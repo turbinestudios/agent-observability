@@ -1,0 +1,61 @@
+@page "/developer-activity"
+@inject LogAnalyticsService Analytics
+
+<PageTitle>Developer Activity</PageTitle>
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Developer Activity</p>
+        <h1>Usage patterns by developer</h1>
+        <p class="page-copy">Surface who is actively using Copilot, which repositories they touch, and whether latency or model diversity starts drifting.</p>
+    </div>
+</section>
+
+@if (developers.Count == 0)
+{
+    <p class="loading-state">Loading developer activity...</p>
+}
+else
+{
+    <section class="panel-card">
+        <div class="panel-heading">
+            <h2>Developer Summary</h2>
+            <span>Last 24 hours</span>
+        </div>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Developer</th>
+                    <th>Repository</th>
+                    <th>Requests</th>
+                    <th>Avg Latency</th>
+                    <th>Models</th>
+                    <th>Last Seen</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in developers)
+                {
+                    <tr>
+                        <td>@item.Developer</td>
+                        <td>@item.Repository</td>
+                        <td>@item.Requests.ToString("N0", CultureInfo.InvariantCulture)</td>
+                        <td>@item.AverageLatencyMs.ToString("N0", CultureInfo.InvariantCulture) ms</td>
+                        <td>@item.UniqueModels</td>
+                        <td>@item.LastSeen.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </section>
+}
+
+@code {
+    private IReadOnlyList<DeveloperActivitySummary> developers = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        developers = await Analytics.GetDeveloperActivityAsync(TimeSpan.FromHours(24));
+    }
+}

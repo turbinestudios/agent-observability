@@ -1,0 +1,91 @@
+@page "/workflow-monitor"
+@inject LogAnalyticsService Analytics
+
+<PageTitle>Workflow Monitor</PageTitle>
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Workflow Monitor</p>
+        <h1>Recent agent interactions and expected flows</h1>
+        <p class="page-copy">Use the latest agent-tool sequence as the operational baseline now, then plug in the alert engine and deviation detector during Phase 5.</p>
+    </div>
+</section>
+
+<section class="chart-grid chart-grid-wide">
+    <article class="panel-card">
+        <div class="panel-heading">
+            <h2>Expected Workflow Templates</h2>
+            <span>Repository-owned definitions</span>
+        </div>
+
+        <div class="workflow-list">
+            @foreach (var config in WorkflowConfig.Examples)
+            {
+                foreach (var workflow in config.Workflows)
+                {
+                    <article class="workflow-card">
+                        <p class="workflow-repo">@config.Repository</p>
+                        <h3>@workflow.Name</h3>
+                        <p>@string.Join(" → ", workflow.ExpectedSequence)</p>
+                        <p class="workflow-meta">Max duration: @workflow.MaxDuration.TotalMinutes.ToString("N0", CultureInfo.InvariantCulture) minutes</p>
+                    </article>
+                }
+            }
+        </div>
+    </article>
+
+    <article class="panel-card">
+        <div class="panel-heading">
+            <h2>Recent Interactions</h2>
+            <span>Last 24 hours</span>
+        </div>
+
+        @if (interactions.Count == 0)
+        {
+            <p class="loading-state">Loading workflow activity...</p>
+        }
+        else
+        {
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Repository</th>
+                        <th>Agent</th>
+                        <th>Tool</th>
+                        <th>Model</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in interactions)
+                    {
+                        <tr>
+                            <td>@item.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)</td>
+                            <td>@item.Repository</td>
+                            <td>@item.Agent</td>
+                            <td>@item.ToolName</td>
+                            <td>@item.Model</td>
+                            <td>@item.DurationMs.ToString("N0", CultureInfo.InvariantCulture) ms</td>
+                            <td>
+                                <span class="status-pill @(item.Success ? "status-pill-success" : "status-pill-failure")">
+                                    @(item.Success ? "Success" : "Failed")
+                                </span>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </article>
+</section>
+
+@code {
+    private IReadOnlyList<AgentInteraction> interactions = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        interactions = await Analytics.GetWorkflowInteractionsAsync(TimeSpan.FromHours(24));
+    }
+}
