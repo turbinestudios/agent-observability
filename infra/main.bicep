@@ -100,7 +100,7 @@ module dashboard 'modules/dashboard-app.bicep' = {
     appName: 'ca-${baseName}-dashboard'
     environmentId: containerAppsEnv.outputs.environmentId
     containerImage: dashboardImage
-    logAnalyticsWorkspaceId: logAnalytics.outputs.workspaceId
+    logAnalyticsWorkspaceId: logAnalytics.outputs.workspaceCustomerId
     acrLoginServer: acr.outputs.loginServer
     dashboardIdentityId: dashboardIdentity.id
   }
