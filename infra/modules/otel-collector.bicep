@@ -18,6 +18,10 @@ param azureMonitorConnectionString string
 @description('OTel Collector configuration YAML content')
 param otelCollectorConfig string
 
+@secure()
+@description('htpasswd entry for basicauth (format: username:bcrypt-hash)')
+param basicAuthHtpasswd string
+
 resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
@@ -42,6 +46,10 @@ resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'otel-collector-config'
           value: otelCollectorConfig
         }
+        {
+          name: 'otel-basicauth-htpasswd'
+          value: basicAuthHtpasswd
+        }
       ]
     }
     template: {
@@ -60,6 +68,10 @@ resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AZURE_MONITOR_CONNECTION_STRING'
               secretRef: 'azure-monitor-connection-string'
+            }
+            {
+              name: 'OTEL_BASICAUTH_HTPASSWD'
+              secretRef: 'otel-basicauth-htpasswd'
             }
           ]
           volumeMounts: [

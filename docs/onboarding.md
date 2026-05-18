@@ -5,7 +5,7 @@ This guide walks you through enabling OpenTelemetry telemetry export from VS Cod
 ## Prerequisites
 
 - VS Code with GitHub Copilot extension installed
-- Access to the Agent Observability platform (ask your platform team for the collector FQDN)
+- Access to the Agent Observability platform (ask your platform team for the collector FQDN and API key)
 
 ## Step 1: Configure VS Code OTLP Export
 
@@ -21,6 +21,22 @@ Add the following to your repository's `.vscode/settings.json`:
 ```
 
 Replace `<COLLECTOR_FQDN>` with the OTel Collector endpoint provided by your platform team.
+
+### Authentication
+
+The OTLP endpoint requires HTTP Basic Authentication. Set the `OTEL_EXPORTER_OTLP_HEADERS` environment variable in your shell profile or `.env` file:
+
+```bash
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic $(echo -n 'otlp:<YOUR_API_KEY>' | base64)"
+```
+
+On Windows (PowerShell):
+
+```powershell
+$env:OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic $([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('otlp:<YOUR_API_KEY>')))"
+```
+
+> **Security note:** Do not commit API keys to version control. Use environment variables or a secrets manager.
 
 > **Note:** Setting `captureContent` to `true` means full prompt and response content will be captured. This may include sensitive information — ensure your team is comfortable with this and that appropriate data retention policies are in place.
 

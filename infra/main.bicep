@@ -18,6 +18,10 @@ param dashboardImage string
 @description('OTel Collector configuration YAML content')
 param otelCollectorConfig string
 
+@secure()
+@description('htpasswd entry for OTel Collector basicauth (format: username:bcrypt-hash)')
+param otelBasicAuthHtpasswd string
+
 // Azure Container Registry
 module acr 'modules/acr.bicep' = {
   params: {
@@ -85,6 +89,7 @@ module otelCollector 'modules/otel-collector.bicep' = {
     containerImage: otelCollectorImage
     azureMonitorConnectionString: appInsights.outputs.connectionString
     otelCollectorConfig: otelCollectorConfig
+    basicAuthHtpasswd: otelBasicAuthHtpasswd
   }
 }
 
