@@ -15,10 +15,6 @@ param otelCollectorImage string = 'otel/opentelemetry-collector-contrib:latest'
 @description('Container image for the Blazor Dashboard')
 param dashboardImage string
 
-@secure()
-@description('Azure Monitor connection string for the OTel exporter')
-param azureMonitorConnectionString string
-
 @description('OTel Collector configuration YAML content')
 param otelCollectorConfig string
 
@@ -26,21 +22,30 @@ param otelCollectorConfig string
 module logAnalytics 'modules/log-analytics.bicep' = {
   params: {
     location: location
-    workspaceName: '${baseName}-law'
+    workspaceName: 'log-${baseName}'
     retentionInDays: logRetentionInDays
   }
 }
 
 // Retrieve the shared key for Container Apps log integration
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
-  name: '${baseName}-law'
+  name: 'log-${baseName}'
+}
+
+// Application Insights (provides connection string for OTel exporter)
+module appInsights 'modules/app-insights.bicep' = {
+  params: {
+    location: location
+    appInsightsName: '${baseName}-appi'
+    logAnalyticsWorkspaceId: logAnalytics.outputs.workspaceId
+  }
 }
 
 // Step 1.2 — Container Apps Environment
 module containerAppsEnv 'modules/container-apps-env.bicep' = {
   params: {
     location: location
-    environmentName: '${baseName}-env'
+    environmentName: 'cae-${baseName}'
     logAnalyticsWorkspaceCustomerId: logAnalytics.outputs.workspaceCustomerId
     logAnalyticsWorkspaceSharedKey: logAnalyticsWorkspace.listKeys().primarySharedKey
   }
@@ -50,10 +55,10 @@ module containerAppsEnv 'modules/container-apps-env.bicep' = {
 module otelCollector 'modules/otel-collector.bicep' = {
   params: {
     location: location
-    appName: '${baseName}-otel-collector'
+    appName: 'ca-${baseName}-otel-collector'
     environmentId: containerAppsEnv.outputs.environmentId
     containerImage: otelCollectorImage
-    azureMonitorConnectionString: azureMonitorConnectionString
+    azureMonitorConnectionString: appInsights.outputs.connectionString
     otelCollectorConfig: otelCollectorConfig
   }
 }
@@ -62,7 +67,7 @@ module otelCollector 'modules/otel-collector.bicep' = {
 module dashboard 'modules/dashboard-app.bicep' = {
   params: {
     location: location
-    appName: '${baseName}-dashboard'
+    appName: 'ca-${baseName}-dashboard'
     environmentId: containerAppsEnv.outputs.environmentId
     containerImage: dashboardImage
     logAnalyticsWorkspaceId: logAnalytics.outputs.workspaceId
@@ -73,7 +78,7 @@ module dashboard 'modules/dashboard-app.bicep' = {
 
 // Monitoring Metrics Publisher role for OTel Collector
 resource otelCollectorMonitoringRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, '${baseName}-otel-collector', '3913510d-42f4-4e42-8a64-420c390055eb')
+  name: guid(resourceGroup().id, 'ca-${baseName}-otel-collector', '3913510d-42f4-4e42-8a64-420c390055eb')
   scope: logAnalyticsWorkspace
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
@@ -84,7 +89,7 @@ resource otelCollectorMonitoringRole 'Microsoft.Authorization/roleAssignments@20
 
 // Log Analytics Reader role for Dashboard
 resource dashboardReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, '${baseName}-dashboard', '73c42c96-874c-492b-b04d-ab87d138a893')
+  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', '73c42c96-874c-492b-b04d-ab87d138a893')
   scope: logAnalyticsWorkspace
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')
