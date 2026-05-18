@@ -19,8 +19,8 @@ param azureMonitorConnectionString string
 param otelCollectorConfig string
 
 @secure()
-@description('htpasswd entry for basicauth (format: username:bcrypt-hash)')
-param basicAuthHtpasswd string
+@description('htpasswd entry for basicauth (format: username:bcrypt-hash). Leave empty to skip basicauth.')
+param basicAuthHtpasswd string = ''
 
 resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
@@ -37,20 +37,21 @@ resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = {
         transport: 'http'
         allowInsecure: false
       }
-      secrets: [
-        {
-          name: 'azure-monitor-connection-string'
-          value: azureMonitorConnectionString
-        }
-        {
-          name: 'otel-collector-config'
-          value: otelCollectorConfig
-        }
-        {
-          name: 'otel-basicauth-htpasswd'
-          value: basicAuthHtpasswd
-        }
-      ]
+      secrets: concat([
+          {
+            name: 'azure-monitor-connection-string'
+            value: azureMonitorConnectionString
+          }
+          {
+            name: 'otel-collector-config'
+            value: otelCollectorConfig
+          }
+        ], !empty(basicAuthHtpasswd) ? [
+          {
+            name: 'otel-basicauth-htpasswd'
+            value: basicAuthHtpasswd
+          }
+        ] : [])
     }
     template: {
       containers: [
@@ -64,16 +65,17 @@ resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.5')
             memory: '1Gi'
           }
-          env: [
-            {
-              name: 'AZURE_MONITOR_CONNECTION_STRING'
-              secretRef: 'azure-monitor-connection-string'
-            }
-            {
-              name: 'OTEL_BASICAUTH_HTPASSWD'
-              secretRef: 'otel-basicauth-htpasswd'
-            }
-          ]
+          env: concat([
+              {
+                name: 'AZURE_MONITOR_CONNECTION_STRING'
+                secretRef: 'azure-monitor-connection-string'
+              }
+            ], !empty(basicAuthHtpasswd) ? [
+              {
+                name: 'OTEL_BASICAUTH_HTPASSWD'
+                secretRef: 'otel-basicauth-htpasswd'
+              }
+            ] : [])
           volumeMounts: [
             {
               volumeName: 'otel-config'
