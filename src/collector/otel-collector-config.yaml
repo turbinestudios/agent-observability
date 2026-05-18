@@ -13,6 +13,9 @@ processors:
       - key: service.namespace
         value: agent-observability
         action: upsert
+      - key: deployment.environment
+        value: azure-container-apps
+        action: upsert
 
 exporters:
   azuremonitor:
@@ -21,9 +24,11 @@ exporters:
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
+  zpages:
+    endpoint: 0.0.0.0:55679
 
 service:
-  extensions: [health_check]
+  extensions: [health_check, zpages]
   pipelines:
     traces:
       receivers: [otlp]

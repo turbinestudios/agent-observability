@@ -49,6 +49,9 @@ resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'otel-collector'
           image: containerImage
+          args: [
+            '--config=/etc/otelcol-contrib/config.yaml'
+          ]
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
@@ -63,6 +66,38 @@ resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               volumeName: 'otel-config'
               mountPath: '/etc/otelcol-contrib'
+            }
+          ]
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/'
+                port: 13133
+              }
+              initialDelaySeconds: 3
+              periodSeconds: 5
+              failureThreshold: 12
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/'
+                port: 13133
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 10
+              failureThreshold: 3
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/'
+                port: 13133
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              failureThreshold: 3
             }
           ]
         }
