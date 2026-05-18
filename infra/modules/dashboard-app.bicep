@@ -16,11 +16,17 @@ param logAnalyticsWorkspaceId string
 @description('ACR login server for managed identity pull')
 param acrLoginServer string
 
+@description('Resource ID of the user-assigned managed identity for ACR pull')
+param dashboardIdentityId string
+
 resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
   identity: {
-    type: 'SystemAssigned'
+    type: 'SystemAssigned, UserAssigned'
+    userAssignedIdentities: {
+      '${dashboardIdentityId}': {}
+    }
   }
   properties: {
     managedEnvironmentId: environmentId
@@ -34,7 +40,7 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
       registries: [
         {
           server: acrLoginServer
-          identity: 'system'
+          identity: dashboardIdentityId
         }
       ]
     }

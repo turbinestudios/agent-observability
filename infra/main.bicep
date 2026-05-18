@@ -26,6 +26,28 @@ module acr 'modules/acr.bicep' = {
   }
 }
 
+// User-assigned managed identity for ACR pull (avoids chicken-and-egg with system identity)
+resource dashboardIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-${baseName}-dashboard'
+  location: location
+}
+
+// AcrPull role for Dashboard identity (assigned before Container App creation)
+resource acrResource 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
+  name: replace('acr${baseName}', '-', '')
+  dependsOn: [acr]
+}
+
+resource dashboardAcrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, 'id-${baseName}-dashboard', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  scope: acrResource
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: dashboardIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Step 1.1 — Log Analytics Workspace
 module logAnalytics 'modules/log-analytics.bicep' = {
   params: {
@@ -75,7 +97,9 @@ module dashboard 'modules/dashboard-app.bicep' = {
     containerImage: dashboardImage
     logAnalyticsWorkspaceId: logAnalytics.outputs.workspaceId
     acrLoginServer: acr.outputs.loginServer
+    dashboardIdentityId: dashboardIdentity.id
   }
+  dependsOn: [dashboardAcrPullRole]
 }
 
 // Step 1.5 — Role Assignments
@@ -83,22 +107,6 @@ module dashboard 'modules/dashboard-app.bicep' = {
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
   name: 'log-${baseName}'
   dependsOn: [logAnalytics]
-}
-
-// AcrPull role for Dashboard managed identity
-resource acrResource 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
-  name: replace('acr${baseName}', '-', '')
-  dependsOn: [acr]
-}
-
-resource dashboardAcrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-  scope: acrResource
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-    principalId: dashboard.outputs.principalId
-    principalType: 'ServicePrincipal'
-  }
 }
 
 // Monitoring Metrics Publisher role for OTel Collector
