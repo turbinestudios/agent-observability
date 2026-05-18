@@ -71,6 +71,11 @@ module dashboard 'modules/dashboard-app.bicep' = {
 
 // Step 1.5 — Role Assignments
 
+resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
+  name: 'log-${baseName}'
+  dependsOn: [logAnalytics]
+}
+
 // Monitoring Metrics Publisher role for OTel Collector
 resource otelCollectorMonitoringRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(resourceGroup().id, 'ca-${baseName}-otel-collector', '3913510d-42f4-4e42-8a64-420c390055eb')
