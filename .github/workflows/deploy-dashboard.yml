@@ -17,7 +17,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/dashboard
   AZURE_RESOURCE_GROUP: rg-agent-observability
-  CONTAINER_APP_NAME: agent-obs-dashboard
+  CONTAINER_APP_NAME: ca-ao-dashboard
 
 jobs:
   build:
