@@ -27,16 +27,11 @@ module logAnalytics 'modules/log-analytics.bicep' = {
   }
 }
 
-// Retrieve the shared key for Container Apps log integration
-resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
-  name: 'log-${baseName}'
-}
-
 // Application Insights (provides connection string for OTel exporter)
 module appInsights 'modules/app-insights.bicep' = {
   params: {
     location: location
-    appInsightsName: '${baseName}-appi'
+    appInsightsName: 'appi-${baseName}'
     logAnalyticsWorkspaceId: logAnalytics.outputs.workspaceId
   }
 }
@@ -47,7 +42,7 @@ module containerAppsEnv 'modules/container-apps-env.bicep' = {
     location: location
     environmentName: 'cae-${baseName}'
     logAnalyticsWorkspaceCustomerId: logAnalytics.outputs.workspaceCustomerId
-    logAnalyticsWorkspaceSharedKey: logAnalyticsWorkspace.listKeys().primarySharedKey
+    logAnalyticsWorkspaceSharedKey: logAnalytics.outputs.workspaceSharedKey
   }
 }
 
