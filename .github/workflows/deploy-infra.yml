@@ -87,5 +87,3 @@ jobs:
             dashboardImage=${{ vars.DASHBOARD_IMAGE || 'mcr.microsoft.com/dotnet/samples:aspnetapp' }}
             otelCollectorConfig=${{ steps.otel-config.outputs.config }}
           deploymentMode: Incremental
-            otelCollectorConfig=${{ steps.otel-config.outputs.config }}
-          deploymentMode: Incremental
