@@ -14,8 +14,11 @@ processors:
         value: agent-observability
         action: upsert
       - key: deployment.environment
-        value: azure-container-apps
-        action: upsert
+        value: production
+        action: insert
+      - key: service.name
+        value: unknown-repo
+        action: insert
 
 exporters:
   azuremonitor:
