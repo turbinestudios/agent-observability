@@ -1,4 +1,5 @@
 using AgentObservability.Dashboard.Components;
+using AgentObservability.Dashboard.Models;
 using AgentObservability.Dashboard.Services;
 using AgentObservability.Dashboard;
 
@@ -9,6 +10,12 @@ builder.Services.AddRazorComponents()
 
 builder.Services.Configure<LogAnalyticsOptions>(builder.Configuration.GetSection(LogAnalyticsOptions.SectionName));
 builder.Services.AddSingleton<LogAnalyticsService>();
+
+// Phase 5: Alert Engine & Workflow Deviation Detection
+builder.Services.Configure<AlertEngineOptions>(builder.Configuration.GetSection(AlertEngineOptions.SectionName));
+builder.Services.AddSingleton<WorkflowDeviationDetector>();
+builder.Services.AddHttpClient("AlertEngine");
+builder.Services.AddHostedService<AlertEngine>();
 
 var app = builder.Build();
 

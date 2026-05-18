@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://turbine.dev/schemas/workflow-config.schema.json",
+  "title": "Agent Workflow Configuration",
+  "description": "Defines expected multi-agent workflows for a repository, used by the alert engine to detect deviations.",
+  "type": "object",
+  "required": ["repository", "workflows"],
+  "properties": {
+    "repository": {
+      "type": "string",
+      "description": "The repository identifier (e.g., 'my-org/my-repo')."
+    },
+    "notifications": {
+      "type": "object",
+      "description": "Notification delivery settings for this repository.",
+      "properties": {
+        "teamsWebhookUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "Microsoft Teams incoming webhook URL."
+        },
+        "emailRecipients": {
+          "type": "array",
+          "items": { "type": "string", "format": "email" },
+          "description": "Email addresses to notify on deviation."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether notifications are enabled for this repository."
+        }
+      },
+      "additionalProperties": false
+    },
+    "workflows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "expectedSequence", "maxDuration"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable name for the workflow."
+          },
+          "expectedSequence": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Ordered list of expected agent names in the workflow."
+          },
+          "maxDuration": {
+            "type": "string",
+            "pattern": "^PT(\\d+H)?(\\d+M)?(\\d+S)?$",
+            "description": "Maximum expected duration in ISO 8601 duration format (e.g., 'PT30M')."
+          },
+          "alerts": {
+            "type": "object",
+            "properties": {
+              "sequenceDeviation": {
+                "type": "boolean",
+                "default": true,
+                "description": "Alert when agent sequence deviates from expected."
+              },
+              "timeoutExceeded": {
+                "type": "boolean",
+                "default": true,
+                "description": "Alert when workflow exceeds maxDuration."
+              },
+              "toolUsageAnomaly": {
+                "type": "boolean",
+                "default": true,
+                "description": "Alert on unusual tool usage patterns."
+              },
+              "missingSteps": {
+                "type": "boolean",
+                "default": true,
+                "description": "Alert when expected workflow steps are skipped."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
