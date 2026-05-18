@@ -13,6 +13,9 @@ param containerImage string
 @description('Resource ID of the Log Analytics workspace for query access')
 param logAnalyticsWorkspaceId string
 
+@description('ACR login server for managed identity pull')
+param acrLoginServer string
+
 resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
@@ -28,6 +31,12 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
         transport: 'http'
         allowInsecure: false
       }
+      registries: [
+        {
+          server: acrLoginServer
+          identity: 'system'
+        }
+      ]
     }
     template: {
       containers: [

@@ -18,6 +18,14 @@ param dashboardImage string
 @description('OTel Collector configuration YAML content')
 param otelCollectorConfig string
 
+// Azure Container Registry
+module acr 'modules/acr.bicep' = {
+  params: {
+    location: location
+    registryName: replace('acr${baseName}', '-', '')
+  }
+}
+
 // Step 1.1 — Log Analytics Workspace
 module logAnalytics 'modules/log-analytics.bicep' = {
   params: {
@@ -66,6 +74,7 @@ module dashboard 'modules/dashboard-app.bicep' = {
     environmentId: containerAppsEnv.outputs.environmentId
     containerImage: dashboardImage
     logAnalyticsWorkspaceId: logAnalytics.outputs.workspaceId
+    acrLoginServer: acr.outputs.loginServer
   }
 }
 
@@ -74,6 +83,22 @@ module dashboard 'modules/dashboard-app.bicep' = {
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
   name: 'log-${baseName}'
   dependsOn: [logAnalytics]
+}
+
+// AcrPull role for Dashboard managed identity
+resource acrResource 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
+  name: replace('acr${baseName}', '-', '')
+  dependsOn: [acr]
+}
+
+resource dashboardAcrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  scope: acrResource
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: dashboard.outputs.principalId
+    principalType: 'ServicePrincipal'
+  }
 }
 
 // Monitoring Metrics Publisher role for OTel Collector
@@ -107,3 +132,6 @@ output dashboardFqdn string = dashboard.outputs.fqdn
 
 @description('Log Analytics Workspace ID')
 output logAnalyticsWorkspaceId string = logAnalytics.outputs.workspaceId
+
+@description('ACR Login Server')
+output acrLoginServer string = acr.outputs.loginServer

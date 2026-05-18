@@ -11,11 +11,9 @@ on:
 permissions:
   id-token: write
   contents: read
-  packages: write
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/dashboard
+  ACR_NAME: acrao
   AZURE_RESOURCE_GROUP: rg-agent-observability
   CONTAINER_APP_NAME: ca-ao-dashboard
 
@@ -23,34 +21,26 @@ jobs:
   build:
     name: Build & Push Image
     runs-on: ubuntu-latest
-    outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Azure Login
+        uses: azure/login@v2
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,prefix=
-            type=raw,value=latest
+      - name: Log in to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
 
       - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: src/dashboard/AgentObservability.Dashboard
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+        run: |
+          IMAGE=${{ env.ACR_NAME }}.azurecr.io/dashboard:${{ github.sha }}
+          docker build -t $IMAGE src/dashboard/AgentObservability.Dashboard
+          docker build -t ${{ env.ACR_NAME }}.azurecr.io/dashboard:latest src/dashboard/AgentObservability.Dashboard
+          docker push $IMAGE
+          docker push ${{ env.ACR_NAME }}.azurecr.io/dashboard:latest
 
   deploy:
     name: Deploy to Container Apps
@@ -71,4 +61,4 @@ jobs:
             az containerapp update \
               --name ${{ env.CONTAINER_APP_NAME }} \
               --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
-              --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+              --image ${{ env.ACR_NAME }}.azurecr.io/dashboard:${{ github.sha }}
