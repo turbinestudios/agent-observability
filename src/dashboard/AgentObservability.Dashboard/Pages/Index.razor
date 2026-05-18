@@ -58,11 +58,18 @@ else
                 <span>30-minute polling window</span>
             </div>
 
-            <RadzenChart>
-                <RadzenColumnSeries Data="@metrics.RequestVolume" CategoryProperty="Label" ValueProperty="Value" Title="Requests" />
-                <RadzenCategoryAxis />
-                <RadzenValueAxis />
-            </RadzenChart>
+            @if (metrics.RequestVolume.Count > 0)
+            {
+                <RadzenChart>
+                    <RadzenColumnSeries Data="@metrics.RequestVolume" CategoryProperty="Label" ValueProperty="Value" Title="Requests" />
+                    <RadzenCategoryAxis />
+                    <RadzenValueAxis />
+                </RadzenChart>
+            }
+            else
+            {
+                <p class="empty-state">No request volume data available.</p>
+            }
         </article>
 
         <article class="panel-card">
@@ -71,9 +78,16 @@ else
                 <span>Request distribution</span>
             </div>
 
-            <RadzenChart>
-                <RadzenDonutSeries Data="@metrics.ModelBreakdown" CategoryProperty="Label" ValueProperty="Value" />
-            </RadzenChart>
+            @if (metrics.ModelBreakdown.Count > 0)
+            {
+                <RadzenChart>
+                    <RadzenDonutSeries Data="@metrics.ModelBreakdown" CategoryProperty="Label" ValueProperty="Value" />
+                </RadzenChart>
+            }
+            else
+            {
+                <p class="empty-state">No model data available.</p>
+            }
         </article>
     </section>
 }
