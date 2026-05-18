@@ -14,6 +14,7 @@ param containerImage string = 'otel/opentelemetry-collector-contrib:latest'
 @description('Azure Monitor connection string for the OTel exporter')
 param azureMonitorConnectionString string
 
+@secure()
 @description('OTel Collector configuration YAML content')
 param otelCollectorConfig string
 
