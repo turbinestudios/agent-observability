@@ -67,23 +67,31 @@ jobs:
               --name ${{ env.AZURE_RESOURCE_GROUP }} \
               --location ${{ env.AZURE_LOCATION }}
 
-      - name: Load OTel Collector config
-        id: otel-config
+      - name: Generate parameters file
         run: |
           CONFIG=$(cat src/collector/otel-collector-config.yaml)
-          echo "config<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$CONFIG" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          jq -n \
+            --arg location "${{ env.AZURE_LOCATION }}" \
+            --arg baseName "agent-obs" \
+            --arg otelCollectorImage "otel/opentelemetry-collector-contrib:0.102.0" \
+            --arg dashboardImage "${{ vars.DASHBOARD_IMAGE || 'mcr.microsoft.com/dotnet/samples:aspnetapp' }}" \
+            --arg otelCollectorConfig "$CONFIG" \
+            '{
+              "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {
+                "location": {"value": $location},
+                "baseName": {"value": $baseName},
+                "otelCollectorImage": {"value": $otelCollectorImage},
+                "dashboardImage": {"value": $dashboardImage},
+                "otelCollectorConfig": {"value": $otelCollectorConfig}
+              }
+            }' > infra/deploy-parameters.json
 
       - name: Deploy Bicep
         uses: azure/arm-deploy@v2
         with:
           resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
           template: infra/main.bicep
-          parameters: >
-            location=${{ env.AZURE_LOCATION }}
-            baseName=agent-obs
-            otelCollectorImage=otel/opentelemetry-collector-contrib:0.102.0
-            dashboardImage=${{ vars.DASHBOARD_IMAGE || 'mcr.microsoft.com/dotnet/samples:aspnetapp' }}
-            otelCollectorConfig=${{ steps.otel-config.outputs.config }}
+          parameters: infra/deploy-parameters.json
           deploymentMode: Incremental
