@@ -23,6 +23,3 @@ output workspaceId string = workspace.id
 
 @description('Customer ID (workspace ID) for Log Analytics')
 output workspaceCustomerId string = workspace.properties.customerId
-
-@description('Primary shared key for Log Analytics')
-output workspaceSharedKey string = workspace.listKeys().primarySharedKey

@@ -42,7 +42,7 @@ module containerAppsEnv 'modules/container-apps-env.bicep' = {
     location: location
     environmentName: 'cae-${baseName}'
     logAnalyticsWorkspaceCustomerId: logAnalytics.outputs.workspaceCustomerId
-    logAnalyticsWorkspaceSharedKey: logAnalytics.outputs.workspaceSharedKey
+    logAnalyticsWorkspaceName: 'log-${baseName}'
   }
 }
 

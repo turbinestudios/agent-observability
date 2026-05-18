@@ -7,9 +7,12 @@ param environmentName string
 @description('Customer ID of the Log Analytics workspace')
 param logAnalyticsWorkspaceCustomerId string
 
-@secure()
-@description('Shared key for the Log Analytics workspace')
-param logAnalyticsWorkspaceSharedKey string
+@description('Name of the Log Analytics workspace')
+param logAnalyticsWorkspaceName string
+
+resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
+  name: logAnalyticsWorkspaceName
+}
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: environmentName
@@ -19,7 +22,7 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
         customerId: logAnalyticsWorkspaceCustomerId
-        sharedKey: logAnalyticsWorkspaceSharedKey
+        sharedKey: logAnalyticsWorkspace.listKeys().primarySharedKey
       }
     }
   }
