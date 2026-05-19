@@ -33,7 +33,7 @@ extensions:
     endpoint: 0.0.0.0:55679
   basicauth:
     htpasswd:
-      inline: ${env:OTEL_BASICAUTH_HTPASSWD}
+      file: /etc/otelcol-contrib/htpasswd
 
 service:
   extensions: [health_check, zpages, basicauth]

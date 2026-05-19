@@ -65,17 +65,12 @@ resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.5')
             memory: '1Gi'
           }
-          env: concat([
+          env: [
               {
                 name: 'AZURE_MONITOR_CONNECTION_STRING'
                 secretRef: 'azure-monitor-connection-string'
               }
-            ], !empty(basicAuthHtpasswd) ? [
-              {
-                name: 'OTEL_BASICAUTH_HTPASSWD'
-                secretRef: 'otel-basicauth-htpasswd'
-              }
-            ] : [])
+            ]
           volumeMounts: [
             {
               volumeName: 'otel-config'
@@ -124,12 +119,17 @@ resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'otel-config'
           storageType: 'Secret'
-          secrets: [
+          secrets: concat([
             {
               secretRef: 'otel-collector-config'
               path: 'config.yaml'
             }
-          ]
+          ], !empty(basicAuthHtpasswd) ? [
+            {
+              secretRef: 'otel-basicauth-htpasswd'
+              path: 'htpasswd'
+            }
+          ] : [])
         }
       ]
     }
