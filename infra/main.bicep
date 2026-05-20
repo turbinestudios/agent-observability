@@ -60,7 +60,7 @@ resource dashboardAcrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-0
 module keyVault 'modules/key-vault.bicep' = {
   params: {
     location: location
-    keyVaultName: 'kv-${baseName}'
+    keyVaultName: 'kv-${baseName}-${uniqueString(resourceGroup().id)}'
     otelApiKey: otelApiKey
   }
 }
