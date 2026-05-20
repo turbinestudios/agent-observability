@@ -61,7 +61,8 @@ AppDependencies
 
         const string modelQuery = """
 AppDependencies
-| extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
+| where isnotempty(Properties["gen_ai.request.model"]) or isnotempty(Properties["ai.model_id"])
+| extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]))
 | summarize Requests=count() by Model
 | order by Requests desc
 """;
@@ -96,7 +97,8 @@ AppDependencies
 
         const string query = """
 AppDependencies
-| extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
+| where isnotempty(Properties["gen_ai.request.model"]) or isnotempty(Properties["ai.model_id"])
+| extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]))
 | extend InputTokens=todouble(coalesce(Measurements["gen_ai.usage.input_tokens"], Properties["gen_ai.usage.input_tokens"], 0))
 | extend OutputTokens=todouble(coalesce(Measurements["gen_ai.usage.output_tokens"], Properties["gen_ai.usage.output_tokens"], 0))
 | summarize Requests=count(), InputTokens=sum(InputTokens), OutputTokens=sum(OutputTokens) by Model

@@ -22,6 +22,10 @@ param otelCollectorConfig string
 @description('htpasswd entry for OTel Collector basicauth (format: username:bcrypt-hash)')
 param otelBasicAuthHtpasswd string
 
+@secure()
+@description('OTEL API key stored as a Key Vault secret')
+param otelApiKey string
+
 // Azure Container Registry
 module acr 'modules/acr.bicep' = {
   params: {
@@ -49,6 +53,15 @@ resource dashboardAcrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-0
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
     principalId: dashboardIdentity.properties.principalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// Key Vault for secrets
+module keyVault 'modules/key-vault.bicep' = {
+  params: {
+    location: location
+    keyVaultName: 'kv-${baseName}'
+    otelApiKey: otelApiKey
   }
 }
 
@@ -148,3 +161,6 @@ output logAnalyticsWorkspaceId string = logAnalytics.outputs.workspaceId
 
 @description('ACR Login Server')
 output acrLoginServer string = acr.outputs.loginServer
+
+@description('Key Vault URI')
+output keyVaultUri string = keyVault.outputs.keyVaultUri

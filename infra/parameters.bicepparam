@@ -10,3 +10,6 @@ param otelCollectorConfig = loadTextContent('../src/collector/otel-collector-con
 // Phase 6 — Security: basicauth htpasswd for OTel Collector
 // Generate with: htpasswd -nbBC 10 otlp <your-api-key>
 param otelBasicAuthHtpasswd = readEnvironmentVariable('OTEL_BASICAUTH_HTPASSWD', '')
+
+// OTEL API key — sourced from GitHub secret OTEL_API_KEY
+param otelApiKey = readEnvironmentVariable('OTEL_API_KEY', '')
