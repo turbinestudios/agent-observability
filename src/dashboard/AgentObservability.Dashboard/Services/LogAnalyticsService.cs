@@ -34,14 +34,9 @@ public sealed class LogAnalyticsService
     public async Task<DashboardMetrics> GetDashboardMetricsAsync(TimeSpan lookback, CancellationToken cancellationToken = default)
     {
         const string overviewQuery = """
-let RepoBySession = AppDependencies
-| where isnotempty(Properties["copilot_chat.repo.remote_url"])
-| summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"])) by SessionId=tostring(Properties["session.id"]);
 AppDependencies
-| extend SessionId=tostring(Properties["session.id"])
-| join kind=leftouter RepoBySession on SessionId
-| extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
-| summarize TotalRequests=count(), AverageLatencyMs=avg(DurationMs), P95LatencyMs=percentile(DurationMs, 95), ActiveRepositories=dcount(Repository), ActiveDevelopers=dcount(coalesce(tostring(Properties["enduser.id"]), tostring(UserId)))
+| extend Repository=coalesce(tostring(Properties["repo.name"]), "unknown")
+| summarize TotalRequests=count(), AverageLatencyMs=avg(DurationMs), P95LatencyMs=percentile(DurationMs, 95), ActiveRepositories=dcount(Repository), ActiveDevelopers=dcount(coalesce(tostring(Properties["user.email"]), tostring(UserId)))
 """;
 
         const string volumeQuery = """
@@ -98,14 +93,9 @@ AppDependencies
     public async Task<IReadOnlyList<DeveloperActivitySummary>> GetDeveloperActivityAsync(TimeSpan lookback, CancellationToken cancellationToken = default)
     {
         const string query = """
-let RepoBySession = AppDependencies
-| where isnotempty(Properties["copilot_chat.repo.remote_url"])
-| summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"])) by SessionId=tostring(Properties["session.id"]);
 AppDependencies
-| extend SessionId=tostring(Properties["session.id"])
-| join kind=leftouter RepoBySession on SessionId
-| extend Developer=coalesce(tostring(Properties["enduser.id"]), tostring(UserId), "unknown")
-| extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
+| extend Developer=coalesce(tostring(Properties["user.email"]), tostring(UserId), "unknown")
+| extend Repository=coalesce(tostring(Properties["repo.name"]), "unknown")
 | extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
 | summarize Requests=count(), AverageLatencyMs=avg(DurationMs), UniqueModels=dcount(Model), LastSeen=max(TimeGenerated) by Developer, Repository
 | order by Requests desc
@@ -118,14 +108,9 @@ AppDependencies
     public async Task<IReadOnlyList<RepositoryActivitySummary>> GetRepositoryActivityAsync(TimeSpan lookback, CancellationToken cancellationToken = default)
     {
         const string query = """
-let RepoBySession = AppDependencies
-| where isnotempty(Properties["copilot_chat.repo.remote_url"])
-| summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"])) by SessionId=tostring(Properties["session.id"]);
 AppDependencies
-| extend SessionId=tostring(Properties["session.id"])
-| join kind=leftouter RepoBySession on SessionId
-| extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
-| extend Developer=coalesce(tostring(Properties["enduser.id"]), tostring(UserId), "unknown")
+| extend Repository=coalesce(tostring(Properties["repo.name"]), "unknown")
+| extend Developer=coalesce(tostring(Properties["user.email"]), tostring(UserId), "unknown")
 | extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
 | summarize Requests=count(), ActiveDevelopers=dcount(Developer), AverageLatencyMs=avg(DurationMs), UniqueModels=dcount(Model) by Repository
 | order by Requests desc
