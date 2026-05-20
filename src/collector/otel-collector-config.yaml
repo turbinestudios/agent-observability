@@ -10,23 +10,6 @@ processors:
   batch:
     timeout: 5s
     send_batch_size: 256
-  transform/headers:
-    trace_statements:
-      - context: resource
-        statements:
-          - set(attributes["service.name"], request["headers"]["x-service-name"]) where request["headers"]["x-service-name"] != nil
-          - set(attributes["repository"], request["headers"]["x-repository"]) where request["headers"]["x-repository"] != nil
-          - set(attributes["team"], request["headers"]["x-team"]) where request["headers"]["x-team"] != nil
-          - set(attributes["project"], request["headers"]["x-project"]) where request["headers"]["x-project"] != nil
-          - set(attributes["deployment.environment"], request["headers"]["x-environment"]) where request["headers"]["x-environment"] != nil
-    log_statements:
-      - context: resource
-        statements:
-          - set(attributes["service.name"], request["headers"]["x-service-name"]) where request["headers"]["x-service-name"] != nil
-          - set(attributes["repository"], request["headers"]["x-repository"]) where request["headers"]["x-repository"] != nil
-          - set(attributes["team"], request["headers"]["x-team"]) where request["headers"]["x-team"] != nil
-          - set(attributes["project"], request["headers"]["x-project"]) where request["headers"]["x-project"] != nil
-          - set(attributes["deployment.environment"], request["headers"]["x-environment"]) where request["headers"]["x-environment"] != nil
   resource:
     attributes:
       - key: service.namespace
@@ -57,9 +40,9 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [transform/headers, resource, batch]
+      processors: [resource, batch]
       exporters: [azuremonitor]
     logs:
       receivers: [otlp]
-      processors: [transform/headers, resource, batch]
+      processors: [resource, batch]
       exporters: [azuremonitor]
