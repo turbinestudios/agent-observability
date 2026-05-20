@@ -207,6 +207,17 @@ code {
 
 .panel-card {
     padding: 1.2rem;
+    overflow: hidden;
+}
+
+.panel-card .data-table {
+    table-layout: fixed;
+}
+
+.panel-card .data-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .panel-heading {
