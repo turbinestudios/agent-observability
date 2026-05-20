@@ -10,7 +10,7 @@
 # WHAT IT WRITES:
 #   A delimited block in ~/.zshrc, ~/.bashrc, or ~/.bash_profile containing:
 #     export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64(otlp:key)>"
-#     export OTEL_RESOURCE_ATTRIBUTES_GLOBAL="user.email=<email>"
+#     export OTEL_RESOURCE_ATTRIBUTES="user.email=<email>"
 #
 # HOW TO UNDO:
 #   Run: bash setup-global.sh --uninstall
@@ -173,7 +173,7 @@ touch "$rc_file"
   echo ""
   echo "$BLOCK_START"
   echo "export OTEL_EXPORTER_OTLP_HEADERS=\"$auth_header\""
-  echo "export OTEL_RESOURCE_ATTRIBUTES_GLOBAL=\"user.email=$email\""
+  echo "export OTEL_RESOURCE_ATTRIBUTES=\"user.email=$email\""
   echo "$BLOCK_END"
 } >> "$rc_file"
 

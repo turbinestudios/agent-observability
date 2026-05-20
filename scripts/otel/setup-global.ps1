@@ -8,7 +8,7 @@
 
     WHAT IT WRITES:
       [User] OTEL_EXPORTER_OTLP_HEADERS = Authorization=Basic base64("otlp:<key>")
-      [User] OTEL_RESOURCE_ATTRIBUTES_GLOBAL = user.email=<email>
+      [User] OTEL_RESOURCE_ATTRIBUTES = user.email=<email>
 
     HOW TO UNDO:
       .\setup-global.ps1 -Uninstall
@@ -47,7 +47,7 @@ $ErrorActionPreference = 'Stop'
 if ($Uninstall) {
     Write-Host "Removing OTel global environment variables..."
     [Environment]::SetEnvironmentVariable('OTEL_EXPORTER_OTLP_HEADERS', $null, 'User')
-    [Environment]::SetEnvironmentVariable('OTEL_RESOURCE_ATTRIBUTES_GLOBAL', $null, 'User')
+    [Environment]::SetEnvironmentVariable('OTEL_RESOURCE_ATTRIBUTES', $null, 'User')
     Write-Host "Done. Restart VS Code for changes to take effect."
     return
 }
@@ -83,10 +83,10 @@ $AuthHeader = "Authorization=Basic $encodedCredential"
 # --- Set environment variables ------------------------------------------------
 
 [Environment]::SetEnvironmentVariable('OTEL_EXPORTER_OTLP_HEADERS', $AuthHeader, 'User')
-[Environment]::SetEnvironmentVariable('OTEL_RESOURCE_ATTRIBUTES_GLOBAL', "user.email=$Email", 'User')
+[Environment]::SetEnvironmentVariable('OTEL_RESOURCE_ATTRIBUTES', "user.email=$Email", 'User')
 
 Write-Host "Done. Set User-scope environment variables:"
 Write-Host "  OTEL_EXPORTER_OTLP_HEADERS = Authorization=Basic [hidden]"
-Write-Host "  OTEL_RESOURCE_ATTRIBUTES_GLOBAL = user.email=$Email"
+Write-Host "  OTEL_RESOURCE_ATTRIBUTES = user.email=$Email"
 Write-Host ""
 Write-Host "Restart VS Code for changes to take effect."
