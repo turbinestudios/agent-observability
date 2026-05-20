@@ -10,13 +10,30 @@ processors:
   batch:
     timeout: 5s
     send_batch_size: 256
+  transform/headers:
+    trace_statements:
+      - context: resource
+        statements:
+          - set(attributes["service.name"], request["headers"]["x-service-name"]) where request["headers"]["x-service-name"] != nil
+          - set(attributes["repository"], request["headers"]["x-repository"]) where request["headers"]["x-repository"] != nil
+          - set(attributes["team"], request["headers"]["x-team"]) where request["headers"]["x-team"] != nil
+          - set(attributes["project"], request["headers"]["x-project"]) where request["headers"]["x-project"] != nil
+          - set(attributes["deployment.environment"], request["headers"]["x-environment"]) where request["headers"]["x-environment"] != nil
+    log_statements:
+      - context: resource
+        statements:
+          - set(attributes["service.name"], request["headers"]["x-service-name"]) where request["headers"]["x-service-name"] != nil
+          - set(attributes["repository"], request["headers"]["x-repository"]) where request["headers"]["x-repository"] != nil
+          - set(attributes["team"], request["headers"]["x-team"]) where request["headers"]["x-team"] != nil
+          - set(attributes["project"], request["headers"]["x-project"]) where request["headers"]["x-project"] != nil
+          - set(attributes["deployment.environment"], request["headers"]["x-environment"]) where request["headers"]["x-environment"] != nil
   resource:
     attributes:
       - key: service.namespace
         value: agent-observability
         action: upsert
       - key: deployment.environment
-        value: production
+        value: unknown
         action: insert
       - key: service.name
         value: unknown-repo
@@ -40,9 +57,9 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch, resource]
+      processors: [transform/headers, resource, batch]
       exporters: [azuremonitor]
     logs:
       receivers: [otlp]
-      processors: [batch, resource]
+      processors: [transform/headers, resource, batch]
       exporters: [azuremonitor]
