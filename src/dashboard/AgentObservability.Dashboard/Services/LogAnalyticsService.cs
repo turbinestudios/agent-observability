@@ -18,30 +18,21 @@ public sealed class LogAnalyticsOptions
 
 public sealed class LogAnalyticsService
 {
-    private readonly LogsQueryClient? client;
+    private readonly LogsQueryClient client;
     private readonly ILogger<LogAnalyticsService> logger;
-    private readonly string? workspaceId;
+    private readonly string workspaceId;
 
     public LogAnalyticsService(IOptions<LogAnalyticsOptions> options, ILogger<LogAnalyticsService> logger)
     {
         this.logger = logger;
-        workspaceId = options.Value.WorkspaceId;
+        workspaceId = options.Value.WorkspaceId
+            ?? throw new InvalidOperationException("LogAnalytics:WorkspaceId must be configured.");
 
-        if (!string.IsNullOrWhiteSpace(workspaceId))
-        {
-            client = new LogsQueryClient(new DefaultAzureCredential());
-        }
+        client = new LogsQueryClient(new DefaultAzureCredential());
     }
-
-    public bool IsDemoMode => string.IsNullOrWhiteSpace(workspaceId) || client is null;
 
     public async Task<DashboardMetrics> GetDashboardMetricsAsync(TimeSpan lookback, CancellationToken cancellationToken = default)
     {
-        if (IsDemoMode)
-        {
-            return BuildDemoMetrics();
-        }
-
         const string overviewQuery = """
 let RepoBySession = AppDependencies
 | where isnotempty(Properties["copilot_chat.repo.remote_url"])
@@ -73,7 +64,7 @@ AppDependencies
 
         if (overview is null || overview.Rows.Count == 0)
         {
-            return BuildDemoMetrics();
+            return new DashboardMetrics();
         }
 
         return new DashboardMetrics
@@ -90,11 +81,6 @@ AppDependencies
 
     public async Task<IReadOnlyList<NamedValue>> GetModelUsageAsync(TimeSpan lookback, CancellationToken cancellationToken = default)
     {
-        if (IsDemoMode)
-        {
-            return BuildDemoModelUsage();
-        }
-
         const string query = """
 AppDependencies
 | where isnotempty(Properties["gen_ai.request.model"]) or isnotempty(Properties["ai.model_id"])
@@ -106,16 +92,11 @@ AppDependencies
 """;
 
         var table = await QueryAsync(query, lookback, cancellationToken);
-        return table is null ? BuildDemoModelUsage() : MapNamedValues(table, "Model", "Requests", "InputTokens", "OutputTokens");
+        return table is null ? [] : MapNamedValues(table, "Model", "Requests", "InputTokens", "OutputTokens");
     }
 
     public async Task<IReadOnlyList<DeveloperActivitySummary>> GetDeveloperActivityAsync(TimeSpan lookback, CancellationToken cancellationToken = default)
     {
-        if (IsDemoMode)
-        {
-            return BuildDemoDeveloperActivity();
-        }
-
         const string query = """
 let RepoBySession = AppDependencies
 | where isnotempty(Properties["copilot_chat.repo.remote_url"])
@@ -131,16 +112,11 @@ AppDependencies
 """;
 
         var table = await QueryAsync(query, lookback, cancellationToken);
-        return table is null ? BuildDemoDeveloperActivity() : MapDeveloperActivity(table);
+        return table is null ? [] : MapDeveloperActivity(table);
     }
 
     public async Task<IReadOnlyList<RepositoryActivitySummary>> GetRepositoryActivityAsync(TimeSpan lookback, CancellationToken cancellationToken = default)
     {
-        if (IsDemoMode)
-        {
-            return BuildDemoRepositoryActivity();
-        }
-
         const string query = """
 let RepoBySession = AppDependencies
 | where isnotempty(Properties["copilot_chat.repo.remote_url"])
@@ -156,16 +132,11 @@ AppDependencies
 """;
 
         var table = await QueryAsync(query, lookback, cancellationToken);
-        return table is null ? BuildDemoRepositoryActivity() : MapRepositoryActivity(table);
+        return table is null ? [] : MapRepositoryActivity(table);
     }
 
     public async Task<IReadOnlyList<AgentInteraction>> GetWorkflowInteractionsAsync(TimeSpan lookback, CancellationToken cancellationToken = default)
     {
-        if (IsDemoMode)
-        {
-            return BuildDemoWorkflowInteractions();
-        }
-
         const string query = """
 let RepoBySession = AppDependencies
 | where isnotempty(Properties["copilot_chat.repo.remote_url"])
@@ -182,16 +153,11 @@ AppDependencies
 """;
 
         var table = await QueryAsync(query, lookback, cancellationToken);
-        return table is null ? BuildDemoWorkflowInteractions() : MapWorkflowInteractions(table);
+        return table is null ? [] : MapWorkflowInteractions(table);
     }
 
     private async Task<LogsTable?> QueryAsync(string query, TimeSpan lookback, CancellationToken cancellationToken)
     {
-        if (client is null || string.IsNullOrWhiteSpace(workspaceId))
-        {
-            return null;
-        }
-
         try
         {
             var response = await client.QueryWorkspaceAsync(
@@ -380,156 +346,5 @@ AppDependencies
             DateTime timestamp => new DateTimeOffset(DateTime.SpecifyKind(timestamp, DateTimeKind.Utc)),
             _ => DateTimeOffset.UtcNow
         };
-    }
-
-    private static DashboardMetrics BuildDemoMetrics()
-    {
-        return new DashboardMetrics
-        {
-            TotalRequests = 1284,
-            AverageLatencyMs = 692,
-            P95LatencyMs = 1840,
-            ActiveRepositories = 5,
-            ActiveDevelopers = 11,
-            RequestVolume = BuildDemoRequestVolume(),
-            ModelBreakdown =
-            [
-                new NamedValue { Label = "gpt-5.4", Value = 714 },
-                new NamedValue { Label = "claude-sonnet-4.5", Value = 328 },
-                new NamedValue { Label = "gpt-4.1", Value = 242 }
-            ]
-        };
-    }
-
-    private static IReadOnlyList<NamedValue> BuildDemoModelUsage()
-    {
-        return
-        [
-            new NamedValue { Label = "gpt-5.4", Value = 714, SecondaryValue = 211000 },
-            new NamedValue { Label = "claude-sonnet-4.5", Value = 328, SecondaryValue = 128400 },
-            new NamedValue { Label = "gpt-4.1", Value = 242, SecondaryValue = 76420 }
-        ];
-    }
-
-    private static IReadOnlyList<DeveloperActivitySummary> BuildDemoDeveloperActivity()
-    {
-        return
-        [
-            new DeveloperActivitySummary
-            {
-                Developer = "jane.doe",
-                Repository = "agent-observability",
-                Requests = 214,
-                AverageLatencyMs = 618,
-                UniqueModels = 3,
-                LastSeen = DateTimeOffset.UtcNow.AddMinutes(-12)
-            },
-            new DeveloperActivitySummary
-            {
-                Developer = "sara.lind",
-                Repository = "payment-service",
-                Requests = 188,
-                AverageLatencyMs = 701,
-                UniqueModels = 2,
-                LastSeen = DateTimeOffset.UtcNow.AddMinutes(-26)
-            },
-            new DeveloperActivitySummary
-            {
-                Developer = "joel.berg",
-                Repository = "customer-portal",
-                Requests = 163,
-                AverageLatencyMs = 749,
-                UniqueModels = 2,
-                LastSeen = DateTimeOffset.UtcNow.AddMinutes(-44)
-            }
-        ];
-    }
-
-    private static IReadOnlyList<RepositoryActivitySummary> BuildDemoRepositoryActivity()
-    {
-        return
-        [
-            new RepositoryActivitySummary
-            {
-                Repository = "agent-observability",
-                Requests = 412,
-                ActiveDevelopers = 4,
-                AverageLatencyMs = 632,
-                UniqueModels = 3
-            },
-            new RepositoryActivitySummary
-            {
-                Repository = "payment-service",
-                Requests = 351,
-                ActiveDevelopers = 3,
-                AverageLatencyMs = 718,
-                UniqueModels = 2
-            },
-            new RepositoryActivitySummary
-            {
-                Repository = "customer-portal",
-                Requests = 287,
-                ActiveDevelopers = 2,
-                AverageLatencyMs = 764,
-                UniqueModels = 2
-            }
-        ];
-    }
-
-    private static IReadOnlyList<AgentInteraction> BuildDemoWorkflowInteractions()
-    {
-        return
-        [
-            new AgentInteraction
-            {
-                Timestamp = DateTimeOffset.UtcNow.AddMinutes(-8),
-                Repository = "agent-observability",
-                Agent = "planner",
-                ToolName = "semantic_search",
-                Model = "gpt-5.4",
-                DurationMs = 241,
-                Success = true
-            },
-            new AgentInteraction
-            {
-                Timestamp = DateTimeOffset.UtcNow.AddMinutes(-6),
-                Repository = "agent-observability",
-                Agent = "coder",
-                ToolName = "apply_patch",
-                Model = "gpt-5.4",
-                DurationMs = 514,
-                Success = true
-            },
-            new AgentInteraction
-            {
-                Timestamp = DateTimeOffset.UtcNow.AddMinutes(-4),
-                Repository = "agent-observability",
-                Agent = "reviewer",
-                ToolName = "execution_subagent",
-                Model = "claude-sonnet-4.5",
-                DurationMs = 667,
-                Success = true
-            }
-        ];
-    }
-
-    private static IReadOnlyList<TimeSeriesPoint> BuildDemoRequestVolume()
-    {
-        var baseline = DateTimeOffset.UtcNow.AddHours(-8);
-        var values = new[] { 24d, 28d, 36d, 42d, 58d, 64d, 72d, 68d, 76d, 81d, 74d, 66d, 54d, 49d, 38d, 31d };
-        var points = new List<TimeSeriesPoint>(values.Length);
-
-        for (var index = 0; index < values.Length; index++)
-        {
-            var timestamp = baseline.AddMinutes(index * 30);
-            points.Add(new TimeSeriesPoint
-            {
-                Timestamp = timestamp,
-                Label = timestamp.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture),
-                Value = values[index]
-            });
-        }
-
-        return points;
     }
 }

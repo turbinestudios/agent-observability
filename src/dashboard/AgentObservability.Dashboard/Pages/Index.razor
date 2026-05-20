@@ -14,14 +14,6 @@
     <button class="action-button" @onclick="LoadAsync">Refresh now</button>
 </section>
 
-@if (Analytics.IsDemoMode)
-{
-    <section class="info-banner">
-        <strong>Demo mode</strong>
-        <span>Set <code>LogAnalytics:WorkspaceId</code> or the <code>LogAnalytics__WorkspaceId</code> environment variable to query Azure Monitor data.</span>
-    </section>
-}
-
 @if (metrics is null)
 {
     <p class="loading-state">Loading dashboard metrics...</p>
