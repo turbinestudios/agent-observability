@@ -123,13 +123,8 @@ AppDependencies
     public async Task<IReadOnlyList<AgentInteraction>> GetWorkflowInteractionsAsync(TimeSpan lookback, CancellationToken cancellationToken = default)
     {
         const string query = """
-let RepoBySession = AppDependencies
-| where isnotempty(Properties["copilot_chat.repo.remote_url"])
-| summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"])) by SessionId=tostring(Properties["session.id"]);
 AppDependencies
-| extend SessionId=tostring(Properties["session.id"])
-| join kind=leftouter RepoBySession on SessionId
-| extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
+| extend Repository=coalesce(tostring(Properties["repo.name"]), "unknown")
 | extend Agent=coalesce(tostring(Properties["github.copilot.agent"]), tostring(Properties["gen_ai.agent.name"]), "copilot")
 | extend ToolName=coalesce(tostring(Properties["tool.name"]), tostring(Name), "unknown")
 | extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
