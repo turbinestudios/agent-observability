@@ -46,30 +46,11 @@ Add the following to your repository's `.vscode/settings.json`:
   "github.copilot.chat.otel.enabled": true,
   "github.copilot.chat.otel.exporterType": "otlp-http",
   "github.copilot.chat.otel.otlpEndpoint": "https://<COLLECTOR_FQDN>",
-  "github.copilot.chat.otel.captureContent": true,
-  "github.copilot.chat.otel.otlpHeaders": {
-    "x-repository": "<org>/<repo-name>",
-    "x-team": "<team-name>",
-    "x-project": "<project-name>",
-    "x-environment": "dev",
-    "x-service-name": "<repo-name>"
-  }
+  "github.copilot.chat.otel.captureContent": true
 }
 ```
 
 Replace `<COLLECTOR_FQDN>` with the OTel Collector endpoint provided by your platform team.
-
-### Header Fields
-
-| Header | Description |
-|--------|-------------|
-| `x-repository` | Full org/repo identifier (e.g., `my-org/my-repo`) |
-| `x-team` | Team name for grouping in the dashboard |
-| `x-project` | Project name |
-| `x-environment` | Environment tag (`dev`, `staging`, `prod`) |
-| `x-service-name` | Identifies the repository in the dashboard (maps to `service.name`) |
-
-These headers are sent with every OTLP request and extracted into resource attributes by the collector.
 
 > **Note:** Setting `captureContent` to `true` means full prompt and response content will be captured. This may include sensitive information — ensure your team is comfortable with this and that appropriate data retention policies are in place.
 
@@ -82,7 +63,6 @@ These headers are sent with every OTLP request and extracted into resource attri
 | `github.copilot.chat.otel.otlpEndpoint` | OTLP collector endpoint URL | `"http://localhost:4318"` |
 | `github.copilot.chat.otel.outfile` | File path for JSON-lines output (file exporter) | `""` |
 | `github.copilot.chat.otel.captureContent` | Capture full prompt/response content | `false` |
-| `github.copilot.chat.otel.otlpHeaders` | Custom headers sent with every OTLP request | `{}` |
 
 ## Step 3: Verify Telemetry Flow
 

@@ -3,12 +3,5 @@
   "github.copilot.chat.otel.enabled": true,
   "github.copilot.chat.otel.exporterType": "otlp-http",
   "github.copilot.chat.otel.otlpEndpoint": "https://ca-ao-otel-collector.example.swedencentral.azurecontainerapps.io",
-  "github.copilot.chat.otel.captureContent": true,
-  "github.copilot.chat.otel.otlpHeaders": {
-    "x-repository": "turbinestudios/agent-observability",
-    "x-team": "Turbine Studios",
-    "x-project": "Agent Observability",
-    "x-environment": "dev",
-    "x-service-name": "agent-observability"
-  }
+  "github.copilot.chat.otel.captureContent": true
 }
