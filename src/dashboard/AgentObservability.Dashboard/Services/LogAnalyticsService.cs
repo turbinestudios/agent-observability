@@ -43,8 +43,14 @@ public sealed class LogAnalyticsService
         }
 
         const string overviewQuery = """
+let RepoBySession = AppDependencies
+| where isnotempty(Properties["copilot_chat.repo.remote_url"])
+| summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"])) by SessionId=tostring(Properties["session.id"]);
 AppDependencies
-| summarize TotalRequests=count(), AverageLatencyMs=avg(DurationMs), P95LatencyMs=percentile(DurationMs, 95), ActiveRepositories=dcount(coalesce(tostring(Properties["service.name"]), tostring(Properties["ai.cloud.role"]))), ActiveDevelopers=dcount(coalesce(tostring(Properties["enduser.id"]), tostring(UserId)))
+| extend SessionId=tostring(Properties["session.id"])
+| join kind=leftouter RepoBySession on SessionId
+| extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
+| summarize TotalRequests=count(), AverageLatencyMs=avg(DurationMs), P95LatencyMs=percentile(DurationMs, 95), ActiveRepositories=dcount(Repository), ActiveDevelopers=dcount(coalesce(tostring(Properties["enduser.id"]), tostring(UserId)))
 """;
 
         const string volumeQuery = """
@@ -109,9 +115,14 @@ AppDependencies
         }
 
         const string query = """
+let RepoBySession = AppDependencies
+| where isnotempty(Properties["copilot_chat.repo.remote_url"])
+| summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"])) by SessionId=tostring(Properties["session.id"]);
 AppDependencies
+| extend SessionId=tostring(Properties["session.id"])
+| join kind=leftouter RepoBySession on SessionId
 | extend Developer=coalesce(tostring(Properties["enduser.id"]), tostring(UserId), "unknown")
-| extend Repository=coalesce(tostring(Properties["service.name"]), tostring(Properties["ai.cloud.role"]), "unknown")
+| extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
 | extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
 | summarize Requests=count(), AverageLatencyMs=avg(DurationMs), UniqueModels=dcount(Model), LastSeen=max(TimeGenerated) by Developer, Repository
 | order by Requests desc
@@ -129,8 +140,13 @@ AppDependencies
         }
 
         const string query = """
+let RepoBySession = AppDependencies
+| where isnotempty(Properties["copilot_chat.repo.remote_url"])
+| summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"])) by SessionId=tostring(Properties["session.id"]);
 AppDependencies
-| extend Repository=coalesce(tostring(Properties["service.name"]), tostring(Properties["ai.cloud.role"]), "unknown")
+| extend SessionId=tostring(Properties["session.id"])
+| join kind=leftouter RepoBySession on SessionId
+| extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
 | extend Developer=coalesce(tostring(Properties["enduser.id"]), tostring(UserId), "unknown")
 | extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
 | summarize Requests=count(), ActiveDevelopers=dcount(Developer), AverageLatencyMs=avg(DurationMs), UniqueModels=dcount(Model) by Repository
@@ -149,8 +165,13 @@ AppDependencies
         }
 
         const string query = """
+let RepoBySession = AppDependencies
+| where isnotempty(Properties["copilot_chat.repo.remote_url"])
+| summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"])) by SessionId=tostring(Properties["session.id"]);
 AppDependencies
-| extend Repository=coalesce(tostring(Properties["service.name"]), tostring(Properties["ai.cloud.role"]), "unknown")
+| extend SessionId=tostring(Properties["session.id"])
+| join kind=leftouter RepoBySession on SessionId
+| extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
 | extend Agent=coalesce(tostring(Properties["github.copilot.agent"]), tostring(Properties["gen_ai.agent.name"]), "copilot")
 | extend ToolName=coalesce(tostring(Properties["tool.name"]), tostring(Name), "unknown")
 | extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
