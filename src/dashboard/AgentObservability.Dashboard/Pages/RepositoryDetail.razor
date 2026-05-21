@@ -1,0 +1,93 @@
+@page "/repository/{EncodedRepoUrl}"
+@using System.Globalization
+@inject LogAnalyticsService Analytics
+@inject NavigationManager Navigation
+
+<PageTitle>Repository – @DecodedRepoUrl</PageTitle>
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow"><a href="/repository">Repository</a> / Detail</p>
+        <h1>@DecodedRepoUrl</h1>
+        <p class="page-copy">Agent sessions in this repository over the last 24 hours. Click a session to inspect its workflow.</p>
+    </div>
+</section>
+
+@if (sessions.Count == 0)
+{
+    <p class="loading-state">Loading sessions...</p>
+}
+else
+{
+    <section class="panel-card">
+        <div class="panel-heading">
+            <h2>Agent Sessions</h2>
+            <span>@sessions.Count sessions found</span>
+        </div>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Session</th>
+                    <th>User</th>
+                    <th>Started</th>
+                    <th>Duration</th>
+                    <th>Requests</th>
+                    <th>Agent Modes</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var session in sessions)
+                {
+                    <tr>
+                        <td><a href="/repository/@EncodedRepoUrl/session/@Uri.EscapeDataString(session.SessionId)">@session.SessionId[..8]…</a></td>
+                        <td>@session.User</td>
+                        <td>@session.StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)</td>
+                        <td>@FormatDuration(session.EndTime - session.StartTime)</td>
+                        <td>@session.RequestCount.ToString("N0", CultureInfo.InvariantCulture)</td>
+                        <td>@session.AgentModes</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </section>
+}
+
+@code {
+    [Parameter]
+    public string EncodedRepoUrl { get; set; } = string.Empty;
+
+    private string DecodedRepoUrl => DecodeRepoUrl(EncodedRepoUrl);
+
+    private IReadOnlyList<AgentSessionSummary> sessions = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        sessions = await Analytics.GetSessionsByRepositoryAsync(DecodedRepoUrl, TimeSpan.FromHours(24));
+    }
+
+    private static string DecodeRepoUrl(string encoded)
+    {
+        try
+        {
+            var padded = encoded.Replace('-', '+').Replace('_', '/');
+            switch (padded.Length % 4)
+            {
+                case 2: padded += "=="; break;
+                case 3: padded += "="; break;
+            }
+            return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(padded));
+        }
+        catch
+        {
+            return encoded;
+        }
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration.TotalMinutes < 1) return $"{duration.Seconds}s";
+        if (duration.TotalHours < 1) return $"{(int)duration.TotalMinutes}m {duration.Seconds}s";
+        return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+    }
+}

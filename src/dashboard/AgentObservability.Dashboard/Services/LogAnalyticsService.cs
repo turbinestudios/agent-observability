@@ -160,6 +160,89 @@ AppDependencies
         return table is null ? [] : MapWorkflowInteractions(table);
     }
 
+    public async Task<IReadOnlyList<AgentSessionSummary>> GetSessionsByRepositoryAsync(string repositoryUrl, TimeSpan lookback, CancellationToken cancellationToken = default)
+    {
+        const string query = """
+let RepoBySession = AppDependencies
+| where isnotempty(Properties["copilot_chat.repo.remote_url"])
+| summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"])) by SessionId=tostring(Properties["session.id"]);
+AppDependencies
+| extend SessionId=tostring(Properties["session.id"])
+| join kind=leftouter RepoBySession on SessionId
+| extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
+| where Repository != "unknown"
+| extend ChatSessionId=tostring(Properties["copilot_chat.chat_session_id"])
+| where isnotempty(ChatSessionId)
+| extend User=coalesce(tostring(Properties["user.email"]), tostring(UserId), "unknown")
+| extend AgentMode=coalesce(tostring(Properties["copilot_chat.mode_name"]), "default")
+| where Repository == repo_filter
+| summarize StartTime=min(TimeGenerated), EndTime=max(TimeGenerated), RequestCount=count(), AgentModes=make_set(AgentMode) by ChatSessionId, User
+| order by StartTime desc
+| take 100
+""";
+
+        var parameterizedQuery = query.Replace("repo_filter", $"'{EscapeKqlString(repositoryUrl)}'");
+        var table = await QueryAsync(parameterizedQuery, lookback, cancellationToken);
+        return table is null ? [] : MapSessionSummaries(table);
+    }
+
+    public async Task<IReadOnlyList<SessionInteraction>> GetSessionInteractionsAsync(string sessionId, TimeSpan lookback, CancellationToken cancellationToken = default)
+    {
+        const string query = """
+AppDependencies
+| where tostring(Properties["copilot_chat.chat_session_id"]) == session_filter
+| extend AgentMode=coalesce(tostring(Properties["copilot_chat.mode_name"]), "default")
+| extend ToolName=coalesce(tostring(Properties["gen_ai.tool.name"]), tostring(Properties["tool.name"]), "")
+| extend UserRequest=tostring(Properties["copilot_chat.user_request"])
+| extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
+| project TimeGenerated, AgentMode, ToolName, UserRequest, Model, DurationMs, Success
+| order by TimeGenerated asc
+""";
+
+        var parameterizedQuery = query.Replace("session_filter", $"'{EscapeKqlString(sessionId)}'");
+        var table = await QueryAsync(parameterizedQuery, lookback, cancellationToken);
+        return table is null ? [] : MapSessionInteractions(table);
+    }
+
+    public async Task<IReadOnlyList<AgentInteraction>> GetSessionInteractionsForDeviationAsync(string sessionId, string repository, TimeSpan lookback, CancellationToken cancellationToken = default)
+    {
+        const string query = """
+AppDependencies
+| where tostring(Properties["copilot_chat.chat_session_id"]) == session_filter
+| extend Agent=coalesce(tostring(Properties["github.copilot.agent"]), tostring(Properties["gen_ai.agent.name"]), "copilot")
+| extend ToolName=coalesce(tostring(Properties["tool.name"]), tostring(Name), "unknown")
+| extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
+| project TimeGenerated, Agent, ToolName, Model, DurationMs, Success
+| order by TimeGenerated asc
+""";
+
+        var parameterizedQuery = query.Replace("session_filter", $"'{EscapeKqlString(sessionId)}'");
+        var table = await QueryAsync(parameterizedQuery, lookback, cancellationToken);
+
+        if (table is null)
+        {
+            return [];
+        }
+
+        var items = new List<AgentInteraction>(table.Rows.Count);
+
+        for (var index = 0; index < table.Rows.Count; index++)
+        {
+            items.Add(new AgentInteraction
+            {
+                Timestamp = GetDateTimeOffset(table, index, "TimeGenerated"),
+                Repository = repository,
+                Agent = GetString(table, index, "Agent"),
+                ToolName = GetString(table, index, "ToolName"),
+                Model = GetString(table, index, "Model"),
+                DurationMs = GetDouble(table, index, "DurationMs"),
+                Success = GetBoolean(table, index, "Success")
+            });
+        }
+
+        return items;
+    }
+
     private async Task<LogsTable?> QueryAsync(string query, TimeSpan lookback, CancellationToken cancellationToken)
     {
         try
@@ -299,6 +382,55 @@ AppDependencies
         }
 
         return items;
+    }
+
+    private static IReadOnlyList<AgentSessionSummary> MapSessionSummaries(LogsTable table)
+    {
+        var items = new List<AgentSessionSummary>(table.Rows.Count);
+
+        for (var index = 0; index < table.Rows.Count; index++)
+        {
+            var agentModesRaw = GetString(table, index, "AgentModes");
+            var agentModes = agentModesRaw.Trim('[', ']', '"').Replace("\",\"", ", ");
+
+            items.Add(new AgentSessionSummary
+            {
+                SessionId = GetString(table, index, "ChatSessionId"),
+                User = GetString(table, index, "User"),
+                StartTime = GetDateTimeOffset(table, index, "StartTime"),
+                EndTime = GetDateTimeOffset(table, index, "EndTime"),
+                RequestCount = GetInt32(table, index, "RequestCount"),
+                AgentModes = agentModes
+            });
+        }
+
+        return items;
+    }
+
+    private static IReadOnlyList<SessionInteraction> MapSessionInteractions(LogsTable table)
+    {
+        var items = new List<SessionInteraction>(table.Rows.Count);
+
+        for (var index = 0; index < table.Rows.Count; index++)
+        {
+            items.Add(new SessionInteraction
+            {
+                Timestamp = GetDateTimeOffset(table, index, "TimeGenerated"),
+                AgentMode = GetString(table, index, "AgentMode"),
+                ToolName = GetString(table, index, "ToolName"),
+                UserRequest = GetString(table, index, "UserRequest"),
+                Model = GetString(table, index, "Model"),
+                DurationMs = GetDouble(table, index, "DurationMs"),
+                Success = GetBoolean(table, index, "Success")
+            });
+        }
+
+        return items;
+    }
+
+    private static string EscapeKqlString(string value)
+    {
+        return value.Replace("'", "\\'");
     }
 
     private static int GetColumnIndex(LogsTable table, string columnName)
