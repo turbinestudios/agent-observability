@@ -2,6 +2,8 @@ using AgentObservability.Dashboard.Components;
 using AgentObservability.Dashboard.Models;
 using AgentObservability.Dashboard.Services;
 using AgentObservability.Dashboard;
+using Azure.Data.Tables;
+using Azure.Identity;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,7 +24,25 @@ builder.Services.AddSingleton<WorkflowDeviationDetector>();
 builder.Services.AddHttpClient("AlertEngine");
 builder.Services.AddHostedService<AlertEngine>();
 
+// Phase 6: Workflow Management (Azure Table Storage)
+var storageTableEndpoint = builder.Configuration["Storage:TableEndpoint"];
+if (!string.IsNullOrEmpty(storageTableEndpoint))
+{
+    builder.Services.AddSingleton(new TableServiceClient(new Uri(storageTableEndpoint), new DefaultAzureCredential()));
+}
+else
+{
+    // Fallback to connection string for local development (Azurite)
+    var storageConnectionString = builder.Configuration["Storage:ConnectionString"] ?? "UseDevelopmentStorage=true";
+    builder.Services.AddSingleton(new TableServiceClient(storageConnectionString));
+}
+builder.Services.AddSingleton<WorkflowManagementService>();
+
 var app = builder.Build();
+
+// Ensure Table Storage tables exist
+var workflowService = app.Services.GetRequiredService<WorkflowManagementService>();
+await workflowService.EnsureTablesExistAsync();
 
 if (!app.Environment.IsDevelopment())
 {

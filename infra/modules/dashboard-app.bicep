@@ -19,6 +19,9 @@ param acrLoginServer string
 @description('Resource ID of the user-assigned managed identity for ACR pull')
 param dashboardIdentityId string
 
+@description('Table service endpoint for Azure Table Storage')
+param storageTableEndpoint string
+
 resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
@@ -57,6 +60,10 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'LogAnalytics__WorkspaceId'
               value: logAnalyticsWorkspaceId
+            }
+            {
+              name: 'Storage__TableEndpoint'
+              value: storageTableEndpoint
             }
           ]
         }

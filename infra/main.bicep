@@ -106,6 +106,14 @@ module otelCollector 'modules/otel-collector.bicep' = {
   }
 }
 
+// Storage Account for workflow configuration (Table Storage)
+module storageAccount 'modules/storage-account.bicep' = {
+  params: {
+    location: location
+    storageAccountName: replace('st${baseName}${uniqueString(resourceGroup().id)}', '-', '')
+  }
+}
+
 // Step 1.4 — Container App: Blazor Dashboard
 module dashboard 'modules/dashboard-app.bicep' = {
   params: {
@@ -116,6 +124,7 @@ module dashboard 'modules/dashboard-app.bicep' = {
     logAnalyticsWorkspaceId: logAnalytics.outputs.workspaceCustomerId
     acrLoginServer: acr.outputs.loginServer
     dashboardIdentityId: dashboardIdentity.id
+    storageTableEndpoint: storageAccount.outputs.tableEndpoint
   }
   dependsOn: [dashboardAcrPullRole]
 }
@@ -149,6 +158,22 @@ resource dashboardReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01
   }
 }
 
+// Storage Table Data Contributor role for Dashboard identity
+resource storageAccountResource 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+  name: replace('st${baseName}${uniqueString(resourceGroup().id)}', '-', '')
+  dependsOn: [storageAccount]
+}
+
+resource dashboardTableDataRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
+  scope: storageAccountResource
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
+    principalId: dashboard.outputs.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Outputs
 @description('FQDN of the OTel Collector endpoint')
 output otelCollectorFqdn string = otelCollector.outputs.fqdn
@@ -164,3 +189,6 @@ output acrLoginServer string = acr.outputs.loginServer
 
 @description('Key Vault URI')
 output keyVaultUri string = keyVault.outputs.keyVaultUri
+
+@description('Storage Account Table Endpoint')
+output storageTableEndpoint string = storageAccount.outputs.tableEndpoint
