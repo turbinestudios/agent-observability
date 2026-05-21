@@ -205,6 +205,11 @@ code {
     margin-bottom: 1rem;
 }
 
+.chart-grid-full {
+    grid-template-columns: 1fr;
+    margin-bottom: 1rem;
+}
+
 .panel-card {
     padding: 1.2rem;
     overflow: hidden;
