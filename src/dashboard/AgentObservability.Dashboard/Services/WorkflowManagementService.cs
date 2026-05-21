@@ -97,7 +97,7 @@ public sealed class WorkflowManagementService
                 Id = entity.RowKey!,
                 RepositoryId = repositoryId,
                 Name = entity.GetString("Name") ?? string.Empty,
-                Trigger = DeserializeTrigger(entity.GetString("TriggerJson")),
+                TriggerConditions = DeserializeTriggerConditions(entity.GetString("TriggerJson")),
                 Steps = DeserializeSteps(entity.GetString("StepsJson"))
             };
 
@@ -112,7 +112,7 @@ public sealed class WorkflowManagementService
         var entity = new TableEntity(workflow.RepositoryId, workflow.Id)
         {
             { "Name", workflow.Name },
-            { "TriggerJson", JsonSerializer.Serialize(workflow.Trigger, JsonOptions) },
+            { "TriggerJson", JsonSerializer.Serialize(workflow.TriggerConditions, JsonOptions) },
             { "StepsJson", JsonSerializer.Serialize(workflow.Steps, JsonOptions) }
         };
 
@@ -125,7 +125,7 @@ public sealed class WorkflowManagementService
         var entity = new TableEntity(workflow.RepositoryId, workflow.Id)
         {
             { "Name", workflow.Name },
-            { "TriggerJson", JsonSerializer.Serialize(workflow.Trigger, JsonOptions) },
+            { "TriggerJson", JsonSerializer.Serialize(workflow.TriggerConditions, JsonOptions) },
             { "StepsJson", JsonSerializer.Serialize(workflow.Steps, JsonOptions) }
         };
 
@@ -141,14 +141,21 @@ public sealed class WorkflowManagementService
 
     // ─── Helpers ────────────────────────────────────────────────────────────────
 
-    private static TriggerCondition DeserializeTrigger(string? json)
+    private static List<TriggerCondition> DeserializeTriggerConditions(string? json)
     {
         if (string.IsNullOrEmpty(json))
         {
-            return new TriggerCondition();
+            return [new TriggerCondition()];
         }
 
-        return JsonSerializer.Deserialize<TriggerCondition>(json, JsonOptions) ?? new TriggerCondition();
+        // Support legacy single-object format
+        if (json.TrimStart().StartsWith('{'))
+        {
+            var single = JsonSerializer.Deserialize<TriggerCondition>(json, JsonOptions);
+            return single is not null ? [single] : [new TriggerCondition()];
+        }
+
+        return JsonSerializer.Deserialize<List<TriggerCondition>>(json, JsonOptions) ?? [new TriggerCondition()];
     }
 
     private static List<WorkflowStep> DeserializeSteps(string? json)

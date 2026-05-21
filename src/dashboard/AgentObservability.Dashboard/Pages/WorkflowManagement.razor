@@ -97,7 +97,7 @@
                                 <button class="btn-icon" title="Delete" @onclick="() => DeleteWorkflow(wf)">🗑️</button>
                             </div>
                         </div>
-                        <p class="workflow-meta">Trigger: <code>@wf.Trigger.AttributeName</code> = <code>@wf.Trigger.ExpectedValue</code></p>
+                        <p class="workflow-meta">Trigger: @string.Join(" AND ", wf.TriggerConditions.Select(c => $"{c.AttributeName} = \"{c.ExpectedValue}\""))</p>
                         <p>@string.Join(" → ", wf.Steps.OrderBy(s => s.Order).Select(s => $"{s.PropertyName}:{s.ExpectedValue}"))</p>
                     </article>
                 }
@@ -114,27 +114,31 @@
                     </div>
 
                     <fieldset class="form-fieldset">
-                        <legend>Trigger Condition</legend>
-                        <p class="form-help">This workflow applies when a session contains a span matching this condition.</p>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Attribute</label>
-                                <select value="@GetDropdownValue(editingWorkflow.Trigger.AttributeName)" @onchange="e => OnTriggerAttributeChanged(e)">
+                        <legend>Trigger Conditions</legend>
+                        <p class="form-help">All conditions must match (AND). The workflow applies when a session contains spans matching every condition below.</p>
+
+                        @for (var i = 0; i < editingWorkflow.TriggerConditions.Count; i++)
+                        {
+                            var condition = editingWorkflow.TriggerConditions[i];
+                            var condIndex = i;
+                            <div class="step-row">
+                                <select value="@GetDropdownValue(condition.AttributeName)" @onchange="e => OnTriggerAttributeChanged(condIndex, e)">
                                     @foreach (var attr in AttributeOptions)
                                     {
                                         <option value="@attr">@attr</option>
                                     }
                                 </select>
-                                @if (IsCustomAttribute(editingWorkflow.Trigger.AttributeName))
+                                @if (IsCustomAttribute(condition.AttributeName))
                                 {
-                                    <input type="text" class="custom-key-input" @bind="editingWorkflow.Trigger.AttributeName" placeholder="e.g. copilot_chat.session.id" />
+                                    <input type="text" class="custom-key-input" @bind="condition.AttributeName" placeholder="e.g. copilot_chat.session.id" />
                                 }
+                                <span class="condition-equals">=</span>
+                                <input type="text" @bind="condition.ExpectedValue" placeholder="Expected value" />
+                                <button class="btn-icon" title="Remove condition" disabled="@(editingWorkflow.TriggerConditions.Count <= 1)" @onclick="() => RemoveTriggerCondition(condIndex)">✕</button>
                             </div>
-                            <div class="form-group">
-                                <label>Expected Value</label>
-                                <input type="text" @bind="editingWorkflow.Trigger.ExpectedValue" placeholder="e.g. planner" />
-                            </div>
-                        </div>
+                        }
+
+                        <button class="action-button action-button-secondary" @onclick="AddTriggerCondition">+ Add Condition</button>
                     </fieldset>
 
                     <fieldset class="form-fieldset">
@@ -207,10 +211,10 @@
 
     private static string GetDropdownValue(string value) => KnownAttributes.Contains(value) ? value : "custom";
 
-    private void OnTriggerAttributeChanged(ChangeEventArgs e)
+    private void OnTriggerAttributeChanged(int index, ChangeEventArgs e)
     {
         var selected = e.Value?.ToString() ?? "tool.name";
-        editingWorkflow.Trigger.AttributeName = selected == "custom" ? "" : selected;
+        editingWorkflow.TriggerConditions[index].AttributeName = selected == "custom" ? "" : selected;
     }
 
     private void OnStepAttributeChanged(int index, ChangeEventArgs e)
@@ -305,11 +309,11 @@
             Id = wf.Id,
             RepositoryId = wf.RepositoryId,
             Name = wf.Name,
-            Trigger = new TriggerCondition
+            TriggerConditions = wf.TriggerConditions.Select(c => new TriggerCondition
             {
-                AttributeName = wf.Trigger.AttributeName,
-                ExpectedValue = wf.Trigger.ExpectedValue
-            },
+                AttributeName = c.AttributeName,
+                ExpectedValue = c.ExpectedValue
+            }).ToList(),
             Steps = wf.Steps.Select(s => new WorkflowStep
             {
                 Order = s.Order,
@@ -356,6 +360,21 @@
     private void CancelWorkflowEdit()
     {
         showWorkflowEditor = false;
+    }
+
+    // ─── Trigger Condition Management ───────────────────────────────────────────
+
+    private void AddTriggerCondition()
+    {
+        editingWorkflow.TriggerConditions.Add(new TriggerCondition());
+    }
+
+    private void RemoveTriggerCondition(int index)
+    {
+        if (editingWorkflow.TriggerConditions.Count > 1)
+        {
+            editingWorkflow.TriggerConditions.RemoveAt(index);
+        }
     }
 
     // ─── Step Management ────────────────────────────────────────────────────────
