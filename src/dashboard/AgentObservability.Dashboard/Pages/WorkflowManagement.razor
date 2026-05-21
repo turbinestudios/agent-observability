@@ -119,12 +119,16 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Attribute</label>
-                                <select @bind="editingWorkflow.Trigger.AttributeName">
+                                <select value="@GetDropdownValue(editingWorkflow.Trigger.AttributeName)" @onchange="e => OnTriggerAttributeChanged(e)">
                                     @foreach (var attr in AttributeOptions)
                                     {
                                         <option value="@attr">@attr</option>
                                     }
                                 </select>
+                                @if (IsCustomAttribute(editingWorkflow.Trigger.AttributeName))
+                                {
+                                    <input type="text" class="custom-key-input" @bind="editingWorkflow.Trigger.AttributeName" placeholder="e.g. copilot_chat.session.id" />
+                                }
                             </div>
                             <div class="form-group">
                                 <label>Expected Value</label>
@@ -143,12 +147,16 @@
                             var index = i;
                             <div class="step-row">
                                 <span class="step-number">@(index + 1)</span>
-                                <select @bind="step.PropertyName">
+                                <select value="@GetDropdownValue(step.PropertyName)" @onchange="e => OnStepAttributeChanged(index, e)">
                                     @foreach (var attr in AttributeOptions)
                                     {
                                         <option value="@attr">@attr</option>
                                     }
                                 </select>
+                                @if (IsCustomAttribute(step.PropertyName))
+                                {
+                                    <input type="text" class="custom-key-input" @bind="step.PropertyName" placeholder="Custom property key" />
+                                }
                                 <input type="text" @bind="step.ExpectedValue" placeholder="Expected value" />
                                 <button class="btn-icon" title="Move up" disabled="@(index == 0)" @onclick="() => MoveStepUp(index)">↑</button>
                                 <button class="btn-icon" title="Move down" disabled="@(index == editingWorkflow.Steps.Count - 1)" @onclick="() => MoveStepDown(index)">↓</button>
@@ -192,6 +200,24 @@
         "gen_ai.agent.name",
         "custom"
     ];
+
+    private static readonly HashSet<string> KnownAttributes = new(AttributeOptions.Where(a => a != "custom"));
+
+    private static bool IsCustomAttribute(string value) => !KnownAttributes.Contains(value);
+
+    private static string GetDropdownValue(string value) => KnownAttributes.Contains(value) ? value : "custom";
+
+    private void OnTriggerAttributeChanged(ChangeEventArgs e)
+    {
+        var selected = e.Value?.ToString() ?? "tool.name";
+        editingWorkflow.Trigger.AttributeName = selected == "custom" ? "" : selected;
+    }
+
+    private void OnStepAttributeChanged(int index, ChangeEventArgs e)
+    {
+        var selected = e.Value?.ToString() ?? "tool.name";
+        editingWorkflow.Steps[index].PropertyName = selected == "custom" ? "" : selected;
+    }
 
     protected override async Task OnInitializedAsync()
     {

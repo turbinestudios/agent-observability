@@ -472,3 +472,13 @@ code {
     color: var(--muted);
     text-align: center;
 }
+
+.custom-key-input {
+    margin-top: 0.35rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px dashed var(--accent);
+    border-radius: 0.5rem;
+    font: inherit;
+    background: #fff;
+    width: 100%;
+}
