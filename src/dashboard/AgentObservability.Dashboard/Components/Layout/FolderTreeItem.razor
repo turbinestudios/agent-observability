@@ -1,6 +1,6 @@
 @using AgentObservability.Dashboard.Models
 
-<div class="tree-item depth-@Depth @(SelectedFolderId == Folder.Id ? "selected" : "") @(isDragOver ? "drag-over" : "")"
+<div class="tree-folder depth-@Depth @(SelectedFolderId == Folder.Id ? "selected" : "") @(isDragOver ? "drag-over" : "")"
      @onclick="() => OnSelect.InvokeAsync(Folder.Id)"
      @onclick:stopPropagation
      @oncontextmenu="HandleContextMenu"
@@ -11,24 +11,24 @@
      @ondrop="HandleDrop">
 
     <button class="tree-expand" @onclick="ToggleExpand" @onclick:stopPropagation>
-        @if (HasChildren)
+        @if (IsExpanded)
         {
-            @if (IsExpanded)
-            {
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-            }
-            else
-            {
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-            }
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         }
         else
         {
-            <span class="tree-expand-spacer"></span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
         }
     </button>
 
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+    @if (IsExpanded)
+    {
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+    }
+    else
+    {
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+    }
 
     @if (isRenaming)
     {
@@ -38,37 +38,40 @@
     else
     {
         <span class="tree-label">@Folder.Name</span>
+        <span class="tree-badge">@DashboardCount</span>
     }
 </div>
 
 @if (IsExpanded)
 {
-    @foreach (var child in AllFolders.Where(f => f.ParentFolderId == Folder.Id).OrderBy(f => f.SortOrder))
-    {
-        <FolderTreeItem Folder="child"
-                        AllFolders="AllFolders"
-                        AllDashboards="AllDashboards"
-                        SelectedFolderId="SelectedFolderId"
-                        OnSelect="OnSelect"
-                        OnContextMenu="OnContextMenu"
-                        OnRename="OnRename"
-                        OnDashboardDrop="OnDashboardDrop"
-                        OnDashboardNavigate="OnDashboardNavigate"
-                        Depth="Depth + 1" />
-    }
+    <div class="tree-children depth-@Depth">
+        @foreach (var child in AllFolders.Where(f => f.ParentFolderId == Folder.Id).OrderBy(f => f.SortOrder))
+        {
+            <FolderTreeItem Folder="child"
+                            AllFolders="AllFolders"
+                            AllDashboards="AllDashboards"
+                            SelectedFolderId="SelectedFolderId"
+                            OnSelect="OnSelect"
+                            OnContextMenu="OnContextMenu"
+                            OnRename="OnRename"
+                            OnDashboardDrop="OnDashboardDrop"
+                            OnDashboardNavigate="OnDashboardNavigate"
+                            Depth="Depth + 1" />
+        }
 
-    @foreach (var dashboard in AllDashboards.Where(d => d.FolderId == Folder.Id).OrderBy(d => d.Name))
-    {
-        <div class="tree-item tree-dashboard-item depth-@(Depth + 1)"
-             draggable="true"
-             @ondragstart="() => HandleDashboardDragStart(dashboard)"
-             @onclick="() => OnDashboardNavigate.InvokeAsync(dashboard.Id)"
-             @onclick:stopPropagation>
-            <span class="tree-expand-spacer"></span>
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
-            <span class="tree-label">@dashboard.Name</span>
-        </div>
-    }
+        @foreach (var dashboard in AllDashboards.Where(d => d.FolderId == Folder.Id).OrderBy(d => d.Name))
+        {
+            <div class="tree-item tree-dashboard-item depth-@(Depth + 1)"
+                 draggable="true"
+                 @ondragstart="() => HandleDashboardDragStart(dashboard.Id)"
+                 @ondragend="HandleDragEnd"
+                 @onclick="() => OnDashboardNavigate.InvokeAsync(dashboard.Id)"
+                 @onclick:stopPropagation>
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+                <span class="tree-label">@dashboard.Name</span>
+            </div>
+        }
+    </div>
 }
 
 @code {
@@ -84,12 +87,14 @@
     [Parameter] public int Depth { get; set; }
 
     private bool IsExpanded { get; set; } = true;
-    private bool HasChildren => AllFolders.Any(f => f.ParentFolderId == Folder.Id) || AllDashboards.Any(d => d.FolderId == Folder.Id);
+    private int DashboardCount => AllDashboards.Count(d => d.FolderId == Folder.Id);
     private bool isRenaming;
     private string renameValue = string.Empty;
     private bool isDragOver;
+    private int dragEnterCount;
 
-    private static string? DraggedDashboardId;
+    /// <summary>Shared drag state across all tree components.</summary>
+    public static string? DraggedDashboardId;
 
     private void ToggleExpand()
     {
@@ -119,13 +124,19 @@
         isRenaming = false;
     }
 
-    private void HandleDashboardDragStart(CustomDashboard dashboard)
+    private void HandleDashboardDragStart(string dashboardId)
     {
-        DraggedDashboardId = dashboard.Id;
+        DraggedDashboardId = dashboardId;
+    }
+
+    private void HandleDragEnd()
+    {
+        DraggedDashboardId = null;
     }
 
     private void HandleDragEnter(DragEventArgs e)
     {
+        dragEnterCount++;
         if (DraggedDashboardId is not null)
         {
             isDragOver = true;
@@ -134,12 +145,18 @@
 
     private void HandleDragLeave(DragEventArgs e)
     {
-        isDragOver = false;
+        dragEnterCount--;
+        if (dragEnterCount <= 0)
+        {
+            isDragOver = false;
+            dragEnterCount = 0;
+        }
     }
 
     private async Task HandleDrop(DragEventArgs e)
     {
         isDragOver = false;
+        dragEnterCount = 0;
         if (DraggedDashboardId is not null)
         {
             var dashboardId = DraggedDashboardId;
