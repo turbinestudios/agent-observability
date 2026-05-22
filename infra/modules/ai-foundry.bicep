@@ -27,6 +27,24 @@ resource aiServices 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   }
 }
 
+// AI Foundry Hub (required parent for projects)
+resource aiHub 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
+  name: '${projectName}-hub'
+  location: location
+  kind: 'Hub'
+  sku: {
+    name: 'Basic'
+    tier: 'Basic'
+  }
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    friendlyName: '${projectName}-hub'
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
 // AI Foundry project (Azure Machine Learning workspace)
 resource aiProject 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
   name: projectName
@@ -41,6 +59,7 @@ resource aiProject 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
   }
   properties: {
     friendlyName: projectName
+    hubResourceId: aiHub.id
     publicNetworkAccess: 'Enabled'
   }
 }
