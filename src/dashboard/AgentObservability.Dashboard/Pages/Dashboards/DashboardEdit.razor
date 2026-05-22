@@ -7,6 +7,7 @@
 @inject Radzen.NotificationService NotificationService
 @inject IJSRuntime JS
 @using AgentObservability.Dashboard.Models
+@using Markdig
 @implements IAsyncDisposable
 
 <PageTitle>Edit - @(dashboard?.Name ?? "Dashboard")</PageTitle>
@@ -255,10 +256,14 @@ else
                                     <span>Generate with AI</span>
                                 }
                             </button>
+                            @if (!string.IsNullOrEmpty(aiGeneratedKql))
+                            {
+                                <button class="action-button action-button-secondary" @onclick="ApplyGeneratedKql">Apply to Query</button>
+                            }
                         </div>
                         @if (!string.IsNullOrEmpty(aiExplanation))
                         {
-                            <div class="ai-explanation">@aiExplanation</div>
+                            <div class="ai-explanation">@((MarkupString)RenderMarkdown(aiExplanation))</div>
                         }
                         @if (!string.IsNullOrEmpty(aiGeneratedKql))
                         {
@@ -532,20 +537,19 @@ else
 
             aiGeneratedKql = result.KqlQuery;
             aiExplanation = result.Explanation;
-
-            // Auto-apply generated KQL and execute preview
-            if (!string.IsNullOrEmpty(aiGeneratedKql))
-            {
-                editingWidget.KqlQuery = aiGeneratedKql;
-                StateHasChanged();
-                await ExecuteEditingWidgetQuery();
-            }
         }
         finally
         {
             aiGenerating = false;
             StateHasChanged();
         }
+    }
+
+    private async Task ApplyGeneratedKql()
+    {
+        if (editingWidget is null || string.IsNullOrEmpty(aiGeneratedKql)) return;
+        editingWidget.KqlQuery = aiGeneratedKql;
+        await ExecuteEditingWidgetQuery();
     }
 
     private async Task RunPreview()
@@ -634,6 +638,15 @@ else
             await JS.InvokeVoidAsync("queryEditor.unregisterKeyHandler", queryTextareaRef);
         }
         dotNetRef?.Dispose();
+    }
+
+    private static readonly MarkdownPipeline _markdownPipeline = new MarkdownPipelineBuilder()
+        .UseAdvancedExtensions()
+        .Build();
+
+    private static string RenderMarkdown(string markdown)
+    {
+        return Markdown.ToHtml(markdown, _markdownPipeline);
     }
 
     private sealed record FilterSnippet(string Label, string Kql);
