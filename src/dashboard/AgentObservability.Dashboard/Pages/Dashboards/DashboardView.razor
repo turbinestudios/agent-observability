@@ -23,6 +23,15 @@ else
             }
         </div>
         <div class="dashboard-toolbar-actions">
+            <select class="time-range-select" @onchange="OnTimeRangeChanged" value="@selectedTimeRange">
+                <option value="1">Last 1 hour</option>
+                <option value="4">Last 4 hours</option>
+                <option value="12">Last 12 hours</option>
+                <option value="24">Last 24 hours</option>
+                <option value="72">Last 3 days</option>
+                <option value="168">Last 7 days</option>
+                <option value="720">Last 30 days</option>
+            </select>
             <button class="action-button action-button-secondary" @onclick="RefreshWidgets">Refresh</button>
             <button class="action-button" @onclick="EditDashboard">Edit</button>
         </div>
@@ -77,6 +86,7 @@ else
     private List<DashboardWidget> widgets = [];
     private Dictionary<string, WidgetQueryResult> widgetResults = new();
     private int maxRow => widgets.Count > 0 ? widgets.Max(w => w.GridRow + w.RowSpan - 1) : 1;
+    private string selectedTimeRange = "24";
 
     protected override async Task OnInitializedAsync()
     {
@@ -98,9 +108,9 @@ else
 
     private async Task ExecuteAllWidgetQueries()
     {
-        var lookback = TimeSpan.FromHours(24);
+        var lookback = TimeSpan.FromHours(double.Parse(selectedTimeRange));
 
-        // Check if there's a TimeRange filter
+        // Check if there's a TimeRange filter that overrides the selector
         var timeFilter = dashboard?.Filters.FirstOrDefault(f => f.FilterType == DashboardFilterType.TimeRange);
         if (timeFilter?.Values.Count > 0 && TimeSpan.TryParse(timeFilter.Values[0], out var parsedLookback))
         {
@@ -128,6 +138,13 @@ else
     private async Task RefreshWidgets()
     {
         await ExecuteAllWidgetQueries();
+    }
+
+    private async Task OnTimeRangeChanged(ChangeEventArgs e)
+    {
+        selectedTimeRange = e.Value?.ToString() ?? "24";
+        await ExecuteAllWidgetQueries();
+        StateHasChanged();
     }
 
     private void EditDashboard()

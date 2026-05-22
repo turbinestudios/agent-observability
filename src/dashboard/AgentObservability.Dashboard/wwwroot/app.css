@@ -1003,7 +1003,18 @@ code {
 
 .dashboard-toolbar-actions {
     display: flex;
+    align-items: center;
     gap: 0.5rem;
+}
+
+.time-range-select {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.82rem;
+    cursor: pointer;
 }
 
 @media (max-width: 980px) {
