@@ -97,7 +97,7 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-
 }
 
 @description('AI Foundry project endpoint (used by Azure.AI.Projects SDK)')
-output endpoint string = 'https://${projectName}.services.ai.azure.com'
+output endpoint string = aiServices.properties.endpoint
 
 @description('Resource ID of the AI Foundry project (for RBAC scoping)')
 output projectId string = aiProject.id
