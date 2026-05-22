@@ -849,6 +849,18 @@ code {
     cursor: pointer;
 }
 
+.widget-cell.editing .widget-cell-body {
+    flex-direction: column;
+    padding: 0.5rem;
+    min-height: 120px;
+}
+
+.query-preview-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
 .widget-placeholder {
     display: flex;
     flex-direction: column;

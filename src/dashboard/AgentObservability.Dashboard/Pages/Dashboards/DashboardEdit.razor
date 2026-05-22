@@ -26,6 +26,15 @@ else
             </div>
         </div>
         <div class="dashboard-toolbar-actions">
+            <select class="time-range-select" @onchange="OnTimeRangeChanged" value="@selectedTimeRange">
+                <option value="1">Last 1 hour</option>
+                <option value="4">Last 4 hours</option>
+                <option value="12">Last 12 hours</option>
+                <option value="24">Last 24 hours</option>
+                <option value="72">Last 3 days</option>
+                <option value="168">Last 7 days</option>
+                <option value="720">Last 30 days</option>
+            </select>
             <button class="action-button action-button-secondary" @onclick="Cancel">Cancel</button>
             <button class="action-button" @onclick="Save">Save</button>
         </div>
@@ -107,14 +116,30 @@ else
                         </div>
                     </div>
                     <div class="widget-cell-body">
-                        <span style="color: var(--muted); font-size: 0.85rem;">@widget.WidgetType — @widget.ColumnSpan×@widget.RowSpan</span>
+                        @if (IsWidgetLoading(widget.Id))
+                        {
+                            <span class="spinner"></span>
+                        }
+                        else if (editingWidget?.Id == widget.Id && editingWidgetResult is not null)
+                        {
+                            <AgentObservability.Dashboard.Components.Widgets.WidgetRenderer
+                                Widget="editingWidget"
+                                QueryResult="editingWidgetResult" />
+                        }
+                        else if (!string.IsNullOrWhiteSpace(widget.KqlQuery))
+                        {
+                            <AgentObservability.Dashboard.Components.Widgets.WidgetRenderer
+                                Widget="widget"
+                                QueryResult="GetWidgetResult(widget.Id)" />
+                        }
+                        else
+                        {
+                            <span style="color: var(--muted); font-size: 0.85rem;">@widget.WidgetType — @widget.ColumnSpan×@widget.RowSpan</span>
+                        }
                         @{ var missing = GetMissingFilters(widget); }
                         @if (missing.Count > 0)
                         {
-                            <div class="widget-filter-warning">
-                                <span class="warning-icon">⚠</span>
-                                <span>Missing filters: @string.Join(", ", missing)</span>
-                            </div>
+                            <span class="widget-filter-warning-badge" title="Missing filters: @string.Join(", ", missing)">⚠</span>
                         }
                     </div>
                 </div>
@@ -191,6 +216,19 @@ else
                             <span>This query does not apply: @string.Join(", ", editMissing)</span>
                         </div>
                     }
+                    <div class="query-preview-actions" style="margin-top: 0.5rem;">
+                        <button class="action-button action-button-secondary" @onclick="RunPreview" disabled="@(previewExecuting || string.IsNullOrWhiteSpace(editingWidget.KqlQuery))">
+                            @if (previewExecuting)
+                            {
+                                <span class="spinner"></span>
+                                <span>Running...</span>
+                            }
+                            else
+                            {
+                                <span>▶ Run Preview</span>
+                            }
+                        </button>
+                    </div>
                 </div>
 
                 <!-- AI Query Assistant -->
@@ -217,10 +255,6 @@ else
                                     <span>Generate with AI</span>
                                 }
                             </button>
-                            @if (!string.IsNullOrEmpty(aiGeneratedKql))
-                            {
-                                <button class="action-button action-button-secondary" @onclick="ApplyGeneratedKql">Apply to Query</button>
-                            }
                         </div>
                         @if (!string.IsNullOrEmpty(aiExplanation))
                         {
@@ -254,6 +288,13 @@ else
     private bool isNewWidget;
     private int maxRow => widgets.Count > 0 ? widgets.Max(w => w.GridRow + w.RowSpan - 1) : 1;
 
+    // Widget preview state
+    private Dictionary<string, WidgetQueryResult> widgetResults = new();
+    private WidgetQueryResult? editingWidgetResult;
+    private string selectedTimeRange = "24";
+    private HashSet<string> loadingWidgets = new();
+    private bool previewExecuting;
+
     // Filter popup state
     private ElementReference queryTextareaRef;
     private bool showFilterPopup;
@@ -277,6 +318,7 @@ else
         }
 
         widgets = await DashboardService.GetWidgetsAsync(Id);
+        await ExecuteAllWidgetQueries();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -414,6 +456,7 @@ else
             Configuration = widget.Configuration
         };
         isNewWidget = false;
+        editingWidgetResult = widgetResults.GetValueOrDefault(widget.Id);
     }
 
     private async Task SaveWidget()
@@ -429,13 +472,20 @@ else
             await DashboardService.UpdateWidgetAsync(editingWidget);
         }
 
+        if (editingWidgetResult is not null)
+        {
+            widgetResults[editingWidget.Id] = editingWidgetResult;
+        }
+
         widgets = await DashboardService.GetWidgetsAsync(Id);
         editingWidget = null;
+        editingWidgetResult = null;
     }
 
     private void CancelWidgetEdit()
     {
         editingWidget = null;
+        editingWidgetResult = null;
     }
 
     private async Task RemoveWidget(DashboardWidget widget)
@@ -482,6 +532,14 @@ else
 
             aiGeneratedKql = result.KqlQuery;
             aiExplanation = result.Explanation;
+
+            // Auto-apply generated KQL and execute preview
+            if (!string.IsNullOrEmpty(aiGeneratedKql))
+            {
+                editingWidget.KqlQuery = aiGeneratedKql;
+                StateHasChanged();
+                await ExecuteEditingWidgetQuery();
+            }
         }
         finally
         {
@@ -490,13 +548,83 @@ else
         }
     }
 
-    private void ApplyGeneratedKql()
+    private async Task RunPreview()
     {
-        if (editingWidget is null || string.IsNullOrEmpty(aiGeneratedKql)) return;
-        editingWidget.KqlQuery = aiGeneratedKql;
-        aiGeneratedKql = string.Empty;
-        aiExplanation = string.Empty;
-        aiPrompt = string.Empty;
+        await ExecuteEditingWidgetQuery();
+    }
+
+    private async Task ExecuteEditingWidgetQuery()
+    {
+        if (editingWidget is null || string.IsNullOrWhiteSpace(editingWidget.KqlQuery)) return;
+
+        previewExecuting = true;
+        StateHasChanged();
+
+        try
+        {
+            var lookback = TimeSpan.FromHours(double.Parse(selectedTimeRange));
+            editingWidgetResult = await WidgetQueryService.ExecuteWidgetQueryAsync(
+                editingWidget.KqlQuery,
+                dashboard?.Filters ?? [],
+                lookback);
+        }
+        finally
+        {
+            previewExecuting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ExecuteAllWidgetQueries()
+    {
+        var lookback = TimeSpan.FromHours(double.Parse(selectedTimeRange));
+
+        var widgetsWithQueries = widgets.Where(w => !string.IsNullOrWhiteSpace(w.KqlQuery)).ToList();
+        foreach (var w in widgetsWithQueries)
+        {
+            loadingWidgets.Add(w.Id);
+        }
+        StateHasChanged();
+
+        try
+        {
+            var tasks = widgetsWithQueries.Select(async widget =>
+            {
+                var result = await WidgetQueryService.ExecuteWidgetQueryAsync(
+                    widget.KqlQuery,
+                    dashboard?.Filters ?? [],
+                    lookback);
+                return (widget.Id, result);
+            });
+
+            var results = await Task.WhenAll(tasks);
+            widgetResults = results.ToDictionary(r => r.Id, r => r.result);
+        }
+        finally
+        {
+            loadingWidgets.Clear();
+            StateHasChanged();
+        }
+    }
+
+    private WidgetQueryResult? GetWidgetResult(string widgetId)
+    {
+        return widgetResults.GetValueOrDefault(widgetId);
+    }
+
+    private bool IsWidgetLoading(string widgetId)
+    {
+        return loadingWidgets.Contains(widgetId);
+    }
+
+    private async Task OnTimeRangeChanged(ChangeEventArgs e)
+    {
+        selectedTimeRange = e.Value?.ToString() ?? "24";
+        await ExecuteAllWidgetQueries();
+        if (editingWidget is not null && !string.IsNullOrWhiteSpace(editingWidget.KqlQuery))
+        {
+            await ExecuteEditingWidgetQuery();
+        }
     }
 
     public async ValueTask DisposeAsync()
