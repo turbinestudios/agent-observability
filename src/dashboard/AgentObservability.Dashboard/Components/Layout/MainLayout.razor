@@ -3,12 +3,7 @@
 <RadzenComponents />
 
 <div class="shell">
-    <header class="shell-header">
-        <div class="header-brand">
-            <img src="logo.svg" alt="Logo" class="header-logo" />
-            <span class="header-title">Agent Observability</span>
-        </div>
-    </header>
+    <HeaderNav />
 
     <aside class="shell-sidebar @(SidebarCollapsed ? "collapsed" : "")">
         <button class="sidebar-toggle" @onclick="ToggleSidebar" title="@(SidebarCollapsed ? "Expand menu" : "Collapse menu")">

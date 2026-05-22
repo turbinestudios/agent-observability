@@ -555,3 +555,421 @@ code {
     padding: 0 0.25rem;
     flex-shrink: 0;
 }
+
+/* ─── Header Navigation ───────────────────────────────────────────────────── */
+
+.header-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-left: 2.5rem;
+}
+
+.header-nav-link {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: rgba(243, 238, 230, 0.7);
+    transition: color 140ms ease, background 140ms ease;
+}
+
+.header-nav-link:hover {
+    color: #f3eee6;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.header-nav-link.active {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.12);
+    font-weight: 600;
+}
+
+/* ─── Dashboard Shell Layout ──────────────────────────────────────────────── */
+
+.dashboard-shell {
+    display: grid;
+    min-height: 100vh;
+    grid-template-rows: auto 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+        "header header"
+        "sidebar main";
+}
+
+.dashboard-shell .shell-header {
+    grid-area: header;
+}
+
+.dashboard-sidebar {
+    grid-area: sidebar;
+    width: 280px;
+    padding: 0;
+    background: linear-gradient(180deg, rgba(34, 55, 52, 0.96) 0%, rgba(21, 37, 39, 0.98) 100%);
+    color: #f3eee6;
+    overflow-y: auto;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.dashboard-main {
+    grid-area: main;
+    padding: 2rem;
+    overflow-y: auto;
+}
+
+/* ─── Dashboard Nav (Folder Tree) ─────────────────────────────────────────── */
+
+.dashboard-nav {
+    padding: 1rem 0.75rem;
+}
+
+.dashboard-nav-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    margin-bottom: 0.75rem;
+}
+
+.dashboard-nav-header h3 {
+    margin: 0;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(243, 238, 230, 0.7);
+}
+
+.dashboard-nav-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.tree-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.6rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    font-size: 0.88rem;
+    color: rgba(243, 238, 230, 0.8);
+    transition: background 120ms ease;
+    user-select: none;
+}
+
+.tree-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.tree-item.selected {
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    font-weight: 500;
+}
+
+.tree-item.depth-1 { padding-left: 1.4rem; }
+.tree-item.depth-2 { padding-left: 2.2rem; }
+.tree-item.depth-3 { padding-left: 3rem; }
+.tree-item.depth-4 { padding-left: 3.8rem; }
+
+.tree-expand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.tree-expand-spacer {
+    width: 12px;
+}
+
+.tree-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tree-rename-input {
+    flex: 1;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid var(--accent);
+    border-radius: 0.3rem;
+    font: inherit;
+    font-size: 0.85rem;
+    background: rgba(255, 255, 255, 0.1);
+    color: #f3eee6;
+}
+
+.folder-create-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.5rem;
+    margin-top: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.5rem;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.folder-create-form input {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0.3rem;
+    font: inherit;
+    font-size: 0.85rem;
+    background: rgba(255, 255, 255, 0.08);
+    color: #f3eee6;
+}
+
+.folder-create-actions {
+    display: flex;
+    gap: 0.35rem;
+    justify-content: flex-end;
+}
+
+/* ─── Dashboard Grid (Widget Board) ──────────────────────────────────────── */
+
+.widget-grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 1rem;
+    min-height: 400px;
+}
+
+.widget-cell {
+    border: 1px solid var(--panel-border);
+    border-radius: 1rem;
+    background: var(--panel);
+    backdrop-filter: blur(18px);
+    box-shadow: var(--shadow);
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.widget-cell-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--panel-border);
+}
+
+.widget-cell-header h4 {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.widget-cell-body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.widget-cell.editing {
+    border: 2px dashed var(--accent);
+    cursor: pointer;
+}
+
+.widget-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 2rem;
+    border: 2px dashed var(--panel-border);
+    border-radius: 1rem;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color 140ms ease, background 140ms ease;
+}
+
+.widget-placeholder:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+
+/* ─── Dashboard Cards (Listing) ───────────────────────────────────────────── */
+
+.dashboard-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem;
+}
+
+.dashboard-card {
+    border: 1px solid var(--panel-border);
+    border-radius: 1rem;
+    background: var(--panel);
+    backdrop-filter: blur(18px);
+    box-shadow: var(--shadow);
+    padding: 1.25rem;
+    cursor: pointer;
+    transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.dashboard-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 30px 60px rgba(75, 52, 34, 0.18);
+}
+
+.dashboard-card h3 {
+    margin: 0 0 0.35rem;
+    font-size: 1.05rem;
+}
+
+.dashboard-card p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.88rem;
+}
+
+.dashboard-card-meta {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+}
+
+/* ─── Dashboard Filter Bar ────────────────────────────────────────────────── */
+
+.dashboard-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--panel-border);
+    border-radius: 1rem;
+    background: var(--panel);
+}
+
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--accent);
+}
+
+.filter-chip button {
+    display: flex;
+    align-items: center;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+}
+
+/* ─── Widget Config Editor ────────────────────────────────────────────────── */
+
+.widget-config-panel {
+    border: 1px solid var(--panel-border);
+    border-radius: 1rem;
+    background: var(--panel);
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+}
+
+.widget-config-panel h3 {
+    margin: 0 0 1rem;
+}
+
+.widget-config-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+}
+
+.widget-config-grid .form-group.full-width {
+    grid-column: 1 / -1;
+}
+
+/* ─── Metric Widget ───────────────────────────────────────────────────────── */
+
+.widget-metric {
+    text-align: center;
+}
+
+.widget-metric-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1.2;
+}
+
+.widget-metric-label {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-top: 0.25rem;
+}
+
+/* ─── Dashboard Toolbar ───────────────────────────────────────────────────── */
+
+.dashboard-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.dashboard-toolbar-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+@media (max-width: 980px) {
+    .dashboard-shell {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "header"
+            "sidebar"
+            "main";
+    }
+
+    .dashboard-sidebar {
+        width: 100%;
+    }
+
+    .widget-grid {
+        grid-template-columns: repeat(6, 1fr);
+    }
+}
+
+@media (max-width: 640px) {
+    .widget-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .dashboard-card-grid {
+        grid-template-columns: 1fr;
+    }
+}

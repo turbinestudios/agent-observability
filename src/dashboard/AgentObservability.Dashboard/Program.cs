@@ -38,11 +38,18 @@ else
 }
 builder.Services.AddSingleton<WorkflowManagementService>();
 
+// Phase 7: Custom Dashboards
+builder.Services.AddSingleton<DashboardService>();
+builder.Services.AddScoped<WidgetQueryService>();
+
 var app = builder.Build();
 
 // Ensure Table Storage tables exist
 var workflowService = app.Services.GetRequiredService<WorkflowManagementService>();
 await workflowService.EnsureTablesExistAsync();
+
+var dashboardService = app.Services.GetRequiredService<DashboardService>();
+await dashboardService.EnsureTablesExistAsync();
 
 if (!app.Environment.IsDevelopment())
 {

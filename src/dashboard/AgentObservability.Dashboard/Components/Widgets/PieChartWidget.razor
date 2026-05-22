@@ -1,0 +1,61 @@
+@using AgentObservability.Dashboard.Models
+@using Radzen.Blazor
+
+@if (chartData.Count > 0)
+{
+    <RadzenChart style="width: 100%; height: 100%;">
+        <RadzenPieSeries Data="@chartData" CategoryProperty="Category" ValueProperty="Value" Title="Distribution" />
+    </RadzenChart>
+}
+else
+{
+    <span style="color: var(--muted); font-size: 0.85rem;">No data</span>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public WidgetQueryResult QueryResult { get; set; } = default!;
+
+    private List<ChartDataItem> chartData = [];
+
+    protected override void OnParametersSet()
+    {
+        BuildChartData();
+    }
+
+    private void BuildChartData()
+    {
+        chartData.Clear();
+
+        if (QueryResult.Columns.Count < 2 || QueryResult.Rows.Count == 0)
+            return;
+
+        var categoryCol = QueryResult.Columns[0];
+        var valueCol = QueryResult.Columns[1];
+
+        foreach (var row in QueryResult.Rows)
+        {
+            var category = row.GetValueOrDefault(categoryCol)?.ToString() ?? "";
+            var rawValue = row.GetValueOrDefault(valueCol);
+            var value = ConvertToDouble(rawValue);
+
+            chartData.Add(new ChartDataItem { Category = category, Value = value });
+        }
+    }
+
+    private static double ConvertToDouble(object? val) => val switch
+    {
+        double d => d,
+        long l => l,
+        int i => i,
+        decimal dec => (double)dec,
+        string s when double.TryParse(s, out var parsed) => parsed,
+        _ => 0
+    };
+
+    private sealed class ChartDataItem
+    {
+        public string Category { get; set; } = "";
+        public double Value { get; set; }
+    }
+}

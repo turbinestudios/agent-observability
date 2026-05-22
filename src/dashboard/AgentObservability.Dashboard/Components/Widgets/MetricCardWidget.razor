@@ -1,0 +1,44 @@
+@using AgentObservability.Dashboard.Models
+
+<div class="widget-metric">
+    <div class="widget-metric-value">@GetValue()</div>
+    @if (!string.IsNullOrEmpty(GetLabel()))
+    {
+        <div class="widget-metric-label">@GetLabel()</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public WidgetQueryResult QueryResult { get; set; } = default!;
+
+    private string GetValue()
+    {
+        if (QueryResult.Rows.Count == 0 || QueryResult.Columns.Count == 0)
+            return "—";
+
+        var firstRow = QueryResult.Rows[0];
+        var firstCol = QueryResult.Columns[0];
+        var val = firstRow.GetValueOrDefault(firstCol);
+
+        return val switch
+        {
+            double d => d.ToString("N0"),
+            long l => l.ToString("N0"),
+            int i => i.ToString("N0"),
+            decimal dec => dec.ToString("N0"),
+            _ => val?.ToString() ?? "—"
+        };
+    }
+
+    private string? GetLabel()
+    {
+        if (QueryResult.Columns.Count <= 1 || QueryResult.Rows.Count == 0)
+            return QueryResult.Columns.Count > 0 ? QueryResult.Columns[0] : null;
+
+        // If there's a second column, use its value as label
+        var firstRow = QueryResult.Rows[0];
+        var secondCol = QueryResult.Columns[1];
+        return firstRow.GetValueOrDefault(secondCol)?.ToString();
+    }
+}

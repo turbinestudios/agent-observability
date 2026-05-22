@@ -1,0 +1,86 @@
+@page "/dashboards"
+@layout AgentObservability.Dashboard.Components.Layout.DashboardLayout
+@inject AgentObservability.Dashboard.Services.DashboardService DashboardService
+@inject NavigationManager Navigation
+@inject Radzen.DialogService DialogService
+
+<PageTitle>Dashboards</PageTitle>
+
+<div class="dashboard-toolbar">
+    <div>
+        <p class="eyebrow">Dashboards</p>
+        <h1>Custom Dashboards</h1>
+    </div>
+    <div class="dashboard-toolbar-actions">
+        <button class="action-button" @onclick="CreateDashboard">
+            <span>+ New Dashboard</span>
+        </button>
+    </div>
+</div>
+
+@if (dashboards is null)
+{
+    <p class="loading-state">Loading dashboards...</p>
+}
+else if (dashboards.Count == 0)
+{
+    <div class="empty-state">
+        <p>No dashboards yet. Create your first dashboard to start visualizing your data.</p>
+        <button class="action-button" @onclick="CreateDashboard">Create Dashboard</button>
+    </div>
+}
+else
+{
+    <div class="dashboard-card-grid">
+        @foreach (var dashboard in dashboards)
+        {
+            <div class="dashboard-card" @onclick="() => OpenDashboard(dashboard.Id)">
+                <h3>@dashboard.Name</h3>
+                <p>@(string.IsNullOrEmpty(dashboard.Description) ? "No description" : dashboard.Description)</p>
+                <div class="dashboard-card-meta">
+                    <span>@dashboard.Filters.Count filter(s)</span>
+                    <span>Updated @dashboard.UpdatedAt.ToString("MMM d, yyyy")</span>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "folder")]
+    public string? FolderId { get; set; }
+
+    private List<AgentObservability.Dashboard.Models.CustomDashboard>? dashboards;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDashboardsAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadDashboardsAsync();
+    }
+
+    private async Task LoadDashboardsAsync()
+    {
+        dashboards = await DashboardService.GetDashboardsAsync(FolderId);
+    }
+
+    private void OpenDashboard(string id)
+    {
+        Navigation.NavigateTo($"/dashboards/{id}");
+    }
+
+    private async Task CreateDashboard()
+    {
+        var newDashboard = new AgentObservability.Dashboard.Models.CustomDashboard
+        {
+            Name = "New Dashboard",
+            FolderId = FolderId
+        };
+
+        await DashboardService.CreateDashboardAsync(newDashboard);
+        Navigation.NavigateTo($"/dashboards/{newDashboard.Id}/edit");
+    }
+}

@@ -1,0 +1,137 @@
+@page "/dashboards/{Id}"
+@layout AgentObservability.Dashboard.Components.Layout.DashboardLayout
+@inject AgentObservability.Dashboard.Services.DashboardService DashboardService
+@inject AgentObservability.Dashboard.Services.WidgetQueryService WidgetQueryService
+@inject NavigationManager Navigation
+@using AgentObservability.Dashboard.Models
+
+<PageTitle>@(dashboard?.Name ?? "Dashboard")</PageTitle>
+
+@if (dashboard is null)
+{
+    <p class="loading-state">Loading dashboard...</p>
+}
+else
+{
+    <div class="dashboard-toolbar">
+        <div>
+            <p class="eyebrow">Dashboard</p>
+            <h1>@dashboard.Name</h1>
+            @if (!string.IsNullOrEmpty(dashboard.Description))
+            {
+                <p class="page-copy">@dashboard.Description</p>
+            }
+        </div>
+        <div class="dashboard-toolbar-actions">
+            <button class="action-button action-button-secondary" @onclick="RefreshWidgets">Refresh</button>
+            <button class="action-button" @onclick="EditDashboard">Edit</button>
+        </div>
+    </div>
+
+    @if (dashboard.Filters.Count > 0)
+    {
+        <div class="dashboard-filter-bar">
+            <span style="font-size: 0.82rem; font-weight: 600; color: var(--muted);">Filters:</span>
+            @foreach (var filter in dashboard.Filters)
+            {
+                <span class="filter-chip">
+                    @filter.FilterType: @string.Join(", ", filter.Values)
+                </span>
+            }
+        </div>
+    }
+
+    @if (widgets.Count == 0)
+    {
+        <div class="empty-state">
+            <p>This dashboard has no widgets yet.</p>
+            <button class="action-button" @onclick="EditDashboard">Add Widgets</button>
+        </div>
+    }
+    else
+    {
+        <div class="widget-grid" style="grid-template-rows: repeat(@maxRow, minmax(180px, auto));">
+            @foreach (var widget in widgets)
+            {
+                <div class="widget-cell"
+                     style="grid-column: @widget.GridColumn / span @widget.ColumnSpan; grid-row: @widget.GridRow / span @widget.RowSpan;">
+                    <div class="widget-cell-header">
+                        <h4>@widget.Title</h4>
+                    </div>
+                    <div class="widget-cell-body">
+                        <AgentObservability.Dashboard.Components.Widgets.WidgetRenderer
+                            Widget="widget"
+                            QueryResult="GetWidgetResult(widget.Id)" />
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter]
+    public string Id { get; set; } = string.Empty;
+
+    private CustomDashboard? dashboard;
+    private List<DashboardWidget> widgets = [];
+    private Dictionary<string, WidgetQueryResult> widgetResults = new();
+    private int maxRow => widgets.Count > 0 ? widgets.Max(w => w.GridRow + w.RowSpan - 1) : 1;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDashboardAsync();
+    }
+
+    private async Task LoadDashboardAsync()
+    {
+        dashboard = await DashboardService.GetDashboardAsync(Id);
+        if (dashboard is null)
+        {
+            Navigation.NavigateTo("/dashboards");
+            return;
+        }
+
+        widgets = await DashboardService.GetWidgetsAsync(Id);
+        await ExecuteAllWidgetQueries();
+    }
+
+    private async Task ExecuteAllWidgetQueries()
+    {
+        var lookback = TimeSpan.FromHours(24);
+
+        // Check if there's a TimeRange filter
+        var timeFilter = dashboard?.Filters.FirstOrDefault(f => f.FilterType == DashboardFilterType.TimeRange);
+        if (timeFilter?.Values.Count > 0 && TimeSpan.TryParse(timeFilter.Values[0], out var parsedLookback))
+        {
+            lookback = parsedLookback;
+        }
+
+        var tasks = widgets.Select(async widget =>
+        {
+            var result = await WidgetQueryService.ExecuteWidgetQueryAsync(
+                widget.KqlQuery,
+                dashboard?.Filters ?? [],
+                lookback);
+            return (widget.Id, result);
+        });
+
+        var results = await Task.WhenAll(tasks);
+        widgetResults = results.ToDictionary(r => r.Id, r => r.result);
+    }
+
+    private WidgetQueryResult? GetWidgetResult(string widgetId)
+    {
+        return widgetResults.GetValueOrDefault(widgetId);
+    }
+
+    private async Task RefreshWidgets()
+    {
+        await ExecuteAllWidgetQueries();
+    }
+
+    private void EditDashboard()
+    {
+        Navigation.NavigateTo($"/dashboards/{Id}/edit");
+    }
+}

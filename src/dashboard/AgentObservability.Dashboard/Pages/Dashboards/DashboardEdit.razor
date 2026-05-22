@@ -1,0 +1,282 @@
+@page "/dashboards/{Id}/edit"
+@layout AgentObservability.Dashboard.Components.Layout.DashboardLayout
+@inject AgentObservability.Dashboard.Services.DashboardService DashboardService
+@inject AgentObservability.Dashboard.Services.WidgetQueryService WidgetQueryService
+@inject NavigationManager Navigation
+@inject Radzen.NotificationService NotificationService
+@using AgentObservability.Dashboard.Models
+
+<PageTitle>Edit - @(dashboard?.Name ?? "Dashboard")</PageTitle>
+
+@if (dashboard is null)
+{
+    <p class="loading-state">Loading dashboard...</p>
+}
+else
+{
+    <div class="dashboard-toolbar">
+        <div>
+            <p class="eyebrow">Editing Dashboard</p>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <input class="form-group input" style="font-size: 1.5rem; font-weight: 700; border: none; background: transparent; padding: 0; width: auto;"
+                       @bind="dashboard.Name" @bind:event="oninput" />
+            </div>
+        </div>
+        <div class="dashboard-toolbar-actions">
+            <button class="action-button action-button-secondary" @onclick="Cancel">Cancel</button>
+            <button class="action-button" @onclick="Save">Save</button>
+        </div>
+    </div>
+
+    <!-- Dashboard Settings -->
+    <div class="widget-config-panel" style="margin-bottom: 1.5rem;">
+        <h3>Dashboard Settings</h3>
+        <div class="widget-config-grid">
+            <div class="form-group full-width">
+                <label>Description</label>
+                <input @bind="dashboard.Description" @bind:event="oninput" placeholder="Dashboard description..." />
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters Configuration -->
+    <div class="widget-config-panel" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h3 style="margin: 0;">Filters</h3>
+            <button class="btn-icon" @onclick="AddFilter" title="Add filter">+</button>
+        </div>
+
+        @for (int i = 0; i < dashboard.Filters.Count; i++)
+        {
+            var idx = i;
+            var filter = dashboard.Filters[idx];
+            <div class="form-row" style="margin-bottom: 0.5rem; align-items: end;">
+                <div class="form-group">
+                    <label>Type</label>
+                    <select @bind="filter.FilterType">
+                        @foreach (var ft in Enum.GetValues<DashboardFilterType>())
+                        {
+                            <option value="@ft">@ft</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Values (comma-separated)</label>
+                    <input value="@string.Join(", ", filter.Values)"
+                           @onchange="e => UpdateFilterValues(idx, e.Value?.ToString())" />
+                </div>
+                <button class="btn-icon" @onclick="() => RemoveFilter(idx)" title="Remove filter">✕</button>
+            </div>
+        }
+
+        @if (dashboard.Filters.Count == 0)
+        {
+            <p class="empty-state" style="padding: 0.5rem;">No filters configured.</p>
+        }
+    </div>
+
+    <!-- Widget Grid Editor -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="margin: 0;">Widgets</h2>
+        <button class="action-button" @onclick="AddWidget">+ Add Widget</button>
+    </div>
+
+    @if (widgets.Count == 0)
+    {
+        <div class="widget-placeholder" @onclick="AddWidget">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            <span>Click to add your first widget</span>
+        </div>
+    }
+    else
+    {
+        <div class="widget-grid" style="grid-template-rows: repeat(@maxRow, minmax(180px, auto)); margin-bottom: 1.5rem;">
+            @foreach (var widget in widgets)
+            {
+                <div class="widget-cell editing"
+                     style="grid-column: @widget.GridColumn / span @widget.ColumnSpan; grid-row: @widget.GridRow / span @widget.RowSpan;"
+                     @onclick="() => EditWidget(widget)">
+                    <div class="widget-cell-header">
+                        <h4>@widget.Title</h4>
+                        <div style="display: flex; gap: 0.25rem;">
+                            <button class="btn-icon" @onclick="() => EditWidget(widget)" @onclick:stopPropagation title="Edit">✎</button>
+                            <button class="btn-icon" @onclick="() => RemoveWidget(widget)" @onclick:stopPropagation title="Remove">✕</button>
+                        </div>
+                    </div>
+                    <div class="widget-cell-body">
+                        <span style="color: var(--muted); font-size: 0.85rem;">@widget.WidgetType — @widget.ColumnSpan×@widget.RowSpan</span>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- Widget Editor Panel -->
+    @if (editingWidget is not null)
+    {
+        <div class="widget-config-panel">
+            <h3>@(isNewWidget ? "Add Widget" : "Edit Widget")</h3>
+            <div class="widget-config-grid">
+                <div class="form-group">
+                    <label>Title</label>
+                    <input @bind="editingWidget.Title" @bind:event="oninput" placeholder="Widget title" />
+                </div>
+                <div class="form-group">
+                    <label>Type</label>
+                    <select @bind="editingWidget.WidgetType">
+                        @foreach (var wt in Enum.GetValues<WidgetType>())
+                        {
+                            <option value="@wt">@wt</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Column (1-12)</label>
+                    <input type="number" min="1" max="12" @bind="editingWidget.GridColumn" />
+                </div>
+                <div class="form-group">
+                    <label>Row</label>
+                    <input type="number" min="1" @bind="editingWidget.GridRow" />
+                </div>
+                <div class="form-group">
+                    <label>Column Span (1-12)</label>
+                    <input type="number" min="1" max="12" @bind="editingWidget.ColumnSpan" />
+                </div>
+                <div class="form-group">
+                    <label>Row Span</label>
+                    <input type="number" min="1" max="4" @bind="editingWidget.RowSpan" />
+                </div>
+                <div class="form-group full-width">
+                    <label>KQL Query</label>
+                    <textarea rows="6" style="width: 100%; font-family: monospace; font-size: 0.85rem; padding: 0.5rem; border: 1px solid var(--panel-border); border-radius: 0.5rem;"
+                              @bind="editingWidget.KqlQuery" @bind:event="oninput"
+                              placeholder="Enter your KQL query..."></textarea>
+                </div>
+            </div>
+            <div class="form-actions" style="margin-top: 1rem;">
+                <button class="action-button" @onclick="SaveWidget">@(isNewWidget ? "Add" : "Update")</button>
+                <button class="action-button action-button-secondary" @onclick="CancelWidgetEdit">Cancel</button>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter]
+    public string Id { get; set; } = string.Empty;
+
+    private CustomDashboard? dashboard;
+    private List<DashboardWidget> widgets = [];
+    private DashboardWidget? editingWidget;
+    private bool isNewWidget;
+    private int maxRow => widgets.Count > 0 ? widgets.Max(w => w.GridRow + w.RowSpan - 1) : 1;
+
+    protected override async Task OnInitializedAsync()
+    {
+        dashboard = await DashboardService.GetDashboardAsync(Id);
+        if (dashboard is null)
+        {
+            Navigation.NavigateTo("/dashboards");
+            return;
+        }
+
+        widgets = await DashboardService.GetWidgetsAsync(Id);
+    }
+
+    private void AddFilter()
+    {
+        dashboard!.Filters.Add(new DashboardFilter());
+    }
+
+    private void RemoveFilter(int index)
+    {
+        dashboard!.Filters.RemoveAt(index);
+    }
+
+    private void UpdateFilterValues(int index, string? raw)
+    {
+        if (raw is null) return;
+        dashboard!.Filters[index].Values = raw
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+    }
+
+    private void AddWidget()
+    {
+        var nextRow = widgets.Count > 0 ? widgets.Max(w => w.GridRow + w.RowSpan) : 1;
+        editingWidget = new DashboardWidget
+        {
+            DashboardId = Id,
+            Title = "New Widget",
+            GridColumn = 1,
+            GridRow = nextRow,
+            ColumnSpan = 4,
+            RowSpan = 1
+        };
+        isNewWidget = true;
+    }
+
+    private void EditWidget(DashboardWidget widget)
+    {
+        editingWidget = new DashboardWidget
+        {
+            Id = widget.Id,
+            DashboardId = widget.DashboardId,
+            Title = widget.Title,
+            WidgetType = widget.WidgetType,
+            KqlQuery = widget.KqlQuery,
+            GridColumn = widget.GridColumn,
+            GridRow = widget.GridRow,
+            ColumnSpan = widget.ColumnSpan,
+            RowSpan = widget.RowSpan,
+            Configuration = widget.Configuration
+        };
+        isNewWidget = false;
+    }
+
+    private async Task SaveWidget()
+    {
+        if (editingWidget is null) return;
+
+        if (isNewWidget)
+        {
+            await DashboardService.AddWidgetAsync(editingWidget);
+        }
+        else
+        {
+            await DashboardService.UpdateWidgetAsync(editingWidget);
+        }
+
+        widgets = await DashboardService.GetWidgetsAsync(Id);
+        editingWidget = null;
+    }
+
+    private void CancelWidgetEdit()
+    {
+        editingWidget = null;
+    }
+
+    private async Task RemoveWidget(DashboardWidget widget)
+    {
+        await DashboardService.RemoveWidgetAsync(widget.DashboardId, widget.Id);
+        widgets = await DashboardService.GetWidgetsAsync(Id);
+    }
+
+    private async Task Save()
+    {
+        if (dashboard is null) return;
+        await DashboardService.UpdateDashboardAsync(dashboard);
+        NotificationService.Notify(new Radzen.NotificationMessage
+        {
+            Summary = "Dashboard saved",
+            Severity = Radzen.NotificationSeverity.Success,
+            Duration = 3000
+        });
+        Navigation.NavigateTo($"/dashboards/{Id}");
+    }
+
+    private void Cancel()
+    {
+        Navigation.NavigateTo($"/dashboards/{Id}");
+    }
+}
