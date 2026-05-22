@@ -26,6 +26,12 @@ param otelBasicAuthHtpasswd string
 @description('OTEL API key stored as a Key Vault secret')
 param otelApiKey string
 
+@description('AI model name for KQL generation')
+param aiModelName string = 'gpt-4o'
+
+@description('AI model version for KQL generation')
+param aiModelVersion string = '2024-11-20'
+
 // Azure Container Registry
 module acr 'modules/acr.bicep' = {
   params: {
@@ -114,6 +120,16 @@ module storageAccount 'modules/storage-account.bicep' = {
   }
 }
 
+// Azure AI Foundry for KQL generation
+module aiFoundry 'modules/ai-foundry.bicep' = {
+  params: {
+    location: location
+    projectName: 'ai-${baseName}'
+    modelName: aiModelName
+    modelVersion: aiModelVersion
+  }
+}
+
 // Step 1.4 — Container App: Blazor Dashboard
 module dashboard 'modules/dashboard-app.bicep' = {
   params: {
@@ -125,6 +141,8 @@ module dashboard 'modules/dashboard-app.bicep' = {
     acrLoginServer: acr.outputs.loginServer
     dashboardIdentityId: dashboardIdentity.id
     storageTableEndpoint: storageAccount.outputs.tableEndpoint
+    aiEndpoint: aiFoundry.outputs.endpoint
+    aiDeploymentName: aiFoundry.outputs.deploymentName
   }
   dependsOn: [dashboardAcrPullRole]
 }
@@ -169,6 +187,22 @@ resource dashboardTableDataRole 'Microsoft.Authorization/roleAssignments@2022-04
   scope: storageAccountResource
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
+    principalId: dashboard.outputs.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Azure AI Developer role for Dashboard (KQL generation via AI Foundry)
+resource aiProjectResource 'Microsoft.MachineLearningServices/workspaces@2024-10-01' existing = {
+  name: 'ai-${baseName}'
+  dependsOn: [aiFoundry]
+}
+
+resource dashboardAiDeveloperRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', '64702f94-c441-49e6-a78b-ef80e0188fee')
+  scope: aiProjectResource
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '64702f94-c441-49e6-a78b-ef80e0188fee')
     principalId: dashboard.outputs.principalId
     principalType: 'ServicePrincipal'
   }

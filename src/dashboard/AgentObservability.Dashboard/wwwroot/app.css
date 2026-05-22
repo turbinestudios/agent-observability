@@ -1147,3 +1147,66 @@ code {
         grid-template-columns: 1fr;
     }
 }
+
+/* AI Query Assistant */
+.ai-assistant-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    background: var(--accent-soft);
+}
+
+.ai-assistant-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.ai-explanation {
+    font-size: 0.82rem;
+    color: var(--muted);
+    line-height: 1.4;
+}
+
+.ai-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.ai-preview label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--muted);
+}
+
+.ai-preview-code {
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    background: rgba(43, 36, 29, 0.06);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}

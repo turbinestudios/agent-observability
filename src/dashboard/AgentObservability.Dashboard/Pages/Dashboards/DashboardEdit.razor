@@ -2,6 +2,7 @@
 @layout AgentObservability.Dashboard.Components.Layout.DashboardLayout
 @inject AgentObservability.Dashboard.Services.DashboardService DashboardService
 @inject AgentObservability.Dashboard.Services.WidgetQueryService WidgetQueryService
+@inject AgentObservability.Dashboard.Services.KqlGenerationService KqlGenerationService
 @inject NavigationManager Navigation
 @inject Radzen.NotificationService NotificationService
 @inject IJSRuntime JS
@@ -191,6 +192,49 @@ else
                         </div>
                     }
                 </div>
+
+                <!-- AI Query Assistant -->
+                <div class="form-group full-width">
+                    <label>AI Query Assistant</label>
+                    <div class="ai-assistant-panel">
+                        <textarea rows="2" class="query-textarea"
+                                  @bind="aiPrompt" @bind:event="oninput"
+                                  placeholder="Describe the metric you want, e.g. 'Show request count by model for the last 7 days'"
+                                  disabled="@aiGenerating"></textarea>
+                        <div class="ai-assistant-actions">
+                            <button class="action-button" @onclick="GenerateOrRefineKql" disabled="@(aiGenerating || string.IsNullOrWhiteSpace(aiPrompt))">
+                                @if (aiGenerating)
+                                {
+                                    <span class="spinner"></span>
+                                    <span>Generating...</span>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(editingWidget.KqlQuery))
+                                {
+                                    <span>Refine with AI</span>
+                                }
+                                else
+                                {
+                                    <span>Generate with AI</span>
+                                }
+                            </button>
+                            @if (!string.IsNullOrEmpty(aiGeneratedKql))
+                            {
+                                <button class="action-button action-button-secondary" @onclick="ApplyGeneratedKql">Apply to Query</button>
+                            }
+                        </div>
+                        @if (!string.IsNullOrEmpty(aiExplanation))
+                        {
+                            <div class="ai-explanation">@aiExplanation</div>
+                        }
+                        @if (!string.IsNullOrEmpty(aiGeneratedKql))
+                        {
+                            <div class="ai-preview">
+                                <label>Generated KQL:</label>
+                                <pre class="ai-preview-code">@aiGeneratedKql</pre>
+                            </div>
+                        }
+                    </div>
+                </div>
             </div>
             <div class="form-actions" style="margin-top: 1rem;">
                 <button class="action-button" @onclick="SaveWidget">@(isNewWidget ? "Add" : "Update")</button>
@@ -216,6 +260,12 @@ else
     private double popupTop;
     private double popupLeft;
     private DotNetObjectReference<DashboardEdit>? dotNetRef;
+
+    // AI assistant state
+    private string aiPrompt = string.Empty;
+    private string aiGeneratedKql = string.Empty;
+    private string aiExplanation = string.Empty;
+    private bool aiGenerating;
 
     protected override async Task OnInitializedAsync()
     {
@@ -410,6 +460,43 @@ else
     private void Cancel()
     {
         Navigation.NavigateTo($"/dashboards/{Id}");
+    }
+
+    private async Task GenerateOrRefineKql()
+    {
+        if (editingWidget is null || string.IsNullOrWhiteSpace(aiPrompt)) return;
+
+        aiGenerating = true;
+        aiGeneratedKql = string.Empty;
+        aiExplanation = string.Empty;
+        StateHasChanged();
+
+        try
+        {
+            var existingKql = string.IsNullOrWhiteSpace(editingWidget.KqlQuery) ? null : editingWidget.KqlQuery;
+            var result = await KqlGenerationService.GenerateKqlAsync(
+                aiPrompt,
+                dashboard!.Filters,
+                editingWidget.WidgetType,
+                existingKql);
+
+            aiGeneratedKql = result.KqlQuery;
+            aiExplanation = result.Explanation;
+        }
+        finally
+        {
+            aiGenerating = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ApplyGeneratedKql()
+    {
+        if (editingWidget is null || string.IsNullOrEmpty(aiGeneratedKql)) return;
+        editingWidget.KqlQuery = aiGeneratedKql;
+        aiGeneratedKql = string.Empty;
+        aiExplanation = string.Empty;
+        aiPrompt = string.Empty;
     }
 
     public async ValueTask DisposeAsync()

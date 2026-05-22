@@ -42,6 +42,10 @@ builder.Services.AddSingleton<WorkflowManagementService>();
 builder.Services.AddSingleton<DashboardService>();
 builder.Services.AddScoped<WidgetQueryService>();
 
+// Phase 8: AI-powered KQL generation
+builder.Services.Configure<AzureAIOptions>(builder.Configuration.GetSection(AzureAIOptions.SectionName));
+builder.Services.AddScoped<KqlGenerationService>();
+
 var app = builder.Build();
 
 // Ensure Table Storage tables exist

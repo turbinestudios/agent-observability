@@ -22,6 +22,12 @@ param dashboardIdentityId string
 @description('Table service endpoint for Azure Table Storage')
 param storageTableEndpoint string
 
+@description('Azure AI Foundry endpoint for KQL generation')
+param aiEndpoint string
+
+@description('Azure AI model deployment name')
+param aiDeploymentName string
+
 resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
@@ -64,6 +70,14 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'Storage__TableEndpoint'
               value: storageTableEndpoint
+            }
+            {
+              name: 'AzureAI__Endpoint'
+              value: aiEndpoint
+            }
+            {
+              name: 'AzureAI__DeploymentName'
+              value: aiDeploymentName
             }
           ]
         }
