@@ -229,6 +229,8 @@ else
                                 <span>▶ Run Preview</span>
                             }
                         </button>
+                        <button class="action-button" @onclick="SaveWidget">@(isNewWidget ? "Add" : "Update")</button>
+                        <button class="action-button action-button-secondary" @onclick="CancelWidgetEdit">Cancel</button>
                     </div>
                 </div>
 
@@ -236,48 +238,52 @@ else
                 <div class="form-group full-width">
                     <label>AI Query Assistant</label>
                     <div class="ai-assistant-panel">
-                        <textarea rows="2" class="query-textarea"
-                                  @bind="aiPrompt" @bind:event="oninput"
-                                  placeholder="Describe the metric you want, e.g. 'Show request count by model for the last 7 days'"
-                                  disabled="@aiGenerating"></textarea>
-                        <div class="ai-assistant-actions">
+                        <div class="ai-input-row">
+                            <textarea rows="2" class="query-textarea"
+                                      @bind="aiPrompt" @bind:event="oninput"
+                                      placeholder="Describe the metric you want or ask a question about the query..."
+                                      disabled="@aiGenerating"
+                                      @onkeydown="OnAiPromptKeyDown"></textarea>
                             <button class="action-button" @onclick="GenerateOrRefineKql" disabled="@(aiGenerating || string.IsNullOrWhiteSpace(aiPrompt))">
                                 @if (aiGenerating)
                                 {
                                     <span class="spinner"></span>
-                                    <span>Generating...</span>
-                                }
-                                else if (!string.IsNullOrWhiteSpace(editingWidget.KqlQuery))
-                                {
-                                    <span>Refine with AI</span>
                                 }
                                 else
                                 {
-                                    <span>Generate with AI</span>
+                                    <span>Send</span>
                                 }
                             </button>
-                            @if (!string.IsNullOrEmpty(aiGeneratedKql))
-                            {
-                                <button class="action-button action-button-secondary" @onclick="ApplyGeneratedKql">Apply to Query</button>
-                            }
                         </div>
-                        @if (!string.IsNullOrEmpty(aiExplanation))
+
+                        @if (aiConversation.Count > 0)
                         {
-                            <div class="ai-explanation">@((MarkupString)RenderMarkdown(aiExplanation))</div>
-                        }
-                        @if (!string.IsNullOrEmpty(aiGeneratedKql))
-                        {
-                            <div class="ai-preview">
-                                <label>Generated KQL:</label>
-                                <pre class="ai-preview-code">@aiGeneratedKql</pre>
+                            <div class="ai-conversation">
+                                @foreach (var message in aiConversation.AsEnumerable().Reverse())
+                                {
+                                    <div class="ai-message ai-message-@message.Role">
+                                        <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
+                                        @if (message.Role == "user")
+                                        {
+                                            <div class="ai-message-content">@message.Text</div>
+                                        }
+                                        else
+                                        {
+                                            <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
+                                            @if (!string.IsNullOrEmpty(message.KqlQuery))
+                                            {
+                                                <div class="ai-preview">
+                                                    <pre class="ai-preview-code">@message.KqlQuery</pre>
+                                                    <button class="action-button action-button-secondary ai-apply-btn" @onclick="() => ApplyConversationKql(message.KqlQuery)">Apply to Query</button>
+                                                </div>
+                                            }
+                                        }
+                                    </div>
+                                }
                             </div>
                         }
                     </div>
                 </div>
-            </div>
-            <div class="form-actions" style="margin-top: 1rem;">
-                <button class="action-button" @onclick="SaveWidget">@(isNewWidget ? "Add" : "Update")</button>
-                <button class="action-button action-button-secondary" @onclick="CancelWidgetEdit">Cancel</button>
             </div>
         </div>
     }
@@ -309,9 +315,8 @@ else
 
     // AI assistant state
     private string aiPrompt = string.Empty;
-    private string aiGeneratedKql = string.Empty;
-    private string aiExplanation = string.Empty;
     private bool aiGenerating;
+    private List<AiConversationMessage> aiConversation = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -443,6 +448,8 @@ else
             RowSpan = 1
         };
         isNewWidget = true;
+        aiConversation = [];
+        aiPrompt = string.Empty;
     }
 
     private void EditWidget(DashboardWidget widget)
@@ -462,6 +469,8 @@ else
         };
         isNewWidget = false;
         editingWidgetResult = widgetResults.GetValueOrDefault(widget.Id);
+        aiConversation = [];
+        aiPrompt = string.Empty;
     }
 
     private async Task SaveWidget()
@@ -491,6 +500,8 @@ else
     {
         editingWidget = null;
         editingWidgetResult = null;
+        aiConversation = [];
+        aiPrompt = string.Empty;
     }
 
     private async Task RemoveWidget(DashboardWidget widget)
@@ -521,22 +532,36 @@ else
     {
         if (editingWidget is null || string.IsNullOrWhiteSpace(aiPrompt)) return;
 
+        var userText = aiPrompt.Trim();
+        aiConversation.Add(new AiConversationMessage("user", userText, null));
+        aiPrompt = string.Empty;
         aiGenerating = true;
-        aiGeneratedKql = string.Empty;
-        aiExplanation = string.Empty;
         StateHasChanged();
 
         try
         {
             var existingKql = string.IsNullOrWhiteSpace(editingWidget.KqlQuery) ? null : editingWidget.KqlQuery;
+
+            // Build conversation history for context (all previous messages)
+            var history = aiConversation
+                .Where(m => m != aiConversation.Last()) // exclude the just-added user message
+                .Select(m => (m.Role, m.Role == "assistant"
+                    ? (string.IsNullOrEmpty(m.KqlQuery) ? m.Text : $"{m.Text}\n\n```kql\n{m.KqlQuery}\n```")
+                    : m.Text))
+                .ToList();
+
             var result = await KqlGenerationService.GenerateKqlAsync(
-                aiPrompt,
+                userText,
                 dashboard!.Filters,
                 editingWidget.WidgetType,
-                existingKql);
+                existingKql,
+                history);
 
-            aiGeneratedKql = result.KqlQuery;
-            aiExplanation = result.Explanation;
+            aiConversation.Add(new AiConversationMessage("assistant", result.Explanation, result.KqlQuery));
+        }
+        catch (Exception ex)
+        {
+            aiConversation.Add(new AiConversationMessage("assistant", $"Error: {ex.Message}", null));
         }
         finally
         {
@@ -545,11 +570,19 @@ else
         }
     }
 
-    private async Task ApplyGeneratedKql()
+    private async Task ApplyConversationKql(string kql)
     {
-        if (editingWidget is null || string.IsNullOrEmpty(aiGeneratedKql)) return;
-        editingWidget.KqlQuery = aiGeneratedKql;
+        if (editingWidget is null || string.IsNullOrEmpty(kql)) return;
+        editingWidget.KqlQuery = kql;
         await ExecuteEditingWidgetQuery();
+    }
+
+    private async Task OnAiPromptKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey && !string.IsNullOrWhiteSpace(aiPrompt) && !aiGenerating)
+        {
+            await GenerateOrRefineKql();
+        }
     }
 
     private async Task RunPreview()
@@ -650,4 +683,5 @@ else
     }
 
     private sealed record FilterSnippet(string Label, string Kql);
+    private sealed record AiConversationMessage(string Role, string Text, string? KqlQuery);
 }

@@ -47,6 +47,17 @@ public sealed class KqlGenerationService
         string? existingKql = null,
         CancellationToken cancellationToken = default)
     {
+        return await GenerateKqlAsync(userPrompt, filters, widgetType, existingKql, [], cancellationToken);
+    }
+
+    public async Task<KqlGenerationResult> GenerateKqlAsync(
+        string userPrompt,
+        List<DashboardFilter> filters,
+        WidgetType widgetType,
+        string? existingKql,
+        IReadOnlyList<(string Role, string Content)> conversationHistory,
+        CancellationToken cancellationToken = default)
+    {
         var systemMessage = BuildSystemPrompt(filters, widgetType);
         var userMessage = BuildUserMessage(userPrompt, existingKql);
 
@@ -56,9 +67,18 @@ public sealed class KqlGenerationService
 
             var messages = new List<ChatMessage>
             {
-                new SystemChatMessage(systemMessage),
-                new UserChatMessage(userMessage)
+                new SystemChatMessage(systemMessage)
             };
+
+            foreach (var (role, content) in conversationHistory)
+            {
+                if (string.Equals(role, "user", StringComparison.OrdinalIgnoreCase))
+                    messages.Add(new UserChatMessage(content));
+                else
+                    messages.Add(new AssistantChatMessage(content));
+            }
+
+            messages.Add(new UserChatMessage(userMessage));
 
             var options = new ChatCompletionOptions
             {
@@ -66,9 +86,9 @@ public sealed class KqlGenerationService
             };
 
             ChatCompletion completion = await chatClient.CompleteChatAsync(messages, options, cancellationToken);
-            var content = completion.Content[0].Text;
+            var content2 = completion.Content[0].Text;
 
-            return ParseResponse(content);
+            return ParseResponse(content2);
         }
         catch (Exception ex)
         {

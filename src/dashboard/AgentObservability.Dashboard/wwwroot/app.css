@@ -1171,6 +1171,68 @@ code {
     background: var(--accent-soft);
 }
 
+.ai-input-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-end;
+}
+
+.ai-input-row .query-textarea {
+    flex: 1;
+}
+
+.ai-conversation {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 0.5rem 0;
+}
+
+.ai-message {
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.ai-message-header {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 0.25rem;
+    color: var(--muted);
+}
+
+.ai-message-user {
+    background: var(--panel-bg, #f8f7f5);
+    border: 1px solid var(--panel-border);
+}
+
+.ai-message-assistant {
+    background: rgba(43, 36, 29, 0.03);
+    border: 1px solid var(--panel-border);
+}
+
+.ai-message-content {
+    word-break: break-word;
+}
+
+.ai-message-content p {
+    margin: 0 0 0.5em;
+}
+
+.ai-message-content p:last-child {
+    margin-bottom: 0;
+}
+
+.ai-apply-btn {
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+}
+
 .ai-assistant-actions {
     display: flex;
     gap: 0.5rem;
