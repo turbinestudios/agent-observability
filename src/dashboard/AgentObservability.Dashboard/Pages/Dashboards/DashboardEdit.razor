@@ -4,7 +4,9 @@
 @inject AgentObservability.Dashboard.Services.WidgetQueryService WidgetQueryService
 @inject NavigationManager Navigation
 @inject Radzen.NotificationService NotificationService
+@inject IJSRuntime JS
 @using AgentObservability.Dashboard.Models
+@implements IAsyncDisposable
 
 <PageTitle>Edit - @(dashboard?.Name ?? "Dashboard")</PageTitle>
 
@@ -105,6 +107,14 @@ else
                     </div>
                     <div class="widget-cell-body">
                         <span style="color: var(--muted); font-size: 0.85rem;">@widget.WidgetType — @widget.ColumnSpan×@widget.RowSpan</span>
+                        @{ var missing = GetMissingFilters(widget); }
+                        @if (missing.Count > 0)
+                        {
+                            <div class="widget-filter-warning">
+                                <span class="warning-icon">⚠</span>
+                                <span>Missing filters: @string.Join(", ", missing)</span>
+                            </div>
+                        }
                     </div>
                 </div>
             }
@@ -147,10 +157,39 @@ else
                     <input type="number" min="1" max="4" @bind="editingWidget.RowSpan" />
                 </div>
                 <div class="form-group full-width">
-                    <label>KQL Query</label>
-                    <textarea rows="6" style="width: 100%; font-family: monospace; font-size: 0.85rem; padding: 0.5rem; border: 1px solid var(--panel-border); border-radius: 0.5rem;"
-                              @bind="editingWidget.KqlQuery" @bind:event="oninput"
-                              placeholder="Enter your KQL query..."></textarea>
+                    <label>KQL Query <span class="hint">(Ctrl+Space to insert filter)</span></label>
+                    <div class="query-editor-container">
+                        <textarea @ref="queryTextareaRef" rows="6"
+                                  class="query-textarea"
+                                  @bind="editingWidget.KqlQuery" @bind:event="oninput"
+                                  placeholder="Enter your KQL query..."></textarea>
+
+                        @if (showFilterPopup)
+                        {
+                            <div class="filter-popup" style="top: @(popupTop)px; left: @(popupLeft)px;">
+                                <div class="filter-popup-header">Insert filter where-clause</div>
+                                @foreach (var snippet in GetAvailableFilterSnippets())
+                                {
+                                    <button class="filter-popup-item" @onclick="() => InsertFilterSnippet(snippet.Kql)">
+                                        <span class="filter-popup-item-label">@snippet.Label</span>
+                                        <span class="filter-popup-item-kql">@snippet.Kql</span>
+                                    </button>
+                                }
+                                @if (!GetAvailableFilterSnippets().Any())
+                                {
+                                    <div class="filter-popup-empty">No dashboard filters configured</div>
+                                }
+                            </div>
+                        }
+                    </div>
+                    @{ var editMissing = GetMissingFilters(editingWidget); }
+                    @if (editMissing.Count > 0)
+                    {
+                        <div class="widget-filter-warning" style="margin-top: 0.5rem;">
+                            <span class="warning-icon">⚠</span>
+                            <span>This query does not apply: @string.Join(", ", editMissing)</span>
+                        </div>
+                    }
                 </div>
             </div>
             <div class="form-actions" style="margin-top: 1rem;">
@@ -171,6 +210,13 @@ else
     private bool isNewWidget;
     private int maxRow => widgets.Count > 0 ? widgets.Max(w => w.GridRow + w.RowSpan - 1) : 1;
 
+    // Filter popup state
+    private ElementReference queryTextareaRef;
+    private bool showFilterPopup;
+    private double popupTop;
+    private double popupLeft;
+    private DotNetObjectReference<DashboardEdit>? dotNetRef;
+
     protected override async Task OnInitializedAsync()
     {
         dashboard = await DashboardService.GetDashboardAsync(Id);
@@ -181,6 +227,92 @@ else
         }
 
         widgets = await DashboardService.GetWidgetsAsync(Id);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (editingWidget is not null && queryTextareaRef.Context is not null)
+        {
+            dotNetRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("queryEditor.registerKeyHandler", queryTextareaRef, dotNetRef);
+        }
+    }
+
+    [JSInvokable]
+    public void OnFilterPopupRequested(double top, double left, int cursorPos)
+    {
+        popupTop = top + 20; // offset below cursor
+        popupLeft = left;
+        showFilterPopup = true;
+        StateHasChanged();
+    }
+
+    private async Task InsertFilterSnippet(string kql)
+    {
+        showFilterPopup = false;
+        var newValue = await JS.InvokeAsync<string>("queryEditor.insertAtCursor", queryTextareaRef, kql);
+        if (editingWidget is not null)
+        {
+            editingWidget.KqlQuery = newValue;
+        }
+        StateHasChanged();
+    }
+
+    private List<FilterSnippet> GetAvailableFilterSnippets()
+    {
+        if (dashboard is null) return [];
+
+        var snippets = new List<FilterSnippet>();
+        foreach (var filter in dashboard.Filters)
+        {
+            switch (filter.FilterType)
+            {
+                case DashboardFilterType.Repository:
+                    snippets.Add(new FilterSnippet(
+                        "Repository",
+                        "| where tostring(Properties[\"copilot_chat.repo.remote_url\"]) in (_filter_repositories)"));
+                    break;
+                case DashboardFilterType.Developer:
+                    snippets.Add(new FilterSnippet(
+                        "Developer",
+                        "| where tostring(Properties[\"user.email\"]) in (_filter_developers)"));
+                    break;
+                case DashboardFilterType.Custom when !string.IsNullOrEmpty(filter.Key):
+                    var sanitizedKey = filter.Key.ToLowerInvariant().Replace(" ", "_");
+                    snippets.Add(new FilterSnippet(
+                        $"Custom: {filter.Key}",
+                        $"| where tostring(Properties[\"{filter.Key}\"]) in (_filter_{sanitizedKey})"));
+                    break;
+            }
+        }
+        return snippets;
+    }
+
+    private List<string> GetMissingFilters(DashboardWidget widget)
+    {
+        if (dashboard is null || string.IsNullOrWhiteSpace(widget.KqlQuery)) return [];
+
+        var missing = new List<string>();
+        foreach (var filter in dashboard.Filters)
+        {
+            switch (filter.FilterType)
+            {
+                case DashboardFilterType.Repository when filter.Values.Count > 0:
+                    if (!widget.KqlQuery.Contains("_filter_repositories"))
+                        missing.Add("Repository");
+                    break;
+                case DashboardFilterType.Developer when filter.Values.Count > 0:
+                    if (!widget.KqlQuery.Contains("_filter_developers"))
+                        missing.Add("Developer");
+                    break;
+                case DashboardFilterType.Custom when !string.IsNullOrEmpty(filter.Key) && filter.Values.Count > 0:
+                    var sanitizedKey = filter.Key.ToLowerInvariant().Replace(" ", "_");
+                    if (!widget.KqlQuery.Contains($"_filter_{sanitizedKey}"))
+                        missing.Add($"Custom: {filter.Key}");
+                    break;
+            }
+        }
+        return missing;
     }
 
     private void AddFilter()
@@ -279,4 +411,15 @@ else
     {
         Navigation.NavigateTo($"/dashboards/{Id}");
     }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (queryTextareaRef.Context is not null)
+        {
+            await JS.InvokeVoidAsync("queryEditor.unregisterKeyHandler", queryTextareaRef);
+        }
+        dotNetRef?.Dispose();
+    }
+
+    private sealed record FilterSnippet(string Label, string Kql);
 }

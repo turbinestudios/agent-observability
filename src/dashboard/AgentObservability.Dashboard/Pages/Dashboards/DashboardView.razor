@@ -66,6 +66,11 @@ else
                      style="grid-column: @widget.GridColumn / span @widget.ColumnSpan; grid-row: @widget.GridRow / span @widget.RowSpan;">
                     <div class="widget-cell-header">
                         <h4>@widget.Title</h4>
+                        @{ var missing = GetMissingFilters(widget); }
+                        @if (missing.Count > 0)
+                        {
+                            <span class="widget-filter-warning-badge" title="Missing filters: @string.Join(", ", missing)">⚠</span>
+                        }
                     </div>
                     <div class="widget-cell-body">
                         <AgentObservability.Dashboard.Components.Widgets.WidgetRenderer
@@ -150,5 +155,32 @@ else
     private void EditDashboard()
     {
         Navigation.NavigateTo($"/dashboards/{Id}/edit");
+    }
+
+    private List<string> GetMissingFilters(DashboardWidget widget)
+    {
+        if (dashboard is null || string.IsNullOrWhiteSpace(widget.KqlQuery)) return [];
+
+        var missing = new List<string>();
+        foreach (var filter in dashboard.Filters)
+        {
+            switch (filter.FilterType)
+            {
+                case DashboardFilterType.Repository when filter.Values.Count > 0:
+                    if (!widget.KqlQuery.Contains("_filter_repositories"))
+                        missing.Add("Repository");
+                    break;
+                case DashboardFilterType.Developer when filter.Values.Count > 0:
+                    if (!widget.KqlQuery.Contains("_filter_developers"))
+                        missing.Add("Developer");
+                    break;
+                case DashboardFilterType.Custom when !string.IsNullOrEmpty(filter.Key) && filter.Values.Count > 0:
+                    var sanitizedKey = filter.Key.ToLowerInvariant().Replace(" ", "_");
+                    if (!widget.KqlQuery.Contains($"_filter_{sanitizedKey}"))
+                        missing.Add($"Custom: {filter.Key}");
+                    break;
+            }
+        }
+        return missing;
     }
 }
