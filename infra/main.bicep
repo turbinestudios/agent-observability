@@ -208,6 +208,22 @@ resource dashboardAiDeveloperRole 'Microsoft.Authorization/roleAssignments@2022-
   }
 }
 
+// Cognitive Services OpenAI User role for Dashboard (chat completions via AI Services)
+resource aiServicesAccount 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = {
+  name: 'ai-${baseName}-aiservices'
+  dependsOn: [aiFoundry]
+}
+
+resource dashboardOpenAiUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+  scope: aiServicesAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+    principalId: dashboard.outputs.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Outputs
 @description('FQDN of the OTel Collector endpoint')
 output otelCollectorFqdn string = otelCollector.outputs.fqdn
