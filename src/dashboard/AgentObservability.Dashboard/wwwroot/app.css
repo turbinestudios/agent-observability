@@ -713,6 +713,30 @@ code {
     color: #f3eee6;
 }
 
+.tree-dashboard-item {
+    color: rgba(243, 238, 230, 0.65);
+    font-size: 0.84rem;
+}
+
+.tree-dashboard-item:hover {
+    color: rgba(243, 238, 230, 0.9);
+}
+
+.tree-item.drag-over {
+    background: rgba(99, 179, 237, 0.15);
+    outline: 1px dashed rgba(99, 179, 237, 0.6);
+    outline-offset: -1px;
+}
+
+.tree-item[draggable="true"] {
+    cursor: grab;
+}
+
+.tree-item[draggable="true"]:active {
+    cursor: grabbing;
+    opacity: 0.6;
+}
+
 .folder-create-form {
     display: flex;
     flex-direction: column;

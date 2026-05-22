@@ -203,6 +203,16 @@ public sealed class DashboardService
         _logger.LogInformation("Updated dashboard {Name} ({Id})", dashboard.Name, dashboard.Id);
     }
 
+    public async Task MoveDashboardAsync(string dashboardId, string? newFolderId)
+    {
+        var response = await _dashboardsTable.GetEntityAsync<TableEntity>("dashboard", dashboardId);
+        var entity = response.Value;
+        entity["FolderId"] = newFolderId;
+        entity["UpdatedAt"] = DateTimeOffset.UtcNow;
+        await _dashboardsTable.UpsertEntityAsync(entity);
+        _logger.LogInformation("Moved dashboard {Id} to folder {FolderId}", dashboardId, newFolderId ?? "root");
+    }
+
     public async Task DeleteDashboardAsync(string dashboardId)
     {
         // Delete all widgets in this dashboard
