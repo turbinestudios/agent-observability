@@ -1,0 +1,24 @@
+@inherits LayoutComponentBase
+@inject NavigationManager Navigation
+
+<RadzenComponents />
+
+<div class="dashboard-shell">
+    <HeaderNav />
+
+    <aside class="dashboard-sidebar">
+        <WorkflowNav OnFolderSelected="OnFolderSelected" />
+    </aside>
+
+    <main class="dashboard-main">
+        @Body
+    </main>
+</div>
+
+@code {
+    private void OnFolderSelected(string? folderId)
+    {
+        var url = folderId is null ? "/workflows" : $"/workflows?folder={folderId}";
+        Navigation.NavigateTo(url);
+    }
+}

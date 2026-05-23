@@ -1,0 +1,385 @@
+@page "/workflows/{Id}/edit"
+@layout AgentObservability.Dashboard.Components.Layout.WorkflowLayout
+@inject AgentObservability.Dashboard.Services.WorkflowManagementService WorkflowService
+@inject AgentObservability.Dashboard.Services.WidgetQueryService QueryService
+@inject AgentObservability.Dashboard.Services.KqlGenerationService KqlGenerationService
+@inject NavigationManager Navigation
+@inject Radzen.NotificationService NotificationService
+@using AgentObservability.Dashboard.Models
+@using Markdig
+
+<PageTitle>Edit - @(workflow?.Name ?? "Workflow")</PageTitle>
+
+@if (workflow is null)
+{
+    <p class="loading-state">Loading workflow...</p>
+}
+else
+{
+    <div class="dashboard-toolbar">
+        <div>
+            <p class="eyebrow">Editing Workflow</p>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <input class="form-group input" style="font-size: 1.5rem; font-weight: 700; border: none; background: transparent; padding: 0; width: auto;"
+                       @bind="workflow.Name" @bind:event="oninput" />
+            </div>
+        </div>
+        <div class="dashboard-toolbar-actions">
+            <button class="action-button action-button-secondary" @onclick="Cancel">Cancel</button>
+            <button class="action-button" @onclick="Save">Save</button>
+        </div>
+    </div>
+
+    <!-- Trigger KQL Query -->
+    <div class="widget-config-panel" style="margin-bottom: 1.5rem;">
+        <h3>Trigger KQL Query</h3>
+        <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 0.75rem;">
+            Define a KQL query that identifies workflow instances. The query should return an <code>OperationId</code> column to correlate with step logs.
+        </p>
+        <div class="form-group full-width">
+            <textarea rows="8" class="query-textarea"
+                      @bind="workflow.TriggerKqlQuery" @bind:event="oninput"
+                      placeholder="Enter your trigger KQL query..."></textarea>
+            <div class="query-preview-actions" style="margin-top: 0.5rem;">
+                <button class="action-button action-button-secondary" @onclick="RunPreview" disabled="@(previewExecuting || string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery))">
+                    @if (previewExecuting)
+                    {
+                        <span class="spinner"></span>
+                        <span>Running...</span>
+                    }
+                    else
+                    {
+                        <span>▶ Run Preview</span>
+                    }
+                </button>
+            </div>
+        </div>
+
+        @if (previewResult?.Error is not null)
+        {
+            <div class="widget-error" style="margin-top: 0.75rem;">
+                <strong>Query Error:</strong> @previewResult.Error
+            </div>
+        }
+        else if (previewResult is not null)
+        {
+            <div style="margin-top: 0.75rem;">
+                <span class="tree-badge">@previewResult.Rows.Count result(s)</span>
+                @if (previewResult.Rows.Count > 0)
+                {
+                    <div class="widget-table-container" style="max-height: 200px; overflow-y: auto; margin-top: 0.5rem;">
+                        <table class="widget-table">
+                            <thead>
+                                <tr>
+                                    @foreach (var col in previewResult.Columns)
+                                    {
+                                        <th>@col</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var row in previewResult.Rows.Take(10))
+                                {
+                                    <tr>
+                                        @foreach (var col in previewResult.Columns)
+                                        {
+                                            <td>@(row.TryGetValue(col, out var val) ? val?.ToString() ?? "" : "")</td>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    @if (previewResult.Rows.Count > 10)
+                    {
+                        <p style="color: var(--muted); font-size: 0.8rem; margin-top: 0.25rem;">Showing first 10 of @previewResult.Rows.Count results</p>
+                    }
+                }
+            </div>
+        }
+
+        <!-- AI Query Assistant -->
+        <div class="form-group full-width" style="margin-top: 1rem;">
+            <label>AI Query Assistant</label>
+            <div class="ai-assistant-panel">
+                <div class="ai-input-row">
+                    <textarea rows="2" class="query-textarea"
+                              @bind="aiPrompt" @bind:event="oninput"
+                              placeholder="Describe the workflow trigger you want to match..."
+                              disabled="@aiGenerating"
+                              @onkeydown="OnAiPromptKeyDown"></textarea>
+                    <button class="action-button" @onclick="GenerateKql" disabled="@(aiGenerating || string.IsNullOrWhiteSpace(aiPrompt))">
+                        @if (aiGenerating)
+                        {
+                            <span class="spinner"></span>
+                        }
+                        else
+                        {
+                            <span>Send</span>
+                        }
+                    </button>
+                </div>
+
+                @if (aiConversation.Count > 0)
+                {
+                    <div class="ai-conversation">
+                        @foreach (var message in aiConversation.AsEnumerable().Reverse())
+                        {
+                            <div class="ai-message ai-message-@message.Role">
+                                <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
+                                @if (message.Role == "user")
+                                {
+                                    <div class="ai-message-content">@message.Text</div>
+                                }
+                                else
+                                {
+                                    <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
+                                    @if (!string.IsNullOrEmpty(message.KqlQuery))
+                                    {
+                                        <div class="ai-preview">
+                                            <pre class="ai-preview-code">@message.KqlQuery</pre>
+                                            <button class="action-button action-button-secondary ai-apply-btn" @onclick="() => ApplyKql(message.KqlQuery)">Apply to Query</button>
+                                        </div>
+                                    }
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- Expected Steps -->
+    <div class="widget-config-panel" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <div>
+                <h3 style="margin: 0;">Expected Steps</h3>
+                <p style="color: var(--muted); font-size: 0.85rem; margin: 0.25rem 0 0;">
+                    Define the expected log sequence. Each step matches a property name and value in the correlated logs.
+                </p>
+            </div>
+            <button class="action-button" @onclick="AddStep">+ Add Step</button>
+        </div>
+
+        @if (workflow.Steps.Count == 0)
+        {
+            <div class="empty-state" style="padding: 1rem;">
+                <p>No steps configured. Add steps to define the expected workflow sequence.</p>
+            </div>
+        }
+        else
+        {
+            @for (int i = 0; i < workflow.Steps.Count; i++)
+            {
+                var idx = i;
+                var step = workflow.Steps[idx];
+                <div class="workflow-step-editor">
+                    <span class="step-number-badge">@step.Order</span>
+
+                    <div class="form-group">
+                        <label>Property</label>
+                        <select @bind="step.PropertyName">
+                            <option value="tool.name">tool.name</option>
+                            <option value="gen_ai.operation.name">gen_ai.operation.name</option>
+                            <option value="gen_ai.request.model">gen_ai.request.model</option>
+                            <option value="gen_ai.agent.name">gen_ai.agent.name</option>
+                            <option value="custom">Custom...</option>
+                        </select>
+                    </div>
+
+                    @if (step.PropertyName == "custom" || !IsKnownProperty(step.PropertyName))
+                    {
+                        <div class="form-group">
+                            <label>Custom Property</label>
+                            <input @bind="step.PropertyName" @bind:event="oninput" placeholder="e.g. my.custom.attribute" />
+                        </div>
+                    }
+
+                    <div class="form-group">
+                        <label>Expected Value</label>
+                        <input @bind="step.ExpectedValue" @bind:event="oninput" placeholder="e.g. read_file" />
+                    </div>
+
+                    <div class="step-actions">
+                        <button class="btn-icon" @onclick="() => MoveStepUp(idx)" disabled="@(idx == 0)" title="Move up">↑</button>
+                        <button class="btn-icon" @onclick="() => MoveStepDown(idx)" disabled="@(idx == workflow.Steps.Count - 1)" title="Move down">↓</button>
+                        <button class="btn-icon" @onclick="() => RemoveStep(idx)" title="Remove">✕</button>
+                    </div>
+                </div>
+            }
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string Id { get; set; } = string.Empty;
+
+    private ManagedWorkflow? workflow;
+
+    // Preview state
+    private WidgetQueryResult? previewResult;
+    private bool previewExecuting;
+
+    // AI assistant state
+    private string aiPrompt = string.Empty;
+    private bool aiGenerating;
+    private List<AiConversationMessage> aiConversation = [];
+
+    private static readonly string[] KnownProperties = ["tool.name", "gen_ai.operation.name", "gen_ai.request.model", "gen_ai.agent.name"];
+
+    protected override async Task OnInitializedAsync()
+    {
+        workflow = await WorkflowService.GetWorkflowAsync(Id);
+        if (workflow is null)
+        {
+            Navigation.NavigateTo("/workflows");
+        }
+    }
+
+    private static bool IsKnownProperty(string property)
+    {
+        return KnownProperties.Contains(property);
+    }
+
+    // ─── Steps ──────────────────────────────────────────────────────────────────
+
+    private void AddStep()
+    {
+        if (workflow is null) return;
+        workflow.Steps.Add(new WorkflowStep
+        {
+            Order = workflow.Steps.Count + 1,
+            PropertyName = "tool.name",
+            ExpectedValue = string.Empty
+        });
+    }
+
+    private void RemoveStep(int index)
+    {
+        if (workflow is null) return;
+        workflow.Steps.RemoveAt(index);
+        ReorderSteps();
+    }
+
+    private void MoveStepUp(int index)
+    {
+        if (workflow is null || index <= 0) return;
+        (workflow.Steps[index], workflow.Steps[index - 1]) = (workflow.Steps[index - 1], workflow.Steps[index]);
+        ReorderSteps();
+    }
+
+    private void MoveStepDown(int index)
+    {
+        if (workflow is null || index >= workflow.Steps.Count - 1) return;
+        (workflow.Steps[index], workflow.Steps[index + 1]) = (workflow.Steps[index + 1], workflow.Steps[index]);
+        ReorderSteps();
+    }
+
+    private void ReorderSteps()
+    {
+        if (workflow is null) return;
+        for (int i = 0; i < workflow.Steps.Count; i++)
+        {
+            workflow.Steps[i].Order = i + 1;
+        }
+    }
+
+    // ─── Preview ────────────────────────────────────────────────────────────────
+
+    private async Task RunPreview()
+    {
+        if (workflow is null || string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery)) return;
+
+        previewExecuting = true;
+        StateHasChanged();
+
+        previewResult = await QueryService.ExecuteWidgetQueryAsync(workflow.TriggerKqlQuery, [], TimeSpan.FromHours(24));
+
+        previewExecuting = false;
+        StateHasChanged();
+    }
+
+    // ─── AI Assistant ───────────────────────────────────────────────────────────
+
+    private async Task OnAiPromptKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            await GenerateKql();
+        }
+    }
+
+    private async Task GenerateKql()
+    {
+        if (workflow is null || string.IsNullOrWhiteSpace(aiPrompt)) return;
+
+        var userText = aiPrompt.Trim();
+        aiConversation.Add(new AiConversationMessage("user", userText, null));
+        aiPrompt = string.Empty;
+        aiGenerating = true;
+        StateHasChanged();
+
+        try
+        {
+            var existingKql = string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery) ? null : workflow.TriggerKqlQuery;
+
+            var history = aiConversation
+                .Where(m => m != aiConversation.Last())
+                .Select(m => (m.Role, m.Role == "assistant"
+                    ? (string.IsNullOrEmpty(m.KqlQuery) ? m.Text : $"{m.Text}\n\n```kql\n{m.KqlQuery}\n```")
+                    : m.Text))
+                .ToList();
+
+            var result = await KqlGenerationService.GenerateKqlAsync(
+                userText,
+                [],
+                WidgetType.Table,
+                existingKql,
+                history);
+
+            aiConversation.Add(new AiConversationMessage("assistant", result.Explanation, result.KqlQuery));
+        }
+        catch (Exception ex)
+        {
+            aiConversation.Add(new AiConversationMessage("assistant", $"Error: {ex.Message}", null));
+        }
+
+        aiGenerating = false;
+        StateHasChanged();
+    }
+
+    private void ApplyKql(string kql)
+    {
+        if (workflow is null) return;
+        workflow.TriggerKqlQuery = kql;
+    }
+
+    // ─── Save / Cancel ──────────────────────────────────────────────────────────
+
+    private async Task Save()
+    {
+        if (workflow is null) return;
+        await WorkflowService.UpdateWorkflowAsync(workflow);
+        NotificationService.Notify(new Radzen.NotificationMessage
+        {
+            Summary = "Workflow saved",
+            Severity = Radzen.NotificationSeverity.Success,
+            Duration = 3000
+        });
+        Navigation.NavigateTo($"/workflows/{Id}");
+    }
+
+    private void Cancel()
+    {
+        Navigation.NavigateTo($"/workflows/{Id}");
+    }
+
+    private static string RenderMarkdown(string markdown)
+    {
+        var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+        return Markdown.ToHtml(markdown, pipeline);
+    }
+
+    private sealed record AiConversationMessage(string Role, string Text, string? KqlQuery);
+}

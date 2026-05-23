@@ -1,0 +1,357 @@
+@page "/workflows/{Id}"
+@layout AgentObservability.Dashboard.Components.Layout.WorkflowLayout
+@inject AgentObservability.Dashboard.Services.WorkflowManagementService WorkflowService
+@inject AgentObservability.Dashboard.Services.WidgetQueryService QueryService
+@inject NavigationManager Navigation
+@using AgentObservability.Dashboard.Models
+
+<PageTitle>@(workflow?.Name ?? "Workflow")</PageTitle>
+
+@if (workflow is null)
+{
+    <p class="loading-state">Loading workflow...</p>
+}
+else
+{
+    <div class="dashboard-toolbar">
+        <div>
+            <p class="eyebrow">Workflow</p>
+            <h1>@workflow.Name</h1>
+        </div>
+        <div class="dashboard-toolbar-actions">
+            <select class="time-range-select" @onchange="OnTimeRangeChanged" value="@selectedTimeRange">
+                <option value="1">Last 1 hour</option>
+                <option value="4">Last 4 hours</option>
+                <option value="12">Last 12 hours</option>
+                <option value="24">Last 24 hours</option>
+                <option value="72">Last 3 days</option>
+                <option value="168">Last 7 days</option>
+                <option value="720">Last 30 days</option>
+            </select>
+            <button class="action-button" @onclick="EditWorkflow">Edit</button>
+        </div>
+    </div>
+
+    @if (string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery))
+    {
+        <div class="empty-state">
+            <p>No trigger query configured. Edit this workflow to add a KQL trigger query.</p>
+            <button class="action-button" @onclick="EditWorkflow">Configure Trigger</button>
+        </div>
+    }
+    else
+    {
+        @if (isLoading)
+        {
+            <p class="loading-state">Executing trigger query...</p>
+        }
+        else if (queryResult?.Error is not null)
+        {
+            <div class="widget-error">
+                <strong>Query Error:</strong> @queryResult.Error
+            </div>
+        }
+        else if (queryResult is not null && queryResult.Rows.Count > 0)
+        {
+            <div class="workflow-view-content @(selectedRow is not null ? "with-detail" : "")">
+                <!-- Trigger Results Table -->
+                <div class="workflow-results-section">
+                    <h3>Trigger Results <span class="tree-badge">@queryResult.Rows.Count</span></h3>
+                    <div class="widget-table-container">
+                        <table class="widget-table">
+                            <thead>
+                                <tr>
+                                    @foreach (var col in queryResult.Columns)
+                                    {
+                                        <th>@col</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var row in queryResult.Rows)
+                                {
+                                    var isSelected = row == selectedRow;
+                                    <tr class="@(isSelected ? "selected-row" : "") clickable-row"
+                                        @onclick="() => SelectRow(row)">
+                                        @foreach (var col in queryResult.Columns)
+                                        {
+                                            <td>@(row.TryGetValue(col, out var val) ? val?.ToString() ?? "" : "")</td>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Side-by-Side Detail Panel -->
+                @if (selectedRow is not null)
+                {
+                    <div class="workflow-detail-panel">
+                        <div class="workflow-detail-header">
+                            <h3>Step Matching</h3>
+                            <button class="btn-icon" @onclick="CloseDetail" title="Close">✕</button>
+                        </div>
+
+                        @if (isLoadingSteps)
+                        {
+                            <p class="loading-state">Loading step matches...</p>
+                        }
+                        else
+                        {
+                            <div class="workflow-steps-comparison">
+                                @for (int i = 0; i < workflow.Steps.Count; i++)
+                                {
+                                    var step = workflow.Steps[i];
+                                    var match = stepMatches.ElementAtOrDefault(i);
+
+                                    <div class="workflow-step-row">
+                                        <!-- Left: Expected Step Config -->
+                                        <div class="workflow-step-expected">
+                                            <div class="step-header">
+                                                <span class="step-number">Step @step.Order</span>
+                                                <span class="step-status @(match?.Status ?? "pending")">
+                                                    @switch (match?.Status)
+                                                    {
+                                                        case "matched":
+                                                            <span>✓</span>
+                                                            break;
+                                                        case "missing":
+                                                            <span>✗</span>
+                                                            break;
+                                                        case "out-of-order":
+                                                            <span>⚠</span>
+                                                            break;
+                                                        default:
+                                                            <span>…</span>
+                                                            break;
+                                                    }
+                                                </span>
+                                            </div>
+                                            <div class="step-config">
+                                                <span class="step-property">@step.PropertyName</span>
+                                                <span class="step-equals">=</span>
+                                                <span class="step-value">@step.ExpectedValue</span>
+                                            </div>
+                                        </div>
+
+                                        <!-- Right: Actual Matched Log -->
+                                        <div class="workflow-step-actual">
+                                            @if (match?.MatchedLog is not null)
+                                            {
+                                                <div class="matched-log">
+                                                    @foreach (var kvp in match.MatchedLog)
+                                                    {
+                                                        <div class="log-property">
+                                                            <span class="log-key">@kvp.Key:</span>
+                                                            <span class="log-value">@(kvp.Value?.ToString() ?? "null")</span>
+                                                        </div>
+                                                    }
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <div class="no-match">
+                                                    <span>No matching log found</span>
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+
+                                @if (workflow.Steps.Count == 0)
+                                {
+                                    <div class="empty-state">
+                                        <p>No expected steps configured for this workflow.</p>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="empty-state">
+                <p>No results found for the trigger query in the selected time range.</p>
+            </div>
+        }
+    }
+}
+
+@code {
+    [Parameter] public string Id { get; set; } = string.Empty;
+
+    private ManagedWorkflow? workflow;
+    private WidgetQueryResult? queryResult;
+    private Dictionary<string, object?>? selectedRow;
+    private List<StepMatchResult> stepMatches = [];
+    private bool isLoading;
+    private bool isLoadingSteps;
+    private string selectedTimeRange = "24";
+
+    protected override async Task OnInitializedAsync()
+    {
+        workflow = await WorkflowService.GetWorkflowAsync(Id);
+        if (workflow is not null && !string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery))
+        {
+            await ExecuteTriggerQuery();
+        }
+    }
+
+    private async Task ExecuteTriggerQuery()
+    {
+        if (workflow is null || string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery)) return;
+
+        isLoading = true;
+        StateHasChanged();
+
+        var lookback = TimeSpan.FromHours(int.Parse(selectedTimeRange));
+        queryResult = await QueryService.ExecuteWidgetQueryAsync(workflow.TriggerKqlQuery, [], lookback);
+
+        isLoading = false;
+        StateHasChanged();
+    }
+
+    private async Task SelectRow(Dictionary<string, object?> row)
+    {
+        selectedRow = row;
+        isLoadingSteps = true;
+        StateHasChanged();
+
+        await LoadStepMatches(row);
+
+        isLoadingSteps = false;
+        StateHasChanged();
+    }
+
+    private async Task LoadStepMatches(Dictionary<string, object?> row)
+    {
+        stepMatches = [];
+
+        // Extract OperationId from the selected row
+        var operationId = row.TryGetValue("OperationId", out var opId) ? opId?.ToString()
+                        : row.TryGetValue("operationId", out var opId2) ? opId2?.ToString()
+                        : row.TryGetValue("operation_Id", out var opId3) ? opId3?.ToString()
+                        : null;
+
+        if (string.IsNullOrEmpty(operationId) || workflow is null)
+        {
+            // No OperationId available — mark all steps as missing
+            stepMatches = workflow?.Steps.Select(s => new StepMatchResult { Status = "missing" }).ToList() ?? [];
+            return;
+        }
+
+        // Query all logs related to this OperationId
+        var kql = $"""
+            AppDependencies
+            | where OperationId == "{EscapeKql(operationId)}"
+            | union (AppRequests | where OperationId == "{EscapeKql(operationId)}")
+            | order by TimeGenerated asc
+            """;
+
+        var lookback = TimeSpan.FromHours(int.Parse(selectedTimeRange));
+        var relatedLogs = await QueryService.ExecuteWidgetQueryAsync(kql, [], lookback);
+
+        if (relatedLogs?.Rows is null || relatedLogs.Rows.Count == 0)
+        {
+            stepMatches = workflow.Steps.Select(s => new StepMatchResult { Status = "missing" }).ToList();
+            return;
+        }
+
+        // Match each step against the logs in order
+        var usedLogIndices = new HashSet<int>();
+        var orderedSteps = workflow.Steps.OrderBy(s => s.Order).ToList();
+
+        for (int stepIdx = 0; stepIdx < orderedSteps.Count; stepIdx++)
+        {
+            var step = orderedSteps[stepIdx];
+            var matchResult = new StepMatchResult();
+
+            // Search for a log matching this step's property/value
+            for (int logIdx = 0; logIdx < relatedLogs.Rows.Count; logIdx++)
+            {
+                if (usedLogIndices.Contains(logIdx)) continue;
+
+                var logRow = relatedLogs.Rows[logIdx];
+                if (LogMatchesStep(logRow, step))
+                {
+                    matchResult.MatchedLog = logRow;
+                    matchResult.MatchedLogIndex = logIdx;
+                    usedLogIndices.Add(logIdx);
+
+                    // Check if out of order (matched log appears before a previous step's match)
+                    var previousMaxIndex = stepMatches
+                        .Where(m => m.MatchedLogIndex.HasValue)
+                        .Select(m => m.MatchedLogIndex!.Value)
+                        .DefaultIfEmpty(-1)
+                        .Max();
+
+                    matchResult.Status = logIdx >= previousMaxIndex ? "matched" : "out-of-order";
+                    break;
+                }
+            }
+
+            if (matchResult.MatchedLog is null)
+            {
+                matchResult.Status = "missing";
+            }
+
+            stepMatches.Add(matchResult);
+        }
+    }
+
+    private static bool LogMatchesStep(Dictionary<string, object?> log, WorkflowStep step)
+    {
+        // Check direct property match
+        if (log.TryGetValue(step.PropertyName, out var val) && 
+            string.Equals(val?.ToString(), step.ExpectedValue, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Check in Properties bag (common for AppDependencies custom dimensions)
+        if (log.TryGetValue("Properties", out var props) && props is string propsStr)
+        {
+            if (propsStr.Contains($"\"{step.PropertyName}\"", StringComparison.OrdinalIgnoreCase) &&
+                propsStr.Contains($"\"{step.ExpectedValue}\"", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void CloseDetail()
+    {
+        selectedRow = null;
+        stepMatches = [];
+    }
+
+    private void EditWorkflow()
+    {
+        Navigation.NavigateTo($"/workflows/{Id}/edit");
+    }
+
+    private async Task OnTimeRangeChanged(ChangeEventArgs e)
+    {
+        selectedTimeRange = e.Value?.ToString() ?? "24";
+        selectedRow = null;
+        stepMatches = [];
+        await ExecuteTriggerQuery();
+    }
+
+    private static string EscapeKql(string value)
+    {
+        return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    }
+
+    private sealed class StepMatchResult
+    {
+        public string Status { get; set; } = "pending";
+        public Dictionary<string, object?>? MatchedLog { get; set; }
+        public int? MatchedLogIndex { get; set; }
+    }
+}

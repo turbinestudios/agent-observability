@@ -1,0 +1,85 @@
+@page "/workflows"
+@layout AgentObservability.Dashboard.Components.Layout.WorkflowLayout
+@inject AgentObservability.Dashboard.Services.WorkflowManagementService WorkflowService
+@inject NavigationManager Navigation
+
+<PageTitle>Workflows</PageTitle>
+
+<div class="dashboard-toolbar">
+    <div>
+        <p class="eyebrow">Workflows</p>
+        <h1>Workflow Configurations</h1>
+    </div>
+    <div class="dashboard-toolbar-actions">
+        <button class="action-button" @onclick="CreateWorkflow">
+            <span>+ New Workflow</span>
+        </button>
+    </div>
+</div>
+
+@if (workflows is null)
+{
+    <p class="loading-state">Loading workflows...</p>
+}
+else if (workflows.Count == 0)
+{
+    <div class="empty-state">
+        <p>No workflows yet. Create your first workflow to start monitoring agent behavior.</p>
+        <button class="action-button" @onclick="CreateWorkflow">Create Workflow</button>
+    </div>
+}
+else
+{
+    <div class="dashboard-card-grid">
+        @foreach (var workflow in workflows)
+        {
+            <div class="dashboard-card" @onclick="() => OpenWorkflow(workflow.Id)">
+                <h3>@workflow.Name</h3>
+                <p>@(workflow.Steps.Count == 0 ? "No steps configured" : $"{workflow.Steps.Count} expected step(s)")</p>
+                <div class="dashboard-card-meta">
+                    <span>@(string.IsNullOrEmpty(workflow.TriggerKqlQuery) ? "No trigger query" : "Trigger configured")</span>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "folder")]
+    public string? FolderId { get; set; }
+
+    private List<AgentObservability.Dashboard.Models.ManagedWorkflow>? workflows;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadWorkflowsAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadWorkflowsAsync();
+    }
+
+    private async Task LoadWorkflowsAsync()
+    {
+        var allWorkflows = await WorkflowService.GetWorkflowsAsync(FolderId);
+        workflows = FolderId is null ? allWorkflows : allWorkflows.Where(w => w.FolderId == FolderId).ToList();
+    }
+
+    private void OpenWorkflow(string id)
+    {
+        Navigation.NavigateTo($"/workflows/{id}");
+    }
+
+    private async Task CreateWorkflow()
+    {
+        var newWorkflow = new AgentObservability.Dashboard.Models.ManagedWorkflow
+        {
+            Name = "New Workflow",
+            FolderId = FolderId
+        };
+
+        await WorkflowService.CreateWorkflowAsync(newWorkflow);
+        Navigation.NavigateTo($"/workflows/{newWorkflow.Id}/edit");
+    }
+}
