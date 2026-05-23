@@ -71,7 +71,7 @@ else
                                 @foreach (var row in queryResult.Rows)
                                 {
                                     var isSelected = row == selectedRow;
-                                    <tr class="@(isSelected ? "selected-row" : "") clickable-row"
+                                    <tr class="@(isSelected ? "selected-row" : "")"
                                         @onclick="() => SelectRow(row)">
                                         @foreach (var col in queryResult.Columns)
                                         {

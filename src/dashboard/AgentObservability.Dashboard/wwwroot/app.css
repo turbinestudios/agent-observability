@@ -1305,13 +1305,14 @@ code {
 }
 
 .widget-table-container {
-    overflow-x: auto;
+    overflow: hidden;
     border: 1px solid var(--border);
     border-radius: 8px;
 }
 
 .widget-table {
     width: 100%;
+    table-layout: fixed;
     border-collapse: collapse;
     font-size: 0.85rem;
 }
@@ -1320,9 +1321,8 @@ code {
 .widget-table td {
     padding: 0.5rem 0.75rem;
     text-align: left;
-    border-bottom: 1px solid var(--border);
+    border: 1px solid var(--border);
     white-space: nowrap;
-    max-width: 300px;
     overflow: hidden;
     text-overflow: ellipsis;
 }
@@ -1336,12 +1336,12 @@ code {
     color: var(--muted);
 }
 
-.widget-table tbody tr:hover {
-    background: var(--surface-hover);
+.widget-table tbody tr {
+    cursor: pointer;
 }
 
-.clickable-row {
-    cursor: pointer;
+.widget-table tbody tr:hover {
+    background: var(--surface-hover);
 }
 
 .selected-row {
