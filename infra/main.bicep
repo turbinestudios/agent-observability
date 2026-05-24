@@ -141,6 +141,7 @@ module dashboard 'modules/dashboard-app.bicep' = {
     acrLoginServer: acr.outputs.loginServer
     dashboardIdentityId: dashboardIdentity.id
     storageTableEndpoint: storageAccount.outputs.tableEndpoint
+    storageBlobEndpoint: storageAccount.outputs.blobEndpoint
     aiEndpoint: aiFoundry.outputs.endpoint
     aiDeploymentName: aiFoundry.outputs.deploymentName
   }
@@ -187,6 +188,17 @@ resource dashboardTableDataRole 'Microsoft.Authorization/roleAssignments@2022-04
   scope: storageAccountResource
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
+    principalId: dashboard.outputs.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Storage Blob Data Contributor role for Dashboard identity (AI Learnings)
+resource dashboardBlobDataRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  scope: storageAccountResource
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
     principalId: dashboard.outputs.principalId
     principalType: 'ServicePrincipal'
   }

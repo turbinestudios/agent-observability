@@ -21,15 +21,30 @@ public sealed class KqlGenerationResult
     public string Explanation { get; init; } = string.Empty;
 }
 
+public sealed class LearningProposal
+{
+    public string Title { get; init; } = string.Empty;
+    public string RuleText { get; init; } = string.Empty;
+    public string? KqlExample { get; init; }
+}
+
+public sealed class TeachingResult
+{
+    public string Response { get; init; } = string.Empty;
+    public LearningProposal? Proposal { get; init; }
+}
+
 public sealed class KqlGenerationService
 {
     private readonly AIProjectClient _projectClient;
     private readonly string _deploymentName;
+    private readonly LearningService _learningService;
     private readonly ILogger<KqlGenerationService> _logger;
 
-    public KqlGenerationService(IOptions<AzureAIOptions> options, ILogger<KqlGenerationService> logger)
+    public KqlGenerationService(IOptions<AzureAIOptions> options, LearningService learningService, ILogger<KqlGenerationService> logger)
     {
         _logger = logger;
+        _learningService = learningService;
         var endpoint = options.Value.Endpoint;
         if (string.IsNullOrEmpty(endpoint))
         {
@@ -59,6 +74,12 @@ public sealed class KqlGenerationService
         CancellationToken cancellationToken = default)
     {
         var systemMessage = BuildSystemPrompt(filters, widgetType);
+        var learningsContext = await BuildLearningsContextAsync(cancellationToken);
+        if (!string.IsNullOrEmpty(learningsContext))
+        {
+            systemMessage += "\n\n" + learningsContext;
+        }
+
         var userMessage = BuildUserMessage(userPrompt, existingKql);
 
         try
@@ -99,6 +120,159 @@ public sealed class KqlGenerationService
                 Explanation = $"Error: {ex.Message}"
             };
         }
+    }
+
+    public async Task<TeachingResult> GenerateTeachingResponseAsync(
+        string userMessage,
+        IReadOnlyList<(string Role, string Content)> conversationHistory,
+        CancellationToken cancellationToken = default)
+    {
+        var systemPrompt = BuildTeachingSystemPrompt();
+
+        try
+        {
+            var chatClient = _projectClient.ProjectOpenAIClient.GetChatClient(_deploymentName);
+
+            var messages = new List<ChatMessage>
+            {
+                new SystemChatMessage(systemPrompt)
+            };
+
+            foreach (var (role, content) in conversationHistory)
+            {
+                if (string.Equals(role, "user", StringComparison.OrdinalIgnoreCase))
+                    messages.Add(new UserChatMessage(content));
+                else
+                    messages.Add(new AssistantChatMessage(content));
+            }
+
+            messages.Add(new UserChatMessage(userMessage));
+
+            var options = new ChatCompletionOptions
+            {
+                Temperature = 0.3f
+            };
+
+            ChatCompletion completion = await chatClient.CompleteChatAsync(messages, options, cancellationToken);
+            var responseText = completion.Content[0].Text;
+
+            return ParseTeachingResponse(responseText);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to generate teaching response from AI");
+            return new TeachingResult
+            {
+                Response = $"Error: {ex.Message}"
+            };
+        }
+    }
+
+    private async Task<string> BuildLearningsContextAsync(CancellationToken cancellationToken)
+    {
+        var learnings = await _learningService.GetAllLearningsAsync(cancellationToken);
+        if (learnings.Count == 0) return string.Empty;
+
+        var lines = new List<string>
+        {
+            "## Learned Rules",
+            "The following rules have been taught by users. Always apply them when relevant:"
+        };
+
+        for (int i = 0; i < learnings.Count; i++)
+        {
+            var learning = learnings[i];
+            lines.Add($"\n### Rule {i + 1}: {learning.Title}");
+            lines.Add(learning.RuleText);
+            if (!string.IsNullOrEmpty(learning.KqlExample))
+            {
+                lines.Add($"```kql\n{learning.KqlExample}\n```");
+            }
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private static string BuildTeachingSystemPrompt()
+    {
+        return """
+            You are a helpful assistant that collaborates with users to create reusable knowledge rules for a KQL query assistant.
+
+            The user wants to teach you something about their environment, query patterns, or conventions. Your job is to:
+            1. Listen to what the user wants to teach you
+            2. Ask clarifying questions if needed to make the rule precise and actionable
+            3. When you have enough information, propose a structured learning with a clear title, rule text, and optional KQL example
+
+            When you are ready to propose a learning, include it in your response using this exact format:
+
+            ```learning
+            {
+                "title": "Short descriptive title",
+                "ruleText": "Clear, concise instruction that the AI should follow in future queries",
+                "kqlExample": "Optional KQL example demonstrating the rule (or null if not applicable)"
+            }
+            ```
+
+            Guidelines for the learning:
+            - The title should be 3-8 words, descriptive of the rule
+            - The ruleText should be a clear instruction (1-3 sentences) that the AI can follow
+            - The kqlExample should be a concrete KQL snippet illustrating the rule (if applicable)
+            - Only propose a learning when you're confident the user is satisfied with it
+            - If the user wants to refine the learning, iterate with them until they're happy
+
+            If the user hasn't provided enough information yet, ask questions to understand:
+            - What specific pattern or rule they want to teach
+            - When this rule should be applied
+            - Any concrete examples
+            """;
+    }
+
+    private static TeachingResult ParseTeachingResponse(string content)
+    {
+        LearningProposal? proposal = null;
+
+        var learningStart = content.IndexOf("```learning", StringComparison.OrdinalIgnoreCase);
+        if (learningStart >= 0)
+        {
+            var blockStart = content.IndexOf('\n', learningStart) + 1;
+            var blockEnd = content.IndexOf("```", blockStart, StringComparison.Ordinal);
+            if (blockEnd > blockStart)
+            {
+                var json = content[blockStart..blockEnd].Trim();
+                try
+                {
+                    proposal = System.Text.Json.JsonSerializer.Deserialize<LearningProposal>(json, new System.Text.Json.JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+                }
+                catch
+                {
+                    // If parsing fails, the proposal remains null
+                }
+            }
+        }
+
+        // Build the display response (remove the learning block for clean display)
+        var displayText = content;
+        if (learningStart >= 0)
+        {
+            var endBlock = content.IndexOf("```", content.IndexOf('\n', learningStart) + 1, StringComparison.Ordinal);
+            if (endBlock >= 0)
+            {
+                var beforeBlock = content[..learningStart].TrimEnd();
+                var afterBlock = content[(endBlock + 3)..].TrimStart();
+                displayText = string.IsNullOrEmpty(afterBlock)
+                    ? beforeBlock
+                    : $"{beforeBlock}\n\n{afterBlock}";
+            }
+        }
+
+        return new TeachingResult
+        {
+            Response = displayText.Trim(),
+            Proposal = proposal
+        };
     }
 
     private static string BuildUserMessage(string userPrompt, string? existingKql)

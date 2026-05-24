@@ -3,6 +3,7 @@
 @inject AgentObservability.Dashboard.Services.WorkflowManagementService WorkflowService
 @inject AgentObservability.Dashboard.Services.WidgetQueryService QueryService
 @inject AgentObservability.Dashboard.Services.KqlGenerationService KqlGenerationService
+@inject AgentObservability.Dashboard.Services.LearningService LearningService
 @inject NavigationManager Navigation
 @inject Radzen.NotificationService NotificationService
 @using AgentObservability.Dashboard.Models
@@ -100,51 +101,131 @@ else
 
         <!-- AI Query Assistant -->
         <div class="form-group full-width" style="margin-top: 1rem;">
-            <label>AI Query Assistant</label>
-            <div class="ai-assistant-panel">
-                <div class="ai-input-row">
-                    <textarea rows="2" class="query-textarea"
-                              @bind="aiPrompt" @bind:event="oninput"
-                              placeholder="Describe the workflow trigger you want to match..."
-                              disabled="@aiGenerating"
-                              @onkeydown="OnAiPromptKeyDown"></textarea>
-                    <button class="action-button" @onclick="GenerateKql" disabled="@(aiGenerating || string.IsNullOrWhiteSpace(aiPrompt))">
-                        @if (aiGenerating)
-                        {
-                            <span class="spinner"></span>
-                        }
-                        else
-                        {
-                            <span>Send</span>
-                        }
-                    </button>
-                </div>
-
-                @if (aiConversation.Count > 0)
+            <div class="ai-assistant-header">
+                <label>AI Query Assistant</label>
+                <button class="teach-mode-toggle @(isTeachMode ? "active" : "")" @onclick="ToggleTeachMode">
+                    <span class="teach-icon">🎓</span>
+                    <span>@(isTeachMode ? "Back to Query" : "Teach AI")</span>
+                </button>
+            </div>
+            <div class="ai-assistant-panel @(isTeachMode ? "teach-mode" : "")">
+                @if (isTeachMode)
                 {
-                    <div class="ai-conversation">
-                        @foreach (var message in aiConversation.AsEnumerable().Reverse())
-                        {
-                            <div class="ai-message ai-message-@message.Role">
-                                <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
-                                @if (message.Role == "user")
-                                {
-                                    <div class="ai-message-content">@message.Text</div>
-                                }
-                                else
-                                {
-                                    <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
-                                    @if (!string.IsNullOrEmpty(message.KqlQuery))
+                    <div class="ai-input-row">
+                        <textarea rows="2" class="query-textarea"
+                                  @bind="teachPrompt" @bind:event="oninput"
+                                  placeholder="Describe what you'd like to teach the AI (e.g., rules, patterns, conventions)..."
+                                  disabled="@teachGenerating"
+                                  @onkeydown="OnTeachPromptKeyDown"></textarea>
+                        <button class="action-button" @onclick="SendTeachMessage" disabled="@(teachGenerating || string.IsNullOrWhiteSpace(teachPrompt))">
+                            @if (teachGenerating)
+                            {
+                                <span class="spinner"></span>
+                            }
+                            else
+                            {
+                                <span>Send</span>
+                            }
+                        </button>
+                    </div>
+
+                    @if (teachConversation.Count > 0)
+                    {
+                        <div class="ai-conversation">
+                            @foreach (var message in teachConversation.AsEnumerable().Reverse())
+                            {
+                                <div class="ai-message ai-message-@message.Role">
+                                    <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
+                                    @if (message.Role == "user")
                                     {
-                                        <div class="ai-preview">
-                                            <pre class="ai-preview-code">@message.KqlQuery</pre>
-                                            <button class="action-button action-button-secondary ai-apply-btn" @onclick="() => ApplyKql(message.KqlQuery)">Apply to Query</button>
-                                        </div>
+                                        <div class="ai-message-content">@message.Text</div>
                                     }
+                                    else
+                                    {
+                                        <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (currentProposal is not null)
+                    {
+                        <div class="learning-proposal-card">
+                            <div class="learning-proposal-header">
+                                <span class="teach-icon">🎓</span>
+                                <span>Proposed Learning</span>
+                            </div>
+                            <div class="learning-proposal-body">
+                                <div class="learning-proposal-title">@currentProposal.Title</div>
+                                <div class="learning-proposal-rule">@currentProposal.RuleText</div>
+                                @if (!string.IsNullOrEmpty(currentProposal.KqlExample))
+                                {
+                                    <pre class="ai-preview-code">@currentProposal.KqlExample</pre>
                                 }
                             </div>
-                        }
+                            <div class="learning-proposal-actions">
+                                <button class="action-button" @onclick="SaveProposedLearning" disabled="@savingLearning">
+                                    @if (savingLearning)
+                                    {
+                                        <span class="spinner"></span>
+                                    }
+                                    else
+                                    {
+                                        <span>Save Learning</span>
+                                    }
+                                </button>
+                                <button class="action-button action-button-secondary" @onclick="DismissProposal">Dismiss</button>
+                            </div>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="ai-input-row">
+                        <textarea rows="2" class="query-textarea"
+                                  @bind="aiPrompt" @bind:event="oninput"
+                                  placeholder="Describe the workflow trigger you want to match..."
+                                  disabled="@aiGenerating"
+                                  @onkeydown="OnAiPromptKeyDown"></textarea>
+                        <button class="action-button" @onclick="GenerateKql" disabled="@(aiGenerating || string.IsNullOrWhiteSpace(aiPrompt))">
+                            @if (aiGenerating)
+                            {
+                                <span class="spinner"></span>
+                            }
+                            else
+                            {
+                                <span>Send</span>
+                            }
+                        </button>
                     </div>
+
+                    @if (aiConversation.Count > 0)
+                    {
+                        <div class="ai-conversation">
+                            @foreach (var message in aiConversation.AsEnumerable().Reverse())
+                            {
+                                <div class="ai-message ai-message-@message.Role">
+                                    <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
+                                    @if (message.Role == "user")
+                                    {
+                                        <div class="ai-message-content">@message.Text</div>
+                                    }
+                                    else
+                                    {
+                                        <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
+                                        @if (!string.IsNullOrEmpty(message.KqlQuery))
+                                        {
+                                            <div class="ai-preview">
+                                                <pre class="ai-preview-code">@message.KqlQuery</pre>
+                                                <button class="action-button action-button-secondary ai-apply-btn" @onclick="() => ApplyKql(message.KqlQuery)">Apply to Query</button>
+                                            </div>
+                                        }
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
                 }
             </div>
         </div>
@@ -206,52 +287,132 @@ else
 
                         @if (activeStepAiIndex == idx)
                         {
-                            <div class="ai-assistant-panel" style="margin-top: 0.5rem;">
-                                <div class="ai-input-row">
-                                    <textarea rows="2" class="query-textarea"
-                                              @bind="stepAiPrompt" @bind:event="oninput"
-                                              placeholder="Describe what this step should detect..."
-                                              disabled="@stepAiGenerating"
-                                              @onkeydown="OnStepAiPromptKeyDown"></textarea>
-                                    <button class="action-button" @onclick="GenerateStepKql" disabled="@(stepAiGenerating || string.IsNullOrWhiteSpace(stepAiPrompt))">
-                                        @if (stepAiGenerating)
-                                        {
-                                            <span class="spinner"></span>
-                                        }
-                                        else
-                                        {
-                                            <span>Send</span>
-                                        }
+                            <div class="ai-assistant-panel @(isStepTeachMode ? "teach-mode" : "")" style="margin-top: 0.5rem;">
+                                <div class="ai-assistant-header" style="margin-bottom: 0.5rem;">
+                                    <span></span>
+                                    <button class="teach-mode-toggle @(isStepTeachMode ? "active" : "")" @onclick="ToggleStepTeachMode">
+                                        <span class="teach-icon">🎓</span>
+                                        <span>@(isStepTeachMode ? "Back to Query" : "Teach AI")</span>
                                     </button>
                                 </div>
-
-                                @{ var stepConvo = GetStepAiConversation(idx); }
-                                @if (stepConvo.Count > 0)
+                                @if (isStepTeachMode)
                                 {
-                                    <div class="ai-conversation">
-                                        @foreach (var message in stepConvo.AsEnumerable().Reverse())
-                                        {
-                                            <div class="ai-message ai-message-@message.Role">
-                                                <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
-                                                @if (message.Role == "user")
-                                                {
-                                                    <div class="ai-message-content">@message.Text</div>
-                                                }
-                                                else
-                                                {
-                                                    <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
-                                                    @if (!string.IsNullOrEmpty(message.KqlQuery))
+                                    <div class="ai-input-row">
+                                        <textarea rows="2" class="query-textarea"
+                                                  @bind="teachPrompt" @bind:event="oninput"
+                                                  placeholder="Describe what you'd like to teach the AI..."
+                                                  disabled="@teachGenerating"
+                                                  @onkeydown="OnTeachPromptKeyDown"></textarea>
+                                        <button class="action-button" @onclick="SendTeachMessage" disabled="@(teachGenerating || string.IsNullOrWhiteSpace(teachPrompt))">
+                                            @if (teachGenerating)
+                                            {
+                                                <span class="spinner"></span>
+                                            }
+                                            else
+                                            {
+                                                <span>Send</span>
+                                            }
+                                        </button>
+                                    </div>
+
+                                    @if (teachConversation.Count > 0)
+                                    {
+                                        <div class="ai-conversation">
+                                            @foreach (var message in teachConversation.AsEnumerable().Reverse())
+                                            {
+                                                <div class="ai-message ai-message-@message.Role">
+                                                    <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
+                                                    @if (message.Role == "user")
                                                     {
-                                                        var capturedIdx = idx;
-                                                        <div class="ai-preview">
-                                                            <pre class="ai-preview-code">@message.KqlQuery</pre>
-                                                            <button class="action-button action-button-secondary ai-apply-btn" @onclick="() => ApplyStepKql(capturedIdx, message.KqlQuery)">Apply to Step</button>
-                                                        </div>
+                                                        <div class="ai-message-content">@message.Text</div>
                                                     }
+                                                    else
+                                                    {
+                                                        <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+
+                                    @if (currentProposal is not null)
+                                    {
+                                        <div class="learning-proposal-card">
+                                            <div class="learning-proposal-header">
+                                                <span class="teach-icon">🎓</span>
+                                                <span>Proposed Learning</span>
+                                            </div>
+                                            <div class="learning-proposal-body">
+                                                <div class="learning-proposal-title">@currentProposal.Title</div>
+                                                <div class="learning-proposal-rule">@currentProposal.RuleText</div>
+                                                @if (!string.IsNullOrEmpty(currentProposal.KqlExample))
+                                                {
+                                                    <pre class="ai-preview-code">@currentProposal.KqlExample</pre>
                                                 }
                                             </div>
-                                        }
+                                            <div class="learning-proposal-actions">
+                                                <button class="action-button" @onclick="SaveProposedLearning" disabled="@savingLearning">
+                                                    @if (savingLearning)
+                                                    {
+                                                        <span class="spinner"></span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span>Save Learning</span>
+                                                    }
+                                                </button>
+                                                <button class="action-button action-button-secondary" @onclick="DismissProposal">Dismiss</button>
+                                            </div>
+                                        </div>
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="ai-input-row">
+                                        <textarea rows="2" class="query-textarea"
+                                                  @bind="stepAiPrompt" @bind:event="oninput"
+                                                  placeholder="Describe what this step should detect..."
+                                                  disabled="@stepAiGenerating"
+                                                  @onkeydown="OnStepAiPromptKeyDown"></textarea>
+                                        <button class="action-button" @onclick="GenerateStepKql" disabled="@(stepAiGenerating || string.IsNullOrWhiteSpace(stepAiPrompt))">
+                                            @if (stepAiGenerating)
+                                            {
+                                                <span class="spinner"></span>
+                                            }
+                                            else
+                                            {
+                                                <span>Send</span>
+                                            }
+                                        </button>
                                     </div>
+
+                                    @if (GetStepAiConversation(idx).Count > 0)
+                                    {
+                                        <div class="ai-conversation">
+                                            @foreach (var message in GetStepAiConversation(idx).AsEnumerable().Reverse())
+                                            {
+                                                <div class="ai-message ai-message-@message.Role">
+                                                    <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
+                                                    @if (message.Role == "user")
+                                                    {
+                                                        <div class="ai-message-content">@message.Text</div>
+                                                    }
+                                                    else
+                                                    {
+                                                        <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
+                                                        @if (!string.IsNullOrEmpty(message.KqlQuery))
+                                                        {
+                                                            var capturedIdx = idx;
+                                                            <div class="ai-preview">
+                                                                <pre class="ai-preview-code">@message.KqlQuery</pre>
+                                                                <button class="action-button action-button-secondary ai-apply-btn" @onclick="() => ApplyStepKql(capturedIdx, message.KqlQuery)">Apply to Step</button>
+                                                            </div>
+                                                        }
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    }
                                 }
                             </div>
                         }
@@ -281,6 +442,15 @@ else
     private string stepAiPrompt = string.Empty;
     private bool stepAiGenerating;
     private Dictionary<int, List<AiConversationMessage>> stepAiConversations = [];
+
+    // Teach mode state (shared across trigger & step AI)
+    private bool isTeachMode;
+    private bool isStepTeachMode;
+    private string teachPrompt = string.Empty;
+    private bool teachGenerating;
+    private bool savingLearning;
+    private List<AiConversationMessage> teachConversation = [];
+    private LearningProposal? currentProposal;
 
     protected override async Task OnInitializedAsync()
     {
@@ -474,6 +644,109 @@ else
     {
         if (workflow is null || index >= workflow.Steps.Count) return;
         workflow.Steps[index].KqlQuery = kql;
+    }
+
+    // ─── Teach Mode ─────────────────────────────────────────────────────────────
+
+    private void ToggleTeachMode()
+    {
+        isTeachMode = !isTeachMode;
+    }
+
+    private void ToggleStepTeachMode()
+    {
+        isStepTeachMode = !isStepTeachMode;
+    }
+
+    private async Task OnTeachPromptKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey && !string.IsNullOrWhiteSpace(teachPrompt) && !teachGenerating)
+        {
+            await SendTeachMessage();
+        }
+    }
+
+    private async Task SendTeachMessage()
+    {
+        if (string.IsNullOrWhiteSpace(teachPrompt)) return;
+
+        var userText = teachPrompt.Trim();
+        teachConversation.Add(new AiConversationMessage("user", userText, null));
+        teachPrompt = string.Empty;
+        teachGenerating = true;
+        currentProposal = null;
+        StateHasChanged();
+
+        try
+        {
+            var history = teachConversation
+                .Where(m => m != teachConversation.Last())
+                .Select(m => (m.Role, m.Text))
+                .ToList();
+
+            var result = await KqlGenerationService.GenerateTeachingResponseAsync(userText, history);
+
+            teachConversation.Add(new AiConversationMessage("assistant", result.Response, null));
+            currentProposal = result.Proposal;
+        }
+        catch (Exception ex)
+        {
+            teachConversation.Add(new AiConversationMessage("assistant", $"Error: {ex.Message}", null));
+        }
+        finally
+        {
+            teachGenerating = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveProposedLearning()
+    {
+        if (currentProposal is null) return;
+
+        savingLearning = true;
+        StateHasChanged();
+
+        try
+        {
+            var learning = new AiLearning
+            {
+                Title = currentProposal.Title,
+                RuleText = currentProposal.RuleText,
+                KqlExample = currentProposal.KqlExample
+            };
+
+            await LearningService.SaveLearningAsync(learning);
+
+            NotificationService.Notify(new Radzen.NotificationMessage
+            {
+                Summary = $"Learning saved: {learning.Title}",
+                Severity = Radzen.NotificationSeverity.Success,
+                Duration = 4000
+            });
+
+            currentProposal = null;
+            teachConversation = [];
+        }
+        catch (Exception ex)
+        {
+            NotificationService.Notify(new Radzen.NotificationMessage
+            {
+                Summary = $"Failed to save learning: {ex.Message}",
+                Severity = Radzen.NotificationSeverity.Error,
+                Duration = 5000
+            });
+        }
+        finally
+        {
+            savingLearning = false;
+            StateHasChanged();
+        }
+    }
+
+    private void DismissProposal()
+    {
+        currentProposal = null;
     }
 
     // ─── Save / Cancel ──────────────────────────────────────────────────────────

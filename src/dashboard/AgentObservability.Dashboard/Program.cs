@@ -4,6 +4,7 @@ using AgentObservability.Dashboard.Services;
 using AgentObservability.Dashboard;
 using Azure.Data.Tables;
 using Azure.Identity;
+using Azure.Storage.Blobs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -46,6 +47,19 @@ builder.Services.AddScoped<WidgetQueryService>();
 builder.Services.Configure<AzureAIOptions>(builder.Configuration.GetSection(AzureAIOptions.SectionName));
 builder.Services.AddScoped<KqlGenerationService>();
 
+// Phase 9: AI Learnings (Azure Blob Storage)
+var storageBlobEndpoint = builder.Configuration["Storage:BlobEndpoint"];
+if (!string.IsNullOrEmpty(storageBlobEndpoint))
+{
+    builder.Services.AddSingleton(new BlobServiceClient(new Uri(storageBlobEndpoint), new DefaultAzureCredential()));
+}
+else
+{
+    var storageConnectionString = builder.Configuration["Storage:ConnectionString"] ?? "UseDevelopmentStorage=true";
+    builder.Services.AddSingleton(new BlobServiceClient(storageConnectionString));
+}
+builder.Services.AddSingleton<LearningService>();
+
 var app = builder.Build();
 
 // Ensure Table Storage tables exist
@@ -54,6 +68,9 @@ await workflowService.EnsureTablesExistAsync();
 
 var dashboardService = app.Services.GetRequiredService<DashboardService>();
 await dashboardService.EnsureTablesExistAsync();
+
+var learningService = app.Services.GetRequiredService<LearningService>();
+await learningService.EnsureContainerExistsAsync();
 
 if (!app.Environment.IsDevelopment())
 {
