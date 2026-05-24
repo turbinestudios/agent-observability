@@ -156,7 +156,7 @@ else
             <div>
                 <h3 style="margin: 0;">Expected Steps</h3>
                 <p style="color: var(--muted); font-size: 0.85rem; margin: 0.25rem 0 0;">
-                    Define the expected log sequence. Each step matches a property name and value in the correlated logs.
+                    Define the expected step sequence. Each step uses a KQL query to detect its occurrence. Use <code>_filter_operationid</code> to reference the OperationId from the trigger result.
                 </p>
             </div>
             <button class="action-button" @onclick="AddStep">+ Add Step</button>
@@ -174,37 +174,27 @@ else
             {
                 var idx = i;
                 var step = workflow.Steps[idx];
-                <div class="workflow-step-editor">
-                    <span class="step-number-badge">@step.Order</span>
+                <div class="workflow-step-editor" style="flex-direction: column; align-items: stretch;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <span class="step-number-badge">@step.Order</span>
 
-                    <div class="form-group">
-                        <label>Property</label>
-                        <select @bind="step.PropertyName">
-                            <option value="tool.name">tool.name</option>
-                            <option value="gen_ai.operation.name">gen_ai.operation.name</option>
-                            <option value="gen_ai.request.model">gen_ai.request.model</option>
-                            <option value="gen_ai.agent.name">gen_ai.agent.name</option>
-                            <option value="custom">Custom...</option>
-                        </select>
-                    </div>
-
-                    @if (step.PropertyName == "custom" || !IsKnownProperty(step.PropertyName))
-                    {
-                        <div class="form-group">
-                            <label>Custom Property</label>
-                            <input @bind="step.PropertyName" @bind:event="oninput" placeholder="e.g. my.custom.attribute" />
+                        <div class="form-group" style="flex: 1;">
+                            <label>Step Name</label>
+                            <input @bind="step.Name" @bind:event="oninput" placeholder="e.g. File Read, Code Generation" />
                         </div>
-                    }
 
-                    <div class="form-group">
-                        <label>Expected Value</label>
-                        <input @bind="step.ExpectedValue" @bind:event="oninput" placeholder="e.g. read_file" />
+                        <div class="step-actions">
+                            <button class="btn-icon" @onclick="() => MoveStepUp(idx)" disabled="@(idx == 0)" title="Move up">↑</button>
+                            <button class="btn-icon" @onclick="() => MoveStepDown(idx)" disabled="@(idx == workflow.Steps.Count - 1)" title="Move down">↓</button>
+                            <button class="btn-icon" @onclick="() => RemoveStep(idx)" title="Remove">✕</button>
+                        </div>
                     </div>
 
-                    <div class="step-actions">
-                        <button class="btn-icon" @onclick="() => MoveStepUp(idx)" disabled="@(idx == 0)" title="Move up">↑</button>
-                        <button class="btn-icon" @onclick="() => MoveStepDown(idx)" disabled="@(idx == workflow.Steps.Count - 1)" title="Move down">↓</button>
-                        <button class="btn-icon" @onclick="() => RemoveStep(idx)" title="Remove">✕</button>
+                    <div class="form-group" style="margin-top: 0.5rem;">
+                        <label>KQL Query</label>
+                        <textarea rows="4" class="query-textarea"
+                                  @bind="step.KqlQuery" @bind:event="oninput"
+                                  placeholder="e.g. AppDependencies | where OperationId == _filter_operationid | where Name == &quot;read_file&quot;"></textarea>
                     </div>
                 </div>
             }
@@ -226,8 +216,6 @@ else
     private bool aiGenerating;
     private List<AiConversationMessage> aiConversation = [];
 
-    private static readonly string[] KnownProperties = ["tool.name", "gen_ai.operation.name", "gen_ai.request.model", "gen_ai.agent.name"];
-
     protected override async Task OnInitializedAsync()
     {
         workflow = await WorkflowService.GetWorkflowAsync(Id);
@@ -235,11 +223,6 @@ else
         {
             Navigation.NavigateTo("/workflows");
         }
-    }
-
-    private static bool IsKnownProperty(string property)
-    {
-        return KnownProperties.Contains(property);
     }
 
     // ─── Steps ──────────────────────────────────────────────────────────────────
@@ -250,8 +233,8 @@ else
         workflow.Steps.Add(new WorkflowStep
         {
             Order = workflow.Steps.Count + 1,
-            PropertyName = "tool.name",
-            ExpectedValue = string.Empty
+            Name = string.Empty,
+            KqlQuery = string.Empty
         });
     }
 

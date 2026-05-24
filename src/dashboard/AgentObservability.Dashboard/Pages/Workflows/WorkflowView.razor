@@ -129,10 +129,14 @@ else
                                                 </span>
                                             </div>
                                             <div class="step-config">
-                                                <span class="step-property">@step.PropertyName</span>
-                                                <span class="step-equals">=</span>
-                                                <span class="step-value">@step.ExpectedValue</span>
+                                                <span class="step-property">@(string.IsNullOrEmpty(step.Name) ? $"Step {step.Order}" : step.Name)</span>
                                             </div>
+                                            @if (!string.IsNullOrWhiteSpace(step.KqlQuery))
+                                            {
+                                                <div class="step-query-preview" style="font-size: 0.75rem; color: var(--muted); font-family: monospace; margin-top: 0.25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                                    @step.KqlQuery.Split('\n').FirstOrDefault()
+                                                </div>
+                                            }
                                         </div>
 
                                         <!-- Right: Actual Matched Log -->
@@ -243,85 +247,63 @@ else
             return;
         }
 
-        // Query all logs related to this OperationId
-        var kql = $"""
-            AppDependencies
-            | where OperationId == "{EscapeKql(operationId)}"
-            | union (AppRequests | where OperationId == "{EscapeKql(operationId)}")
-            | order by TimeGenerated asc
-            """;
-
         var lookback = TimeSpan.FromHours(int.Parse(selectedTimeRange));
-        var relatedLogs = await QueryService.ExecuteWidgetQueryAsync(kql, [], lookback);
-
-        if (relatedLogs?.Rows is null || relatedLogs.Rows.Count == 0)
-        {
-            stepMatches = workflow.Steps.Select(s => new StepMatchResult { Status = "missing" }).ToList();
-            return;
-        }
-
-        // Match each step against the logs in order
-        var usedLogIndices = new HashSet<int>();
         var orderedSteps = workflow.Steps.OrderBy(s => s.Order).ToList();
+        DateTimeOffset? previousTimestamp = null;
 
         for (int stepIdx = 0; stepIdx < orderedSteps.Count; stepIdx++)
         {
             var step = orderedSteps[stepIdx];
             var matchResult = new StepMatchResult();
 
-            // Search for a log matching this step's property/value
-            for (int logIdx = 0; logIdx < relatedLogs.Rows.Count; logIdx++)
+            if (string.IsNullOrWhiteSpace(step.KqlQuery))
             {
-                if (usedLogIndices.Contains(logIdx)) continue;
-
-                var logRow = relatedLogs.Rows[logIdx];
-                if (LogMatchesStep(logRow, step))
-                {
-                    matchResult.MatchedLog = logRow;
-                    matchResult.MatchedLogIndex = logIdx;
-                    usedLogIndices.Add(logIdx);
-
-                    // Check if out of order (matched log appears before a previous step's match)
-                    var previousMaxIndex = stepMatches
-                        .Where(m => m.MatchedLogIndex.HasValue)
-                        .Select(m => m.MatchedLogIndex!.Value)
-                        .DefaultIfEmpty(-1)
-                        .Max();
-
-                    matchResult.Status = logIdx >= previousMaxIndex ? "matched" : "out-of-order";
-                    break;
-                }
+                matchResult.Status = "missing";
+                stepMatches.Add(matchResult);
+                continue;
             }
 
-            if (matchResult.MatchedLog is null)
+            // Inject OperationId as a let statement (same pattern as dashboard filters)
+            var preamble = $"let _filter_operationid = \"{EscapeKql(operationId)}\";\n";
+            var fullQuery = preamble + step.KqlQuery;
+
+            var stepResult = await QueryService.ExecuteWidgetQueryAsync(fullQuery, [], lookback);
+
+            if (stepResult?.Rows is not null && stepResult.Rows.Count > 0)
+            {
+                matchResult.MatchedLog = stepResult.Rows[0];
+
+                // Check ordering via TimeGenerated
+                DateTimeOffset? currentTimestamp = null;
+                if (matchResult.MatchedLog.TryGetValue("TimeGenerated", out var tg) && tg is not null)
+                {
+                    if (DateTimeOffset.TryParse(tg.ToString(), out var parsed))
+                    {
+                        currentTimestamp = parsed;
+                    }
+                }
+
+                if (previousTimestamp.HasValue && currentTimestamp.HasValue && currentTimestamp < previousTimestamp)
+                {
+                    matchResult.Status = "out-of-order";
+                }
+                else
+                {
+                    matchResult.Status = "matched";
+                }
+
+                if (currentTimestamp.HasValue)
+                {
+                    previousTimestamp = currentTimestamp;
+                }
+            }
+            else
             {
                 matchResult.Status = "missing";
             }
 
             stepMatches.Add(matchResult);
         }
-    }
-
-    private static bool LogMatchesStep(Dictionary<string, object?> log, WorkflowStep step)
-    {
-        // Check direct property match
-        if (log.TryGetValue(step.PropertyName, out var val) && 
-            string.Equals(val?.ToString(), step.ExpectedValue, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        // Check in Properties bag (common for AppDependencies custom dimensions)
-        if (log.TryGetValue("Properties", out var props) && props is string propsStr)
-        {
-            if (propsStr.Contains($"\"{step.PropertyName}\"", StringComparison.OrdinalIgnoreCase) &&
-                propsStr.Contains($"\"{step.ExpectedValue}\"", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private void CloseDetail()
@@ -352,6 +334,5 @@ else
     {
         public string Status { get; set; } = "pending";
         public Dictionary<string, object?>? MatchedLog { get; set; }
-        public int? MatchedLogIndex { get; set; }
     }
 }
