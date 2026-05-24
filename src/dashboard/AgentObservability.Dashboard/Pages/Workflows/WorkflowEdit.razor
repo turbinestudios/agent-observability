@@ -196,6 +196,66 @@ else
                                   @bind="step.KqlQuery" @bind:event="oninput"
                                   placeholder="e.g. AppDependencies | where OperationId == _filter_operationid | where Name == &quot;read_file&quot;"></textarea>
                     </div>
+
+                    <!-- Step AI Query Assistant -->
+                    <div style="margin-top: 0.5rem;">
+                        <button class="action-button action-button-secondary" style="font-size: 0.8rem; padding: 0.3rem 0.6rem;"
+                                @onclick="() => ToggleStepAi(idx)">
+                            @(activeStepAiIndex == idx ? "Hide AI Assistant" : "AI Assistant")
+                        </button>
+
+                        @if (activeStepAiIndex == idx)
+                        {
+                            <div class="ai-assistant-panel" style="margin-top: 0.5rem;">
+                                <div class="ai-input-row">
+                                    <textarea rows="2" class="query-textarea"
+                                              @bind="stepAiPrompt" @bind:event="oninput"
+                                              placeholder="Describe what this step should detect..."
+                                              disabled="@stepAiGenerating"
+                                              @onkeydown="OnStepAiPromptKeyDown"></textarea>
+                                    <button class="action-button" @onclick="GenerateStepKql" disabled="@(stepAiGenerating || string.IsNullOrWhiteSpace(stepAiPrompt))">
+                                        @if (stepAiGenerating)
+                                        {
+                                            <span class="spinner"></span>
+                                        }
+                                        else
+                                        {
+                                            <span>Send</span>
+                                        }
+                                    </button>
+                                </div>
+
+                                @{ var stepConvo = GetStepAiConversation(idx); }
+                                @if (stepConvo.Count > 0)
+                                {
+                                    <div class="ai-conversation">
+                                        @foreach (var message in stepConvo.AsEnumerable().Reverse())
+                                        {
+                                            <div class="ai-message ai-message-@message.Role">
+                                                <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
+                                                @if (message.Role == "user")
+                                                {
+                                                    <div class="ai-message-content">@message.Text</div>
+                                                }
+                                                else
+                                                {
+                                                    <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
+                                                    @if (!string.IsNullOrEmpty(message.KqlQuery))
+                                                    {
+                                                        var capturedIdx = idx;
+                                                        <div class="ai-preview">
+                                                            <pre class="ai-preview-code">@message.KqlQuery</pre>
+                                                            <button class="action-button action-button-secondary ai-apply-btn" @onclick="() => ApplyStepKql(capturedIdx, message.KqlQuery)">Apply to Step</button>
+                                                        </div>
+                                                    }
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
                 </div>
             }
         }
@@ -211,10 +271,16 @@ else
     private WidgetQueryResult? previewResult;
     private bool previewExecuting;
 
-    // AI assistant state
+    // AI assistant state (trigger)
     private string aiPrompt = string.Empty;
     private bool aiGenerating;
     private List<AiConversationMessage> aiConversation = [];
+
+    // AI assistant state (steps)
+    private int? activeStepAiIndex;
+    private string stepAiPrompt = string.Empty;
+    private bool stepAiGenerating;
+    private Dictionary<int, List<AiConversationMessage>> stepAiConversations = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -336,6 +402,78 @@ else
     {
         if (workflow is null) return;
         workflow.TriggerKqlQuery = kql;
+    }
+
+    // ─── Step AI Assistant ──────────────────────────────────────────────────────
+
+    private void ToggleStepAi(int index)
+    {
+        activeStepAiIndex = activeStepAiIndex == index ? null : index;
+    }
+
+    private List<AiConversationMessage> GetStepAiConversation(int index)
+    {
+        return stepAiConversations.TryGetValue(index, out var convo) ? convo : [];
+    }
+
+    private async Task OnStepAiPromptKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            await GenerateStepKql();
+        }
+    }
+
+    private async Task GenerateStepKql()
+    {
+        if (workflow is null || activeStepAiIndex is null || string.IsNullOrWhiteSpace(stepAiPrompt)) return;
+
+        var idx = activeStepAiIndex.Value;
+        if (!stepAiConversations.ContainsKey(idx))
+        {
+            stepAiConversations[idx] = [];
+        }
+
+        var userText = stepAiPrompt.Trim();
+        stepAiConversations[idx].Add(new AiConversationMessage("user", userText, null));
+        stepAiPrompt = string.Empty;
+        stepAiGenerating = true;
+        StateHasChanged();
+
+        try
+        {
+            var step = workflow.Steps[idx];
+            var existingKql = string.IsNullOrWhiteSpace(step.KqlQuery) ? null : step.KqlQuery;
+
+            var history = stepAiConversations[idx]
+                .Where(m => m != stepAiConversations[idx].Last())
+                .Select(m => (m.Role, m.Role == "assistant"
+                    ? (string.IsNullOrEmpty(m.KqlQuery) ? m.Text : $"{m.Text}\n\n```kql\n{m.KqlQuery}\n```")
+                    : m.Text))
+                .ToList();
+
+            var result = await KqlGenerationService.GenerateKqlAsync(
+                userText + "\n\nNote: This query is for a workflow step. Use `_filter_operationid` to reference the OperationId from the trigger result.",
+                [],
+                WidgetType.Table,
+                existingKql,
+                history);
+
+            stepAiConversations[idx].Add(new AiConversationMessage("assistant", result.Explanation, result.KqlQuery));
+        }
+        catch (Exception ex)
+        {
+            stepAiConversations[idx].Add(new AiConversationMessage("assistant", $"Error: {ex.Message}", null));
+        }
+
+        stepAiGenerating = false;
+        StateHasChanged();
+    }
+
+    private void ApplyStepKql(int index, string kql)
+    {
+        if (workflow is null || index >= workflow.Steps.Count) return;
+        workflow.Steps[index].KqlQuery = kql;
     }
 
     // ─── Save / Cancel ──────────────────────────────────────────────────────────
