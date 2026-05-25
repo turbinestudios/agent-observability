@@ -4,6 +4,7 @@ using Azure.Identity;
 using Microsoft.Extensions.Options;
 using OpenAI.Chat;
 using System.ClientModel;
+using System.Text.Json;
 
 namespace AgentObservability.Dashboard.Services;
 
@@ -24,8 +25,10 @@ public sealed class KqlGenerationResult
 public sealed class LearningProposal
 {
     public string Title { get; init; } = string.Empty;
+    public string Description { get; init; } = string.Empty;
     public string RuleText { get; init; } = string.Empty;
     public string? KqlExample { get; init; }
+    public string? UpdatesLearningId { get; init; }
 }
 
 public sealed class TeachingResult
@@ -55,6 +58,122 @@ public sealed class KqlGenerationService
         _projectClient = new AIProjectClient(new Uri(endpoint), new DefaultAzureCredential());
     }
 
+    private static readonly ChatTool _loadLearningsTool = ChatTool.CreateFunctionTool(
+        functionName: "load_learnings",
+        functionDescription: "Load the full content of one or more learnings by their IDs. Call this when you need the detailed rules and KQL examples from specific learnings to complete the task.",
+        functionParameters: BinaryData.FromBytes("""
+            {
+                "type": "object",
+                "properties": {
+                    "learningIds": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Array of learning IDs to load"
+                    }
+                },
+                "required": ["learningIds"]
+            }
+            """u8.ToArray()));
+
+    private async Task<ChatCompletion> CompleteChatWithToolsAsync(
+        ChatClient chatClient,
+        List<ChatMessage> messages,
+        ChatCompletionOptions options,
+        CancellationToken cancellationToken)
+    {
+        const int maxIterations = 3;
+
+        for (int i = 0; i < maxIterations; i++)
+        {
+            ChatCompletion completion = await chatClient.CompleteChatAsync(messages, options, cancellationToken);
+
+            if (completion.FinishReason != ChatFinishReason.ToolCalls)
+                return completion;
+
+            // Add the assistant message containing tool calls
+            messages.Add(new AssistantChatMessage(completion));
+
+            // Process each tool call
+            foreach (ChatToolCall toolCall in completion.ToolCalls)
+            {
+                if (toolCall.FunctionName == "load_learnings")
+                {
+                    var result = await HandleLoadLearningsAsync(toolCall.FunctionArguments, cancellationToken);
+                    messages.Add(new ToolChatMessage(toolCall.Id, result));
+                }
+                else
+                {
+                    messages.Add(new ToolChatMessage(toolCall.Id, "Unknown tool."));
+                }
+            }
+        }
+
+        // Final call without tools to force a text response
+        options.Tools.Clear();
+        return await chatClient.CompleteChatAsync(messages, options, cancellationToken);
+    }
+
+    private async Task<string> HandleLoadLearningsAsync(BinaryData arguments, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(arguments);
+            var ids = doc.RootElement.GetProperty("learningIds")
+                .EnumerateArray()
+                .Select(e => e.GetString()!)
+                .Where(id => !string.IsNullOrEmpty(id))
+                .ToList();
+
+            var learnings = await _learningService.GetLearningsByIdsAsync(ids, cancellationToken);
+
+            if (learnings.Count == 0)
+                return "No learnings found for the provided IDs.";
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var learning in learnings)
+            {
+                sb.AppendLine($"## {learning.Title}");
+                sb.AppendLine($"**Description**: {learning.Description}");
+                sb.AppendLine($"**Rule**: {learning.RuleText}");
+                if (!string.IsNullOrEmpty(learning.KqlExample))
+                {
+                    sb.AppendLine($"**KQL Example**:");
+                    sb.AppendLine($"```kql");
+                    sb.AppendLine(learning.KqlExample);
+                    sb.AppendLine($"```");
+                }
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to handle load_learnings tool call");
+            return "Error loading learnings.";
+        }
+    }
+
+    private async Task<(string Catalog, bool HasLearnings)> BuildLearningsCatalogAsync(CancellationToken cancellationToken)
+    {
+        var learnings = await _learningService.GetAllLearningsAsync(cancellationToken);
+        if (learnings.Count == 0) return (string.Empty, false);
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("## Available Learnings");
+        sb.AppendLine("You have access to the following learned rules. If any are relevant to the user's request, call the `load_learnings` tool with their IDs to load their full content before responding.");
+        sb.AppendLine();
+        sb.AppendLine("| ID | Title | Description |");
+        sb.AppendLine("| --- | --- | --- |");
+
+        foreach (var learning in learnings)
+        {
+            sb.AppendLine($"| {learning.Id} | {learning.Title} | {learning.Description} |");
+        }
+
+        return (sb.ToString(), true);
+    }
+
     public async Task<KqlGenerationResult> GenerateKqlAsync(
         string userPrompt,
         List<DashboardFilter> filters,
@@ -74,10 +193,10 @@ public sealed class KqlGenerationService
         CancellationToken cancellationToken = default)
     {
         var systemMessage = BuildSystemPrompt(filters, widgetType);
-        var learningsContext = await BuildLearningsContextAsync(cancellationToken);
-        if (!string.IsNullOrEmpty(learningsContext))
+        var (catalog, hasLearnings) = await BuildLearningsCatalogAsync(cancellationToken);
+        if (hasLearnings)
         {
-            systemMessage += "\n\n" + learningsContext;
+            systemMessage += "\n\n" + catalog;
         }
 
         var userMessage = BuildUserMessage(userPrompt, existingKql);
@@ -106,7 +225,12 @@ public sealed class KqlGenerationService
                 Temperature = 0.2f
             };
 
-            ChatCompletion completion = await chatClient.CompleteChatAsync(messages, options, cancellationToken);
+            if (hasLearnings)
+            {
+                options.Tools.Add(_loadLearningsTool);
+            }
+
+            ChatCompletion completion = await CompleteChatWithToolsAsync(chatClient, messages, options, cancellationToken);
             var content2 = completion.Content[0].Text;
 
             return ParseResponse(content2);
@@ -127,7 +251,9 @@ public sealed class KqlGenerationService
         IReadOnlyList<(string Role, string Content)> conversationHistory,
         CancellationToken cancellationToken = default)
     {
-        var systemPrompt = BuildTeachingSystemPrompt();
+        var existingLearnings = await _learningService.GetAllLearningsAsync(cancellationToken);
+        var systemPrompt = BuildTeachingSystemPrompt(existingLearnings);
+        var hasLearnings = existingLearnings.Count > 0;
 
         try
         {
@@ -153,7 +279,12 @@ public sealed class KqlGenerationService
                 Temperature = 0.3f
             };
 
-            ChatCompletion completion = await chatClient.CompleteChatAsync(messages, options, cancellationToken);
+            if (hasLearnings)
+            {
+                options.Tools.Add(_loadLearningsTool);
+            }
+
+            ChatCompletion completion = await CompleteChatWithToolsAsync(chatClient, messages, options, cancellationToken);
             var responseText = completion.Content[0].Text;
 
             return ParseTeachingResponse(responseText);
@@ -168,87 +299,106 @@ public sealed class KqlGenerationService
         }
     }
 
-    private async Task<string> BuildLearningsContextAsync(CancellationToken cancellationToken)
+    private static string BuildTeachingSystemPrompt(List<AiLearning> existingLearnings)
     {
-        var learnings = await _learningService.GetAllLearningsAsync(cancellationToken);
-        if (learnings.Count == 0) return string.Empty;
-
-        var lines = new List<string>
-        {
-            "## Learned Rules",
-            "The following rules have been taught by users. Always apply them when relevant:"
-        };
-
-        for (int i = 0; i < learnings.Count; i++)
-        {
-            var learning = learnings[i];
-            lines.Add($"\n### Rule {i + 1}: {learning.Title}");
-            lines.Add(learning.RuleText);
-            if (!string.IsNullOrEmpty(learning.KqlExample))
-            {
-                lines.Add($"```kql\n{learning.KqlExample}\n```");
-            }
-        }
-
-        return string.Join("\n", lines);
-    }
-
-    private static string BuildTeachingSystemPrompt()
-    {
-        return """
+        var prompt = """
             You are a helpful assistant that collaborates with users to create reusable knowledge rules for a KQL query assistant.
 
             The user wants to teach you something about their environment, query patterns, or conventions. Your job is to:
             1. Listen to what the user wants to teach you
             2. Ask clarifying questions if needed to make the rule precise and actionable
-            3. When you have enough information, propose a structured learning with a clear title, rule text, and optional KQL example
+            3. When you have enough information, propose a structured learning with a clear title, description, rule text, and optional KQL example
+            4. IMPORTANT: Before proposing a NEW learning, check the existing learnings listed below. If the user's input overlaps with or refines an existing learning, call the `load_learnings` tool to inspect its full content, then propose an UPDATE by setting "updatesLearningId" to its id.
 
             When you are ready to propose a learning, include it in your response using this exact format:
 
             ```learning
             {
                 "title": "Short descriptive title",
+                "description": "A brief summary of what this learning covers and when it applies",
                 "ruleText": "Clear, concise instruction that the AI should follow in future queries",
-                "kqlExample": "Optional KQL example demonstrating the rule (or null if not applicable)"
+                "kqlExample": "Optional KQL example demonstrating the rule (or null if not applicable)",
+                "updatesLearningId": "id-of-existing-learning-to-update OR null if this is a new learning"
             }
             ```
 
             Guidelines for the learning:
             - The title should be 3-8 words, descriptive of the rule
+            - The description should be 1-2 sentences explaining the scope and intent of the learning
             - The ruleText should be a clear instruction (1-3 sentences) that the AI can follow
             - The kqlExample should be a concrete KQL snippet illustrating the rule (if applicable)
             - Only propose a learning when you're confident the user is satisfied with it
             - If the user wants to refine the learning, iterate with them until they're happy
+            - If updating an existing learning, call `load_learnings` first to see its current content, then incorporate the new information into the existing rule (merge, don't replace entirely unless the user intends to)
 
             If the user hasn't provided enough information yet, ask questions to understand:
             - What specific pattern or rule they want to teach
             - When this rule should be applied
             - Any concrete examples
             """;
+
+        if (existingLearnings.Count > 0)
+        {
+            var sb = new System.Text.StringBuilder(prompt);
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.AppendLine("## Existing Learnings");
+            sb.AppendLine("Review these summaries. If the user's request overlaps, use `load_learnings` to inspect the full content before proposing an update:");
+            sb.AppendLine();
+            sb.AppendLine("| ID | Title | Description |");
+            sb.AppendLine("| --- | --- | --- |");
+
+            foreach (var learning in existingLearnings)
+            {
+                sb.AppendLine($"| {learning.Id} | {learning.Title} | {learning.Description} |");
+            }
+
+            return sb.ToString();
+        }
+
+        return prompt;
     }
 
     private static TeachingResult ParseTeachingResponse(string content)
     {
         LearningProposal? proposal = null;
+        var learningStart = -1;
 
-        var learningStart = content.IndexOf("```learning", StringComparison.OrdinalIgnoreCase);
-        if (learningStart >= 0)
+        // Try multiple fence formats: ```learning, ```json, or bare ``` containing the expected JSON shape
+        string[] fenceMarkers = ["```learning", "```json", "```"];
+        foreach (var marker in fenceMarkers)
         {
-            var blockStart = content.IndexOf('\n', learningStart) + 1;
-            var blockEnd = content.IndexOf("```", blockStart, StringComparison.Ordinal);
-            if (blockEnd > blockStart)
+            var idx = content.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
             {
-                var json = content[blockStart..blockEnd].Trim();
-                try
+                var blockStart = content.IndexOf('\n', idx) + 1;
+                var blockEnd = content.IndexOf("```", blockStart, StringComparison.Ordinal);
+                if (blockEnd > blockStart)
                 {
-                    proposal = System.Text.Json.JsonSerializer.Deserialize<LearningProposal>(json, new System.Text.Json.JsonSerializerOptions
+                    var json = content[blockStart..blockEnd].Trim();
+                    // Only attempt parse if it looks like it has our expected properties
+                    if (json.Contains("\"title\"", StringComparison.OrdinalIgnoreCase) &&
+                        json.Contains("\"ruleText\"", StringComparison.OrdinalIgnoreCase) &&
+                        json.Contains("\"description\"", StringComparison.OrdinalIgnoreCase))
                     {
-                        PropertyNameCaseInsensitive = true
-                    });
-                }
-                catch
-                {
-                    // If parsing fails, the proposal remains null
+                        try
+                        {
+                            proposal = System.Text.Json.JsonSerializer.Deserialize<LearningProposal>(json, new System.Text.Json.JsonSerializerOptions
+                            {
+                                PropertyNameCaseInsensitive = true
+                            });
+                            if (proposal is not null && !string.IsNullOrWhiteSpace(proposal.Title) && !string.IsNullOrWhiteSpace(proposal.RuleText))
+                            {
+                                learningStart = idx;
+                                break;
+                            }
+                            proposal = null; // Reset if validation failed
+                        }
+                        catch
+                        {
+                            // Try next fence marker
+                        }
+                    }
                 }
             }
         }

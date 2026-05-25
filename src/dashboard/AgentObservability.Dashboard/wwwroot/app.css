@@ -1366,6 +1366,13 @@ code {
     color: var(--text, #2b241d);
 }
 
+.learning-proposal-description {
+    font-size: 0.8rem;
+    font-style: italic;
+    color: var(--text-muted, #6b6560);
+    margin-bottom: 0.25rem;
+}
+
 .learning-proposal-actions {
     display: flex;
     gap: 0.5rem;
