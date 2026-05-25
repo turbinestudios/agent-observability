@@ -54,34 +54,81 @@ else
         else if (queryResult is not null && queryResult.Rows.Count > 0)
         {
             <div class="workflow-view-content @(selectedRow is not null ? "with-detail" : "")">
-                <!-- Trigger Results Table -->
+                <!-- Trigger Results Section -->
                 <div class="workflow-results-section">
-                    <h3>Trigger Results <span class="tree-badge">@queryResult.Rows.Count</span></h3>
-                    <div class="widget-table-container">
-                        <table class="widget-table">
-                            <thead>
-                                <tr>
-                                    @foreach (var col in queryResult.Columns)
-                                    {
-                                        <th>@col</th>
-                                    }
-                                </tr>
-                            </thead>
-                            <tbody>
-                                @foreach (var row in queryResult.Rows)
-                                {
-                                    var isSelected = row == selectedRow;
-                                    <tr class="@(isSelected ? "selected-row" : "")"
-                                        @onclick="() => SelectRow(row)">
+                    <div class="workflow-results-header" @onclick="ToggleResultsCollapsed">
+                        <span class="chevron @(resultsCollapsed ? "" : "expanded")">▶</span>
+                        <h3>Trigger Results <span class="tree-badge">@queryResult.Rows.Count</span></h3>
+                        @if (!statsComputed && !isComputingStats)
+                        {
+                            <button class="action-button stat-compute-btn" @onclick="ComputeAllStats" @onclick:stopPropagation="true">Compute Stats</button>
+                        }
+                        @if (isComputingStats)
+                        {
+                            <span class="stat-computing">Computing… (@statsProgress / @queryResult.Rows.Count)</span>
+                        }
+                    </div>
+
+                    @if (statsComputed)
+                    {
+                        <div class="workflow-stats-bar">
+                            <span class="stat-badge success">✓ @statsSuccessCount success</span>
+                            <span class="stat-badge warning">⚠ @statsWarningCount warning</span>
+                            <span class="stat-badge failed">✗ @statsFailedCount failed</span>
+                        </div>
+                    }
+
+                    @if (!resultsCollapsed)
+                    {
+                        <div class="widget-table-container">
+                            <table class="widget-table">
+                                <thead>
+                                    <tr>
+                                        @if (statsComputed)
+                                        {
+                                            <th style="width: 2.5rem;"></th>
+                                        }
                                         @foreach (var col in queryResult.Columns)
                                         {
-                                            <td>@(row.TryGetValue(col, out var val) ? val?.ToString() ?? "" : "")</td>
+                                            <th>@col</th>
                                         }
                                     </tr>
-                                }
-                            </tbody>
-                        </table>
-                    </div>
+                                </thead>
+                                <tbody>
+                                    @for (int rowIdx = 0; rowIdx < queryResult.Rows.Count; rowIdx++)
+                                    {
+                                        var row = queryResult.Rows[rowIdx];
+                                        var isSelected = row == selectedRow;
+                                        var rowStatus = rowStatuses.TryGetValue(rowIdx, out var s) ? s : null;
+                                        <tr class="@(isSelected ? "selected-row" : "") @(rowStatus is not null ? $"row-{rowStatus}" : "")"
+                                            @onclick="() => SelectRow(row)">
+                                            @if (statsComputed)
+                                            {
+                                                <td class="row-status-cell">
+                                                    @switch (rowStatus)
+                                                    {
+                                                        case "success":
+                                                            <span class="step-status matched">✓</span>
+                                                            break;
+                                                        case "warning":
+                                                            <span class="step-status out-of-order">⚠</span>
+                                                            break;
+                                                        case "failed":
+                                                            <span class="step-status missing">✗</span>
+                                                            break;
+                                                    }
+                                                </td>
+                                            }
+                                            @foreach (var col in queryResult.Columns)
+                                            {
+                                                <td>@(row.TryGetValue(col, out var val) ? val?.ToString() ?? "" : "")</td>
+                                            }
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
                 </div>
 
                 <!-- Side-by-Side Detail Panel -->
@@ -194,6 +241,14 @@ else
     private bool isLoading;
     private bool isLoadingSteps;
     private string selectedTimeRange = "24";
+    private bool resultsCollapsed;
+    private Dictionary<int, string> rowStatuses = new();
+    private bool isComputingStats;
+    private bool statsComputed;
+    private int statsProgress;
+    private int statsSuccessCount;
+    private int statsWarningCount;
+    private int statsFailedCount;
 
     protected override async Task OnInitializedAsync()
     {
@@ -322,7 +377,108 @@ else
         selectedTimeRange = e.Value?.ToString() ?? "24";
         selectedRow = null;
         stepMatches = [];
+        rowStatuses = new();
+        statsComputed = false;
+        statsProgress = 0;
         await ExecuteTriggerQuery();
+    }
+
+    private void ToggleResultsCollapsed()
+    {
+        resultsCollapsed = !resultsCollapsed;
+    }
+
+    private async Task ComputeAllStats()
+    {
+        if (workflow is null || queryResult is null) return;
+
+        isComputingStats = true;
+        statsProgress = 0;
+        rowStatuses = new();
+        StateHasChanged();
+
+        var lookback = TimeSpan.FromHours(int.Parse(selectedTimeRange));
+        var orderedSteps = workflow.Steps.OrderBy(s => s.Order).ToList();
+
+        for (int rowIdx = 0; rowIdx < queryResult.Rows.Count; rowIdx++)
+        {
+            var row = queryResult.Rows[rowIdx];
+
+            var operationId = row.TryGetValue("OperationId", out var opId) ? opId?.ToString()
+                            : row.TryGetValue("operationId", out var opId2) ? opId2?.ToString()
+                            : row.TryGetValue("operation_Id", out var opId3) ? opId3?.ToString()
+                            : null;
+
+            if (string.IsNullOrEmpty(operationId))
+            {
+                rowStatuses[rowIdx] = "failed";
+                statsProgress = rowIdx + 1;
+                StateHasChanged();
+                continue;
+            }
+
+            var hasOutOfOrder = false;
+            var hasMissing = false;
+            DateTimeOffset? previousTimestamp = null;
+
+            for (int stepIdx = 0; stepIdx < orderedSteps.Count; stepIdx++)
+            {
+                var step = orderedSteps[stepIdx];
+
+                if (string.IsNullOrWhiteSpace(step.KqlQuery))
+                {
+                    hasMissing = true;
+                    continue;
+                }
+
+                var preamble = $"let _filter_operationid = \"{EscapeKql(operationId)}\";\n";
+                var fullQuery = preamble + step.KqlQuery;
+                var stepResult = await QueryService.ExecuteWidgetQueryAsync(fullQuery, [], lookback);
+
+                if (stepResult?.Rows is not null && stepResult.Rows.Count > 0)
+                {
+                    DateTimeOffset? currentTimestamp = null;
+                    if (stepResult.Rows[0].TryGetValue("TimeGenerated", out var tg) && tg is not null)
+                    {
+                        if (DateTimeOffset.TryParse(tg.ToString(), out var parsed))
+                        {
+                            currentTimestamp = parsed;
+                        }
+                    }
+
+                    if (previousTimestamp.HasValue && currentTimestamp.HasValue && currentTimestamp < previousTimestamp)
+                    {
+                        hasOutOfOrder = true;
+                    }
+
+                    if (currentTimestamp.HasValue)
+                    {
+                        previousTimestamp = currentTimestamp;
+                    }
+                }
+                else
+                {
+                    hasMissing = true;
+                }
+            }
+
+            if (hasMissing)
+                rowStatuses[rowIdx] = "failed";
+            else if (hasOutOfOrder)
+                rowStatuses[rowIdx] = "warning";
+            else
+                rowStatuses[rowIdx] = "success";
+
+            statsProgress = rowIdx + 1;
+            StateHasChanged();
+        }
+
+        statsSuccessCount = rowStatuses.Values.Count(v => v == "success");
+        statsWarningCount = rowStatuses.Values.Count(v => v == "warning");
+        statsFailedCount = rowStatuses.Values.Count(v => v == "failed");
+        statsComputed = true;
+        isComputingStats = false;
+        StateHasChanged();
     }
 
     private static string EscapeKql(string value)
