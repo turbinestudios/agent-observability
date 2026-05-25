@@ -1,0 +1,425 @@
+@inject KqlGenerationService KqlGenerationService
+@inject LearningService LearningService
+@inject Radzen.NotificationService NotificationService
+@using Markdig
+
+@if (IsOpen)
+{
+    <div class="ai-overlay-backdrop" @onclick="Close"></div>
+    <div class="ai-overlay-panel">
+        <div class="ai-overlay-header">
+            <div class="ai-overlay-header-left">
+                <h3>AI Query Assistant</h3>
+                <button class="teach-mode-toggle @(isTeachMode ? "active" : "")" @onclick="ToggleTeachMode">
+                    <span class="teach-icon">🎓</span>
+                    <span>@(isTeachMode ? "Back to Query" : "Teach AI")</span>
+                </button>
+            </div>
+            <button class="ai-overlay-close" @onclick="Close" title="Close">✕</button>
+        </div>
+
+        <div class="ai-overlay-body">
+            @if (isTeachMode)
+            {
+                @if (teachConversation.Count > 0)
+                {
+                    <div class="ai-conversation" @ref="conversationRef">
+                        @foreach (var message in teachConversation)
+                        {
+                            <div class="ai-message ai-message-@message.Role">
+                                <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
+                                @if (message.Role == "user")
+                                {
+                                    <div class="ai-message-content">@message.Text</div>
+                                }
+                                else
+                                {
+                                    <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
+                                    @if (currentProposal is not null && message == teachConversation.Last(m => m.Role == "assistant"))
+                                    {
+                                        <div class="learning-proposal-card">
+                                            <div class="learning-proposal-header">
+                                                <span class="teach-icon">🎓</span>
+                                                @if (!string.IsNullOrEmpty(currentProposal.UpdatesLearningId))
+                                                {
+                                                    <span>Update Existing Learning</span>
+                                                }
+                                                else
+                                                {
+                                                    <span>Proposed Learning</span>
+                                                }
+                                            </div>
+                                            <div class="learning-proposal-body">
+                                                <div class="learning-proposal-title">@currentProposal.Title</div>
+                                                @if (!string.IsNullOrEmpty(currentProposal.Description))
+                                                {
+                                                    <div class="learning-proposal-description">@currentProposal.Description</div>
+                                                }
+                                                <div class="learning-proposal-rule">@currentProposal.RuleText</div>
+                                                @if (!string.IsNullOrEmpty(currentProposal.KqlExample))
+                                                {
+                                                    <pre class="ai-preview-code">@currentProposal.KqlExample</pre>
+                                                }
+                                            </div>
+                                            <div class="learning-proposal-actions">
+                                                <button class="action-button" @onclick="SaveProposedLearning" disabled="@savingLearning">
+                                                    @if (savingLearning)
+                                                    {
+                                                        <span class="spinner"></span>
+                                                    }
+                                                    else if (!string.IsNullOrEmpty(currentProposal.UpdatesLearningId))
+                                                    {
+                                                        <span>Update Learning</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span>Save Learning</span>
+                                                    }
+                                                </button>
+                                                <button class="action-button action-button-secondary" @onclick="DismissProposal">Dismiss</button>
+                                            </div>
+                                        </div>
+                                    }
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            }
+            else
+            {
+                @if (aiConversation.Count > 0)
+                {
+                    <div class="ai-conversation" @ref="conversationRef">
+                        @foreach (var message in aiConversation)
+                        {
+                            <div class="ai-message ai-message-@message.Role">
+                                <div class="ai-message-header">@(message.Role == "user" ? "You" : "AI")</div>
+                                @if (message.Role == "user")
+                                {
+                                    <div class="ai-message-content">@message.Text</div>
+                                }
+                                else
+                                {
+                                    <div class="ai-message-content">@((MarkupString)RenderMarkdown(message.Text))</div>
+                                    @if (!string.IsNullOrEmpty(message.KqlQuery))
+                                    {
+                                        <div class="ai-preview">
+                                            <pre class="ai-preview-code">@message.KqlQuery</pre>
+                                            <button class="action-button action-button-secondary ai-apply-btn" @onclick="() => ApplyKql(message.KqlQuery)">Apply to Query</button>
+                                        </div>
+                                    }
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            }
+        </div>
+
+        <div class="ai-overlay-footer">
+            @if (isTeachMode)
+            {
+                <div class="ai-input-row">
+                    <textarea rows="2" class="query-textarea"
+                              @bind="teachPrompt" @bind:event="oninput"
+                              placeholder="Describe what you'd like to teach the AI (e.g., rules, patterns, conventions)..."
+                              disabled="@teachGenerating"
+                              @onkeydown="OnTeachPromptKeyDown"></textarea>
+                    <button class="action-button" @onclick="SendTeachMessage" disabled="@(teachGenerating || string.IsNullOrWhiteSpace(teachPrompt))">
+                        @if (teachGenerating)
+                        {
+                            <span class="spinner"></span>
+                        }
+                        else
+                        {
+                            <span>Send</span>
+                        }
+                    </button>
+                </div>
+            }
+            else
+            {
+                <div class="ai-input-row">
+                    <textarea rows="2" class="query-textarea"
+                              @bind="aiPrompt" @bind:event="oninput"
+                              placeholder="@Placeholder"
+                              disabled="@aiGenerating"
+                              @onkeydown="OnAiPromptKeyDown"></textarea>
+                    <button class="action-button" @onclick="GenerateOrRefineKql" disabled="@(aiGenerating || string.IsNullOrWhiteSpace(aiPrompt))">
+                        @if (aiGenerating)
+                        {
+                            <span class="spinner"></span>
+                        }
+                        else
+                        {
+                            <span>Send</span>
+                        }
+                    </button>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<string> OnApplyKql { get; set; }
+    [Parameter] public string Placeholder { get; set; } = "Describe the metric you want or ask a question about the query...";
+    [Parameter] public string? ExistingQuery { get; set; }
+    [Parameter] public List<DashboardFilter> Filters { get; set; } = [];
+    [Parameter] public WidgetType WidgetType { get; set; } = WidgetType.Table;
+    [Parameter] public string? ExtraPromptContext { get; set; }
+    [Parameter] public string ContextKey { get; set; } = string.Empty;
+
+    private ElementReference conversationRef;
+    private string? previousContextKey;
+
+    // Query mode state
+    private string aiPrompt = string.Empty;
+    private bool aiGenerating;
+    private List<AiConversationMessage> aiConversation = [];
+
+    // Teach mode state
+    private bool isTeachMode;
+    private string teachPrompt = string.Empty;
+    private bool teachGenerating;
+    private bool savingLearning;
+    private List<AiConversationMessage> teachConversation = [];
+    private LearningProposal? currentProposal;
+
+    protected override void OnParametersSet()
+    {
+        if (previousContextKey is not null && previousContextKey != ContextKey)
+        {
+            ResetState();
+        }
+        previousContextKey = ContextKey;
+    }
+
+    private void ResetState()
+    {
+        aiPrompt = string.Empty;
+        aiConversation = [];
+        aiGenerating = false;
+        teachPrompt = string.Empty;
+        teachConversation = [];
+        teachGenerating = false;
+        currentProposal = null;
+        savingLearning = false;
+        isTeachMode = false;
+    }
+
+    private async Task Close()
+    {
+        await OnClose.InvokeAsync();
+    }
+
+    private void ToggleTeachMode()
+    {
+        isTeachMode = !isTeachMode;
+    }
+
+    // ─── Query Mode ─────────────────────────────────────────────────────────────
+
+    private async Task OnAiPromptKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey && !string.IsNullOrWhiteSpace(aiPrompt) && !aiGenerating)
+        {
+            await GenerateOrRefineKql();
+        }
+    }
+
+    private async Task GenerateOrRefineKql()
+    {
+        if (string.IsNullOrWhiteSpace(aiPrompt)) return;
+
+        var userText = aiPrompt.Trim();
+        aiConversation.Add(new AiConversationMessage("user", userText, null));
+        aiPrompt = string.Empty;
+        aiGenerating = true;
+        StateHasChanged();
+
+        try
+        {
+            var existingKql = string.IsNullOrWhiteSpace(ExistingQuery) ? null : ExistingQuery;
+
+            var history = aiConversation
+                .Where(m => m != aiConversation.Last())
+                .Select(m => (m.Role, m.Role == "assistant"
+                    ? (string.IsNullOrEmpty(m.KqlQuery) ? m.Text : $"{m.Text}\n\n```kql\n{m.KqlQuery}\n```")
+                    : m.Text))
+                .ToList();
+
+            var prompt = string.IsNullOrEmpty(ExtraPromptContext)
+                ? userText
+                : $"{userText}\n\n{ExtraPromptContext}";
+
+            var result = await KqlGenerationService.GenerateKqlAsync(
+                prompt,
+                Filters,
+                WidgetType,
+                existingKql,
+                history);
+
+            aiConversation.Add(new AiConversationMessage("assistant", result.Explanation, result.KqlQuery));
+        }
+        catch (Exception ex)
+        {
+            aiConversation.Add(new AiConversationMessage("assistant", $"Error: {ex.Message}", null));
+        }
+        finally
+        {
+            aiGenerating = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ApplyKql(string kql)
+    {
+        if (string.IsNullOrEmpty(kql)) return;
+        await OnApplyKql.InvokeAsync(kql);
+    }
+
+    // ─── Teach Mode ─────────────────────────────────────────────────────────────
+
+    private async Task OnTeachPromptKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey && !string.IsNullOrWhiteSpace(teachPrompt) && !teachGenerating)
+        {
+            await SendTeachMessage();
+        }
+    }
+
+    private async Task SendTeachMessage()
+    {
+        if (string.IsNullOrWhiteSpace(teachPrompt)) return;
+
+        var userText = teachPrompt.Trim();
+        teachConversation.Add(new AiConversationMessage("user", userText, null));
+        teachPrompt = string.Empty;
+        teachGenerating = true;
+        currentProposal = null;
+        StateHasChanged();
+
+        try
+        {
+            var history = teachConversation
+                .SkipLast(1)
+                .Select(m => (m.Role, m.Text))
+                .ToList();
+
+            var result = await KqlGenerationService.GenerateTeachingResponseAsync(userText, history);
+
+            teachConversation.Add(new AiConversationMessage("assistant", result.Response, null));
+            currentProposal = result.Proposal;
+        }
+        catch (Exception ex)
+        {
+            teachConversation.Add(new AiConversationMessage("assistant", $"Error: {ex.Message}", null));
+        }
+        finally
+        {
+            teachGenerating = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveProposedLearning()
+    {
+        if (currentProposal is null) return;
+
+        savingLearning = true;
+        StateHasChanged();
+
+        try
+        {
+            if (!string.IsNullOrEmpty(currentProposal.UpdatesLearningId))
+            {
+                var existingLearnings = await LearningService.GetAllLearningsAsync();
+                var existing = existingLearnings.FirstOrDefault(l => l.Id == currentProposal.UpdatesLearningId);
+
+                if (existing is not null)
+                {
+                    existing.Title = currentProposal.Title;
+                    existing.Description = currentProposal.Description;
+                    existing.RuleText = currentProposal.RuleText;
+                    existing.KqlExample = currentProposal.KqlExample;
+                    await LearningService.UpdateLearningAsync(existing);
+                }
+                else
+                {
+                    var learning = new AiLearning
+                    {
+                        Title = currentProposal.Title,
+                        Description = currentProposal.Description,
+                        RuleText = currentProposal.RuleText,
+                        KqlExample = currentProposal.KqlExample
+                    };
+                    await LearningService.SaveLearningAsync(learning);
+                }
+
+                NotificationService.Notify(new Radzen.NotificationMessage
+                {
+                    Summary = $"Learning updated: {currentProposal.Title}",
+                    Severity = Radzen.NotificationSeverity.Success,
+                    Duration = 4000
+                });
+            }
+            else
+            {
+                var learning = new AiLearning
+                {
+                    Title = currentProposal.Title,
+                    Description = currentProposal.Description,
+                    RuleText = currentProposal.RuleText,
+                    KqlExample = currentProposal.KqlExample
+                };
+
+                await LearningService.SaveLearningAsync(learning);
+
+                NotificationService.Notify(new Radzen.NotificationMessage
+                {
+                    Summary = $"Learning saved: {learning.Title}",
+                    Severity = Radzen.NotificationSeverity.Success,
+                    Duration = 4000
+                });
+            }
+
+            currentProposal = null;
+            teachConversation = [];
+            teachPrompt = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            NotificationService.Notify(new Radzen.NotificationMessage
+            {
+                Summary = $"Failed to save learning: {ex.Message}",
+                Severity = Radzen.NotificationSeverity.Error,
+                Duration = 5000
+            });
+        }
+        finally
+        {
+            savingLearning = false;
+            StateHasChanged();
+        }
+    }
+
+    private void DismissProposal()
+    {
+        currentProposal = null;
+    }
+
+    private static readonly MarkdownPipeline _markdownPipeline = new MarkdownPipelineBuilder()
+        .UseAdvancedExtensions()
+        .Build();
+
+    private static string RenderMarkdown(string markdown)
+    {
+        return Markdown.ToHtml(markdown, _markdownPipeline);
+    }
+
+    private sealed record AiConversationMessage(string Role, string Text, string? KqlQuery);
+}
