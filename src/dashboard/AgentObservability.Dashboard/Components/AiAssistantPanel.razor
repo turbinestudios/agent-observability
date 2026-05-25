@@ -18,6 +18,14 @@
             <button class="ai-overlay-close" @onclick="Close" title="Close">✕</button>
         </div>
 
+        @if (!string.IsNullOrEmpty(ContextDescription))
+        {
+            <div class="ai-overlay-context">
+                <span class="ai-overlay-context-icon">📍</span>
+                <span>@ContextDescription</span>
+            </div>
+        }
+
         <div class="ai-overlay-body">
             @if (isTeachMode)
             {
@@ -172,6 +180,7 @@
     [Parameter] public WidgetType WidgetType { get; set; } = WidgetType.Table;
     [Parameter] public string? ExtraPromptContext { get; set; }
     [Parameter] public string ContextKey { get; set; } = string.Empty;
+    [Parameter] public string? ContextDescription { get; set; }
 
     private ElementReference conversationRef;
     private string? previousContextKey;

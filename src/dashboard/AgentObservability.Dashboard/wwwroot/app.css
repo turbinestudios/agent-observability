@@ -1452,6 +1452,23 @@ code {
     padding: 1rem 1.25rem;
 }
 
+.ai-overlay-context {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1.25rem;
+    background: var(--accent-soft, rgba(139, 111, 71, 0.08));
+    border-bottom: 1px solid var(--panel-border);
+    font-size: 0.82rem;
+    color: var(--text, #2b241d);
+    flex-shrink: 0;
+}
+
+.ai-overlay-context-icon {
+    font-size: 0.9rem;
+    flex-shrink: 0;
+}
+
 .ai-overlay-body .ai-conversation {
     max-height: none;
     overflow-y: visible;

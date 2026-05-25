@@ -251,7 +251,8 @@ else
                   ExistingQuery="@editingWidget?.KqlQuery"
                   Filters="@(dashboard?.Filters ?? [])"
                   WidgetType="@(editingWidget?.WidgetType ?? WidgetType.Table)"
-                  ContextKey="@(editingWidget?.Id ?? "")" />
+                  ContextKey="@(editingWidget?.Id ?? "")"
+                  ContextDescription="@(editingWidget is not null ? $"Widget: {editingWidget.Title}" : null)" />
 
 @code {
     [Parameter]

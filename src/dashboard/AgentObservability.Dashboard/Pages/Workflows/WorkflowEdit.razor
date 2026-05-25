@@ -173,7 +173,8 @@ else
                   Filters="[]"
                   WidgetType="WidgetType.Table"
                   ExtraPromptContext="@aiPanelExtraContext"
-                  ContextKey="@aiPanelContextKey" />
+                  ContextKey="@aiPanelContextKey"
+                  ContextDescription="@aiPanelContextDescription" />
 
 @code {
     [Parameter] public string Id { get; set; } = string.Empty;
@@ -190,6 +191,7 @@ else
     private string? aiPanelExistingQuery;
     private string? aiPanelExtraContext;
     private string aiPanelContextKey = string.Empty;
+    private string? aiPanelContextDescription;
     private int? aiPanelStepIndex;
 
     protected override async Task OnInitializedAsync()
@@ -267,6 +269,7 @@ else
         aiPanelExistingQuery = workflow?.TriggerKqlQuery;
         aiPanelExtraContext = null;
         aiPanelContextKey = "trigger";
+        aiPanelContextDescription = $"Workflow trigger: {workflow?.Name ?? "Untitled"}";
         aiPanelStepIndex = null;
         showAiPanel = true;
     }
@@ -274,10 +277,12 @@ else
     private void OpenStepAiAssistant(int index)
     {
         if (workflow is null || index >= workflow.Steps.Count) return;
+        var step = workflow.Steps[index];
         aiPanelPlaceholder = "Describe what this step should detect...";
-        aiPanelExistingQuery = workflow.Steps[index].KqlQuery;
+        aiPanelExistingQuery = step.KqlQuery;
         aiPanelExtraContext = "Note: This query is for a workflow step. Use `_filter_operationid` to reference the OperationId from the trigger result.";
         aiPanelContextKey = $"step-{index}";
+        aiPanelContextDescription = $"Workflow step: {(string.IsNullOrWhiteSpace(step.Name) ? $"Step {step.Order}" : step.Name)}";
         aiPanelStepIndex = index;
         showAiPanel = true;
     }
