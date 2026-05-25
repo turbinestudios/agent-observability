@@ -1556,10 +1556,18 @@ code {
     margin-bottom: 0.75rem;
 }
 
+.workflow-results-header h3 {
+    margin: 0;
+    line-height: 1;
+}
+
 .workflow-results-header .chevron {
     font-size: 0.7rem;
     transition: transform 0.2s ease;
     color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
 }
 
 .workflow-results-header .chevron.expanded {

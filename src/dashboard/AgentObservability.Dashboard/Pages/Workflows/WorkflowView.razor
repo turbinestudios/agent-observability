@@ -3,7 +3,9 @@
 @inject AgentObservability.Dashboard.Services.WorkflowManagementService WorkflowService
 @inject AgentObservability.Dashboard.Services.WidgetQueryService QueryService
 @inject NavigationManager Navigation
+@inject IJSRuntime JS
 @using AgentObservability.Dashboard.Models
+@using System.Text.Json
 
 <PageTitle>@(workflow?.Name ?? "Workflow")</PageTitle>
 
@@ -259,6 +261,14 @@ else
         }
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await RestoreStatsFromSessionStorage();
+        }
+    }
+
     private async Task ExecuteTriggerQuery()
     {
         if (workflow is null || string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery)) return;
@@ -479,6 +489,46 @@ else
         statsComputed = true;
         isComputingStats = false;
         StateHasChanged();
+
+        await PersistStatsToSessionStorage();
+    }
+
+    private string StatsSessionKey => $"workflow-stats-{Id}-{selectedTimeRange}";
+
+    private async Task PersistStatsToSessionStorage()
+    {
+        var data = new WorkflowStatsCache
+        {
+            RowStatuses = rowStatuses,
+            SuccessCount = statsSuccessCount,
+            WarningCount = statsWarningCount,
+            FailedCount = statsFailedCount
+        };
+        var json = JsonSerializer.Serialize(data);
+        await JS.InvokeVoidAsync("sessionStorage.setItem", StatsSessionKey, json);
+    }
+
+    private async Task RestoreStatsFromSessionStorage()
+    {
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("sessionStorage.getItem", StatsSessionKey);
+            if (json is null) return;
+
+            var data = JsonSerializer.Deserialize<WorkflowStatsCache>(json);
+            if (data is null) return;
+
+            rowStatuses = data.RowStatuses;
+            statsSuccessCount = data.SuccessCount;
+            statsWarningCount = data.WarningCount;
+            statsFailedCount = data.FailedCount;
+            statsComputed = true;
+            StateHasChanged();
+        }
+        catch
+        {
+            // Session storage unavailable or data corrupted — ignore
+        }
     }
 
     private static string EscapeKql(string value)
@@ -490,5 +540,13 @@ else
     {
         public string Status { get; set; } = "pending";
         public Dictionary<string, object?>? MatchedLog { get; set; }
+    }
+
+    private sealed class WorkflowStatsCache
+    {
+        public Dictionary<int, string> RowStatuses { get; set; } = new();
+        public int SuccessCount { get; set; }
+        public int WarningCount { get; set; }
+        public int FailedCount { get; set; }
     }
 }
