@@ -1483,6 +1483,7 @@ code {
 .ai-assistant-trigger {
     display: inline-flex;
     align-items: center;
+    align-self: flex-start;
     gap: 0.4rem;
     padding: 0.4rem 0.75rem;
     border: 1px solid var(--panel-border);
