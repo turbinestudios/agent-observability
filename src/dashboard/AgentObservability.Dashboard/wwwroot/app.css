@@ -1405,6 +1405,23 @@ code {
     animation: ai-slide-in 0.2s ease-out;
 }
 
+.ai-overlay-resize-handle {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 5px;
+    height: 100%;
+    cursor: ew-resize;
+    z-index: 10;
+    transition: background 0.15s ease;
+}
+
+.ai-overlay-resize-handle:hover,
+.ai-overlay-resize-handle:active {
+    background: var(--accent, #8b6f47);
+    opacity: 0.4;
+}
+
 @keyframes ai-slide-in {
     from { transform: translateX(100%); }
     to { transform: translateX(0); }

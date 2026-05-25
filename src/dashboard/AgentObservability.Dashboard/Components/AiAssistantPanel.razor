@@ -1,12 +1,14 @@
 @inject KqlGenerationService KqlGenerationService
 @inject LearningService LearningService
 @inject Radzen.NotificationService NotificationService
+@inject IJSRuntime JS
 @using Markdig
 
 @if (IsOpen)
 {
     <div class="ai-overlay-backdrop" @onclick="Close"></div>
-    <div class="ai-overlay-panel">
+    <div class="ai-overlay-panel" @ref="panelRef">
+        <div class="ai-overlay-resize-handle"></div>
         <div class="ai-overlay-header">
             <div class="ai-overlay-header-left">
                 <h3>AI Query Assistant</h3>
@@ -183,6 +185,8 @@
     [Parameter] public string? ContextDescription { get; set; }
 
     private ElementReference conversationRef;
+    private ElementReference panelRef;
+    private bool resizeInitialized;
     private string? previousContextKey;
 
     // Query mode state
@@ -205,6 +209,19 @@
             ResetState();
         }
         previousContextKey = ContextKey;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (IsOpen && !resizeInitialized)
+        {
+            await JS.InvokeVoidAsync("aiPanelResize.init", panelRef);
+            resizeInitialized = true;
+        }
+        else if (!IsOpen)
+        {
+            resizeInitialized = false;
+        }
     }
 
     private void ResetState()
