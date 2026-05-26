@@ -107,7 +107,6 @@ AppDependencies
 | join kind=leftouter RepoBySession on SessionId
 | extend Developer=coalesce(tostring(Properties["user.email"]), tostring(UserId), "unknown")
 | extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
-| where Repository != "unknown"
 | extend Model=coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]), "unknown")
 | summarize Requests=count(), AverageLatencyMs=avg(DurationMs), UniqueModels=dcount(Model), LastSeen=max(TimeGenerated) by Developer, Repository
 | order by Requests desc
