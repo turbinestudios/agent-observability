@@ -102,7 +102,7 @@ resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
   name: 'text-embedding-3-small'
   dependsOn: [modelDeployment]
   sku: {
-    name: 'Standard'
+    name: 'GlobalStandard'
     capacity: 2
   }
   properties: {
