@@ -69,9 +69,12 @@ public sealed class LearningService
 
             if (queryEmbedding is not null)
             {
-                // Rank by cosine similarity (learnings without embeddings get score 0)
+                const double similarityThreshold = 0.3;
+
+                // Rank by cosine similarity, exclude learnings below threshold
                 sorted = allLearnings
                     .Select(l => (Learning: l, Score: l.Embedding is not null ? EmbeddingService.CosineSimilarity(queryEmbedding, l.Embedding) : 0.0))
+                    .Where(x => x.Score >= similarityThreshold)
                     .OrderByDescending(x => x.Score)
                     .Select(x => x.Learning);
             }
