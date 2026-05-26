@@ -1,0 +1,272 @@
+@page "/ai-learnings"
+@inject AgentObservability.Dashboard.Services.LearningService LearningService
+@inject Radzen.NotificationService NotificationService
+
+<PageTitle>AI Learnings</PageTitle>
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">AI Learnings</p>
+        <h1>Manage AI Query Assistant knowledge</h1>
+        <p class="page-copy">View, edit, and remove the learnings that guide the AI Query Assistant when generating KQL queries.</p>
+    </div>
+
+    <button class="action-button" @onclick="StartCreating">+ New Learning</button>
+</section>
+
+@if (isCreating)
+{
+    <section class="learning-form-card panel-card">
+        <h3>Create New Learning</h3>
+        <div class="learning-form">
+            <div class="form-field">
+                <label>Title</label>
+                <input type="text" @bind="newLearning.Title" placeholder="Short descriptive title" />
+            </div>
+            <div class="form-field">
+                <label>Description</label>
+                <input type="text" @bind="newLearning.Description" placeholder="Brief summary of what this learning covers" />
+            </div>
+            <div class="form-field">
+                <label>Rule Text</label>
+                <textarea rows="4" @bind="newLearning.RuleText" placeholder="The rule or pattern the AI should follow..."></textarea>
+            </div>
+            <div class="form-field">
+                <label>KQL Example (optional)</label>
+                <textarea rows="3" @bind="newLearning.KqlExample" placeholder="Example KQL query demonstrating this rule"></textarea>
+            </div>
+            <div class="form-actions">
+                <button class="btn-primary" @onclick="SaveNewLearning">Save</button>
+                <button class="btn-secondary" @onclick="CancelCreate">Cancel</button>
+            </div>
+        </div>
+    </section>
+}
+
+@if (learnings is null)
+{
+    <p class="loading-state">Loading learnings...</p>
+}
+else if (learnings.Count == 0 && !isCreating)
+{
+    <div class="empty-state-card panel-card">
+        <p>No learnings yet. Teach the AI Query Assistant by creating a new learning or using the "Teach AI" mode in the assistant panel.</p>
+    </div>
+}
+else
+{
+    <section class="learnings-grid">
+        @foreach (var learning in learnings.OrderByDescending(l => l.UpdatedAt ?? l.CreatedAt))
+        {
+            <article class="learning-card panel-card" @key="learning.Id">
+                @if (editingId == learning.Id)
+                {
+                    <div class="learning-form">
+                        <div class="form-field">
+                            <label>Title</label>
+                            <input type="text" @bind="editModel!.Title" />
+                        </div>
+                        <div class="form-field">
+                            <label>Description</label>
+                            <input type="text" @bind="editModel!.Description" />
+                        </div>
+                        <div class="form-field">
+                            <label>Rule Text</label>
+                            <textarea rows="4" @bind="editModel!.RuleText"></textarea>
+                        </div>
+                        <div class="form-field">
+                            <label>KQL Example (optional)</label>
+                            <textarea rows="3" @bind="editModel!.KqlExample"></textarea>
+                        </div>
+                        <div class="form-actions">
+                            <button class="btn-primary" @onclick="() => SaveEdit(learning)">Save</button>
+                            <button class="btn-secondary" @onclick="CancelEdit">Cancel</button>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="learning-card-header">
+                        <h3>@learning.Title</h3>
+                        <div class="learning-card-actions">
+                            <button class="btn-icon" title="Edit" @onclick="() => StartEditing(learning)">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                            </button>
+                            <button class="btn-icon btn-danger" title="Delete" @onclick="() => ConfirmDelete(learning)">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(learning.Description))
+                    {
+                        <p class="learning-description">@learning.Description</p>
+                    }
+
+                    <div class="learning-rule">
+                        <span class="learning-label">Rule</span>
+                        <pre>@learning.RuleText</pre>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(learning.KqlExample))
+                    {
+                        <div class="learning-kql">
+                            <span class="learning-label">KQL Example</span>
+                            <pre><code>@learning.KqlExample</code></pre>
+                        </div>
+                    }
+
+                    <div class="learning-meta">
+                        <span>Created @learning.CreatedAt.ToString("yyyy-MM-dd HH:mm")</span>
+                        @if (learning.UpdatedAt.HasValue)
+                        {
+                            <span>· Updated @learning.UpdatedAt.Value.ToString("yyyy-MM-dd HH:mm")</span>
+                        }
+                    </div>
+                }
+            </article>
+        }
+    </section>
+}
+
+@if (deleteTarget is not null)
+{
+    <div class="modal-backdrop" @onclick="CancelDelete">
+        <div class="modal-dialog" @onclick:stopPropagation="true">
+            <h3>Delete Learning</h3>
+            <p>Are you sure you want to delete "<strong>@deleteTarget.Title</strong>"? This action cannot be undone.</p>
+            <div class="form-actions">
+                <button class="btn-danger-solid" @onclick="ExecuteDelete">Delete</button>
+                <button class="btn-secondary" @onclick="CancelDelete">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<AiLearning>? learnings;
+    private bool isCreating;
+    private AiLearning newLearning = new();
+    private string? editingId;
+    private AiLearning? editModel;
+    private AiLearning? deleteTarget;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadLearningsAsync();
+    }
+
+    private async Task LoadLearningsAsync()
+    {
+        learnings = await LearningService.GetAllLearningsAsync();
+    }
+
+    private void StartCreating()
+    {
+        newLearning = new AiLearning();
+        isCreating = true;
+    }
+
+    private void CancelCreate()
+    {
+        isCreating = false;
+    }
+
+    private async Task SaveNewLearning()
+    {
+        if (string.IsNullOrWhiteSpace(newLearning.Title) || string.IsNullOrWhiteSpace(newLearning.RuleText))
+        {
+            return;
+        }
+
+        await LearningService.SaveLearningAsync(newLearning);
+        isCreating = false;
+        await LoadLearningsAsync();
+
+        NotificationService.Notify(new Radzen.NotificationMessage
+        {
+            Summary = "Learning created",
+            Detail = newLearning.Title,
+            Severity = Radzen.NotificationSeverity.Success,
+            Duration = 3000
+        });
+    }
+
+    private void StartEditing(AiLearning learning)
+    {
+        editingId = learning.Id;
+        editModel = new AiLearning
+        {
+            Id = learning.Id,
+            Title = learning.Title,
+            Description = learning.Description,
+            RuleText = learning.RuleText,
+            KqlExample = learning.KqlExample,
+            CreatedAt = learning.CreatedAt,
+            UpdatedAt = learning.UpdatedAt
+        };
+    }
+
+    private void CancelEdit()
+    {
+        editingId = null;
+        editModel = null;
+    }
+
+    private async Task SaveEdit(AiLearning original)
+    {
+        if (editModel is null || string.IsNullOrWhiteSpace(editModel.Title) || string.IsNullOrWhiteSpace(editModel.RuleText))
+        {
+            return;
+        }
+
+        original.Title = editModel.Title;
+        original.Description = editModel.Description;
+        original.RuleText = editModel.RuleText;
+        original.KqlExample = editModel.KqlExample;
+        original.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await LearningService.UpdateLearningAsync(original);
+        editingId = null;
+        editModel = null;
+
+        NotificationService.Notify(new Radzen.NotificationMessage
+        {
+            Summary = "Learning updated",
+            Detail = original.Title,
+            Severity = Radzen.NotificationSeverity.Success,
+            Duration = 3000
+        });
+    }
+
+    private void ConfirmDelete(AiLearning learning)
+    {
+        deleteTarget = learning;
+    }
+
+    private void CancelDelete()
+    {
+        deleteTarget = null;
+    }
+
+    private async Task ExecuteDelete()
+    {
+        if (deleteTarget is null)
+        {
+            return;
+        }
+
+        await LearningService.DeleteLearningAsync(deleteTarget.Id);
+        learnings?.Remove(deleteTarget);
+
+        NotificationService.Notify(new Radzen.NotificationMessage
+        {
+            Summary = "Learning deleted",
+            Detail = deleteTarget.Title,
+            Severity = Radzen.NotificationSeverity.Info,
+            Duration = 3000
+        });
+
+        deleteTarget = null;
+    }
+}
