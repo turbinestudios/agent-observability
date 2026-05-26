@@ -9,4 +9,8 @@ public sealed class AiLearning
     public string? KqlExample { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }
+    public float[]? Embedding { get; set; }
+
+    public string GetSearchableText() =>
+        $"{Title} {Description} {RuleText} {KqlExample}";
 }

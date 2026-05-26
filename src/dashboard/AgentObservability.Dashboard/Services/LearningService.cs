@@ -2,6 +2,7 @@ using AgentObservability.Dashboard.Models;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using System.Text;
+using System.Text.Json;
 
 namespace AgentObservability.Dashboard.Services;
 
@@ -9,11 +10,13 @@ public sealed class LearningService
 {
     private const string ContainerName = "ai-learnings";
     private readonly BlobContainerClient _containerClient;
+    private readonly EmbeddingService _embeddingService;
     private readonly ILogger<LearningService> _logger;
 
-    public LearningService(BlobServiceClient blobServiceClient, ILogger<LearningService> logger)
+    public LearningService(BlobServiceClient blobServiceClient, EmbeddingService embeddingService, ILogger<LearningService> logger)
     {
         _containerClient = blobServiceClient.GetBlobContainerClient(ContainerName);
+        _embeddingService = embeddingService;
         _logger = logger;
     }
 
@@ -55,24 +58,93 @@ public sealed class LearningService
         return learnings.OrderByDescending(l => l.UpdatedAt ?? l.CreatedAt).ToList();
     }
 
+    public async Task<PagedResult<AiLearning>> GetPagedLearningsAsync(string? searchQuery, int page, int pageSize, CancellationToken cancellationToken = default)
+    {
+        var allLearnings = await GetAllLearningsAsync(cancellationToken);
+        IEnumerable<AiLearning> sorted;
+
+        if (!string.IsNullOrWhiteSpace(searchQuery))
+        {
+            var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(searchQuery, cancellationToken);
+
+            if (queryEmbedding is not null)
+            {
+                // Rank by cosine similarity (learnings without embeddings get score 0)
+                sorted = allLearnings
+                    .Select(l => (Learning: l, Score: l.Embedding is not null ? EmbeddingService.CosineSimilarity(queryEmbedding, l.Embedding) : 0.0))
+                    .OrderByDescending(x => x.Score)
+                    .Select(x => x.Learning);
+            }
+            else
+            {
+                // Fallback: basic substring match across all fields
+                var query = searchQuery.Trim();
+                sorted = allLearnings
+                    .Where(l => l.GetSearchableText().Contains(query, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(l => l.UpdatedAt ?? l.CreatedAt);
+            }
+        }
+        else
+        {
+            sorted = allLearnings.OrderByDescending(l => l.UpdatedAt ?? l.CreatedAt);
+        }
+
+        var filtered = sorted.ToList();
+        var items = filtered.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+        return new PagedResult<AiLearning>
+        {
+            Items = items,
+            TotalCount = filtered.Count,
+            Page = page,
+            PageSize = pageSize
+        };
+    }
+
+    public async Task BackfillEmbeddingsAsync(CancellationToken cancellationToken = default)
+    {
+        var learnings = await GetAllLearningsAsync(cancellationToken);
+        var withoutEmbeddings = learnings.Where(l => l.Embedding is null).ToList();
+
+        if (withoutEmbeddings.Count == 0)
+            return;
+
+        _logger.LogInformation("Backfilling embeddings for {Count} learnings", withoutEmbeddings.Count);
+
+        foreach (var learning in withoutEmbeddings)
+        {
+            var embedding = await _embeddingService.GenerateEmbeddingAsync(learning.GetSearchableText(), cancellationToken);
+            if (embedding is not null)
+            {
+                learning.Embedding = embedding;
+                await SaveBlobAsync(learning, cancellationToken);
+                _logger.LogInformation("Backfilled embedding for learning: {LearningId}", learning.Id);
+            }
+        }
+    }
+
     public async Task SaveLearningAsync(AiLearning learning, CancellationToken cancellationToken = default)
     {
-        var blobName = $"{learning.Id}.md";
-        var blobClient = _containerClient.GetBlobClient(blobName);
-        var markdown = ToMarkdown(learning);
-
-        await blobClient.UploadAsync(
-            BinaryData.FromString(markdown),
-            new BlobUploadOptions { HttpHeaders = new BlobHttpHeaders { ContentType = "text/markdown" } },
-            cancellationToken);
-
+        learning.Embedding = await _embeddingService.GenerateEmbeddingAsync(learning.GetSearchableText(), cancellationToken);
+        await SaveBlobAsync(learning, cancellationToken);
         _logger.LogInformation("Saved AI learning: {LearningId} - {Title}", learning.Id, learning.Title);
     }
 
     public async Task UpdateLearningAsync(AiLearning learning, CancellationToken cancellationToken = default)
     {
         learning.UpdatedAt = DateTimeOffset.UtcNow;
+        learning.Embedding = await _embeddingService.GenerateEmbeddingAsync(learning.GetSearchableText(), cancellationToken);
+        await SaveBlobAsync(learning, cancellationToken);
 
+        // Clean up old .json blob if it exists (migration from previous format)
+        var oldBlobClient = _containerClient.GetBlobClient($"{learning.Id}.json");
+        await oldBlobClient.DeleteIfExistsAsync(cancellationToken: cancellationToken);
+
+        _logger.LogInformation("Updated AI learning: {LearningId} - {Title}", learning.Id, learning.Title);
+    }
+
+    private async Task SaveBlobAsync(AiLearning learning, CancellationToken cancellationToken)
+    {
         var blobName = $"{learning.Id}.md";
         var blobClient = _containerClient.GetBlobClient(blobName);
         var markdown = ToMarkdown(learning);
@@ -85,12 +157,6 @@ public sealed class LearningService
                 Conditions = null // overwrite
             },
             cancellationToken);
-
-        // Clean up old .json blob if it exists (migration from previous format)
-        var oldBlobClient = _containerClient.GetBlobClient($"{learning.Id}.json");
-        await oldBlobClient.DeleteIfExistsAsync(cancellationToken: cancellationToken);
-
-        _logger.LogInformation("Updated AI learning: {LearningId} - {Title}", learning.Id, learning.Title);
     }
 
     public async Task DeleteLearningAsync(string id, CancellationToken cancellationToken = default)
@@ -147,6 +213,10 @@ public sealed class LearningService
         {
             sb.AppendLine($"updatedAt: {learning.UpdatedAt.Value:O}");
         }
+        if (learning.Embedding is not null)
+        {
+            sb.AppendLine($"embedding: {JsonSerializer.Serialize(learning.Embedding)}");
+        }
         sb.AppendLine("---");
         sb.AppendLine();
         sb.AppendLine(learning.RuleText);
@@ -191,6 +261,10 @@ public sealed class LearningService
                 case "description": learning.Description = value; break;
                 case "createdAt" when DateTimeOffset.TryParse(value, out var dt): learning.CreatedAt = dt; break;
                 case "updatedAt" when DateTimeOffset.TryParse(value, out var udt): learning.UpdatedAt = udt; break;
+                case "embedding":
+                    try { learning.Embedding = JsonSerializer.Deserialize<float[]>(value); }
+                    catch { /* ignore malformed embedding */ }
+                    break;
             }
         }
 

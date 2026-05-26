@@ -45,6 +45,7 @@ builder.Services.AddScoped<WidgetQueryService>();
 
 // Phase 8: AI-powered KQL generation
 builder.Services.Configure<AzureAIOptions>(builder.Configuration.GetSection(AzureAIOptions.SectionName));
+builder.Services.AddSingleton<EmbeddingService>();
 builder.Services.AddScoped<KqlGenerationService>();
 
 // Phase 9: AI Learnings (Azure Blob Storage)
@@ -71,6 +72,7 @@ await dashboardService.EnsureTablesExistAsync();
 
 var learningService = app.Services.GetRequiredService<LearningService>();
 await learningService.EnsureContainerExistsAsync();
+await learningService.BackfillEmbeddingsAsync();
 
 if (!app.Environment.IsDevelopment())
 {

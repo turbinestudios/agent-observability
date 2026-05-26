@@ -96,6 +96,24 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-
   }
 }
 
+// Embedding model deployment for semantic search
+resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: aiServices
+  name: 'text-embedding-3-small'
+  dependsOn: [modelDeployment]
+  sku: {
+    name: 'Standard'
+    capacity: 2
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'text-embedding-3-small'
+      version: '1'
+    }
+  }
+}
+
 @description('AI Foundry project endpoint (used by Azure.AI.Projects SDK)')
 output endpoint string = aiServices.properties.endpoint
 
@@ -104,6 +122,9 @@ output projectId string = aiProject.id
 
 @description('Name of the deployed model')
 output deploymentName string = modelDeployment.name
+
+@description('Name of the embedding model deployment')
+output embeddingDeploymentName string = embeddingDeployment.name
 
 @description('Principal ID of the AI Foundry project managed identity')
 output projectPrincipalId string = aiProject.identity.principalId

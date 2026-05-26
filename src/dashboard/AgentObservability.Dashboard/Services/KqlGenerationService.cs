@@ -14,6 +14,7 @@ public sealed class AzureAIOptions
 
     public string Endpoint { get; init; } = string.Empty;
     public string DeploymentName { get; init; } = "gpt-4o";
+    public string EmbeddingDeploymentName { get; init; } = "text-embedding-3-small";
 }
 
 public sealed class KqlGenerationResult

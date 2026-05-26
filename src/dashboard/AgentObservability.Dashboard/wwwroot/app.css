@@ -2065,6 +2065,125 @@ code {
     gap: 0.85rem;
 }
 
+/* Search */
+.learnings-search {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+}
+
+.search-input-wrapper {
+    position: relative;
+    flex: 1;
+    max-width: 480px;
+    display: flex;
+    align-items: center;
+}
+
+.search-input-wrapper > svg {
+    position: absolute;
+    left: 0.85rem;
+    color: var(--muted);
+    pointer-events: none;
+}
+
+.search-input-wrapper input {
+    width: 100%;
+    padding: 0.6rem 2.2rem 0.6rem 2.5rem;
+    border: 1px solid var(--panel-border);
+    border-radius: 0.6rem;
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.9rem;
+    transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.search-input-wrapper input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(13, 107, 107, 0.12);
+}
+
+.search-input-wrapper input::placeholder {
+    color: var(--muted);
+    opacity: 0.7;
+}
+
+.search-clear {
+    position: absolute;
+    right: 0.6rem;
+    background: none;
+    border: none;
+    padding: 0.25rem;
+    cursor: pointer;
+    color: var(--muted);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 150ms ease, background 150ms ease;
+}
+
+.search-clear:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.search-status {
+    font-size: 0.82rem;
+    color: var(--muted);
+    font-style: italic;
+}
+
+/* Pagination */
+.pagination-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    padding: 1rem 0;
+}
+
+.btn-pagination {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--panel-border);
+    border-radius: 0.5rem;
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 180ms ease, background 180ms ease, opacity 180ms ease;
+}
+
+.btn-pagination:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: rgba(13, 107, 107, 0.07);
+}
+
+.btn-pagination:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.btn-pagination svg {
+    width: 14px;
+    height: 14px;
+}
+
+.pagination-info {
+    font-size: 0.85rem;
+    color: var(--muted);
+    font-weight: 500;
+}
+
 .learnings-empty svg {
     width: 52px;
     height: 52px;

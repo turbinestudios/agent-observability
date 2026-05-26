@@ -2,6 +2,7 @@
 @layout AgentObservability.Dashboard.Components.Layout.HeaderOnlyLayout
 @inject AgentObservability.Dashboard.Services.LearningService LearningService
 @inject Radzen.NotificationService NotificationService
+@implements IDisposable
 
 <PageTitle>AI Learnings</PageTitle>
 
@@ -10,11 +11,11 @@
         <p class="eyebrow">AI Learnings</p>
         <h1>Manage AI Query Assistant knowledge</h1>
         <p class="page-copy">View, edit, and remove the learnings that guide the AI Query Assistant when generating KQL queries.</p>
-        @if (learnings is not null)
+        @if (pagedResult is not null)
         {
             <span class="learnings-stats">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>
-                @learnings.Count @(learnings.Count == 1 ? "learning" : "learnings") indexed
+                @pagedResult.TotalCount @(pagedResult.TotalCount == 1 ? "learning" : "learnings") indexed
             </span>
         }
     </div>
@@ -23,6 +24,23 @@
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         New Learning
     </button>
+</section>
+
+<section class="learnings-search">
+    <div class="search-input-wrapper">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="Search learnings semantically..." @bind="searchQuery" @bind:event="oninput" @onkeyup="OnSearchInput" />
+        @if (!string.IsNullOrEmpty(searchQuery))
+        {
+            <button class="search-clear" @onclick="ClearSearch" title="Clear search">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        }
+    </div>
+    @if (isSearching)
+    {
+        <span class="search-status">Searching...</span>
+    }
 </section>
 
 @if (isCreating)
@@ -57,23 +75,31 @@
     </section>
 }
 
-@if (learnings is null)
+@if (pagedResult is null)
 {
     <p class="loading-state">Loading learnings...</p>
 }
-else if (learnings.Count == 0 && !isCreating)
+else if (pagedResult.TotalCount == 0 && !isCreating)
 {
     <div class="learnings-empty panel-card">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg>
-        <h3>No learnings yet</h3>
-        <p>Teach the AI Query Assistant by creating a new learning, or use the &ldquo;Teach AI&rdquo; mode in the assistant panel.</p>
-        <button class="btn-primary" @onclick="StartCreating">Create first learning</button>
+        @if (string.IsNullOrWhiteSpace(searchQuery))
+        {
+            <h3>No learnings yet</h3>
+            <p>Teach the AI Query Assistant by creating a new learning, or use the &ldquo;Teach AI&rdquo; mode in the assistant panel.</p>
+            <button class="btn-primary" @onclick="StartCreating">Create first learning</button>
+        }
+        else
+        {
+            <h3>No results found</h3>
+            <p>No learnings matched your search. Try a different query or create a new learning.</p>
+        }
     </div>
 }
 else
 {
     <section class="learnings-grid">
-        @foreach (var learning in learnings.OrderByDescending(l => l.UpdatedAt ?? l.CreatedAt))
+        @foreach (var learning in pagedResult.Items)
         {
             <article class="learning-card panel-card" @key="learning.Id">
                 @if (editingId == learning.Id)
@@ -151,6 +177,21 @@ else
             </article>
         }
     </section>
+
+    @if (pagedResult.TotalPages > 1)
+    {
+        <nav class="pagination-controls">
+            <button class="btn-pagination" disabled="@(!pagedResult.HasPreviousPage)" @onclick="PreviousPage">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                Previous
+            </button>
+            <span class="pagination-info">Page @pagedResult.Page of @pagedResult.TotalPages</span>
+            <button class="btn-pagination" disabled="@(!pagedResult.HasNextPage)" @onclick="NextPage">
+                Next
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+        </nav>
+    }
 }
 
 @if (deleteTarget is not null)
@@ -168,21 +209,69 @@ else
 }
 
 @code {
-    private List<AiLearning>? learnings;
+    private const int PageSize = 10;
+
+    private PagedResult<AiLearning>? pagedResult;
     private bool isCreating;
     private AiLearning newLearning = new();
     private string? editingId;
     private AiLearning? editModel;
     private AiLearning? deleteTarget;
+    private string? searchQuery;
+    private bool isSearching;
+    private int currentPage = 1;
+    private Timer? _debounceTimer;
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadLearningsAsync();
+        await LoadPageAsync();
     }
 
-    private async Task LoadLearningsAsync()
+    private async Task LoadPageAsync()
     {
-        learnings = await LearningService.GetAllLearningsAsync();
+        pagedResult = await LearningService.GetPagedLearningsAsync(searchQuery, currentPage, PageSize);
+    }
+
+    private void OnSearchInput()
+    {
+        _debounceTimer?.Dispose();
+        _debounceTimer = new Timer(async _ =>
+        {
+            await InvokeAsync(async () =>
+            {
+                isSearching = true;
+                StateHasChanged();
+                currentPage = 1;
+                await LoadPageAsync();
+                isSearching = false;
+                StateHasChanged();
+            });
+        }, null, 300, Timeout.Infinite);
+    }
+
+    private async Task ClearSearch()
+    {
+        searchQuery = null;
+        currentPage = 1;
+        await LoadPageAsync();
+    }
+
+    private async Task PreviousPage()
+    {
+        if (pagedResult?.HasPreviousPage == true)
+        {
+            currentPage--;
+            await LoadPageAsync();
+        }
+    }
+
+    private async Task NextPage()
+    {
+        if (pagedResult?.HasNextPage == true)
+        {
+            currentPage++;
+            await LoadPageAsync();
+        }
     }
 
     private void StartCreating()
@@ -205,7 +294,8 @@ else
 
         await LearningService.SaveLearningAsync(newLearning);
         isCreating = false;
-        await LoadLearningsAsync();
+        currentPage = 1;
+        await LoadPageAsync();
 
         NotificationService.Notify(new Radzen.NotificationMessage
         {
@@ -253,6 +343,7 @@ else
         await LearningService.UpdateLearningAsync(original);
         editingId = null;
         editModel = null;
+        await LoadPageAsync();
 
         NotificationService.Notify(new Radzen.NotificationMessage
         {
@@ -281,7 +372,7 @@ else
         }
 
         await LearningService.DeleteLearningAsync(deleteTarget.Id);
-        learnings?.Remove(deleteTarget);
+        await LoadPageAsync();
 
         NotificationService.Notify(new Radzen.NotificationMessage
         {
@@ -292,5 +383,10 @@ else
         });
 
         deleteTarget = null;
+    }
+
+    public void Dispose()
+    {
+        _debounceTimer?.Dispose();
     }
 }
