@@ -92,10 +92,15 @@ else
     private Dictionary<string, WidgetQueryResult> widgetResults = new();
     private int maxRow => widgets.Count > 0 ? widgets.Max(w => w.GridRow + w.RowSpan - 1) : 1;
     private string selectedTimeRange = "24";
+    private string? loadedId;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
-        await LoadDashboardAsync();
+        if (Id != loadedId)
+        {
+            loadedId = Id;
+            await LoadDashboardAsync();
+        }
     }
 
     private async Task LoadDashboardAsync()
