@@ -52,6 +52,13 @@ code {
         "sidebar main";
 }
 
+.shell.shell-no-sidebar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+        "header"
+        "main";
+}
+
 .shell-header {
     grid-area: header;
     display: flex;
