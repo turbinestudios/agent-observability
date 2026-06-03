@@ -1,0 +1,26 @@
+# Source and tooling — only dist/ + the better-sqlite3 native dep ship.
+.vscode/**
+.vscode-test/**
+src/**
+out/**
+coverage/**
+
+# Exclude node_modules wholesale, then re-include the one runtime dependency
+# (better-sqlite3 is a native module marked external in esbuild, so it is NOT
+# bundled into dist/extension.js and must be shipped from node_modules).
+node_modules/**
+!node_modules/better-sqlite3/**
+!node_modules/bindings/**
+!node_modules/file-uri-to-path/**
+
+**/*.map
+**/*.ts
+**/tsconfig.json
+**/vitest.config.ts
+**/esbuild.js
+**/.eslintrc.json
+**/eslint.config.js
+**/.gitignore
+**/.editorconfig
+
+# Keep README, CHANGELOG, LICENSE, package.json, media/ and dist/ in the package

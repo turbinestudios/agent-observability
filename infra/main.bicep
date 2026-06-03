@@ -9,22 +9,15 @@ param baseName string
 @description('Retention period in days for Log Analytics')
 param logRetentionInDays int = 30
 
-@description('Container image for the OTel Collector')
-param otelCollectorImage string = 'otel/opentelemetry-collector-contrib:latest'
-
 @description('Container image for the Blazor Dashboard')
 param dashboardImage string
 
-@description('OTel Collector configuration YAML content')
-param otelCollectorConfig string
-
 @secure()
-@description('htpasswd entry for OTel Collector basicauth (format: username:bcrypt-hash)')
-param otelBasicAuthHtpasswd string
+@description('Server-side pepper for ingestion API-key HMAC (Ingestion:KeyPepper), stored in Key Vault and wired to the dashboard')
+param ingestionKeyPepper string
 
-@secure()
-@description('OTEL API key stored as a Key Vault secret')
-param otelApiKey string
+@description('Organization id filter for aggregate analytics (Analytics:OrgId). Empty = all orgs.')
+param analyticsOrgId string = ''
 
 @description('AI model name for KQL generation')
 param aiModelName string = 'gpt-4o'
@@ -67,7 +60,7 @@ module keyVault 'modules/key-vault.bicep' = {
   params: {
     location: location
     keyVaultName: 'kv-${baseName}-${uniqueString(resourceGroup().id)}'
-    otelApiKey: otelApiKey
+    ingestionKeyPepper: ingestionKeyPepper
   }
 }
 
@@ -80,7 +73,7 @@ module logAnalytics 'modules/log-analytics.bicep' = {
   }
 }
 
-// Application Insights (provides connection string for OTel exporter)
+// Application Insights (dashboard's own telemetry + optional legacy analytics fallback)
 module appInsights 'modules/app-insights.bicep' = {
   params: {
     location: location
@@ -96,19 +89,6 @@ module containerAppsEnv 'modules/container-apps-env.bicep' = {
     environmentName: 'cae-${baseName}'
     logAnalyticsWorkspaceCustomerId: logAnalytics.outputs.workspaceCustomerId
     logAnalyticsWorkspaceName: 'log-${baseName}'
-  }
-}
-
-// Step 1.3 — Container App: OTel Collector
-module otelCollector 'modules/otel-collector.bicep' = {
-  params: {
-    location: location
-    appName: 'ca-${baseName}-otel-collector'
-    environmentId: containerAppsEnv.outputs.environmentId
-    containerImage: otelCollectorImage
-    azureMonitorConnectionString: appInsights.outputs.connectionString
-    otelCollectorConfig: otelCollectorConfig
-    basicAuthHtpasswd: otelBasicAuthHtpasswd
   }
 }
 
@@ -144,6 +124,8 @@ module dashboard 'modules/dashboard-app.bicep' = {
     storageBlobEndpoint: storageAccount.outputs.blobEndpoint
     aiEndpoint: aiFoundry.outputs.endpoint
     aiDeploymentName: aiFoundry.outputs.deploymentName
+    ingestionKeyPepper: ingestionKeyPepper
+    analyticsOrgId: analyticsOrgId
   }
   dependsOn: [dashboardAcrPullRole]
 }
@@ -153,17 +135,6 @@ module dashboard 'modules/dashboard-app.bicep' = {
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
   name: 'log-${baseName}'
   dependsOn: [logAnalytics]
-}
-
-// Monitoring Metrics Publisher role for OTel Collector
-resource otelCollectorMonitoringRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, 'ca-${baseName}-otel-collector', '3913510d-42f4-4e42-8a64-420c390055eb')
-  scope: logAnalyticsWorkspace
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
-    principalId: otelCollector.outputs.principalId
-    principalType: 'ServicePrincipal'
-  }
 }
 
 // Log Analytics Reader role for Dashboard
@@ -237,9 +208,6 @@ resource dashboardOpenAiUserRole 'Microsoft.Authorization/roleAssignments@2022-0
 }
 
 // Outputs
-@description('FQDN of the OTel Collector endpoint')
-output otelCollectorFqdn string = otelCollector.outputs.fqdn
-
 @description('FQDN of the Dashboard')
 output dashboardFqdn string = dashboard.outputs.fqdn
 

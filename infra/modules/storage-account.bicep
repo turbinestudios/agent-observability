@@ -46,6 +46,22 @@ resource workflowsTable 'Microsoft.Storage/storageAccounts/tableServices/tables@
   name: 'Workflows'
 }
 
+// Aggregate ingestion tables (also created at runtime via EnsureTablesExistAsync; declared here for explicit IaC)
+resource ingestionAggregatesTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: tableService
+  name: 'IngestionAggregates'
+}
+
+resource ingestionSyncStatusTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: tableService
+  name: 'IngestionSyncStatus'
+}
+
+resource ingestionApiKeysTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: tableService
+  name: 'IngestionApiKeys'
+}
+
 @description('Storage Account resource ID')
 output storageAccountId string = storageAccount.id
 

@@ -2,6 +2,7 @@
 @layout AgentObservability.Dashboard.Components.Layout.DashboardLayout
 @inject AgentObservability.Dashboard.Services.DashboardService DashboardService
 @inject AgentObservability.Dashboard.Services.WidgetQueryService WidgetQueryService
+@inject Microsoft.Extensions.Options.IOptions<AgentObservability.Dashboard.Services.WebUxOptions> WebUxOptions
 @inject NavigationManager Navigation
 @inject Radzen.NotificationService NotificationService
 @inject IJSRuntime JS
@@ -323,34 +324,14 @@ else
         StateHasChanged();
     }
 
-    private List<FilterSnippet> GetAvailableFilterSnippets()
+    private List<AgentObservability.Dashboard.Services.FilterSnippet> GetAvailableFilterSnippets()
     {
         if (dashboard is null) return [];
 
-        var snippets = new List<FilterSnippet>();
-        foreach (var filter in dashboard.Filters)
-        {
-            switch (filter.FilterType)
-            {
-                case DashboardFilterType.Repository:
-                    snippets.Add(new FilterSnippet(
-                        "Repository",
-                        "| where tostring(Properties[\"copilot_chat.repo.remote_url\"]) in (_filter_repositories)"));
-                    break;
-                case DashboardFilterType.Developer:
-                    snippets.Add(new FilterSnippet(
-                        "Developer",
-                        "| where tostring(Properties[\"user.email\"]) in (_filter_developers)"));
-                    break;
-                case DashboardFilterType.Custom when !string.IsNullOrEmpty(filter.Key):
-                    var sanitizedKey = filter.Key.ToLowerInvariant().Replace(" ", "_");
-                    snippets.Add(new FilterSnippet(
-                        $"Custom: {filter.Key}",
-                        $"| where tostring(Properties[\"{filter.Key}\"]) in (_filter_{sanitizedKey})"));
-                    break;
-            }
-        }
-        return snippets;
+        // Phase 10: snippet shape (aggregate columns vs raw Properties[...]) is driven by the
+        // single master switch WebUxOptions.ExposeRawSessionDetail.
+        return AgentObservability.Dashboard.Services.FilterSnippetBuilder.Build(
+            dashboard.Filters, WebUxOptions.Value.ExposeRawSessionDetail);
     }
 
     private List<string> GetMissingFilters(DashboardWidget widget)
@@ -594,6 +575,4 @@ else
         }
         dotNetRef?.Dispose();
     }
-
-    private sealed record FilterSnippet(string Label, string Kql);
 }

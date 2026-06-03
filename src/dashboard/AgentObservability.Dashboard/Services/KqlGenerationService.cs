@@ -40,15 +40,30 @@ public sealed class TeachingResult
 
 public sealed class KqlGenerationService
 {
+    /// <summary>Message returned when AI query generation is disabled via <see cref="AiQueryOptions"/>.</summary>
+    internal const string DisabledMessage = "AI query generation is temporarily disabled.";
+
     private readonly AIProjectClient _projectClient;
     private readonly string _deploymentName;
     private readonly LearningService _learningService;
     private readonly ILogger<KqlGenerationService> _logger;
+    private readonly bool _aiQueryEnabled;
 
-    public KqlGenerationService(IOptions<AzureAIOptions> options, LearningService learningService, ILogger<KqlGenerationService> logger)
+    /// <summary>
+    /// Whether AI query generation is enabled (bound from <see cref="AiQueryOptions"/>). When false,
+    /// the generate/teaching flows short-circuit and the UI should surface a disabled state.
+    /// </summary>
+    public bool IsEnabled => _aiQueryEnabled;
+
+    public KqlGenerationService(
+        IOptions<AzureAIOptions> options,
+        IOptions<AiQueryOptions> aiQueryOptions,
+        LearningService learningService,
+        ILogger<KqlGenerationService> logger)
     {
         _logger = logger;
         _learningService = learningService;
+        _aiQueryEnabled = aiQueryOptions.Value.Enabled;
         var endpoint = options.Value.Endpoint;
         if (string.IsNullOrEmpty(endpoint))
         {
@@ -193,6 +208,15 @@ public sealed class KqlGenerationService
         IReadOnlyList<(string Role, string Content)> conversationHistory,
         CancellationToken cancellationToken = default)
     {
+        if (!_aiQueryEnabled)
+        {
+            return new KqlGenerationResult
+            {
+                KqlQuery = existingKql ?? string.Empty,
+                Explanation = DisabledMessage
+            };
+        }
+
         var systemMessage = BuildSystemPrompt(filters, widgetType);
         var (catalog, hasLearnings) = await BuildLearningsCatalogAsync(cancellationToken);
         if (hasLearnings)
@@ -252,6 +276,11 @@ public sealed class KqlGenerationService
         IReadOnlyList<(string Role, string Content)> conversationHistory,
         CancellationToken cancellationToken = default)
     {
+        if (!_aiQueryEnabled)
+        {
+            return new TeachingResult { Response = DisabledMessage };
+        }
+
         var existingLearnings = await _learningService.GetAllLearningsAsync(cancellationToken);
         var systemPrompt = BuildTeachingSystemPrompt(existingLearnings);
         var hasLearnings = existingLearnings.Count > 0;
@@ -484,48 +513,62 @@ public sealed class KqlGenerationService
         };
     }
 
-    private static string BuildSystemPrompt(List<DashboardFilter> filters, WidgetType widgetType)
+    // Phase 10 (privacy-first refactor): this prompt describes the AGGREGATE data model only. The
+    // raw OTEL -> Log Analytics ingestion (AppDependencies and friends) is being retired, so the
+    // assistant must never reference raw telemetry tables or raw-content fields. NOTE: actually
+    // executing these queries against the aggregate store is a follow-up; this phase ensures the
+    // GENERATED queries and the runtime guardrail (WidgetQueryService.ValidateQueryAllowed) are
+    // aggregate-only.
+    //
+    // ENFORCEMENT BOUNDARY: this prompt is ADVISORY only. The authoritative aggregate-only contract
+    // is enforced at EXECUTION time by WidgetQueryService.ValidateQueryAllowed (active whenever
+    // WebUxOptions.ExposeRawSessionDetail is false, i.e. not in rollback). This matters because a
+    // saved learning's KqlExample (surfaced via the load_learnings tool / BuildLearningsCatalogAsync)
+    // could contain raw tables or Properties[...] accessors and get echoed into a generated query —
+    // but such a query is rejected when executed. The prompt cannot reintroduce raw telemetry into
+    // an executed query; the guardrail is the real boundary.
+    internal static string BuildSystemPrompt(List<DashboardFilter> filters, WidgetType widgetType)
     {
         var filterContext = BuildFilterContext(filters);
         var widgetContext = GetWidgetTypeGuidance(widgetType);
 
         return $"""
-            You are a KQL (Kusto Query Language) expert that generates queries for an Azure Log Analytics workspace containing Copilot/agent observability telemetry.
+            You are a KQL (Kusto Query Language) expert that generates queries over an AGGREGATE, privacy-preserving store of Copilot/agent observability telemetry. The data is pre-aggregated into 30-minute time buckets. No raw, per-interaction telemetry is available.
 
-            ## Available Tables and Properties
+            ## HARD CONSTRAINTS (must never be violated)
+            - You MUST NOT reference any raw telemetry table (the legacy raw dependency, trace, and request tables). They no longer exist in this environment.
+            - You MUST NOT reference any raw-content field — for example raw user requests/prompts, raw input or output messages, system instructions, tool call arguments or results, model reasoning content, or any agent hook fields. This raw prompt/tool/reasoning content is NOT available — it lives only on developers' machines in the VS Code 'Agent Observability (Local)' extension.
+            - Queries that reference any of the above are rejected at execution time. Only use the aggregate fields described below.
 
-            ### AppDependencies (primary table)
-            Each row represents a dependency call (typically an LLM request).
+            ## Aggregate Data Model
+            Each row is one 30-minute aggregate bucket grouped by repository / model / agent mode / operation / tool. The following fields are available:
 
-            | Property | Path | Type | Description |
-            |----------|------|------|-------------|
-            | Chat Session ID | Properties["copilot_chat.chat_session_id"] | string | Unique identifier for an agent session in VS Code |
-            | Agent Mode Name | Properties["copilot_chat.mode_name"] | string | The custom agent handling the request |
-            | Agent Name | Properties["gen_ai.agent_name"] | string | Name of the agent handling the request |
-            | User Request | Properties["copilot_chat.user_request"] | string | The prompt sent to the agent |
-            | Service Name | Properties["service.name"] | string | The service emitting the telemetry (always "copilot-chat") |
-            | User Email | Properties["user.email"] | string | Developer who initiated the session |
-            | Operation Name | Properties["gen_ai.operation.name"] | string | Operation type: "invoke_agent", "execute_tool", etc. |
-            | Tool Name | Properties["gen_ai.tool.name"] | string | Tool name (only on "execute_tool" operations) |
-            | Repository URL | Properties["copilot_chat.repo.remote_url"] | string | Git remote URL of the active repository |
-            | Request Model | Properties["gen_ai.request.model"] | string | LLM model used for the request |
-            | Model ID (fallback) | Properties["ai.model_id"] | string | Alternative model identifier |
-            | Input Tokens | Measurements["gen_ai.usage.input_tokens"] | double | Number of input tokens consumed |
-            | Output Tokens | Measurements["gen_ai.usage.output_tokens"] | double | Number of output tokens generated |
-            | Duration | DurationMs | double | Latency of the dependency call in milliseconds |
-            | Timestamp | TimeGenerated | datetime | When the telemetry was recorded |
+            | Field | Type | Description |
+            |-------|------|-------------|
+            | timeBucket | datetime | Start of the 30-minute aggregation window |
+            | repository | string | Git remote URL of the repository |
+            | model | string | LLM model used for the requests in this bucket |
+            | agentMode | string | The custom agent/mode handling the requests |
+            | operation | string | Operation type (e.g. "invoke_agent", "execute_tool") |
+            | toolName | string | Tool name (present for tool-execution operations) |
+            | interactionCount | long | Number of interactions aggregated into this bucket |
+            | successCount | long | Number of successful interactions |
+            | errorCount | long | Number of failed interactions |
+            | inputTokens | long | Sum of input tokens consumed |
+            | outputTokens | long | Sum of output tokens generated |
+            | cachedTokens | long | Sum of cached input tokens |
+            | durationMsSum | long | Sum of interaction durations in milliseconds (divide by interactionCount for an average) |
+            | latencyHistogram | dynamic | Latency distribution buckets for this aggregate row |
+            | distinctSessionCount | long | Number of distinct agent sessions contributing to this bucket |
+            | developerId | string | Pseudonymous (non-reversible) developer identifier |
 
-            ## Important Notes
-            - The repository URL is NOT always present on every row. If you need to filter by repository, note that `copilot_chat.repo.remote_url` may only appear on certain telemetry entries within a session.
-            - To reliably filter by repository, join via `copilot_chat.chat_session_id`:
-              ```
-              let RepoBySession = AppDependencies
-              | where isnotempty(Properties["copilot_chat.repo.remote_url"])
-              | summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"])) by SessionId=tostring(Properties["copilot_chat.chat_session_id"]);
-              ```
-            - Use `tostring(Properties["..."])` when comparing property values.
-            - Use `todouble(Measurements["..."])` or `todouble(Properties["..."])` for numeric measurements.
-            - For model identification, use: `coalesce(tostring(Properties["gen_ai.request.model"]), tostring(Properties["ai.model_id"]))`
+            ## Guidance
+            - These are already-aggregated counts/sums. To produce a metric, further aggregate with `summarize` (e.g. `summarize Requests=sum(interactionCount) by model`).
+            - For time series, bin on `timeBucket` (it is already 30-minute aligned), e.g. `summarize sum(interactionCount) by bin(timeBucket, 1h)`.
+            - Average latency = `sum(durationMsSum) / sum(interactionCount)` (guard against divide-by-zero).
+            - Success rate = `sum(successCount) * 100.0 / sum(interactionCount)`.
+            - Use the pseudonymous `developerId` for per-developer breakdowns; never attempt to resolve it to a person.
+            - Reference fields directly by their column name listed above; they are plain top-level columns, not nested property/measurement bags.
 
             {filterContext}
 
@@ -536,7 +579,7 @@ public sealed class KqlGenerationService
             1. A brief explanation of what the query does (1-2 sentences)
             2. The KQL query in a ```kql code block
 
-            Do NOT include any `let` statements for filter variables — those are injected automatically by the system. Just reference them directly (e.g., `| where ... in (_filter_repositories)`).
+            Do NOT include any `let` statements for filter variables — those are injected automatically by the system. Just reference them directly (e.g., `| where repository in (_filter_repositories)`).
 
             Produce a single, valid KQL query. Do not include multiple queries or union statements unless necessary for the metric requested.
             """;
@@ -554,10 +597,10 @@ public sealed class KqlGenerationService
             switch (filter.FilterType)
             {
                 case DashboardFilterType.Repository when filter.Values.Count > 0:
-                    lines.Add($"- `_filter_repositories` (dynamic array) — filter by repository URL. Use: `| where tostring(Properties[\"copilot_chat.repo.remote_url\"]) in (_filter_repositories)` (or join pattern for reliable filtering)");
+                    lines.Add($"- `_filter_repositories` (dynamic array) — filter by repository URL. Use: `| where repository in (_filter_repositories)`");
                     break;
                 case DashboardFilterType.Developer when filter.Values.Count > 0:
-                    lines.Add($"- `_filter_developers` (dynamic array) — filter by developer. Use: `| where tostring(Properties[\"user.email\"]) in (_filter_developers)`");
+                    lines.Add($"- `_filter_developers` (dynamic array) — filter by pseudonymous developer id. Use: `| where developerId in (_filter_developers)`");
                     break;
                 case DashboardFilterType.TimeRange when filter.Values.Count > 0:
                     lines.Add($"- `_filter_timerange` (string) — time range filter value: \"{filter.Values[0]}\"");
@@ -584,8 +627,8 @@ public sealed class KqlGenerationService
             WidgetType.LineChart => """
                 ## Widget Type: Line Chart
                 The query should return rows with two columns: a time-based or ordered category (first column) and a numeric value (second column).
-                Example output shape: | TimeGenerated | Requests |
-                Use `bin(TimeGenerated, ...)` for time series or ordered string categories.
+                Example output shape: | timeBucket | Requests |
+                Use `bin(timeBucket, ...)` for time series or ordered string categories.
                 """,
             WidgetType.BarChart => """
                 ## Widget Type: Bar Chart

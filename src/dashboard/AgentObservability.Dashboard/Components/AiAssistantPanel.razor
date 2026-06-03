@@ -12,10 +12,13 @@
         <div class="ai-overlay-header">
             <div class="ai-overlay-header-left">
                 <h3>AI Query Assistant</h3>
-                <button class="teach-mode-toggle @(isTeachMode ? "active" : "")" @onclick="ToggleTeachMode">
-                    <span class="teach-icon">🎓</span>
-                    <span>@(isTeachMode ? "Back to Query" : "Teach AI")</span>
-                </button>
+                @if (KqlGenerationService.IsEnabled)
+                {
+                    <button class="teach-mode-toggle @(isTeachMode ? "active" : "")" @onclick="ToggleTeachMode">
+                        <span class="teach-icon">🎓</span>
+                        <span>@(isTeachMode ? "Back to Query" : "Teach AI")</span>
+                    </button>
+                }
             </div>
             <button class="ai-overlay-close" @onclick="Close" title="Close">✕</button>
         </div>
@@ -29,7 +32,17 @@
         }
 
         <div class="ai-overlay-body">
-            @if (isTeachMode)
+            @if (!KqlGenerationService.IsEnabled)
+            {
+                <div class="ai-disabled-state">
+                    <span class="ai-disabled-icon">🚫</span>
+                    <div class="ai-disabled-text">
+                        <strong>AI query generation is temporarily disabled.</strong>
+                        <p>An administrator has turned off the AI query assistant. You can still edit queries manually.</p>
+                    </div>
+                </div>
+            }
+            else if (isTeachMode)
             {
                 @if (teachConversation.Count > 0)
                 {
@@ -128,7 +141,11 @@
         </div>
 
         <div class="ai-overlay-footer">
-            @if (isTeachMode)
+            @if (!KqlGenerationService.IsEnabled)
+            {
+                <div class="ai-disabled-footer">AI assistant unavailable</div>
+            }
+            else if (isTeachMode)
             {
                 <div class="ai-input-row">
                     <textarea rows="2" class="query-textarea"

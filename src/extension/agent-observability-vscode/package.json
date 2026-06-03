@@ -1,0 +1,251 @@
+{
+  "name": "agent-observability",
+  "displayName": "Agent Observability (Local)",
+  "description": "Privacy-first local view of GitHub Copilot agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
+  "version": "0.1.0",
+  "publisher": "turbinestudios",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentObservability",
+          "title": "Agent Observability",
+          "icon": "media/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentObservability": [
+        {
+          "id": "agentObservability.overview",
+          "name": "Local Overview"
+        },
+        {
+          "id": "agentObservability.sessions",
+          "name": "Sessions"
+        },
+        {
+          "id": "agentObservability.sync",
+          "name": "Sync"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "agentObservability.overview",
+        "contents": "Local Overview will summarize your GitHub Copilot agent activity from the on-disk telemetry database.\n\nLocal telemetry reading arrives in a later phase. Nothing is read or uploaded yet.\n\n[Open Settings](command:agentObservability.openSettings)"
+      },
+      {
+        "view": "agentObservability.sessions",
+        "contents": "Sessions will list your local Copilot agent sessions with prompt, tool, model, duration and success detail.\n\nSession browsing arrives in a later phase. All session detail stays on this machine.\n\n[Refresh](command:agentObservability.refresh)"
+      },
+      {
+        "view": "agentObservability.sync",
+        "contents": "Sync uploads only opt-in, aggregated, non-sensitive statistics to your organization dashboard. Raw prompts, completions, tool I/O and file paths never leave your machine.\n\nCloud sharing is OFF by default and arrives in a later phase.\n\n[Set Organization API Key](command:agentObservability.setApiKey)\n[Open Settings](command:agentObservability.openSettings)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "agentObservability.refresh",
+        "title": "Refresh",
+        "category": "Agent Observability",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "agentObservability.syncNow",
+        "title": "Sync Now",
+        "category": "Agent Observability",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "agentObservability.openSettings",
+        "title": "Open Settings",
+        "category": "Agent Observability",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "agentObservability.setApiKey",
+        "title": "Set Organization API Key",
+        "category": "Agent Observability",
+        "icon": "$(key)"
+      },
+      {
+        "command": "agentObservability.toggleConsent",
+        "title": "Toggle Cloud Sharing",
+        "category": "Agent Observability"
+      },
+      {
+        "command": "agentObservability.previewPayload",
+        "title": "Preview Aggregate Payload",
+        "category": "Agent Observability",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "agentObservability.openSession",
+        "title": "Open Session Detail",
+        "category": "Agent Observability"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "agentObservability.openSession",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "agentObservability.refresh",
+          "when": "view == agentObservability.overview",
+          "group": "navigation"
+        },
+        {
+          "command": "agentObservability.refresh",
+          "when": "view == agentObservability.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "agentObservability.syncNow",
+          "when": "view == agentObservability.sync",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Agent Observability",
+      "properties": {
+        "agentObservability.dashboardUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Base URL of the cloud ingestion API that receives opt-in aggregate batches (e.g. `https://dashboard.example.com`). Leave blank to disable uploads."
+        },
+        "agentObservability.sync.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Opt in to share aggregated, non-sensitive statistics with your organization dashboard. Disabled by default (opt-out). Raw prompts, completions, tool I/O and file paths are never uploaded."
+        },
+        "agentObservability.sync.intervalMinutes": {
+          "type": "number",
+          "default": 60,
+          "minimum": 5,
+          "markdownDescription": "How often background sync uploads aggregate batches, in minutes. Minimum 5."
+        },
+        "agentObservability.localTelemetry.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Feature flag to enable the local telemetry view. When disabled, the extension does not read the local Copilot telemetry database."
+        },
+        "agentObservability.sqlitePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Override the path to the Copilot `agent-traces.db` SQLite database. Leave blank to auto-detect the platform default location."
+        },
+        "agentObservability.deviation.maxSessionMinutes": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "markdownDescription": "Maximum expected duration of an agent session, in minutes, used by the local workflow-deviation detector to flag overlong sessions (TimeoutExceeded) when no explicit workflow is configured for the repository."
+        },
+        "agentObservability.workflows": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Optional per-repository expected agent workflows for the local deviation detector. When a repository has an explicit entry here, sequence and missing-step checks are enabled in addition to the always-on timeout and failure-rate checks. All detection runs locally; nothing is uploaded.",
+          "items": {
+            "type": "object",
+            "required": [
+              "repository",
+              "workflows"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "repository": {
+                "type": "string",
+                "markdownDescription": "Sanitized repository this configuration applies to (e.g. `https://github.com/org/repo`)."
+              },
+              "workflows": {
+                "type": "array",
+                "markdownDescription": "Expected workflows to check this repository's sessions against.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "markdownDescription": "Human-readable workflow name (e.g. `feature-development`)."
+                    },
+                    "expectedSequence": {
+                      "type": "array",
+                      "default": [],
+                      "items": {
+                        "type": "string"
+                      },
+                      "markdownDescription": "Expected ordered agent names. When present, enables sequence and missing-step checks."
+                    },
+                    "maxDurationMinutes": {
+                      "type": "number",
+                      "minimum": 1,
+                      "markdownDescription": "Maximum expected workflow duration, in minutes. Defaults to `agentObservability.deviation.maxSessionMinutes` when omitted."
+                    },
+                    "sequenceDeviationAlert": {
+                      "type": "boolean",
+                      "default": true,
+                      "markdownDescription": "Flag sequence and missing-step deviations. Requires `expectedSequence`."
+                    },
+                    "timeoutExceededAlert": {
+                      "type": "boolean",
+                      "default": true,
+                      "markdownDescription": "Flag sessions that exceed the maximum duration."
+                    },
+                    "toolUsageAnomalyAlert": {
+                      "type": "boolean",
+                      "default": true,
+                      "markdownDescription": "Flag sessions with a high (>50% over >=3 interactions) failure rate."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext ts",
+    "test": "vitest run",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vscode/vsce": "^3.0.0",
+    "ajv": "^8.20.0",
+    "esbuild": "^0.23.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0"
+  }
+}

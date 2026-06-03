@@ -2,6 +2,7 @@
 @layout AgentObservability.Dashboard.Components.Layout.WorkflowLayout
 @inject AgentObservability.Dashboard.Services.WorkflowManagementService WorkflowService
 @inject AgentObservability.Dashboard.Services.WidgetQueryService QueryService
+@inject Microsoft.Extensions.Options.IOptions<AgentObservability.Dashboard.Services.WebUxOptions> WebUxOptions
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @using AgentObservability.Dashboard.Models
@@ -21,20 +22,86 @@ else
             <h1>@workflow.Name</h1>
         </div>
         <div class="dashboard-toolbar-actions">
-            <select class="time-range-select" @onchange="OnTimeRangeChanged" value="@selectedTimeRange">
-                <option value="1">Last 1 hour</option>
-                <option value="4">Last 4 hours</option>
-                <option value="12">Last 12 hours</option>
-                <option value="24">Last 24 hours</option>
-                <option value="72">Last 3 days</option>
-                <option value="168">Last 7 days</option>
-                <option value="720">Last 30 days</option>
-            </select>
+            @if (rawDetailEnabled)
+            {
+                <select class="time-range-select" @onchange="OnTimeRangeChanged" value="@selectedTimeRange">
+                    <option value="1">Last 1 hour</option>
+                    <option value="4">Last 4 hours</option>
+                    <option value="12">Last 12 hours</option>
+                    <option value="24">Last 24 hours</option>
+                    <option value="72">Last 3 days</option>
+                    <option value="168">Last 7 days</option>
+                    <option value="720">Last 30 days</option>
+                </select>
+            }
             <button class="action-button" @onclick="EditWorkflow">Edit</button>
         </div>
     </div>
 
-    @if (string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery))
+    @if (!rawDetailEnabled)
+    {
+        <!-- Aggregate-only (privacy-first default): per-interaction run stats and deviation detection
+             moved to the local VS Code extension. Show the org-level workflow DEFINITION only. -->
+        <div class="workflow-moved-notice empty-state" style="text-align: left;">
+            <h3 style="margin-top: 0;">Per-interaction run statistics moved to the local extension</h3>
+            <p>
+                Workflow run statistics and step deviation detection now run <strong>locally</strong> in the
+                <strong>Agent Observability (Local)</strong> VS Code extension, against telemetry on the developer's
+                own machine. Raw per-interaction agent correlation (Properties, OperationId, TimeGenerated) no longer
+                happens in the org dashboard.
+            </p>
+            <p>
+                This page shows the org-level workflow <strong>definition</strong> below. Edit it here to update the
+                expected step sequence the local deviation detector matches against.
+            </p>
+        </div>
+
+        <div class="widget-config-panel" style="margin-bottom: 1.5rem;">
+            <h3>Workflow Definition</h3>
+            <div class="workflow-definition">
+                <div class="log-property">
+                    <span class="log-key">Name:</span>
+                    <span class="log-value">@workflow.Name</span>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery))
+                {
+                    <div class="log-property">
+                        <span class="log-key">Trigger:</span>
+                        <span class="log-value">Configured</span>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="widget-config-panel">
+            <h3>Expected Steps <span class="tree-badge">@workflow.Steps.Count</span></h3>
+            @if (workflow.Steps.Count == 0)
+            {
+                <div class="empty-state" style="padding: 0.5rem;">
+                    <p>No expected steps configured. Edit this workflow to define the expected step sequence.</p>
+                </div>
+            }
+            else
+            {
+                <div class="workflow-steps-comparison">
+                    @foreach (var step in workflow.Steps.OrderBy(s => s.Order))
+                    {
+                        <div class="workflow-step-row">
+                            <div class="workflow-step-expected">
+                                <div class="step-header">
+                                    <span class="step-number">Step @step.Order</span>
+                                </div>
+                                <div class="step-config">
+                                    <span class="step-property">@(string.IsNullOrEmpty(step.Name) ? $"Step {step.Order}" : step.Name)</span>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+    else if (string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery))
     {
         <div class="empty-state">
             <p>No trigger query configured. Edit this workflow to add a KQL trigger query.</p>
@@ -77,6 +144,10 @@ else
                             <span class="stat-badge success">✓ @statsSuccessCount success</span>
                             <span class="stat-badge warning">⚠ @statsWarningCount warning</span>
                             <span class="stat-badge failed">✗ @statsFailedCount failed</span>
+                            @if (statsBlockedCount > 0)
+                            {
+                                <span class="stat-badge blocked">⛔ @statsBlockedCount blocked</span>
+                            }
                         </div>
                     }
 
@@ -117,6 +188,9 @@ else
                                                             break;
                                                         case "failed":
                                                             <span class="step-status missing">✗</span>
+                                                            break;
+                                                        case "blocked":
+                                                            <span class="step-status blocked">⛔</span>
                                                             break;
                                                     }
                                                 </td>
@@ -171,6 +245,9 @@ else
                                                         case "out-of-order":
                                                             <span>⚠</span>
                                                             break;
+                                                        case "blocked":
+                                                            <span title="@match?.Error">⛔</span>
+                                                            break;
                                                         default:
                                                             <span>…</span>
                                                             break;
@@ -200,6 +277,12 @@ else
                                                             <span class="log-value">@(kvp.Value?.ToString() ?? "null")</span>
                                                         </div>
                                                     }
+                                                </div>
+                                            }
+                                            else if (match?.Status == "blocked")
+                                            {
+                                                <div class="no-match widget-error">
+                                                    <span>Step query blocked: @match.Error</span>
                                                 </div>
                                             }
                                             else
@@ -251,11 +334,21 @@ else
     private int statsSuccessCount;
     private int statsWarningCount;
     private int statsFailedCount;
+    private int statsBlockedCount;
+
+    /// <summary>
+    /// Master switch (WebUxOptions.ExposeRawSessionDetail). When false (privacy-first default) this
+    /// page does NOT execute the raw trigger/step KQL; it renders the moved-to-extension notice plus
+    /// the org-level workflow definition. When true (one-release rollback) the prior raw-KQL run
+    /// behavior is preserved.
+    /// </summary>
+    private bool rawDetailEnabled;
 
     protected override async Task OnInitializedAsync()
     {
+        rawDetailEnabled = WebUxOptions.Value.ExposeRawSessionDetail;
         workflow = await WorkflowService.GetWorkflowAsync(Id);
-        if (workflow is not null && !string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery))
+        if (rawDetailEnabled && workflow is not null && !string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery))
         {
             await ExecuteTriggerQuery();
         }
@@ -263,7 +356,8 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        // Persisted run stats only exist in the raw-execution (rollback) world.
+        if (firstRender && rawDetailEnabled)
         {
             await RestoreStatsFromSessionStorage();
         }
@@ -334,7 +428,15 @@ else
 
             var stepResult = await QueryService.ExecuteWidgetQueryAsync(fullQuery, [], lookback);
 
-            if (stepResult?.Rows is not null && stepResult.Rows.Count > 0)
+            if (stepResult?.Error is not null)
+            {
+                // The query failed (e.g. blocked by the aggregate-only guardrail, or a malformed
+                // query during rollback). This is distinct from a step that simply did not occur:
+                // represent it as 'blocked' rather than 'missing'.
+                matchResult.Status = "blocked";
+                matchResult.Error = stepResult.Error;
+            }
+            else if (stepResult?.Rows is not null && stepResult.Rows.Count > 0)
             {
                 matchResult.MatchedLog = stepResult.Rows[0];
 
@@ -429,6 +531,7 @@ else
 
             var hasOutOfOrder = false;
             var hasMissing = false;
+            var hasBlocked = false;
             DateTimeOffset? previousTimestamp = null;
 
             for (int stepIdx = 0; stepIdx < orderedSteps.Count; stepIdx++)
@@ -445,7 +548,12 @@ else
                 var fullQuery = preamble + step.KqlQuery;
                 var stepResult = await QueryService.ExecuteWidgetQueryAsync(fullQuery, [], lookback);
 
-                if (stepResult?.Rows is not null && stepResult.Rows.Count > 0)
+                if (stepResult?.Error is not null)
+                {
+                    // Query errored/was blocked — distinct from a step that did not occur.
+                    hasBlocked = true;
+                }
+                else if (stepResult?.Rows is not null && stepResult.Rows.Count > 0)
                 {
                     DateTimeOffset? currentTimestamp = null;
                     if (stepResult.Rows[0].TryGetValue("TimeGenerated", out var tg) && tg is not null)
@@ -472,7 +580,9 @@ else
                 }
             }
 
-            if (hasMissing)
+            if (hasBlocked)
+                rowStatuses[rowIdx] = "blocked";
+            else if (hasMissing)
                 rowStatuses[rowIdx] = "failed";
             else if (hasOutOfOrder)
                 rowStatuses[rowIdx] = "warning";
@@ -486,6 +596,7 @@ else
         statsSuccessCount = rowStatuses.Values.Count(v => v == "success");
         statsWarningCount = rowStatuses.Values.Count(v => v == "warning");
         statsFailedCount = rowStatuses.Values.Count(v => v == "failed");
+        statsBlockedCount = rowStatuses.Values.Count(v => v == "blocked");
         statsComputed = true;
         isComputingStats = false;
         StateHasChanged();
@@ -502,7 +613,8 @@ else
             RowStatuses = rowStatuses,
             SuccessCount = statsSuccessCount,
             WarningCount = statsWarningCount,
-            FailedCount = statsFailedCount
+            FailedCount = statsFailedCount,
+            BlockedCount = statsBlockedCount
         };
         var json = JsonSerializer.Serialize(data);
         await JS.InvokeVoidAsync("sessionStorage.setItem", StatsSessionKey, json);
@@ -522,6 +634,7 @@ else
             statsSuccessCount = data.SuccessCount;
             statsWarningCount = data.WarningCount;
             statsFailedCount = data.FailedCount;
+            statsBlockedCount = data.BlockedCount;
             statsComputed = true;
             StateHasChanged();
         }
@@ -540,6 +653,7 @@ else
     {
         public string Status { get; set; } = "pending";
         public Dictionary<string, object?>? MatchedLog { get; set; }
+        public string? Error { get; set; }
     }
 
     private sealed class WorkflowStatsCache
@@ -548,5 +662,6 @@ else
         public int SuccessCount { get; set; }
         public int WarningCount { get; set; }
         public int FailedCount { get; set; }
+        public int BlockedCount { get; set; }
     }
 }

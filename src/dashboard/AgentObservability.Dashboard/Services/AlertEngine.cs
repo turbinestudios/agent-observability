@@ -17,6 +17,7 @@ public sealed class AlertEngine : BackgroundService
     private readonly AlertEngineOptions _options;
     private readonly ILogger<AlertEngine> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly bool _exposeRawSessionDetail;
 
     // Track recently sent alerts to avoid duplicates within a cooldown period
     private readonly Dictionary<string, DateTimeOffset> _recentAlerts = new();
@@ -26,12 +27,14 @@ public sealed class AlertEngine : BackgroundService
         IServiceProvider serviceProvider,
         WorkflowDeviationDetector detector,
         IOptions<AlertEngineOptions> options,
+        IOptions<WebUxOptions> webUxOptions,
         ILogger<AlertEngine> logger,
         IHttpClientFactory httpClientFactory)
     {
         _serviceProvider = serviceProvider;
         _detector = detector;
         _options = options.Value;
+        _exposeRawSessionDetail = webUxOptions.Value.ExposeRawSessionDetail;
         _logger = logger;
         _httpClientFactory = httpClientFactory;
     }
@@ -41,6 +44,19 @@ public sealed class AlertEngine : BackgroundService
         if (!_options.Enabled)
         {
             _logger.LogInformation("Alert engine is disabled");
+            return;
+        }
+
+        // Privacy-first master switch (WebUxOptions.ExposeRawSessionDetail, default false): cloud-side
+        // deviation detection runs raw AppDependencies/Properties[...] KQL via LogAnalyticsService, so
+        // it belongs to the retired raw-telemetry world. Workflow deviation detection now runs LOCALLY
+        // in the VS Code extension (over on-machine session data). Only poll raw telemetry during the
+        // one-release rollback (ExposeRawSessionDetail == true).
+        if (!_exposeRawSessionDetail)
+        {
+            _logger.LogInformation(
+                "Alert engine is idle: workflow deviation detection now runs locally in the Agent Observability VS Code extension. " +
+                "Set WebUx:ExposeRawSessionDetail=true to re-enable cloud-side raw-telemetry deviation polling (rollback).");
             return;
         }
 

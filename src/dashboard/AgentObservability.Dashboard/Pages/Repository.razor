@@ -1,6 +1,8 @@
 @page "/repository"
 @using System.Globalization
-@inject LogAnalyticsService Analytics
+@using Microsoft.Extensions.Options
+@inject IAnalyticsService Analytics
+@inject IOptions<WebUxOptions> WebUx
 
 <PageTitle>Repository</PageTitle>
 
@@ -66,7 +68,14 @@ else
                 @foreach (var item in repositories)
                 {
                     <tr>
-                        <td><a href="/repository/@EncodeRepoUrl(item.Repository)">@item.Repository</a></td>
+                        @if (ExposeRawSessionDetail)
+                        {
+                            <td><a href="/repository/@EncodeRepoUrl(item.Repository)">@item.Repository</a></td>
+                        }
+                        else
+                        {
+                            <td>@item.Repository</td>
+                        }
                         <td>@item.Requests.ToString("N0", CultureInfo.InvariantCulture)</td>
                         <td>@item.ActiveDevelopers</td>
                         <td>@item.AverageLatencyMs.ToString("N0", CultureInfo.InvariantCulture) ms</td>
@@ -79,6 +88,8 @@ else
 }
 
 @code {
+    private bool ExposeRawSessionDetail => WebUx.Value.ExposeRawSessionDetail;
+
     private IReadOnlyList<RepositoryActivitySummary> repositories = [];
 
     protected override async Task OnInitializedAsync()

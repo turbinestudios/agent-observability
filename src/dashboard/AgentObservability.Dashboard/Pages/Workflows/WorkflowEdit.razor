@@ -2,6 +2,7 @@
 @layout AgentObservability.Dashboard.Components.Layout.WorkflowLayout
 @inject AgentObservability.Dashboard.Services.WorkflowManagementService WorkflowService
 @inject AgentObservability.Dashboard.Services.WidgetQueryService QueryService
+@inject Microsoft.Extensions.Options.IOptions<AgentObservability.Dashboard.Services.WebUxOptions> WebUxOptions
 @inject NavigationManager Navigation
 @inject Radzen.NotificationService NotificationService
 @using AgentObservability.Dashboard.Models
@@ -28,6 +29,19 @@ else
         </div>
     </div>
 
+    @if (!rawDetailEnabled)
+    {
+        <div class="empty-state" style="text-align: left; margin-bottom: 1.5rem;">
+            <p>
+                This is the org-level workflow <strong>definition</strong>. The expected step sequence
+                below is matched against telemetry <strong>locally</strong> by the
+                <strong>Agent Observability (Local)</strong> VS Code extension's deviation detector;
+                raw per-interaction correlation no longer runs in the org dashboard. Editing here stays
+                available so you can keep the definition up to date.
+            </p>
+        </div>
+    }
+
     <!-- Trigger KQL Query -->
     <div class="widget-config-panel" style="margin-bottom: 1.5rem;">
         <h3>Trigger KQL Query</h3>
@@ -38,19 +52,29 @@ else
             <textarea rows="8" class="query-textarea"
                       @bind="workflow.TriggerKqlQuery" @bind:event="oninput"
                       placeholder="Enter your trigger KQL query..."></textarea>
-            <div class="query-preview-actions" style="margin-top: 0.5rem;">
-                <button class="action-button action-button-secondary" @onclick="RunPreview" disabled="@(previewExecuting || string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery))">
-                    @if (previewExecuting)
-                    {
-                        <span class="spinner"></span>
-                        <span>Running...</span>
-                    }
-                    else
-                    {
-                        <span>▶ Run Preview</span>
-                    }
-                </button>
-            </div>
+            @if (rawDetailEnabled)
+            {
+                <div class="query-preview-actions" style="margin-top: 0.5rem;">
+                    <button class="action-button action-button-secondary" @onclick="RunPreview" disabled="@(previewExecuting || string.IsNullOrWhiteSpace(workflow.TriggerKqlQuery))">
+                        @if (previewExecuting)
+                        {
+                            <span class="spinner"></span>
+                            <span>Running...</span>
+                        }
+                        else
+                        {
+                            <span>▶ Run Preview</span>
+                        }
+                    </button>
+                </div>
+            }
+            else
+            {
+                <p style="color: var(--muted); font-size: 0.8rem; margin-top: 0.5rem;">
+                    Preview executes raw telemetry correlation and is disabled in the aggregate-only org dashboard.
+                    Validate trigger/step queries locally in the VS Code extension.
+                </p>
+            }
         </div>
 
         @if (previewResult?.Error is not null)
@@ -149,7 +173,7 @@ else
                         <label>KQL Query</label>
                         <textarea rows="4" class="query-textarea"
                                   @bind="step.KqlQuery" @bind:event="oninput"
-                                  placeholder="e.g. AppDependencies | where OperationId == _filter_operationid | where Name == &quot;read_file&quot;"></textarea>
+                                  placeholder="e.g. detect this step using _filter_operationid to correlate the trigger result"></textarea>
                     </div>
 
                     <!-- Step AI Query Assistant -->
@@ -194,8 +218,16 @@ else
     private string? aiPanelContextDescription;
     private int? aiPanelStepIndex;
 
+    /// <summary>
+    /// Master switch (WebUxOptions.ExposeRawSessionDetail). False (default) = aggregate-only: the
+    /// raw trigger-query preview is hidden (it would execute raw telemetry correlation). Defining
+    /// the workflow stays available as org config consumed by the local deviation detector.
+    /// </summary>
+    private bool rawDetailEnabled;
+
     protected override async Task OnInitializedAsync()
     {
+        rawDetailEnabled = WebUxOptions.Value.ExposeRawSessionDetail;
         workflow = await WorkflowService.GetWorkflowAsync(Id);
         if (workflow is null)
         {

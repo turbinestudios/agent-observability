@@ -1,0 +1,617 @@
+{
+  "source": "GitHub Copilot Chat native telemetry — agent-traces.db",
+  "capturedFrom": "real local DB (sanitized)",
+  "schemaVersion": 1,
+  "journalMode": "wal",
+  "tables": {
+    "spans": {
+      "sql": "CREATE TABLE spans (\n\t\t\t\tspan_id TEXT PRIMARY KEY, trace_id TEXT NOT NULL, parent_span_id TEXT,\n\t\t\t\tname TEXT NOT NULL, start_time_ms INTEGER NOT NULL, end_time_ms INTEGER NOT NULL,\n\t\t\t\tstatus_code INTEGER NOT NULL DEFAULT 0, status_message TEXT,\n\t\t\t\toperation_name TEXT, provider_name TEXT, agent_name TEXT, conversation_id TEXT,\n\t\t\t\trequest_model TEXT, response_model TEXT,\n\t\t\t\tinput_tokens INTEGER, output_tokens INTEGER, cached_tokens INTEGER, reasoning_tokens INTEGER,\n\t\t\t\ttool_name TEXT, tool_call_id TEXT, tool_type TEXT,\n\t\t\t\tchat_session_id TEXT, turn_index INTEGER, ttft_ms REAL\n\t\t\t)",
+      "columns": [
+        {
+          "name": "span_id",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": true
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "notnull": true,
+          "pk": false
+        },
+        {
+          "name": "parent_span_id",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "notnull": true,
+          "pk": false
+        },
+        {
+          "name": "start_time_ms",
+          "type": "INTEGER",
+          "notnull": true,
+          "pk": false
+        },
+        {
+          "name": "end_time_ms",
+          "type": "INTEGER",
+          "notnull": true,
+          "pk": false
+        },
+        {
+          "name": "status_code",
+          "type": "INTEGER",
+          "notnull": true,
+          "pk": false
+        },
+        {
+          "name": "status_message",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "operation_name",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "provider_name",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "agent_name",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "conversation_id",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "request_model",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "response_model",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "input_tokens",
+          "type": "INTEGER",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "output_tokens",
+          "type": "INTEGER",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "cached_tokens",
+          "type": "INTEGER",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "reasoning_tokens",
+          "type": "INTEGER",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "tool_name",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "tool_call_id",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "tool_type",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "chat_session_id",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "turn_index",
+          "type": "INTEGER",
+          "notnull": false,
+          "pk": false
+        },
+        {
+          "name": "ttft_ms",
+          "type": "REAL",
+          "notnull": false,
+          "pk": false
+        }
+      ],
+      "rows": 429
+    },
+    "span_attributes": {
+      "sql": "CREATE TABLE span_attributes (\n\t\t\t\tspan_id TEXT NOT NULL REFERENCES spans(span_id) ON DELETE CASCADE,\n\t\t\t\tkey TEXT NOT NULL, value TEXT,\n\t\t\t\tPRIMARY KEY (span_id, key)\n\t\t\t)",
+      "columns": [
+        {
+          "name": "span_id",
+          "type": "TEXT",
+          "notnull": true,
+          "pk": true
+        },
+        {
+          "name": "key",
+          "type": "TEXT",
+          "notnull": true,
+          "pk": true
+        },
+        {
+          "name": "value",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        }
+      ],
+      "rows": 5867
+    },
+    "span_events": {
+      "sql": "CREATE TABLE span_events (\n\t\t\t\tid INTEGER PRIMARY KEY AUTOINCREMENT,\n\t\t\t\tspan_id TEXT NOT NULL REFERENCES spans(span_id) ON DELETE CASCADE,\n\t\t\t\tname TEXT NOT NULL, timestamp_ms INTEGER NOT NULL, attributes TEXT\n\t\t\t)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "notnull": false,
+          "pk": true
+        },
+        {
+          "name": "span_id",
+          "type": "TEXT",
+          "notnull": true,
+          "pk": false
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "notnull": true,
+          "pk": false
+        },
+        {
+          "name": "timestamp_ms",
+          "type": "INTEGER",
+          "notnull": true,
+          "pk": false
+        },
+        {
+          "name": "attributes",
+          "type": "TEXT",
+          "notnull": false,
+          "pk": false
+        }
+      ],
+      "rows": 179
+    },
+    "schema_version": {
+      "sql": "CREATE TABLE schema_version (version INTEGER PRIMARY KEY)",
+      "columns": [
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "notnull": false,
+          "pk": true
+        }
+      ],
+      "rows": 1
+    }
+  },
+  "attributeKeys": [
+    {
+      "key": "gen_ai.operation.name",
+      "occurrences": 429,
+      "maxLen": 12,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.chat_session_id",
+      "occurrences": 318,
+      "maxLen": 36,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.request.model",
+      "occurrences": 166,
+      "maxLen": 31,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.provider.name",
+      "occurrences": 166,
+      "maxLen": 6,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.input.messages",
+      "occurrences": 166,
+      "maxLen": 87934,
+      "sensitive": true
+    },
+    {
+      "key": "gen_ai.conversation.id",
+      "occurrences": 166,
+      "maxLen": 36,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.agent.name",
+      "occurrences": 166,
+      "maxLen": 31,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.user_request",
+      "occurrences": 166,
+      "maxLen": 17595,
+      "sensitive": true
+    },
+    {
+      "key": "gen_ai.usage.output_tokens",
+      "occurrences": 164,
+      "maxLen": 4,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.usage.input_tokens",
+      "occurrences": 164,
+      "maxLen": 6,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.response.model",
+      "occurrences": 163,
+      "maxLen": 31,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.output.messages",
+      "occurrences": 162,
+      "maxLen": 4656,
+      "sensitive": true
+    },
+    {
+      "key": "gen_ai.system_instructions",
+      "occurrences": 149,
+      "maxLen": 23044,
+      "sensitive": true
+    },
+    {
+      "key": "gen_ai.response.finish_reasons",
+      "occurrences": 149,
+      "maxLen": 9,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.request.max_tokens",
+      "occurrences": 149,
+      "maxLen": 5,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.request.shape",
+      "occurrences": 149,
+      "maxLen": 36,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.request.options",
+      "occurrences": 149,
+      "maxLen": 429,
+      "sensitive": true
+    },
+    {
+      "key": "copilot_chat.request.max_prompt_tokens",
+      "occurrences": 149,
+      "maxLen": 6,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.response.id",
+      "occurrences": 147,
+      "maxLen": 36,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.time_to_first_token",
+      "occurrences": 147,
+      "maxLen": 4,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.server_request_id",
+      "occurrences": 147,
+      "maxLen": 36,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.hook_type",
+      "occurrences": 143,
+      "maxLen": 11,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.hook_result_kind",
+      "occurrences": 143,
+      "maxLen": 18,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.hook_input",
+      "occurrences": 143,
+      "maxLen": 56592,
+      "sensitive": true
+    },
+    {
+      "key": "copilot_chat.hook_command",
+      "occurrences": 143,
+      "maxLen": 73,
+      "sensitive": true
+    },
+    {
+      "key": "copilot_chat.hook_exit_code",
+      "occurrences": 126,
+      "maxLen": 1,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.tool.type",
+      "occurrences": 120,
+      "maxLen": 8,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.tool.name",
+      "occurrences": 120,
+      "maxLen": 28,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.tool.description",
+      "occurrences": 120,
+      "maxLen": 4331,
+      "sensitive": true
+    },
+    {
+      "key": "gen_ai.tool.call.id",
+      "occurrences": 120,
+      "maxLen": 35,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.tool.call.arguments",
+      "occurrences": 120,
+      "maxLen": 3601,
+      "sensitive": true
+    },
+    {
+      "key": "gen_ai.tool.call.result",
+      "occurrences": 119,
+      "maxLen": 55271,
+      "sensitive": true
+    },
+    {
+      "key": "gen_ai.usage.cache_read.input_tokens",
+      "occurrences": 96,
+      "maxLen": 6,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.tool.definitions",
+      "occurrences": 84,
+      "maxLen": 131129,
+      "sensitive": true
+    },
+    {
+      "key": "copilot_chat.session_id",
+      "occurrences": 84,
+      "maxLen": 36,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.usage.cache_creation.input_tokens",
+      "occurrences": 82,
+      "maxLen": 5,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.request.top_p",
+      "occurrences": 82,
+      "maxLen": 1,
+      "sensitive": false
+    },
+    {
+      "key": "gen_ai.request.temperature",
+      "occurrences": 82,
+      "maxLen": 3,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.copilot_usage_nano_aiu",
+      "occurrences": 66,
+      "maxLen": 1,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.turn_count",
+      "occurrences": 17,
+      "maxLen": 2,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.repo.remote_url",
+      "occurrences": 17,
+      "maxLen": 54,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.repo.head_commit_hash",
+      "occurrences": 17,
+      "maxLen": 40,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.repo.head_branch_name",
+      "occurrences": 17,
+      "maxLen": 4,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.reasoning_content",
+      "occurrences": 17,
+      "maxLen": 8182,
+      "sensitive": true
+    },
+    {
+      "key": "copilot_chat.parent_chat_session_id",
+      "occurrences": 16,
+      "maxLen": 36,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.debug_log_label",
+      "occurrences": 16,
+      "maxLen": 26,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.mode_name",
+      "occurrences": 14,
+      "maxLen": 14,
+      "sensitive": false
+    },
+    {
+      "key": "error.type",
+      "occurrences": 8,
+      "maxLen": 10,
+      "sensitive": false
+    },
+    {
+      "key": "copilot_chat.hook_output",
+      "occurrences": 4,
+      "maxLen": 298,
+      "sensitive": true
+    }
+  ],
+  "enums": {
+    "operation_name": [
+      {
+        "v": "chat",
+        "c": 149
+      },
+      {
+        "v": "execute_hook",
+        "c": 143
+      },
+      {
+        "v": "execute_tool",
+        "c": 120
+      },
+      {
+        "v": "invoke_agent",
+        "c": 17
+      }
+    ],
+    "tool_name": [
+      {
+        "v": "read_file",
+        "c": 50
+      },
+      {
+        "v": "run_in_terminal",
+        "c": 30
+      },
+      {
+        "v": "list_dir",
+        "c": 11
+      },
+      {
+        "v": "replace_string_in_file",
+        "c": 7
+      },
+      {
+        "v": "grep_search",
+        "c": 6
+      },
+      {
+        "v": "manage_todo_list",
+        "c": 5
+      },
+      {
+        "v": "multi_replace_string_in_file",
+        "c": 4
+      },
+      {
+        "v": "runSubagent",
+        "c": 2
+      },
+      {
+        "v": "file_search",
+        "c": 2
+      },
+      {
+        "v": "create_file",
+        "c": 2
+      },
+      {
+        "v": "semantic_search",
+        "c": 1
+      }
+    ],
+    "status_code": [
+      {
+        "v": 0,
+        "c": 147
+      },
+      {
+        "v": 1,
+        "c": 148
+      },
+      {
+        "v": 2,
+        "c": 134
+      }
+    ],
+    "provider_name": [
+      {
+        "v": null,
+        "c": 263
+      },
+      {
+        "v": "github",
+        "c": 166
+      }
+    ]
+  },
+  "sessionsView": "CREATE VIEW sessions AS\n\t\t\tSELECT\n\t\t\t\tCOALESCE(conversation_id, chat_session_id) AS session_id,\n\t\t\t\tagent_name,\n\t\t\t\tresponse_model AS model,\n\t\t\t\tMIN(start_time_ms) AS started_at,\n\t\t\t\tMAX(end_time_ms) AS ended_at,\n\t\t\t\tMAX(end_time_ms) - MIN(start_time_ms) AS duration_ms,\n\t\t\t\tCOUNT(*) AS span_count,\n\t\t\t\tSUM(CASE WHEN operation_name = 'chat' THEN 1 ELSE 0 END) AS llm_calls,\n\t\t\t\tSUM(CASE WHEN operation_name = 'execute_tool' THEN 1 ELSE 0 END) AS tool_calls,\n\t\t\t\tSUM(CASE WHEN operation_name = 'chat' THEN input_tokens ELSE 0 END) AS total_input_tokens,\n\t\t\t\tSUM(CASE WHEN operation_name = 'chat' THEN output_tokens ELSE 0 END) AS total_output_tokens,\n\t\t\t\tSUM(CASE WHEN operation_name = 'chat' THEN cached_tokens ELSE 0 END) AS total_cached_tokens\n\t\t\tFROM spans\n\t\t\tWHERE COALESCE(conversation_id, chat_session_id) IS NOT NULL\n\t\t\tGROUP BY COALESCE(conversation_id, chat_session_id)"
+}
