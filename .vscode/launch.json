@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Agent Observability Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/src/extension/agent-observability-vscode"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/src/extension/agent-observability-vscode/dist/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile - extension"
+    }
+  ]
+}
