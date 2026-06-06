@@ -128,6 +128,17 @@ export class TelemetryService {
   }
 
   /**
+   * LOCAL-ONLY raw span-attribute values for a session, keyed by span id, for the
+   * given content-predicate attribute. Used exclusively by the local
+   * workflow-deviation path to evaluate a
+   * {@link ../deviation/models.ContentPredicate} on-machine; the values are never
+   * cached, logged, or uploaded, and never reach the aggregate/sync path.
+   */
+  getSpanAttributes(sessionKey: string, attributeKey: string): Result<Map<string, string>> {
+    return this.withDatabase((db) => db.getAttributesBySpan(sessionKey, attributeKey));
+  }
+
+  /**
    * Safe per-span aggregation rows for the Phase 5 cloud aggregate engine,
    * optionally bounded to `[sinceMs, untilMs)` on span start time. Carries ONLY
    * non-sensitive metadata (sanitized repository, mapped mode/tool, counts,

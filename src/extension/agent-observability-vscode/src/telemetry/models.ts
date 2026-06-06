@@ -36,6 +36,14 @@ export interface Interaction {
   sessionId: string;
   /** `spans.trace_id`. */
   traceId: string;
+  /**
+   * `spans.span_id`. Used ONLY on the local deviation path to correlate a span
+   * with its raw `span_attributes` content for a {@link ../deviation/models.ContentPredicate}.
+   * It is not a cloud-aggregate dimension and never reaches the sync batch (that
+   * path uses the separate `AggregationRow`). Optional so synthetic test
+   * interactions and metadata-only callers need not supply it.
+   */
+  spanId?: string;
   /** `spans.operation_name`. */
   operation: Operation | string;
   /** `spans.agent_name`, defaulting to `copilot` when absent. */

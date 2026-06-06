@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
-import { WorkflowConfig, WorkflowDefinition } from '../deviation/models';
+import { WorkflowConfig } from '../deviation/models';
+import { MIN_SESSION_MINUTES, parseWorkflowConfigs } from './workflowParsing';
+
+export { MIN_SESSION_MINUTES } from './workflowParsing';
 
 /**
  * The configuration section under which all extension settings live. This must
@@ -36,29 +39,6 @@ export const ConfigDefaults = {
 
 /** Minimum allowed sync interval, mirroring the package.json `minimum`. */
 export const MIN_SYNC_INTERVAL_MINUTES = 5;
-
-/** Minimum allowed deviation session window, mirroring the package.json `minimum`. */
-export const MIN_SESSION_MINUTES = 1;
-
-/**
- * Raw shape of one workflow as authored in settings.json
- * (`agentObservability.workflows[].workflows[]`). Optional fields default to the
- * documented values when omitted; see {@link Configuration.getWorkflowConfigs}.
- */
-interface RawWorkflow {
-  name?: unknown;
-  expectedSequence?: unknown;
-  maxDurationMinutes?: unknown;
-  sequenceDeviationAlert?: unknown;
-  timeoutExceededAlert?: unknown;
-  toolUsageAnomalyAlert?: unknown;
-}
-
-/** Raw shape of one repository entry in `agentObservability.workflows`. */
-interface RawWorkflowConfig {
-  repository?: unknown;
-  workflows?: unknown;
-}
 
 /**
  * Typed accessor over the `agentObservability` workspace configuration.
@@ -148,58 +128,7 @@ export class Configuration {
    */
   getWorkflowConfigs(): WorkflowConfig[] {
     const raw = this.config().get<unknown>(ConfigKeys.workflows, []);
-    if (!Array.isArray(raw)) {
-      return [];
-    }
-
-    const defaultMaxMs = this.getMaxSessionMinutes() * 60_000;
-    const configs: WorkflowConfig[] = [];
-
-    for (const entry of raw as RawWorkflowConfig[]) {
-      if (typeof entry !== 'object' || entry === null) {
-        continue;
-      }
-      const repository = typeof entry.repository === 'string' ? entry.repository.trim() : '';
-      if (repository.length === 0 || !Array.isArray(entry.workflows)) {
-        continue;
-      }
-
-      const workflows: WorkflowDefinition[] = [];
-      for (const w of entry.workflows as RawWorkflow[]) {
-        if (typeof w !== 'object' || w === null) {
-          continue;
-        }
-        const name = typeof w.name === 'string' ? w.name.trim() : '';
-        if (name.length === 0) {
-          continue;
-        }
-        const expectedSequence = Array.isArray(w.expectedSequence)
-          ? w.expectedSequence.filter((s): s is string => typeof s === 'string')
-          : [];
-        const maxDurationMs =
-          typeof w.maxDurationMinutes === 'number' && Number.isFinite(w.maxDurationMinutes)
-            ? Math.max(MIN_SESSION_MINUTES, Math.floor(w.maxDurationMinutes)) * 60_000
-            : defaultMaxMs;
-
-        workflows.push({
-          name,
-          expectedSequence,
-          maxDurationMs,
-          sequenceDeviationAlert:
-            typeof w.sequenceDeviationAlert === 'boolean' ? w.sequenceDeviationAlert : true,
-          timeoutExceededAlert:
-            typeof w.timeoutExceededAlert === 'boolean' ? w.timeoutExceededAlert : true,
-          toolUsageAnomalyAlert:
-            typeof w.toolUsageAnomalyAlert === 'boolean' ? w.toolUsageAnomalyAlert : true,
-        });
-      }
-
-      if (workflows.length > 0) {
-        configs.push({ repository, workflows });
-      }
-    }
-
-    return configs;
+    return parseWorkflowConfigs(raw, this.getMaxSessionMinutes() * 60_000);
   }
 
   /**

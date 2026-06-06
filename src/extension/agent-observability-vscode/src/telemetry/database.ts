@@ -434,6 +434,7 @@ export class TelemetryDatabase {
       timestampMs: row.start_time_ms,
       sessionId: sessionKey,
       traceId: row.trace_id,
+      spanId: row.span_id,
       operation: row.operation_name ?? 'chat',
       agentName: row.agent_name !== null && row.agent_name.length > 0 ? row.agent_name : DEFAULT_AGENT,
       agentMode: mode,
@@ -646,6 +647,40 @@ export class TelemetryDatabase {
     };
 
     return { summary, timeline };
+  }
+
+  /**
+   * LOCAL-ONLY: map span id → raw value of `attributeKey` for the spans of a
+   * single session. The local equivalent of a cloud KQL step query that reads log
+   * CONTENT, used solely by the local workflow-deviation path
+   * ({@link ../deviation/models.ContentPredicate}) for on-machine evaluation.
+   *
+   * PRIVACY: the returned text is never logged, never uploaded, and this method is
+   * NEVER called from {@link getAggregationRows} or any method in `src/aggregate/`
+   * (the aggregate/sync path is strictly content-free). The caller restricts
+   * `attributeKey` to the content-predicate allow-list
+   * ({@link ../deviation/models.CONTENT_PREDICATE_ATTRIBUTES}); the key is bound as
+   * a SQL parameter, never interpolated. Unlike {@link userRequestsBySpan} this is
+   * not scoped to chat spans, since content predicates may target tool/hook spans.
+   */
+  getAttributesBySpan(sessionKey: string, attributeKey: string): Map<string, string> {
+    const rows = this.db
+      .prepare(
+        `SELECT a.span_id AS span_id, a.value AS value
+         FROM span_attributes a
+         JOIN spans s ON s.span_id = a.span_id
+         WHERE a.key = ?
+           AND COALESCE(s.conversation_id, s.chat_session_id) = ?`,
+      )
+      .all(attributeKey, sessionKey) as Array<{ span_id: string; value: string | null }>;
+
+    const map = new Map<string, string>();
+    for (const row of rows) {
+      if (row.value !== null) {
+        map.set(row.span_id, row.value);
+      }
+    }
+    return map;
   }
 
   /**

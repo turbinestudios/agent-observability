@@ -99,9 +99,15 @@ function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
         d.expectedSequence !== undefined && d.expectedSequence.length > 0
           ? `<div class="seq"><strong>Expected:</strong> ${d.expectedSequence.map(escapeHtml).join(' → ')}</div>`
           : '';
+      // Content-derived deviations are computed from raw local-only content and
+      // can never be synced; flag them so the distinction is visible.
+      const localOnly = d.contentDerived
+        ? '<span class="badge badge-local" title="Derived from local-only content (e.g. a prompt or tool argument). Never eligible for sync.">Local only</span>'
+        : '';
       return `<article class="deviation deviation-${escapeHtml(d.type.toLowerCase())}">
         <div class="deviation-head">
           <span class="badge">${escapeHtml(d.type)}</span>
+          ${localOnly}
           <span class="muted">${escapeHtml(d.workflowName)}</span>
         </div>
         <p>${escapeHtml(d.description)}</p>
@@ -209,6 +215,7 @@ const STYLE = `
   .deviation p { margin: .3rem 0; }
   .deviation-head { display: flex; align-items: center; gap: .5rem; }
   .badge { display: inline-block; font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: .1rem .4rem; border-radius: 3px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+  .badge-local { background: var(--vscode-inputValidation-warningBackground, transparent); color: var(--vscode-editorWarning-foreground, #c90); border: 1px solid var(--vscode-editorWarning-foreground, #c90); }
   .seq { font-size: .82rem; color: var(--vscode-descriptionForeground); }
   .timeline { display: flex; flex-direction: column; }
   .row { padding: .35rem 0; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }

@@ -108,3 +108,63 @@ describe('manifest contract is stable', () => {
     expect(props['agentObservability.sqlitePath'].default).toBe('');
   });
 });
+
+/** Minimal JSON Schema view for drilling into the workflows contribution. */
+interface JsonSchema {
+  type?: string;
+  enum?: string[];
+  required?: string[];
+  additionalProperties?: boolean;
+  properties?: Record<string, JsonSchema>;
+  items?: JsonSchema;
+}
+
+describe('workflows predicate DSL schema (Phase 1-3)', () => {
+  const workflows = manifest.contributes.configuration.properties[
+    'agentObservability.workflows'
+  ] as unknown as JsonSchema;
+  /** The schema of a single workflow object (`workflows[].workflows[]`). */
+  const workflowItem = workflows.items?.properties?.workflows?.items;
+  const metadataFields = ['operation', 'agentName', 'agentMode', 'model', 'toolName', 'success'];
+
+  it('does not regress the top-level configuration keys', () => {
+    const props = manifest.contributes.configuration.properties;
+    expect(Object.keys(props).sort()).toEqual([...EXPECTED_CONFIG_KEYS].sort());
+  });
+
+  it('declares triggerPredicate + steps alongside the legacy fields, closed to extras', () => {
+    expect(workflowItem).toBeDefined();
+    const props = Object.keys(workflowItem?.properties ?? {});
+    expect(props).toContain('triggerPredicate');
+    expect(props).toContain('steps');
+    expect(props).toContain('expectedSequence');
+    expect(workflowItem?.additionalProperties).toBe(false);
+  });
+
+  it('declares the metadata predicate fields on triggerPredicate and step.predicate', () => {
+    const trigger = workflowItem?.properties?.triggerPredicate;
+    expect(trigger?.additionalProperties).toBe(false);
+    for (const f of metadataFields) {
+      expect(Object.keys(trigger?.properties ?? {})).toContain(f);
+    }
+    const predicate = workflowItem?.properties?.steps?.items?.properties?.predicate;
+    for (const f of metadataFields) {
+      expect(Object.keys(predicate?.properties ?? {})).toContain(f);
+    }
+  });
+
+  it('declares contentPredicate with an attribute enum restricted to the allow-list', () => {
+    const content = workflowItem?.properties?.steps?.items?.properties?.contentPredicate;
+    expect(content?.additionalProperties).toBe(false);
+    expect(content?.required).toContain('attribute');
+    const attrEnum = content?.properties?.attribute?.enum ?? [];
+    expect(attrEnum).toContain('copilot_chat.user_request');
+    expect(attrEnum).toContain('gen_ai.tool.call.arguments');
+    expect(attrEnum).toContain('copilot_chat.mode_name');
+    // The aggregate-only marker that is NOT a span attribute must not be offered.
+    expect(attrEnum).not.toContain('repositoryBranch');
+    for (const key of ['contains', 'matches', 'negate']) {
+      expect(Object.keys(content?.properties ?? {})).toContain(key);
+    }
+  });
+});

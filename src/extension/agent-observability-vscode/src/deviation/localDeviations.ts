@@ -1,5 +1,5 @@
 import { Interaction } from '../telemetry/models';
-import { WorkflowDeviationDetector } from './deviationDetector';
+import { ContentLookup, WorkflowDeviationDetector } from './deviationDetector';
 import { WorkflowConfig, WorkflowDefinition, WorkflowDeviation } from './models';
 
 /**
@@ -36,8 +36,16 @@ export class LocalDeviationDetector {
   /**
    * Detect deviations for a single session's interactions (used by the detail
    * panel). The repository is taken from the interactions themselves.
+   *
+   * @param contentLookup optional LOCAL-ONLY span-content provider, supplied by
+   *   the panel for workflows whose steps carry a content predicate. The raw text
+   *   it returns is evaluated on-machine only and never enters a
+   *   {@link WorkflowDeviation}. Absent → content predicates are inert.
    */
-  detectForSession(interactions: readonly Interaction[]): WorkflowDeviation[] {
+  detectForSession(
+    interactions: readonly Interaction[],
+    contentLookup?: ContentLookup,
+  ): WorkflowDeviation[] {
     if (interactions.length === 0) {
       return [];
     }
@@ -54,7 +62,7 @@ export class LocalDeviationDetector {
         workflows: [this.defaultWorkflow()],
       };
 
-    return this.detector.detectDeviations(interactions, [config]);
+    return this.detector.detectDeviations(interactions, [config], contentLookup);
   }
 
   /**

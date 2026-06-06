@@ -75,12 +75,24 @@ export class SessionDetailPanelManager {
     const detail = result.value;
 
     // Run the deviation detector over the SAFE-metadata interactions (which
-    // carry the real agent_name the sequence/missing checks need). The
-    // local-only userRequest content is never passed to the detector.
+    // carry the real agent_name the sequence/missing checks need). Workflow
+    // content predicates (if any) read raw span attributes through a LOCAL-ONLY
+    // lookup, memoized per attribute; that text is used only to compute booleans
+    // on-machine and never enters a WorkflowDeviation or any networked path.
     let found: ReturnType<LocalDeviationDetector['detectForSession']> = [];
     const interactions = this.telemetry.getSessionInteractions(sessionKey);
     if (interactions.ok) {
-      found = this.deviations.detectForSession(interactions.value);
+      const attributeCache = new Map<string, ReadonlyMap<string, string>>();
+      const contentLookup = (attribute: string): ReadonlyMap<string, string> => {
+        let values = attributeCache.get(attribute);
+        if (values === undefined) {
+          const result = this.telemetry.getSpanAttributes(sessionKey, attribute);
+          values = result.ok ? result.value : new Map<string, string>();
+          attributeCache.set(attribute, values);
+        }
+        return values;
+      };
+      found = this.deviations.detectForSession(interactions.value, contentLookup);
     }
 
     const nonce = makeNonce();

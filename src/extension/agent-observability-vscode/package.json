@@ -214,6 +214,141 @@
                       "type": "boolean",
                       "default": true,
                       "markdownDescription": "Flag sessions with a high (>50% over >=3 interactions) failure rate."
+                    },
+                    "triggerPredicate": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "markdownDescription": "Optional metadata filter scoping which interactions belong to this workflow (the local equivalent of the cloud `TriggerKqlQuery`). When set, every check runs over only the matching interactions. All fields are optional; an absent field matches any value; string fields compare case-insensitively.",
+                      "properties": {
+                        "operation": {
+                          "type": "string",
+                          "markdownDescription": "Match the interaction operation, e.g. `chat`, `execute_tool`, `execute_hook`, `invoke_agent`."
+                        },
+                        "agentName": {
+                          "type": "string",
+                          "markdownDescription": "Match the agent name."
+                        },
+                        "agentMode": {
+                          "type": "string",
+                          "markdownDescription": "Match the agent mode, e.g. `agent`, `ask`, `edit`, `default`."
+                        },
+                        "model": {
+                          "type": "string",
+                          "markdownDescription": "Match the resolved model id."
+                        },
+                        "toolName": {
+                          "type": "string",
+                          "markdownDescription": "Match the tool name; interactions without a tool never match."
+                        },
+                        "success": {
+                          "type": "boolean",
+                          "markdownDescription": "Match the success flag exactly."
+                        }
+                      }
+                    },
+                    "steps": {
+                      "type": "array",
+                      "markdownDescription": "Optional ordered, structured workflow steps. When present, predicate-based matching supersedes `expectedSequence` for the sequence and missing-step checks: each step must match at least one in-scope interaction, in order. All matching runs locally.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "markdownDescription": "Step name, shown in deviation descriptions."
+                          },
+                          "predicate": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "markdownDescription": "Metadata filter the step must match. All fields optional; an absent field matches any value; string fields compare case-insensitively.",
+                            "properties": {
+                              "operation": {
+                                "type": "string",
+                                "markdownDescription": "Match the interaction operation, e.g. `chat`, `execute_tool`, `execute_hook`, `invoke_agent`."
+                              },
+                              "agentName": {
+                                "type": "string",
+                                "markdownDescription": "Match the agent name."
+                              },
+                              "agentMode": {
+                                "type": "string",
+                                "markdownDescription": "Match the agent mode, e.g. `agent`, `ask`, `edit`, `default`."
+                              },
+                              "model": {
+                                "type": "string",
+                                "markdownDescription": "Match the resolved model id."
+                              },
+                              "toolName": {
+                                "type": "string",
+                                "markdownDescription": "Match the tool name; interactions without a tool never match."
+                              },
+                              "success": {
+                                "type": "boolean",
+                                "markdownDescription": "Match the success flag exactly."
+                              }
+                            }
+                          },
+                          "contentPredicate": {
+                            "type": "object",
+                            "required": [
+                              "attribute"
+                            ],
+                            "anyOf": [
+                              {
+                                "required": [
+                                  "contains"
+                                ]
+                              },
+                              {
+                                "required": [
+                                  "matches"
+                                ]
+                              }
+                            ],
+                            "additionalProperties": false,
+                            "markdownDescription": "**Local-only** content condition over a raw span attribute. Evaluated entirely on this machine; the matched text NEVER leaves it and any deviation it produces is marked local-only and excluded from sync by construction. Requires one of `contains` or `matches`. An unsupported `attribute`, a missing condition, or an unsafe regex causes the whole step to be skipped.",
+                            "properties": {
+                              "attribute": {
+                                "type": "string",
+                                "enum": [
+                                  "copilot_chat.user_request",
+                                  "gen_ai.input.messages",
+                                  "gen_ai.output.messages",
+                                  "gen_ai.system_instructions",
+                                  "gen_ai.tool.call.arguments",
+                                  "gen_ai.tool.call.result",
+                                  "gen_ai.tool.definitions",
+                                  "gen_ai.tool.description",
+                                  "copilot_chat.reasoning_content",
+                                  "copilot_chat.hook_input",
+                                  "copilot_chat.hook_output",
+                                  "copilot_chat.hook_command",
+                                  "copilot_chat.request.options",
+                                  "copilot_chat.repo.head_branch_name",
+                                  "copilot_chat.repo.head_commit_hash",
+                                  "copilot_chat.mode_name"
+                                ],
+                                "markdownDescription": "Raw `span_attributes` key to inspect. Restricted to the forbidden-to-sync local-only content set (plus `copilot_chat.mode_name`). Any other key is rejected and the step is skipped."
+                              },
+                              "contains": {
+                                "type": "string",
+                                "markdownDescription": "Case-insensitive substring to look for. Preferred over `matches` for simple checks."
+                              },
+                              "matches": {
+                                "type": "string",
+                                "markdownDescription": "Regex pattern to test against the attribute value. A conservative ReDoS-safe subset is enforced: regex alternation `|` under a repetition (e.g. `(a|b)+`) and other catastrophic-backtracking shapes are rejected and the step is skipped — use a character class such as `[ab]+` instead. Regex matching runs only over the first 1,000 characters of the value (vs 10,000 for `contains`) to bound backtracking cost. Prefer `contains` for simple checks."
+                              },
+                              "negate": {
+                                "type": "boolean",
+                                "markdownDescription": "Invert the match (e.g. assert the content does NOT contain the value)."
+                              }
+                            }
+                          }
+                        }
+                      }
                     }
                   }
                 }

@@ -12,6 +12,7 @@ shared with an organization dashboard.
 | Activity Bar container, three views, commands, settings | Shipped |
 | Read-only local SQLite (`agent-traces.db`) ingestion (snapshot + read-only connection) | Shipped |
 | Local session detail timeline + local workflow deviation detection | Shipped |
+| Workflow predicate DSL (metadata + local-only content predicates) | Shipped |
 | Consent toggle + organization API key in SecretStorage (opt-in, off by default) | Shipped |
 | Aggregate engine (30-min time bins, pseudonymous developer id, idempotent batch/row ids) | Shipped |
 | Upload to the dashboard ingestion API with retry/backoff | Shipped |
@@ -45,6 +46,76 @@ All under the **Agent Observability** category:
 | `agentObservability.sqlitePath` | `""` | Override path to `agent-traces.db` (blank = auto-detect). |
 | `agentObservability.deviation.maxSessionMinutes` | `60` | Local deviation detector: max expected session duration. |
 | `agentObservability.workflows` | `[]` | Optional per-repository expected workflows for the local deviation detector. Evaluated on-machine; never uploaded. |
+
+## Workflow predicate DSL
+
+`agentObservability.workflows` lets you describe the agent workflows you expect
+per repository so the **local** deviation detector can flag sequence, missing,
+timeout, and failure-rate anomalies. There are two tiers of matching, and both
+run entirely on your machine.
+
+**Tier 1 — metadata predicates (safe).** A `StepPredicate` filters the safe
+interaction metadata: `operation`, `agentName`, `agentMode`, `model`,
+`toolName`, `success`. Every field is optional (absent = match any); strings
+compare case-insensitively. Use them in `steps[].predicate` and in an optional
+`triggerPredicate` that scopes *which* interactions belong to the workflow (the
+local analog of the cloud dashboard's `TriggerKqlQuery`). The legacy
+`expectedSequence` (an ordered list of agent names) still works and is the
+degenerate case of `steps`.
+
+**Tier 2 — content predicates (local-only).** A step may add a
+`contentPredicate` that inspects a raw `span_attributes` value (e.g. the user
+prompt or a tool's arguments) via `contains` (case-insensitive substring),
+`matches` (regex), and `negate`. The `attribute` is restricted to the
+forbidden-to-sync content keys (plus `copilot_chat.mode_name`); any other key is
+rejected and the step is skipped. `matches` is held to a conservative,
+ReDoS-safe regex subset: catastrophic-backtracking shapes — including any regex
+alternation `|` under a repetition such as `(a|b)+` — are rejected (use a
+character class like `[ab]+` instead), and regex matching runs only over the
+first 1,000 characters of the value (vs 10,000 for `contains`) to bound
+backtracking cost. Prefer `contains` for simple checks.
+
+```jsonc
+"agentObservability.workflows": [
+  {
+    "repository": "https://github.com/org/repo",
+    "workflows": [
+      {
+        "name": "feature-development",
+        "triggerPredicate": { "agentMode": "agent" },
+        "steps": [
+          { "name": "plan",   "predicate": { "agentName": "planner", "operation": "chat" } },
+          { "name": "code",   "predicate": { "agentName": "coder", "toolName": "edit_file" } },
+          {
+            "name": "no-secrets-in-prompt",
+            "predicate": { "operation": "chat" },
+            "contentPredicate": { "attribute": "copilot_chat.user_request", "contains": "AKIA", "negate": true }
+          }
+        ],
+        "maxDurationMinutes": 45
+      }
+    ]
+  }
+]
+```
+
+### Privacy contract for the DSL
+
+The privacy boundary is what makes the two tiers different:
+
+- **Metadata predicates** read only the safe `Interaction` projection — the same
+  non-sensitive fields the cloud aggregate already permits.
+- **Content predicates** read raw content through a scoped, **local-only**
+  database path. The matched text is used to compute a boolean and is **never**
+  copied into a deviation: a content-condition failure is described only as
+  `step '<name>' content condition not met`, naming the step, never the value.
+- Any deviation a content predicate contributes to is flagged
+  `contentDerived` and rendered with a **Local only** badge in the session
+  detail panel. These can **never** be synced — the cloud aggregate path
+  (`getAggregationRows` → `buildBatch`) is a separate, content-free read, and
+  the aggregate batch schema has no slot for a deviation. Deviations never cross
+  the network at all today; the flag makes that boundary explicit and
+  future-proof. See `docs/privacy-validation.md` and `aggregate/privacy.test.ts`.
 
 ## Privacy
 
