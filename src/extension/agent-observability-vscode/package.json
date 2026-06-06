@@ -355,6 +355,41 @@
               }
             }
           }
+        },
+        "agentObservability.pricing.modelRates": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Optional per-model rates used ONLY to show an estimated cost on the local session-detail panel. GitHub Copilot does not record or bill per token, so any figure shown is an **estimate** = tokens × your configured rate; models without a rate show `n/a`. Rates stay entirely local — nothing about cost or tokens is ever uploaded. Keys are model ids (the dotted request form and dashed response form, and dated `-YYYY-MM-DD` suffixes, are matched to a single key). When omitted, `cachedInputPerMTok` defaults to 0.1× `inputPerMTok` and `reasoningPerMTok` defaults to `outputPerMTok`.",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "inputPerMTok",
+              "outputPerMTok"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "inputPerMTok": {
+                "type": "number",
+                "minimum": 0,
+                "markdownDescription": "USD per 1,000,000 uncached input tokens."
+              },
+              "outputPerMTok": {
+                "type": "number",
+                "minimum": 0,
+                "markdownDescription": "USD per 1,000,000 output tokens."
+              },
+              "cachedInputPerMTok": {
+                "type": "number",
+                "minimum": 0,
+                "markdownDescription": "USD per 1,000,000 cached input tokens. Defaults to 0.1× `inputPerMTok` when omitted."
+              },
+              "reasoningPerMTok": {
+                "type": "number",
+                "minimum": 0,
+                "markdownDescription": "USD per 1,000,000 reasoning tokens. Defaults to `outputPerMTok` when omitted."
+              }
+            }
+          }
         }
       }
     }
@@ -368,7 +403,6 @@
     "package": "vsce package"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.90.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
@@ -381,6 +415,6 @@
     "vitest": "^2.0.0"
   },
   "dependencies": {
-    "better-sqlite3": "^12.10.0"
+    "node-sqlite3-wasm": "^0.8.57"
   }
 }

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import Database from 'better-sqlite3';
+import { Database } from 'node-sqlite3-wasm';
 import { TelemetryService, ServiceConfig } from './telemetryService';
 import { copyFixtureToTemp } from './testSupport';
 

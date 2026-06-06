@@ -1,4 +1,4 @@
-import type { Database } from 'better-sqlite3';
+import type { Database } from 'node-sqlite3-wasm';
 import { sanitizeRepositoryUrl, UNKNOWN_REPOSITORY } from './repositoryUrl';
 
 /**
@@ -51,7 +51,7 @@ export class RepositoryResolver {
 
   /** Build the resolver by reading the sparse repo attributes from `db`. */
   static fromDatabase(db: Database): RepositoryResolver {
-    const rows = db.prepare(REPO_BY_SESSION_SQL).all() as RepoRow[];
+    const rows = db.all(REPO_BY_SESSION_SQL) as unknown as RepoRow[];
     const map = new Map<string, string>();
     for (const row of rows) {
       if (row.session_id === null) {

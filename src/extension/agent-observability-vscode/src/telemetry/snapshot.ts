@@ -12,7 +12,7 @@ import * as fs from 'node:fs';
  *
  *   1. Copy `*.db` plus its `*.db-wal` and `*.db-shm` sidecars (when present)
  *      to a private temp directory, as close together in time as possible.
- *   2. Callers open the COPY read-only (better-sqlite3 { readonly: true }).
+ *   2. Callers open the COPY read-only (node-sqlite3-wasm { readOnly: true }).
  *      SQLite replays the copied WAL on first open, so the reader sees the
  *      latest committed state.
  *   3. {@link ReadonlySnapshot.dispose} deletes the temp copy.

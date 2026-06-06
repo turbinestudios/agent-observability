@@ -122,13 +122,40 @@ export interface SessionTimelineEntry {
 }
 
 /**
+ * Per-model token rollup within a single session, used by the LOCAL detail panel
+ * to show a "cost & tokens by model" breakdown.
+ *
+ * Accumulated over the session's LLM-operation spans (`chat` and `invoke_agent`)
+ * — the only operations that carry a model and token counts; tool/hook spans are
+ * excluded so a session never grows a spurious all-zero `unknown` bucket. The
+ * {@link model} is the RAW resolved id (response_model, else request_model, else
+ * `unknown`); divergent forms of the same model (e.g. the dotted request id vs
+ * the dashed response id) intentionally remain separate rows here and are only
+ * unified for pricing via {@link ../telemetry/pricing.normalizeModelId}.
+ */
+export interface SessionModelUsage {
+  /** Resolved model id (response_model, else request_model, else `unknown`). */
+  model: string;
+  /** LLM spans (`chat` + `invoke_agent`) attributed to this model. */
+  llmCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  /** `spans.reasoning_tokens` when the optional column is present, else 0. */
+  reasoningTokens: number;
+}
+
+/**
  * A single session's full drill-down for the LOCAL detail panel: the safe
  * {@link SessionSummary} header plus the chronological {@link SessionTimelineEntry}
- * timeline (which may include local-only raw content).
+ * timeline (which may include local-only raw content) and a per-model usage
+ * rollup ({@link SessionModelUsage}) for the cost/tokens breakdown.
  */
 export interface SessionDetail {
   summary: SessionSummary;
   timeline: SessionTimelineEntry[];
+  /** Per-model token rollup (LLM ops only), sorted by total tokens desc. */
+  modelUsage: SessionModelUsage[];
 }
 
 /** Per-repository rollup used for the two-level Sessions tree. */

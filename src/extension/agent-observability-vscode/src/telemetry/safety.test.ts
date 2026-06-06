@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import Database from 'better-sqlite3';
+import { Database } from 'node-sqlite3-wasm';
 import * as fs from 'node:fs';
 import { createReadonlySnapshot } from './snapshot';
 import { TelemetryDatabase } from './database';
@@ -14,12 +14,12 @@ describe('read-only safety', () => {
   it('opens the snapshot read-only — writes throw', () => {
     const copy = copyFixtureToTemp();
     try {
-      const raw = new Database(copy.dbPath, { readonly: true, fileMustExist: true });
+      const raw = new Database(copy.dbPath, { readOnly: true, fileMustExist: true });
       try {
         // A write against a readonly connection must throw.
-        expect(() => raw.prepare('DELETE FROM spans').run()).toThrow();
+        expect(() => raw.run('DELETE FROM spans')).toThrow();
         expect(() =>
-          raw.prepare("INSERT INTO spans (span_id, trace_id, name, start_time_ms, end_time_ms, status_code) VALUES ('x','x','x',0,0,0)").run(),
+          raw.run("INSERT INTO spans (span_id, trace_id, name, start_time_ms, end_time_ms, status_code) VALUES ('x','x','x',0,0,0)"),
         ).toThrow();
       } finally {
         raw.close();

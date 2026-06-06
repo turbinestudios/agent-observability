@@ -25,10 +25,13 @@ const options = {
   platform: 'node',
   format: 'cjs',
   target: 'node18',
-  // `vscode` is provided by the host at runtime; `better-sqlite3` is a native
-  // module (loads a prebuilt .node binary) and must NOT be bundled — it is
-  // resolved from node_modules at runtime and shipped in the .vsix.
-  external: ['vscode', 'better-sqlite3'],
+  // `vscode` is provided by the host at runtime. `node-sqlite3-wasm` is a pure
+  // WebAssembly SQLite build (no native .node binary, so no Node/Electron ABI
+  // mismatch) but it locates its `.wasm` sidecar relative to its own
+  // `__dirname`; bundling the JS into dist/ would break that lookup. So it is
+  // marked external, resolved from node_modules at runtime, and shipped in the
+  // .vsix (see .vscodeignore re-includes).
+  external: ['vscode', 'node-sqlite3-wasm'],
   sourcemap: !production,
   minify: production,
   logLevel: 'info',

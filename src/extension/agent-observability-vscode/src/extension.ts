@@ -53,7 +53,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Local-only workflow deviation detection for the session-detail webview.
   const deviations = new LocalDeviationDetector(config);
-  const detailPanels = new SessionDetailPanelManager(telemetry, deviations);
+  const detailPanels = new SessionDetailPanelManager(telemetry, deviations, config);
   sessionDetailPanels = detailPanels;
 
   // Phase 7 sync wiring. The state store persists the watermark + run history;

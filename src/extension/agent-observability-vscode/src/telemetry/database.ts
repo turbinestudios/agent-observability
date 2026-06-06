@@ -1,5 +1,5 @@
-import Database from 'better-sqlite3';
-import type { Database as DatabaseType } from 'better-sqlite3';
+import { Database } from 'node-sqlite3-wasm';
+import type { BindValues } from 'node-sqlite3-wasm';
 import { RepositoryResolver } from './repositoryResolver';
 import { AggregationRow } from '../aggregate/aggregator';
 import { mapToolName } from '../aggregate/builtinTools';
@@ -9,6 +9,7 @@ import {
   RepositorySummary,
   SessionSummary,
   SessionDetail,
+  SessionModelUsage,
   SessionTimelineEntry,
   AgentMode,
   mapAgentMode,
@@ -43,23 +44,40 @@ const DEFAULT_AGENT = 'copilot';
  * repository.
  */
 export class TelemetryDatabase {
-  private readonly db: DatabaseType;
+  private readonly db: Database;
   private resolverCache: RepositoryResolver | undefined;
   private spansColumnsCache: ReadonlySet<string> | undefined;
 
-  private constructor(db: DatabaseType) {
+  private constructor(db: Database) {
     this.db = db;
+  }
+
+  /**
+   * Run a single-row query via the auto-finalizing convenience method and
+   * normalize node-sqlite3-wasm's `null` (no row) to `undefined` so callers can
+   * keep using `=== undefined` checks. `db.get`/`db.all` finalize the internal
+   * prepared statement for us — unlike a raw `db.prepare(...)`, which would leak
+   * WASM memory since `db.close()` does not finalize pending statements.
+   */
+  private getRow<T>(sql: string, params?: BindValues): T | undefined {
+    const row = this.db.get(sql, params);
+    return row === null ? undefined : (row as unknown as T);
+  }
+
+  /** Run a multi-row query via the auto-finalizing convenience method. */
+  private allRows<T>(sql: string, params?: BindValues): T[] {
+    return this.db.all(sql, params) as unknown as T[];
   }
 
   /**
    * Open the snapshot copy read-only and validate its schema.
    *
    * @throws SchemaMismatchError when the file is not a supported telemetry DB.
-   * @throws the underlying better-sqlite3 error (e.g. ENOENT) when the file is
+   * @throws the underlying node-sqlite3-wasm error (e.g. ENOENT) when the file is
    *   missing or unreadable — the service layer classifies these.
    */
   static open(snapshotDbPath: string): TelemetryDatabase {
-    const db = new Database(snapshotDbPath, { readonly: true, fileMustExist: true });
+    const db = new Database(snapshotDbPath, { readOnly: true, fileMustExist: true });
     const instance = new TelemetryDatabase(db);
     try {
       instance.validateSchema();
@@ -70,7 +88,7 @@ export class TelemetryDatabase {
     return instance;
   }
 
-  /** Close the underlying connection. Idempotent-safe via better-sqlite3. */
+  /** Close the underlying connection. Guarded so a double close never throws. */
   close(): void {
     try {
       this.db.close();
@@ -91,9 +109,7 @@ export class TelemetryDatabase {
     // schema_version table + value.
     let version: number;
     try {
-      const row = this.db
-        .prepare('SELECT version FROM schema_version LIMIT 1')
-        .get() as { version: number } | undefined;
+      const row = this.getRow<{ version: number }>('SELECT version FROM schema_version LIMIT 1');
       if (row === undefined || typeof row.version !== 'number') {
         throw new SchemaMismatchError(
           'Telemetry database has no schema_version row.',
@@ -142,9 +158,7 @@ export class TelemetryDatabase {
       'tool_name',
     ];
     const columns = new Set(
-      (this.db.prepare("PRAGMA table_info('spans')").all() as Array<{ name: string }>).map(
-        (c) => c.name,
-      ),
+      this.allRows<{ name: string }>("PRAGMA table_info('spans')").map((c) => c.name),
     );
     const missing = required.filter((c) => !columns.has(c));
     if (missing.length > 0) {
@@ -157,9 +171,10 @@ export class TelemetryDatabase {
 
   /** Assert a table/view named `name` of `kind` exists in sqlite_master. */
   private assertObject(name: string, kind: 'table' | 'view'): void {
-    const row = this.db
-      .prepare('SELECT type FROM sqlite_master WHERE name = ? LIMIT 1')
-      .get(name) as { type: string } | undefined;
+    const row = this.getRow<{ type: string }>(
+      'SELECT type FROM sqlite_master WHERE name = ? LIMIT 1',
+      [name],
+    );
     if (row === undefined) {
       throw new SchemaMismatchError(
         `Telemetry database is missing the '${name}' ${kind}.`,
@@ -190,9 +205,7 @@ export class TelemetryDatabase {
   private spansColumns(): ReadonlySet<string> {
     if (this.spansColumnsCache === undefined) {
       this.spansColumnsCache = new Set(
-        (this.db.prepare("PRAGMA table_info('spans')").all() as Array<{ name: string }>).map(
-          (c) => c.name,
-        ),
+        this.allRows<{ name: string }>("PRAGMA table_info('spans')").map((c) => c.name),
       );
     }
     return this.spansColumnsCache;
@@ -207,9 +220,16 @@ export class TelemetryDatabase {
     const where = sinceMs !== undefined ? 'WHERE start_time_ms >= ?' : '';
     const params = sinceMs !== undefined ? [sinceMs] : [];
 
-    const agg = this.db
-      .prepare(
-        `SELECT
+    const agg = this.getRow<{
+      total_interactions: number;
+      total_sessions: number;
+      avg_duration_ms: number | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      cached_tokens: number | null;
+      error_count: number | null;
+    }>(
+      `SELECT
            COUNT(*) AS total_interactions,
            COUNT(DISTINCT COALESCE(conversation_id, chat_session_id)) AS total_sessions,
            AVG(end_time_ms - start_time_ms) AS avg_duration_ms,
@@ -218,24 +238,15 @@ export class TelemetryDatabase {
            SUM(CASE WHEN operation_name = 'chat' THEN COALESCE(cached_tokens, 0) ELSE 0 END) AS cached_tokens,
            SUM(CASE WHEN status_code = 2 THEN 1 ELSE 0 END) AS error_count
          FROM spans ${where}`,
-      )
-      .get(...params) as {
-      total_interactions: number;
-      total_sessions: number;
-      avg_duration_ms: number | null;
-      input_tokens: number | null;
-      output_tokens: number | null;
-      cached_tokens: number | null;
-      error_count: number | null;
-    };
+      params,
+    )!;
 
     // Distinct models from the typed columns (safe metadata).
-    const modelRows = this.db
-      .prepare(
-        `SELECT DISTINCT COALESCE(response_model, request_model) AS model
+    const modelRows = this.allRows<{ model: string | null }>(
+      `SELECT DISTINCT COALESCE(response_model, request_model) AS model
          FROM spans ${where}`,
-      )
-      .all(...params) as Array<{ model: string | null }>;
+      params,
+    );
     const models = new Set<string>();
     for (const r of modelRows) {
       if (r.model !== null && r.model.length > 0) {
@@ -244,12 +255,11 @@ export class TelemetryDatabase {
     }
 
     // Distinct sanitized repositories across the session keys in range.
-    const sessionRows = this.db
-      .prepare(
-        `SELECT DISTINCT COALESCE(conversation_id, chat_session_id) AS sk
+    const sessionRows = this.allRows<{ sk: string | null }>(
+      `SELECT DISTINCT COALESCE(conversation_id, chat_session_id) AS sk
          FROM spans ${where}`,
-      )
-      .all(...params) as Array<{ sk: string | null }>;
+      params,
+    );
     const resolver = this.resolver();
     const repositories = new Set<string>();
     for (const r of sessionRows) {
@@ -286,16 +296,14 @@ export class TelemetryDatabase {
     }
     const byRepo = new Map<string, Acc>();
 
-    const rows = this.db
-      .prepare(
-        `SELECT session_id, ended_at, span_count
-         FROM sessions`,
-      )
-      .all() as Array<{
+    const rows = this.allRows<{
       session_id: string;
       ended_at: number;
       span_count: number;
-    }>;
+    }>(
+      `SELECT session_id, ended_at, span_count
+         FROM sessions`,
+    );
 
     for (const row of rows) {
       const repository = resolver.resolve(row.session_id);
@@ -339,15 +347,7 @@ export class TelemetryDatabase {
   listSessions(repository?: string, limit?: number): SessionSummary[] {
     const resolver = this.resolver();
 
-    const rows = this.db
-      .prepare(
-        `SELECT session_id, agent_name, started_at, ended_at, duration_ms,
-                span_count, llm_calls, tool_calls,
-                total_input_tokens, total_output_tokens, total_cached_tokens
-         FROM sessions
-         ORDER BY started_at DESC`,
-      )
-      .all() as Array<{
+    const rows = this.allRows<{
       session_id: string;
       agent_name: string | null;
       started_at: number;
@@ -359,7 +359,13 @@ export class TelemetryDatabase {
       total_input_tokens: number | null;
       total_output_tokens: number | null;
       total_cached_tokens: number | null;
-    }>;
+    }>(
+      `SELECT session_id, agent_name, started_at, ended_at, duration_ms,
+                span_count, llm_calls, tool_calls,
+                total_input_tokens, total_output_tokens, total_cached_tokens
+         FROM sessions
+         ORDER BY started_at DESC`,
+    );
 
     // Agent modes + representative model per session (consistent resolution).
     const modesBySession = this.agentModesBySession();
@@ -402,16 +408,7 @@ export class TelemetryDatabase {
     const resolver = this.resolver();
     const repository = resolver.resolve(sessionKey);
 
-    const rows = this.db
-      .prepare(
-        `SELECT span_id, trace_id, start_time_ms, end_time_ms, status_code,
-                operation_name, agent_name, request_model, response_model,
-                tool_name, input_tokens, output_tokens, cached_tokens
-         FROM spans
-         WHERE COALESCE(conversation_id, chat_session_id) = ?
-         ORDER BY start_time_ms ASC, span_id ASC`,
-      )
-      .all(sessionKey) as Array<{
+    const rows = this.allRows<{
       span_id: string;
       trace_id: string;
       start_time_ms: number;
@@ -425,7 +422,15 @@ export class TelemetryDatabase {
       input_tokens: number | null;
       output_tokens: number | null;
       cached_tokens: number | null;
-    }>;
+    }>(
+      `SELECT span_id, trace_id, start_time_ms, end_time_ms, status_code,
+                operation_name, agent_name, request_model, response_model,
+                tool_name, input_tokens, output_tokens, cached_tokens
+         FROM spans
+         WHERE COALESCE(conversation_id, chat_session_id) = ?
+         ORDER BY start_time_ms ASC, span_id ASC`,
+      [sessionKey],
+    );
 
     // Agent mode for this session (one mapped value; first distinct mode).
     const mode = this.agentModesBySession().get(sessionKey)?.[0] ?? 'default';
@@ -486,17 +491,7 @@ export class TelemetryDatabase {
       ? 'reasoning_tokens'
       : 'NULL AS reasoning_tokens';
 
-    const rows = this.db
-      .prepare(
-        `SELECT COALESCE(conversation_id, chat_session_id) AS session_key,
-                start_time_ms, end_time_ms, status_code, operation_name,
-                response_model, request_model, tool_name,
-                input_tokens, output_tokens, cached_tokens, ${reasoningCol}
-         FROM spans
-         ${where}
-         ORDER BY start_time_ms ASC, span_id ASC`,
-      )
-      .all(...params) as Array<{
+    const rows = this.allRows<{
       session_key: string | null;
       start_time_ms: number;
       end_time_ms: number;
@@ -509,7 +504,16 @@ export class TelemetryDatabase {
       output_tokens: number | null;
       cached_tokens: number | null;
       reasoning_tokens: number | null;
-    }>;
+    }>(
+      `SELECT COALESCE(conversation_id, chat_session_id) AS session_key,
+                start_time_ms, end_time_ms, status_code, operation_name,
+                response_model, request_model, tool_name,
+                input_tokens, output_tokens, cached_tokens, ${reasoningCol}
+         FROM spans
+         ${where}
+         ORDER BY start_time_ms ASC, span_id ASC`,
+      params,
+    );
 
     const resolver = this.resolver();
     const modesBySession = this.agentModesBySession();
@@ -557,16 +561,14 @@ export class TelemetryDatabase {
     const resolver = this.resolver();
     const repository = resolver.resolve(sessionKey);
 
-    const rows = this.db
-      .prepare(
-        `SELECT span_id, start_time_ms, end_time_ms, status_code,
-                operation_name, request_model, response_model, tool_name,
-                input_tokens, output_tokens, cached_tokens
-         FROM spans
-         WHERE COALESCE(conversation_id, chat_session_id) = ?
-         ORDER BY start_time_ms ASC, span_id ASC`,
-      )
-      .all(sessionKey) as Array<{
+    // reasoning_tokens is optional/provider-specific and not a required column;
+    // select it only when present so a v1 DB that omits it still renders (same
+    // pattern as getAggregationRows).
+    const reasoningCol = this.spansColumns().has('reasoning_tokens')
+      ? 'reasoning_tokens'
+      : 'NULL AS reasoning_tokens';
+
+    const rows = this.allRows<{
       span_id: string;
       start_time_ms: number;
       end_time_ms: number;
@@ -578,7 +580,16 @@ export class TelemetryDatabase {
       input_tokens: number | null;
       output_tokens: number | null;
       cached_tokens: number | null;
-    }>;
+      reasoning_tokens: number | null;
+    }>(
+      `SELECT span_id, start_time_ms, end_time_ms, status_code,
+                operation_name, request_model, response_model, tool_name,
+                input_tokens, output_tokens, cached_tokens, ${reasoningCol}
+         FROM spans
+         WHERE COALESCE(conversation_id, chat_session_id) = ?
+         ORDER BY start_time_ms ASC, span_id ASC`,
+      [sessionKey],
+    );
 
     if (rows.length === 0) {
       return undefined;
@@ -596,16 +607,50 @@ export class TelemetryDatabase {
     let outputTokens = 0;
     let cachedTokens = 0;
 
+    // Per-model rollup, keyed by resolved model id. Accumulated only for the
+    // LLM operations that actually carry a model and token counts: `chat` AND
+    // `invoke_agent` (Copilot agent-mode sessions emit their model/tokens on
+    // invoke_agent spans, not chat). Restricting to these avoids a spurious
+    // all-zero `unknown` bucket from tool/hook spans while keeping the rollup's
+    // token sums equal to the header totals (tool/hook spans carry no tokens).
+    const usageByModel = new Map<string, SessionModelUsage>();
+
     const timeline: SessionTimelineEntry[] = rows.map((row) => {
       const operation = row.operation_name ?? 'chat';
+      const model = resolveModel(row.response_model, row.request_model);
+      const rowInput = row.input_tokens ?? 0;
+      const rowOutput = row.output_tokens ?? 0;
+      const rowCached = row.cached_tokens ?? 0;
+      const rowReasoning = row.reasoning_tokens ?? 0;
+
       if (operation === 'chat') {
         llmCalls += 1;
       } else if (operation === 'execute_tool') {
         toolCalls += 1;
       }
-      inputTokens += row.input_tokens ?? 0;
-      outputTokens += row.output_tokens ?? 0;
-      cachedTokens += row.cached_tokens ?? 0;
+      if (operation === 'chat' || operation === 'invoke_agent') {
+        let usage = usageByModel.get(model);
+        if (usage === undefined) {
+          usage = {
+            model,
+            llmCalls: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedTokens: 0,
+            reasoningTokens: 0,
+          };
+          usageByModel.set(model, usage);
+        }
+        usage.llmCalls += 1;
+        usage.inputTokens += rowInput;
+        usage.outputTokens += rowOutput;
+        usage.cachedTokens += rowCached;
+        usage.reasoningTokens += rowReasoning;
+      }
+
+      inputTokens += rowInput;
+      outputTokens += rowOutput;
+      cachedTokens += rowCached;
       if (row.start_time_ms < startedAtMs) {
         startedAtMs = row.start_time_ms;
       }
@@ -621,13 +666,21 @@ export class TelemetryDatabase {
         timestampMs: row.start_time_ms,
         operation,
         agentMode: mode,
-        model: resolveModel(row.response_model, row.request_model),
+        model,
         toolName:
           row.tool_name !== null && row.tool_name.length > 0 ? row.tool_name : undefined,
         durationMs: row.end_time_ms - row.start_time_ms,
         success: statusToSuccess(row.status_code),
         userRequest,
       };
+    });
+
+    // Sort by total tokens (input + output) desc, then model id asc for a stable
+    // order when token counts tie.
+    const modelUsage = [...usageByModel.values()].sort((a, b) => {
+      const byTokens =
+        b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens);
+      return byTokens !== 0 ? byTokens : a.model.localeCompare(b.model);
     });
 
     const summary: SessionSummary = {
@@ -646,7 +699,7 @@ export class TelemetryDatabase {
       agentModes: this.agentModesBySession().get(sessionKey) ?? ['default'],
     };
 
-    return { summary, timeline };
+    return { summary, timeline, modelUsage };
   }
 
   /**
@@ -664,15 +717,14 @@ export class TelemetryDatabase {
    * not scoped to chat spans, since content predicates may target tool/hook spans.
    */
   getAttributesBySpan(sessionKey: string, attributeKey: string): Map<string, string> {
-    const rows = this.db
-      .prepare(
-        `SELECT a.span_id AS span_id, a.value AS value
+    const rows = this.allRows<{ span_id: string; value: string | null }>(
+      `SELECT a.span_id AS span_id, a.value AS value
          FROM span_attributes a
          JOIN spans s ON s.span_id = a.span_id
          WHERE a.key = ?
            AND COALESCE(s.conversation_id, s.chat_session_id) = ?`,
-      )
-      .all(attributeKey, sessionKey) as Array<{ span_id: string; value: string | null }>;
+      [attributeKey, sessionKey],
+    );
 
     const map = new Map<string, string>();
     for (const row of rows) {
@@ -690,16 +742,15 @@ export class TelemetryDatabase {
    * the value is surfaced exactly where the detail view shows a user prompt.
    */
   private userRequestsBySpan(sessionKey: string): Map<string, string> {
-    const rows = this.db
-      .prepare(
-        `SELECT a.span_id AS span_id, a.value AS value
+    const rows = this.allRows<{ span_id: string; value: string | null }>(
+      `SELECT a.span_id AS span_id, a.value AS value
          FROM span_attributes a
          JOIN spans s ON s.span_id = a.span_id
          WHERE a.key = 'copilot_chat.user_request'
            AND s.operation_name = 'chat'
            AND COALESCE(s.conversation_id, s.chat_session_id) = ?`,
-      )
-      .all(sessionKey) as Array<{ span_id: string; value: string | null }>;
+      [sessionKey],
+    );
 
     const map = new Map<string, string>();
     for (const row of rows) {
@@ -719,16 +770,18 @@ export class TelemetryDatabase {
    * carry no model are absent (callers default to 'unknown').
    */
   private modelBySession(): Map<string, string> {
-    const rows = this.db
-      .prepare(
-        `SELECT COALESCE(conversation_id, chat_session_id) AS sk,
+    const rows = this.allRows<{
+      sk: string;
+      response_model: string | null;
+      request_model: string | null;
+    }>(
+      `SELECT COALESCE(conversation_id, chat_session_id) AS sk,
                 response_model, request_model
          FROM spans
          WHERE COALESCE(conversation_id, chat_session_id) IS NOT NULL
            AND (response_model IS NOT NULL OR request_model IS NOT NULL)
          ORDER BY start_time_ms ASC, span_id ASC`,
-      )
-      .all() as Array<{ sk: string; response_model: string | null; request_model: string | null }>;
+    );
 
     // Iterating in ascending time means the last write per session wins (latest).
     const map = new Map<string, string>();
@@ -747,17 +800,15 @@ export class TelemetryDatabase {
    * absent from the map (callers default to `['default']`).
    */
   private agentModesBySession(): Map<string, AgentMode[]> {
-    const rows = this.db
-      .prepare(
-        `SELECT DISTINCT COALESCE(s.conversation_id, s.chat_session_id) AS session_id,
+    const rows = this.allRows<{ session_id: string; mode_name: string | null }>(
+      `SELECT DISTINCT COALESCE(s.conversation_id, s.chat_session_id) AS session_id,
                 a.value AS mode_name
          FROM spans s
          JOIN span_attributes a
            ON a.span_id = s.span_id
           AND a.key = 'copilot_chat.mode_name'
          WHERE COALESCE(s.conversation_id, s.chat_session_id) IS NOT NULL`,
-      )
-      .all() as Array<{ session_id: string; mode_name: string | null }>;
+    );
 
     const map = new Map<string, Set<AgentMode>>();
     for (const row of rows) {

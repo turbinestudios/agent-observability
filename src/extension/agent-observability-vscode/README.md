@@ -46,6 +46,7 @@ All under the **Agent Observability** category:
 | `agentObservability.sqlitePath` | `""` | Override path to `agent-traces.db` (blank = auto-detect). |
 | `agentObservability.deviation.maxSessionMinutes` | `60` | Local deviation detector: max expected session duration. |
 | `agentObservability.workflows` | `[]` | Optional per-repository expected workflows for the local deviation detector. Evaluated on-machine; never uploaded. |
+| `agentObservability.pricing.modelRates` | `{}` | Per-model USD rates (per 1M tokens) used to show an **estimated** cost on the session detail panel. Local only; never uploaded. See [Model pricing](#model-pricing--cost-estimates). |
 
 ## Workflow predicate DSL
 
@@ -117,6 +118,70 @@ The privacy boundary is what makes the two tiers different:
   the network at all today; the flag makes that boundary explicit and
   future-proof. See `docs/privacy-validation.md` and `aggregate/privacy.test.ts`.
 
+## Model pricing & cost estimates
+
+Click a session in the **Sessions** view to open its detail panel. Alongside the
+token totals it shows an **Estimated cost** and a **Cost & tokens by model**
+table.
+
+> **It is always an estimate.** GitHub Copilot does not record or bill per token,
+> so there is no authoritative cost in the local data. The figure shown is purely
+> `tokens × a rate you configure`, and every cost is labelled `(est.)`. There is
+> **no built-in rate table**: until you set rates, every cost reads `n/a`.
+
+Configure rates with `agentObservability.pricing.modelRates` — an object keyed by
+model id, where each value gives the **USD price per 1,000,000 tokens**:
+
+```jsonc
+// Example rates only — substitute your provider's actual numbers.
+"agentObservability.pricing.modelRates": {
+  "claude-opus-4-6": {
+    "inputPerMTok": 15,        // required: USD / 1M uncached input tokens
+    "outputPerMTok": 75,       // required: USD / 1M output tokens
+    "cachedInputPerMTok": 1.5, // optional: USD / 1M cached input tokens
+    "reasoningPerMTok": 75     // optional: USD / 1M reasoning tokens
+  },
+  "claude-sonnet-4-6": {
+    "inputPerMTok": 3,
+    "outputPerMTok": 15
+  },
+  "gpt-4o-mini": {
+    "inputPerMTok": 0.15,
+    "outputPerMTok": 0.6
+  }
+}
+```
+
+**Required vs optional fields.** `inputPerMTok` and `outputPerMTok` are required;
+an entry missing either is ignored. When omitted, `cachedInputPerMTok` defaults to
+`0.1 × inputPerMTok` (a cached-read discount) and `reasoningPerMTok` defaults to
+`outputPerMTok`.
+
+**How cost is computed** (per model, then summed):
+
+- `uncached input = max(0, input − cached)`, billed at `inputPerMTok`;
+- `cached` billed at `cachedInputPerMTok`;
+- `output` billed at `outputPerMTok`;
+- `reasoning` billed at `reasoningPerMTok`.
+
+**Finding the model id.** Use the id shown in the session detail's **Model**
+column / per-model table. You only need one key per model: the request side
+records dotted versions (`claude-opus-4.6`) and the response side dashed
+(`claude-opus-4-6`), and dated suffixes like `gpt-4o-mini-2024-07-18` are
+trimmed — all of these are matched case-insensitively to a single key, so
+`"claude-opus-4-6"` covers every form.
+
+**What you'll see.**
+
+- A model with no configured rate → `n/a` (never `$0`).
+- A configured rate applied to zero tokens → a real `$0.0000 (est.)`.
+- A session mixing priced and unpriced models → the priced subtotal followed by a
+  `+ n/a` marker (e.g. `$0.0234 (est.) + n/a`), rather than blanking the total.
+
+**Privacy.** Rates and all derived cost/token figures stay entirely on your
+machine. Nothing about cost or per-session tokens is ever added to the opt-in
+aggregate batch — this is a local-only display.
+
 ## Privacy
 
 Raw content — `copilot_chat.user_request`, `gen_ai.input.messages`,
@@ -149,37 +214,31 @@ npm run package    # vsce package (.vsix)
 Press <kbd>F5</kbd> in VS Code to launch an Extension Development Host and open
 the **Agent Observability** view in the Activity Bar.
 
-## Packaging the native module (`better-sqlite3`) — REQUIRED
+## Packaging the SQLite engine (`node-sqlite3-wasm`)
 
-The extension reads the local Copilot SQLite database via **`better-sqlite3`**, a
-**native** (C++) Node module. Its compiled binary (`build/Release/*.node`) MUST
-match the **VS Code Electron host's** Node ABI — **not** the system Node you ran
-`npm install` with. If they differ, the extension fails to activate at runtime
-with `ERR_DLOPEN_FAILED` / `NODE_MODULE_VERSION` mismatch. This requirement
-carries over from Phase 2 (local SQLite ingestion).
+The extension reads the local Copilot SQLite database via **`node-sqlite3-wasm`**,
+a **WebAssembly** build of SQLite. Because it is WASM and not a native (C++) addon,
+it has **no compiled `.node` binary and no Node/Electron ABI to mismatch** — a
+single `.vsix` activates correctly across every VS Code version, regardless of the
+Electron/Node ABI of the host. (This replaced `better-sqlite3`, whose native
+binary had to match the host ABI and caused `ERR_DLOPEN_FAILED` /
+`NODE_MODULE_VERSION` failures when the `.vsix` was installed on a VS Code whose
+Electron differed from the build machine's Node.)
 
-When building a `.vsix` with `vsce package`, ensure a binary matching the target
-Electron ABI is present:
+Packaging notes:
 
-- **Match the host ABI.** Determine the target VS Code's Electron version, then
-  obtain a matching `better-sqlite3` binary by either:
-  - **`electron-rebuild`** — `npx electron-rebuild -v <electronVersion> -f -w better-sqlite3`
-    rebuilds the module against that Electron's headers; or
-  - **a matching prebuild** — fetch the prebuilt binary for that Electron ABI
-    (e.g. via `prebuild-install` with the correct `--runtime electron` and
-    `--target <electronVersion>`).
-- **Do not ship the system-Node binary.** A binary built for system Node will not
-  load in the Electron host.
-- **Keep the binary in the package.** `better-sqlite3` (and its
-  `build/Release/*.node`) must NOT be excluded by `.vscodeignore`; it is a runtime
-  `dependency`, not a dev dependency, and esbuild marks it `external` (it is not
-  bundled), so the `node_modules` copy is what ships.
-- **Multi-target.** To support multiple VS Code/Electron versions, produce one
-  `.vsix` per target ABI (rebuild/prebuild per target) rather than assuming one
-  binary works everywhere.
+- **It is `external`, not bundled.** esbuild marks `node-sqlite3-wasm` external
+  because the JS loader locates its `.wasm` sidecar relative to its own
+  `__dirname`; bundling the JS into `dist/extension.js` would break that lookup.
+- **Keep it in the package.** `.vscodeignore` re-includes
+  `node_modules/node-sqlite3-wasm/**` (the `dist/node-sqlite3-wasm.js` loader plus
+  the `dist/node-sqlite3-wasm.wasm` binary) so the runtime `require` resolves at
+  runtime. It is a runtime `dependency`, not a dev dependency.
+- **No per-target builds.** Unlike a native module, you do **not** rebuild per
+  Electron version — one `.vsix` works everywhere.
 
 > Running `vsce package` is not required for this repo's CI; this section
-> documents the packaging requirement so a release build is reproducible.
+> documents the packaging shape so a release build is reproducible.
 
 ## Architecture seams
 

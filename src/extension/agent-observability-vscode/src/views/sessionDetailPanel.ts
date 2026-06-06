@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import * as crypto from 'node:crypto';
 import { TelemetryService } from '../telemetry/telemetryService';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
+import { Configuration } from '../config/configuration';
+import { computeCost, sumCost, CostEstimate } from '../telemetry/pricing';
 import { renderSessionDetailHtml } from './sessionDetailHtml';
 
 /** Webview view type used for all session-detail panels. */
@@ -23,6 +25,7 @@ export class SessionDetailPanelManager {
   constructor(
     private readonly telemetry: TelemetryService,
     private readonly deviations: LocalDeviationDetector,
+    private readonly config: Configuration,
   ) {}
 
   /**
@@ -95,8 +98,18 @@ export class SessionDetailPanelManager {
       found = this.deviations.detectForSession(interactions.value, contentLookup);
     }
 
+    // Estimated cost (LOCAL-ONLY): read pricing overrides fresh each render — this
+    // path is already uncached, so editing rates and reopening reflects them — and
+    // compute a per-model estimate plus the session total. Copilot does not bill
+    // per token; this is a configurable estimate, `n/a` until rates are set.
+    const overrides = this.config.getPricingOverrides();
+    const costByModel = new Map<string, CostEstimate>(
+      detail.modelUsage.map((u) => [u.model, computeCost(u.model, u, overrides)]),
+    );
+    const total = sumCost([...costByModel.values()]);
+
     const nonce = makeNonce();
-    panel.webview.html = renderSessionDetailHtml(detail, found, nonce);
+    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, { costByModel, total });
   }
 }
 

@@ -12,7 +12,7 @@ import {
  * Pure aggregation engine: turns safe per-span metadata rows into a strict,
  * privacy-first {@link AggregateBatch}.
  *
- * This module imports neither `vscode` nor `better-sqlite3`; it is a deterministic
+ * This module imports neither `vscode` nor `node-sqlite3-wasm`; it is a deterministic
  * transform over plain {@link AggregationRow} objects, so it is fully headless-
  * testable and reusable by the preview command and the (future) sync engine.
  *

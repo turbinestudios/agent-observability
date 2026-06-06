@@ -1,17 +1,17 @@
-# Source and tooling — only dist/ + the better-sqlite3 native dep ship.
+# Source and tooling — only dist/ + the node-sqlite3-wasm runtime dep ship.
 .vscode/**
 .vscode-test/**
 src/**
 out/**
 coverage/**
 
-# Exclude node_modules wholesale, then re-include the one runtime dependency
-# (better-sqlite3 is a native module marked external in esbuild, so it is NOT
-# bundled into dist/extension.js and must be shipped from node_modules).
+# Exclude node_modules wholesale, then re-include the one runtime dependency.
+# node-sqlite3-wasm is marked external in esbuild (it loads its .wasm sidecar
+# via __dirname, so it is NOT bundled into dist/extension.js) and must be
+# shipped from node_modules. Being WebAssembly, it has no native binary and no
+# Node/Electron ABI to mismatch — one .vsix works across all VS Code versions.
 node_modules/**
-!node_modules/better-sqlite3/**
-!node_modules/bindings/**
-!node_modules/file-uri-to-path/**
+!node_modules/node-sqlite3-wasm/**
 
 **/*.map
 **/*.ts

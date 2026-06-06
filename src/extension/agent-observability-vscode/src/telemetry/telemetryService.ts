@@ -274,9 +274,9 @@ export class TelemetryService {
         message: 'Permission denied reading the Copilot telemetry database.',
       };
     }
-    // better-sqlite3 throws a SqliteError for a non-DB / corrupt file; treat a
-    // failure to read a present-but-invalid file as a schema mismatch rather
-    // than an opaque crash.
+    // node-sqlite3-wasm throws a SQLite3Error ("file is not a database") for a
+    // non-DB / corrupt file; treat a failure to read a present-but-invalid file
+    // as a schema mismatch rather than an opaque crash.
     const message = err instanceof Error ? err.message : String(err);
     if (/not a database|file is not a database|malformed|disk image is malformed/i.test(message)) {
       return {

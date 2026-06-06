@@ -1,6 +1,24 @@
-import { SessionDetail, SessionTimelineEntry } from '../telemetry/models';
+import { SessionDetail, SessionModelUsage, SessionTimelineEntry } from '../telemetry/models';
 import { WorkflowDeviation } from '../deviation/models';
+import { CostEstimate, sumCost } from '../telemetry/pricing';
 import { escapeHtml } from './escapeHtml';
+
+/**
+ * Per-render cost data computed by the panel (where settings are available) and
+ * passed in as plain data so this module stays `vscode`-free. `costByModel` is
+ * keyed by the RAW resolved model id used in {@link SessionModelUsage.model};
+ * `total` is the {@link ../telemetry/pricing.sumCost} rollup.
+ */
+export interface SessionCostView {
+  costByModel: ReadonlyMap<string, CostEstimate>;
+  total: { available: boolean; totalUsd: number; partial: boolean };
+}
+
+/**
+ * The minimal shape {@link formatCost} reads. Both a {@link CostEstimate} and the
+ * {@link SessionCostView.total} rollup satisfy it structurally.
+ */
+type Costish = { available: boolean; totalUsd?: number; partial?: boolean } | undefined;
 
 /**
  * Render a numeric field. Today these are typed `number` and stringify to safe
@@ -31,6 +49,7 @@ export function renderSessionDetailHtml(
   detail: SessionDetail,
   deviations: readonly WorkflowDeviation[],
   nonce: string,
+  cost?: SessionCostView,
 ): string {
   const { summary } = detail;
   const csp = [
@@ -51,17 +70,24 @@ export function renderSessionDetailHtml(
   <style nonce="${nonce}">${STYLE}</style>
 </head>
 <body>
-  ${renderHeader(detail)}
+  ${renderHeader(detail, cost)}
+  ${renderModelUsage(detail.modelUsage, cost?.costByModel)}
   ${renderDeviations(deviations)}
   ${renderTimeline(detail.timeline)}
 </body>
 </html>`;
 }
 
-/** Sanitized header: repository, model, start/end, counts, token totals. */
-function renderHeader(detail: SessionDetail): string {
+/** Sanitized header: repository, model, start/end, counts, token totals, cost. */
+function renderHeader(detail: SessionDetail, cost?: SessionCostView): string {
   const s = detail.summary;
   const modes = s.agentModes.map(escapeHtml).join(', ');
+  // Estimated cost is shown only for sessions that made LLM calls (the same
+  // condition that produces a model-usage rollup); otherwise it is meaningless.
+  const costRow =
+    detail.modelUsage.length > 0
+      ? `\n      <div><dt>Estimated cost</dt><dd>${formatCost(cost?.total)}</dd></div>`
+      : '';
   return `<header class="header">
     <p class="eyebrow">Session</p>
     <h1>${escapeHtml(shortId(s.sessionId))}</h1>
@@ -75,9 +101,79 @@ function renderHeader(detail: SessionDetail): string {
       <div><dt>Interactions</dt><dd>${num(s.interactionCount)}</dd></div>
       <div><dt>LLM calls</dt><dd>${num(s.llmCalls)}</dd></div>
       <div><dt>Tool calls</dt><dd>${num(s.toolCalls)}</dd></div>
-      <div><dt>Tokens in / out</dt><dd>${num(s.inputTokens)} / ${num(s.outputTokens)} (cached ${num(s.cachedTokens)})</dd></div>
+      <div><dt>Tokens in / out</dt><dd>${num(s.inputTokens)} / ${num(s.outputTokens)} (cached ${num(s.cachedTokens)})</dd></div>${costRow}
     </dl>
   </header>`;
+}
+
+/**
+ * Per-model "Cost & tokens by model" table. Rendered only when there is at least
+ * one model-usage row. Each row's cost comes from `costByModel`; the totals row
+ * sums the usage rows and shows the session cost rollup. Costs are ESTIMATES —
+ * `n/a` until the user configures `agentObservability.pricing.modelRates`.
+ */
+function renderModelUsage(
+  usage: readonly SessionModelUsage[],
+  costByModel?: ReadonlyMap<string, CostEstimate>,
+): string {
+  if (usage.length === 0) {
+    return '';
+  }
+
+  const totals = usage.reduce(
+    (acc, u) => {
+      acc.llmCalls += u.llmCalls;
+      acc.inputTokens += u.inputTokens;
+      acc.outputTokens += u.outputTokens;
+      acc.cachedTokens += u.cachedTokens;
+      acc.reasoningTokens += u.reasoningTokens;
+      return acc;
+    },
+    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0 },
+  );
+
+  const totalCost = sumCostView(usage, costByModel);
+
+  const bodyRows = usage
+    .map(
+      (u) => `<tr>
+        <td class="model">${escapeHtml(u.model)}</td>
+        <td class="n">${num(u.llmCalls)}</td>
+        <td class="n">${num(u.inputTokens)}</td>
+        <td class="n">${num(u.outputTokens)}</td>
+        <td class="n">${num(u.cachedTokens)}</td>
+        <td class="n">${num(u.reasoningTokens)}</td>
+        <td class="n">${formatCost(costByModel?.get(u.model))}</td>
+      </tr>`,
+    )
+    .join('\n');
+
+  return `<section class="panel">
+    <div class="panel-heading"><h2>Cost &amp; tokens by model</h2><span>${num(usage.length)} model(s)</span></div>
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th><th class="n" title="LLM calls to this model (chat and agent invocations)">Calls</th><th class="n">Input</th>
+          <th class="n">Output</th><th class="n">Cached</th><th class="n">Reasoning</th>
+          <th class="n">Est. cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${bodyRows}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td class="model">Total</td>
+          <td class="n">${num(totals.llmCalls)}</td>
+          <td class="n">${num(totals.inputTokens)}</td>
+          <td class="n">${num(totals.outputTokens)}</td>
+          <td class="n">${num(totals.cachedTokens)}</td>
+          <td class="n">${num(totals.reasoningTokens)}</td>
+          <td class="n">${formatCost(totalCost)}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </section>`;
 }
 
 /** Workflow-deviations section (parity with the cloud SessionDetail page). */
@@ -162,6 +258,37 @@ export function renderTimelineRow(entry: SessionTimelineEntry): string {
   </div>`;
 }
 
+/**
+ * Roll up the per-model estimates into a session total for the table footer,
+ * mirroring the header total the panel passes in. When `costByModel` is absent
+ * (e.g. the renderer is called without cost data), every model is unpriced and
+ * the total is unavailable → `n/a`.
+ */
+function sumCostView(
+  usage: readonly SessionModelUsage[],
+  costByModel?: ReadonlyMap<string, CostEstimate>,
+): { available: boolean; totalUsd: number; partial: boolean } {
+  const estimates: CostEstimate[] = usage.map(
+    (u) => costByModel?.get(u.model) ?? { available: false },
+  );
+  return sumCost(estimates);
+}
+
+/**
+ * Format a cost as a clearly-labelled ESTIMATE:
+ * - available → `$0.0000 (est.)` (the `(est.)` label is mandatory — Copilot does
+ *   not bill per token, so this is never an authoritative figure);
+ * - a partial session total → append ` + n/a` (some models priced, some not);
+ * - unavailable (no rate configured) → `n/a`, never `$0`.
+ */
+function formatCost(cost: Costish): string {
+  if (cost === undefined || !cost.available) {
+    return 'n/a';
+  }
+  const base = `$${(cost.totalUsd ?? 0).toFixed(4)} (est.)`;
+  return cost.partial === true ? `${base} + n/a` : base;
+}
+
 /** First UUID segment, else a truncated id. */
 function shortId(sessionId: string): string {
   const dash = sessionId.indexOf('-');
@@ -217,6 +344,12 @@ const STYLE = `
   .badge { display: inline-block; font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: .1rem .4rem; border-radius: 3px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
   .badge-local { background: var(--vscode-inputValidation-warningBackground, transparent); color: var(--vscode-editorWarning-foreground, #c90); border: 1px solid var(--vscode-editorWarning-foreground, #c90); }
   .seq { font-size: .82rem; color: var(--vscode-descriptionForeground); }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
+  thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); font-weight: 600; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  td.model { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }
+  tfoot td { font-weight: 600; border-bottom: none; border-top: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   .timeline { display: flex; flex-direction: column; }
   .row { padding: .35rem 0; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   .row:last-child { border-bottom: none; }

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { WorkflowConfig } from '../deviation/models';
+import { ModelRate, parsePricingOverrides } from '../telemetry/pricing';
 import { MIN_SESSION_MINUTES, parseWorkflowConfigs } from './workflowParsing';
 
 export { MIN_SESSION_MINUTES } from './workflowParsing';
@@ -25,6 +26,7 @@ export const ConfigKeys = {
   sqlitePath: 'sqlitePath',
   maxSessionMinutes: 'deviation.maxSessionMinutes',
   workflows: 'workflows',
+  pricingModelRates: 'pricing.modelRates',
 } as const;
 
 /** Default values mirroring the package.json contribution defaults. */
@@ -35,6 +37,7 @@ export const ConfigDefaults = {
   localTelemetryEnabled: true,
   sqlitePath: '',
   maxSessionMinutes: 60,
+  pricingModelRates: {} as Record<string, ModelRate>,
 } as const;
 
 /** Minimum allowed sync interval, mirroring the package.json `minimum`. */
@@ -129,6 +132,19 @@ export class Configuration {
   getWorkflowConfigs(): WorkflowConfig[] {
     const raw = this.config().get<unknown>(ConfigKeys.workflows, []);
     return parseWorkflowConfigs(raw, this.getMaxSessionMinutes() * 60_000);
+  }
+
+  /**
+   * Per-model pricing overrides for the LOCAL session-detail cost estimate,
+   * parsed and validated from `agentObservability.pricing.modelRates`.
+   *
+   * There is NO built-in rate table: cost reads `n/a` until the user provides
+   * rates here (Copilot does not bill per token — the figure is always an
+   * estimate). Malformed entries are skipped rather than throwing, so a
+   * hand-edited settings.json can never break the detail panel.
+   */
+  getPricingOverrides(): Record<string, ModelRate> {
+    return parsePricingOverrides(this.config().get<unknown>(ConfigKeys.pricingModelRates, {}));
   }
 
   /**
