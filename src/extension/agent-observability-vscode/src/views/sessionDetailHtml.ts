@@ -24,6 +24,13 @@ export interface SessionCostView {
   costByModel: ReadonlyMap<string, CostEstimate>;
   costByAgent?: ReadonlyMap<string, CostEstimate>;
   total: { available: boolean; totalUsd: number; partial: boolean };
+  /**
+   * Optional USD-per-AIU rate (`agentObservability.pricing.usdPerAiu`). When > 0,
+   * AIU figures are annotated with a converted dollar amount; otherwise AIU is
+   * shown on its own. AIU itself comes from {@link SessionModelUsage.aiuNano} and
+   * needs no configuration — this only adds a currency view.
+   */
+  usdPerAiu?: number;
 }
 
 /**
@@ -105,8 +112,8 @@ export function renderSessionDetailHtml(
 </head>
 <body>
   ${renderHeader(detail, cost)}
-  ${renderModelUsage(detail.modelUsage, cost?.costByModel)}
-  ${renderSubAgentUsage(detail.agentUsage, cost?.costByAgent)}
+  ${renderModelUsage(detail.modelUsage, cost?.costByModel, cost?.usdPerAiu)}
+  ${renderSubAgentUsage(detail.agentUsage, cost?.costByAgent, cost?.usdPerAiu)}
   ${renderDeviations(deviations)}
   ${renderTurns(detail.turns)}
 </body>
@@ -148,9 +155,9 @@ export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce
   <style nonce="${nonce}">${STYLE}</style>
 </head>
 <body>
-  ${renderCombinedHeader(combined.summary, cost)}
-  ${renderModelUsage(combined.modelUsage, cost?.costByModel)}
-  ${renderSubAgentUsage(combined.agentUsage, cost?.costByAgent)}
+  ${renderCombinedHeader(combined.summary, cost, sumAiuNano(combined.modelUsage))}
+  ${renderModelUsage(combined.modelUsage, cost?.costByModel, cost?.usdPerAiu)}
+  ${renderSubAgentUsage(combined.agentUsage, cost?.costByAgent, cost?.usdPerAiu)}
   <section class="panel">
     <div class="panel-heading"><h2>Sessions</h2><span>${num(sections.length)} session(s)</span></div>
     <div class="turns">${sectionsHtml}</div>
@@ -160,10 +167,15 @@ export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce
 }
 
 /** Aggregate header for the combined view: counts, repos, models, totals, cost. */
-function renderCombinedHeader(summary: CombinedSummary, cost?: SessionCostView): string {
+function renderCombinedHeader(
+  summary: CombinedSummary,
+  cost: SessionCostView | undefined,
+  aiuTotalNano: number,
+): string {
   const repos = summary.repositories.map(escapeHtml).join(', ');
   const models = summary.models.map(escapeHtml).join(', ');
   const modes = summary.agentModes.map(escapeHtml).join(', ');
+  const aiuRow = `\n      <div><dt>AIU (billed)</dt><dd>${formatAiu(aiuTotalNano, cost?.usdPerAiu)}</dd></div>`;
   const costRow =
     cost !== undefined
       ? `\n      <div><dt>Estimated cost</dt><dd>${formatCost(cost.total)}</dd></div>`
@@ -182,7 +194,7 @@ function renderCombinedHeader(summary: CombinedSummary, cost?: SessionCostView):
       <div><dt>Interactions</dt><dd>${num(summary.interactionCount)}</dd></div>
       <div><dt>LLM calls</dt><dd>${num(summary.llmCalls)}</dd></div>
       <div><dt>Tool calls</dt><dd>${num(summary.toolCalls)}</dd></div>
-      <div><dt>Tokens in / out</dt><dd>${num(summary.inputTokens)} / ${num(summary.outputTokens)} (cached ${num(summary.cachedTokens)})</dd></div>${costRow}
+      <div><dt>Tokens in / out</dt><dd>${num(summary.inputTokens)} / ${num(summary.outputTokens)} (cached ${num(summary.cachedTokens)})</dd></div>${aiuRow}${costRow}
     </dl>
   </header>`;
 }
@@ -240,8 +252,14 @@ function renderHeader(detail: SessionDetail, cost?: SessionCostView): string {
     mainAgents.length > 0
       ? `\n      <div><dt>Agent</dt><dd>${mainAgents.map(escapeHtml).join(', ')}</dd></div>`
       : '';
-  // Estimated cost is shown only for sessions that made LLM calls (the same
-  // condition that produces a model-usage rollup); otherwise it is meaningless.
+  // AIU (GitHub's billed premium-request usage) and the token×rate estimate are
+  // shown only for sessions that made LLM calls (the same condition that produces
+  // a model-usage rollup); otherwise they are meaningless. AIU is the primary,
+  // authoritative figure; the estimate is the configurable fallback.
+  const aiuRow =
+    detail.modelUsage.length > 0
+      ? `\n      <div><dt>AIU (billed)</dt><dd>${formatAiu(sumAiuNano(detail.modelUsage), cost?.usdPerAiu)}</dd></div>`
+      : '';
   const costRow =
     detail.modelUsage.length > 0
       ? `\n      <div><dt>Estimated cost</dt><dd>${formatCost(cost?.total)}</dd></div>`
@@ -259,7 +277,7 @@ function renderHeader(detail: SessionDetail, cost?: SessionCostView): string {
       <div><dt>Interactions</dt><dd>${num(s.interactionCount)}</dd></div>
       <div><dt>LLM calls</dt><dd>${num(s.llmCalls)}</dd></div>
       <div><dt>Tool calls</dt><dd>${num(s.toolCalls)}</dd></div>
-      <div><dt>Tokens in / out</dt><dd>${num(s.inputTokens)} / ${num(s.outputTokens)} (cached ${num(s.cachedTokens)})</dd></div>${costRow}
+      <div><dt>Tokens in / out</dt><dd>${num(s.inputTokens)} / ${num(s.outputTokens)} (cached ${num(s.cachedTokens)})</dd></div>${aiuRow}${costRow}
     </dl>
   </header>`;
 }
@@ -273,6 +291,7 @@ function renderHeader(detail: SessionDetail, cost?: SessionCostView): string {
 function renderModelUsage(
   usage: readonly SessionModelUsage[],
   costByModel?: ReadonlyMap<string, CostEstimate>,
+  usdPerAiu?: number,
 ): string {
   if (usage.length === 0) {
     return '';
@@ -284,9 +303,10 @@ function renderModelUsage(
       acc.inputTokens += u.inputTokens;
       acc.outputTokens += u.outputTokens;
       acc.cachedTokens += u.cachedTokens;
+      acc.aiuNano += u.aiuNano;
       return acc;
     },
-    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
+    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, aiuNano: 0 },
   );
 
   const totalCost = sumCostView(usage, costByModel);
@@ -299,6 +319,7 @@ function renderModelUsage(
         <td class="n">${num(u.inputTokens)}</td>
         <td class="n">${num(u.outputTokens)}</td>
         <td class="n">${num(u.cachedTokens)}</td>
+        <td class="n">${formatAiu(u.aiuNano, usdPerAiu)}</td>
         <td class="n">${formatCost(costByModel?.get(u.model))}</td>
       </tr>`,
     )
@@ -311,7 +332,8 @@ function renderModelUsage(
         <tr>
           <th>Model</th><th class="n" title="LLM calls to this model (chat and agent invocations)">Calls</th><th class="n">Input</th>
           <th class="n">Output</th><th class="n">Cached</th>
-          <th class="n">Est. cost</th>
+          <th class="n" title="AIU (Copilot premium-request units) GitHub recorded for this model — the actual billed usage, not an estimate">AIU</th>
+          <th class="n" title="Token × your configured rate — an estimate; n/a until rates are set">Est. cost</th>
         </tr>
       </thead>
       <tbody>
@@ -324,6 +346,7 @@ function renderModelUsage(
           <td class="n">${num(totals.inputTokens)}</td>
           <td class="n">${num(totals.outputTokens)}</td>
           <td class="n">${num(totals.cachedTokens)}</td>
+          <td class="n">${formatAiu(totals.aiuNano, usdPerAiu)}</td>
           <td class="n">${formatCost(totalCost)}</td>
         </tr>
       </tfoot>
@@ -342,6 +365,7 @@ function renderModelUsage(
 function renderSubAgentUsage(
   usage: readonly SessionAgentUsage[],
   costByAgent?: ReadonlyMap<string, CostEstimate>,
+  usdPerAiu?: number,
 ): string {
   const subs = usage.filter((u) => u.kind === 'subagent');
   if (subs.length === 0) {
@@ -354,9 +378,10 @@ function renderSubAgentUsage(
       acc.inputTokens += u.inputTokens;
       acc.outputTokens += u.outputTokens;
       acc.cachedTokens += u.cachedTokens;
+      acc.aiuNano += u.aiuNano;
       return acc;
     },
-    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
+    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, aiuNano: 0 },
   );
   const subtotalCost = sumCost(subs.map((u) => costByAgent?.get(agentUsageKey(u)) ?? { available: false }));
 
@@ -369,6 +394,7 @@ function renderSubAgentUsage(
         <td class="n">${num(u.inputTokens)}</td>
         <td class="n">${num(u.outputTokens)}</td>
         <td class="n">${num(u.cachedTokens)}</td>
+        <td class="n">${formatAiu(u.aiuNano, usdPerAiu)}</td>
         <td class="n">${formatCost(costByAgent?.get(agentUsageKey(u)))}</td>
       </tr>`,
     )
@@ -376,13 +402,14 @@ function renderSubAgentUsage(
 
   return `<section class="panel">
     <div class="panel-heading"><h2>Spawned sub-agents</h2><span>${num(subs.length)} invocation group(s)</span></div>
-    <p class="muted">Sub-agents launched by this session via <code>runSubagent</code>. Their tokens are counted in each sub-agent's own session, so they are shown here for visibility but are NOT included in the session totals above.</p>
+    <p class="muted">Sub-agents launched by this session via <code>runSubagent</code>. Their tokens — and the AIU they bill — are counted in each sub-agent's own session, so they are shown here for visibility but are NOT included in the session totals above. (AIU is recorded on the sub-agent's own <code>chat</code> spans, so these orchestration rows usually read <code>0</code> here.)</p>
     <table>
       <thead>
         <tr>
           <th>Agent</th><th>Model</th><th class="n">Calls</th><th class="n">Input</th>
           <th class="n">Output</th><th class="n">Cached</th>
-          <th class="n">Est. cost</th>
+          <th class="n" title="AIU (Copilot premium-request units) recorded on these spans — the actual billed usage">AIU</th>
+          <th class="n" title="Token × your configured rate — an estimate">Est. cost</th>
         </tr>
       </thead>
       <tbody>
@@ -396,6 +423,7 @@ function renderSubAgentUsage(
           <td class="n">${num(totals.inputTokens)}</td>
           <td class="n">${num(totals.outputTokens)}</td>
           <td class="n">${num(totals.cachedTokens)}</td>
+          <td class="n">${formatAiu(totals.aiuNano, usdPerAiu)}</td>
           <td class="n">${formatCost(subtotalCost)}</td>
         </tr>
       </tfoot>
@@ -554,6 +582,11 @@ function sumCostView(
   return sumCost(estimates);
 }
 
+/** Total NANO-AIU across a per-model rollup (integer sum, stays exact). */
+function sumAiuNano(usage: readonly SessionModelUsage[]): number {
+  return usage.reduce((acc, u) => acc + u.aiuNano, 0);
+}
+
 /**
  * Format a cost as a clearly-labelled ESTIMATE:
  * - available → `$0.0000 (est.)` (the `(est.)` label is mandatory — Copilot does
@@ -567,6 +600,26 @@ function formatCost(cost: Costish): string {
   }
   const base = `$${(cost.totalUsd ?? 0).toFixed(4)} (est.)`;
   return cost.partial === true ? `${base} + n/a` : base;
+}
+
+/**
+ * Format premium-request usage held as integer NANO-AIU (1 AIU = 1e9) for
+ * display. Unlike {@link formatCost} this is GitHub's ACTUAL billed unit, not an
+ * estimate. Zero/absent → `0` (honest: not billed, never `n/a`). Small values get
+ * extra precision; when `usdPerAiu` > 0 a converted dollar amount is appended. The
+ * output is digits and `$.()` only, so it is safe to inject without escaping (it
+ * never derives from user content).
+ */
+function formatAiu(aiuNano: number, usdPerAiu?: number): string {
+  if (!(aiuNano > 0)) {
+    return '0';
+  }
+  const aiu = aiuNano / 1_000_000_000;
+  const value = aiu.toFixed(aiu < 1 ? 4 : 2);
+  if (usdPerAiu !== undefined && usdPerAiu > 0) {
+    return `${value} ($${(aiu * usdPerAiu).toFixed(4)})`;
+  }
+  return value;
 }
 
 /** Collapse whitespace and truncate a label to `max` chars with an ellipsis. */

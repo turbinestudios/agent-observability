@@ -73,12 +73,12 @@ describe('renderCombinedSessionDetailHtml', () => {
   it('renders a merged cost & tokens by model table', () => {
     const a = session({ sessionId: 'a-1' }, {
       modelUsage: [
-        { model: 'gpt', llmCalls: 1, inputTokens: 10, outputTokens: 5, cachedTokens: 0, reasoningTokens: 0 },
+        { model: 'gpt', llmCalls: 1, inputTokens: 10, outputTokens: 5, cachedTokens: 0, reasoningTokens: 0, aiuNano: 1_000_000_000 },
       ],
     });
     const b = session({ sessionId: 'b-2' }, {
       modelUsage: [
-        { model: 'gpt', llmCalls: 2, inputTokens: 20, outputTokens: 5, cachedTokens: 0, reasoningTokens: 0 },
+        { model: 'gpt', llmCalls: 2, inputTokens: 20, outputTokens: 5, cachedTokens: 0, reasoningTokens: 0, aiuNano: 3_000_000_000 },
       ],
     });
 
@@ -87,6 +87,8 @@ describe('renderCombinedSessionDetailHtml', () => {
     expect(html).toContain('Cost &amp; tokens by model');
     // Merged input tokens 10 + 20 appear in the table.
     expect(html).toContain('>30<');
+    // Merged AIU 1 + 3 = 4 appears (formatted to 2 dp).
+    expect(html).toContain('4.00');
   });
 
   it('renders each session\'s own deviations within its section', () => {

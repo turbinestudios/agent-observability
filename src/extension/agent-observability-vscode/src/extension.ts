@@ -6,6 +6,7 @@ import { SessionsViewProvider, SESSIONS_VIEW_ID } from './views/sessionsView';
 import { SyncViewProvider, SYNC_VIEW_ID } from './views/syncView';
 import { SessionDetailPanelManager } from './views/sessionDetailPanel';
 import { TelemetryService } from './telemetry/telemetryService';
+import { watchTelemetrySource, SourceWatcherHandle } from './telemetry/sourceWatcher';
 import { LocalDeviationDetector } from './deviation/localDeviations';
 import { ConsentManager } from './consent/consentManager';
 import { SecretManager } from './secrets/secretManager';
@@ -39,6 +40,7 @@ let telemetryService: TelemetryService | undefined;
 let sessionDetailPanels: SessionDetailPanelManager | undefined;
 let consentManager: ConsentManager | undefined;
 let syncScheduler: SyncScheduler | undefined;
+let liveSourceWatcher: SourceWatcherHandle | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const config = new Configuration();
@@ -113,6 +115,21 @@ export function activate(context: vscode.ExtensionContext): void {
   syncScheduler = scheduler;
   scheduler.start();
 
+  // Near-live updates: watch the live agent-traces.db (+ its -wal sidecar, where
+  // Copilot appends each committed span) and, debounced, re-snapshot and redraw
+  // the views + any open detail panels — approximating the Agent Debug Logs'
+  // live feel. Only COMMITTED spans are visible (the in-memory ones the debug
+  // view shows pre-commit are not on disk). Dropping the snapshot here forces the
+  // next query to re-read, so a stale source mtime can't suppress the update.
+  const triggerLiveRefresh = (): void => {
+    telemetry.refresh();
+    overview.refresh();
+    sessions.refresh();
+    detailPanels.refreshAll();
+  };
+  liveSourceWatcher = watchTelemetrySource(config, triggerLiveRefresh);
+  context.subscriptions.push({ dispose: () => liveSourceWatcher?.dispose() });
+
   // Keep the Sync view live when consent flips (set-key already refreshes via
   // the command path, but consent can also change programmatically).
   context.subscriptions.push(consent.onDidChange(() => sync.refresh()));
@@ -133,6 +150,9 @@ export function activate(context: vscode.ExtensionContext): void {
       overview.refresh();
       sessions.refresh();
       sync.refresh();
+      // The sqlitePath override may have moved the source — re-arm the watcher.
+      liveSourceWatcher?.dispose();
+      liveSourceWatcher = watchTelemetrySource(config, triggerLiveRefresh);
     }),
   );
 }
@@ -222,4 +242,6 @@ export function deactivate(): void {
   consentManager = undefined;
   syncScheduler?.dispose();
   syncScheduler = undefined;
+  liveSourceWatcher?.dispose();
+  liveSourceWatcher = undefined;
 }

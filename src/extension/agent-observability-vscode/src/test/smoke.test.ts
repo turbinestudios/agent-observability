@@ -71,6 +71,7 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.deviation.maxSessionMinutes',
   'agentObservability.workflows',
   'agentObservability.pricing.modelRates',
+  'agentObservability.pricing.usdPerAiu',
 ] as const;
 
 describe('manifest contract is stable', () => {

@@ -128,6 +128,7 @@ interface TokenCounts {
   outputTokens: number;
   cachedTokens: number;
   reasoningTokens: number;
+  aiuNano: number;
 }
 
 function addTokens(into: TokenCounts, from: TokenCounts): void {
@@ -136,6 +137,7 @@ function addTokens(into: TokenCounts, from: TokenCounts): void {
   into.outputTokens += from.outputTokens;
   into.cachedTokens += from.cachedTokens;
   into.reasoningTokens += from.reasoningTokens;
+  into.aiuNano += from.aiuNano;
 }
 
 /** Sort by input+output tokens descending (the renderer's stable ordering). */

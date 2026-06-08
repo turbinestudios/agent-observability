@@ -424,6 +424,12 @@
               }
             }
           }
+        },
+        "agentObservability.pricing.usdPerAiu": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "markdownDescription": "Optional USD per 1 AIU (Copilot premium-request unit) used ONLY to show a dollar figure next to the **billed AIU** on the local session-detail panel. Unlike `#agentObservability.pricing.modelRates#` (a token×rate *estimate*), AIU is the unit GitHub actually records per request, so it is shown as the primary cost. Leave at `0` to display AIU without a dollar conversion. Stays entirely local — nothing about cost or usage is ever uploaded."
         }
       }
     }

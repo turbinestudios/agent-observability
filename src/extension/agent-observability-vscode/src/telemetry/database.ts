@@ -609,6 +609,10 @@ export class TelemetryDatabase {
     // per-turn request/response below; never logged or uploaded.
     const userRequests = this.userRequestsBySpan(sessionKey);
     const responses = this.responsesBySpan(sessionKey);
+    // GitHub's premium-request billing units (nano-AIU) per span, for the AIU
+    // cost rollups below. Recorded only on `chat` spans (verified on live data);
+    // absent → 0.
+    const aiuBySpan = this.aiuBySpan(sessionKey);
     const mode = this.agentModesBySession().get(sessionKey)?.[0] ?? 'default';
 
     let startedAtMs = rows[0].start_time_ms;
@@ -653,6 +657,9 @@ export class TelemetryDatabase {
       const rowOutput = row.output_tokens ?? 0;
       const rowCached = row.cached_tokens ?? 0;
       const rowReasoning = row.reasoning_tokens ?? 0;
+      // Premium-request units (nano-AIU) carried by this span; only `chat` spans
+      // have it, so non-chat spans contribute 0 to every AIU rollup below.
+      const rowAiu = aiuBySpan.get(row.span_id) ?? 0;
 
       // A spawned sub-agent invocation carries the parent conversation_id but a
       // distinct chat_session_id (the spawning tool-call id); its tokens belong
@@ -696,6 +703,7 @@ export class TelemetryDatabase {
             outputTokens: 0,
             cachedTokens: 0,
             reasoningTokens: 0,
+            aiuNano: 0,
           };
           usageByAgent.set(key, agentUsage);
         }
@@ -704,6 +712,7 @@ export class TelemetryDatabase {
         agentUsage.outputTokens += rowOutput;
         agentUsage.cachedTokens += rowCached;
         agentUsage.reasoningTokens += rowReasoning;
+        agentUsage.aiuNano += rowAiu;
       }
 
       if (countsTokens) {
@@ -716,6 +725,7 @@ export class TelemetryDatabase {
             outputTokens: 0,
             cachedTokens: 0,
             reasoningTokens: 0,
+            aiuNano: 0,
           };
           usageByModel.set(model, usage);
         }
@@ -724,6 +734,7 @@ export class TelemetryDatabase {
         usage.outputTokens += rowOutput;
         usage.cachedTokens += rowCached;
         usage.reasoningTokens += rowReasoning;
+        usage.aiuNano += rowAiu;
 
         inputTokens += rowInput;
         outputTokens += rowOutput;
@@ -951,6 +962,45 @@ export class TelemetryDatabase {
     for (const row of rows) {
       if (row.value !== null && row.value.length > 0) {
         map.set(row.span_id, row.value);
+      }
+    }
+    return map;
+  }
+
+  /**
+   * Map span id → premium-request usage in NANO-AIU for the LLM spans of a single
+   * session, read from the `copilot_chat.copilot_usage_nano_aiu` attribute. This
+   * is GitHub's authoritative billing unit (1 AIU = 1e9 nano-AIU) and the basis
+   * for the AIU cost rollups in {@link getSessionDetail}.
+   *
+   * SAFE metadata (a numeric usage count, not content) — unlike
+   * {@link contentBySpan} this value is non-sensitive. It is read here only for
+   * the local detail panel; the aggregate/sync path does not use it. Spans whose
+   * attribute is absent or non-numeric are omitted (callers default to 0). Scoped
+   * to `chat`/`invoke_agent` to mirror the other per-span LLM lookups, though in
+   * practice only `chat` spans carry it.
+   */
+  private aiuBySpan(sessionKey: string): Map<string, number> {
+    const rows = this.allRows<{ span_id: string; value: string | null }>(
+      `SELECT a.span_id AS span_id, a.value AS value
+         FROM span_attributes a
+         JOIN spans s ON s.span_id = a.span_id
+         WHERE a.key = 'copilot_chat.copilot_usage_nano_aiu'
+           AND s.operation_name IN ('chat', 'invoke_agent')
+           AND COALESCE(s.conversation_id, s.chat_session_id) = ?`,
+      [sessionKey],
+    );
+
+    const map = new Map<string, number>();
+    for (const row of rows) {
+      if (row.value === null) {
+        continue;
+      }
+      // The attribute is an integer string of nano-AIU; tolerate odd values by
+      // skipping anything that does not parse to a finite, non-negative number.
+      const nano = Number(row.value);
+      if (Number.isFinite(nano) && nano >= 0) {
+        map.set(row.span_id, nano);
       }
     }
     return map;

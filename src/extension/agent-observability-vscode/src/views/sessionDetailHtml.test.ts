@@ -104,6 +104,7 @@ describe('renderSessionDetailHtml — cost & tokens by model', () => {
         outputTokens: 150,
         cachedTokens: 100,
         reasoningTokens: 0,
+        aiuNano: 2_042_500_000,
       },
       {
         model: 'gpt-zero',
@@ -112,6 +113,7 @@ describe('renderSessionDetailHtml — cost & tokens by model', () => {
         outputTokens: 0,
         cachedTokens: 0,
         reasoningTokens: 0,
+        aiuNano: 0,
       },
       {
         model: '<script>evil</script>',
@@ -120,6 +122,7 @@ describe('renderSessionDetailHtml — cost & tokens by model', () => {
         outputTokens: 50,
         cachedTokens: 0,
         reasoningTokens: 0,
+        aiuNano: 500_000_000,
       },
     ],
     agentUsage: [],
@@ -205,12 +208,12 @@ describe('renderSessionDetailHtml — spawned sub-agents', () => {
     },
     turns: [],
     modelUsage: [
-      { model: 'gpt-5.4', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0 },
+      { model: 'gpt-5.4', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0, aiuNano: 3_000_000_000 },
     ],
     agentUsage: [
-      { agentName: 'GitHub Copilot Chat', model: 'gpt-5.4', kind: 'main', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0 },
-      { agentName: 'Testing', model: 'gpt-5.3-codex', kind: 'subagent', llmCalls: 2, inputTokens: 1300, outputTokens: 40, cachedTokens: 0, reasoningTokens: 0 },
-      { agentName: 'Frontend', model: 'gpt-5.4', kind: 'subagent', llmCalls: 1, inputTokens: 900, outputTokens: 10, cachedTokens: 0, reasoningTokens: 0 },
+      { agentName: 'GitHub Copilot Chat', model: 'gpt-5.4', kind: 'main', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0, aiuNano: 3_000_000_000 },
+      { agentName: 'Testing', model: 'gpt-5.3-codex', kind: 'subagent', llmCalls: 2, inputTokens: 1300, outputTokens: 40, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0 },
+      { agentName: 'Frontend', model: 'gpt-5.4', kind: 'subagent', llmCalls: 1, inputTokens: 900, outputTokens: 10, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0 },
     ],
   };
 

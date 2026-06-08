@@ -21,6 +21,7 @@ function modelUsage(model: string, over: Partial<SessionModelUsage> = {}): Sessi
     outputTokens: 0,
     cachedTokens: 0,
     reasoningTokens: 0,
+    aiuNano: 0,
     ...over,
   };
 }
@@ -40,6 +41,7 @@ function agentUsage(
     outputTokens: 0,
     cachedTokens: 0,
     reasoningTokens: 0,
+    aiuNano: 0,
     ...over,
   };
 }
@@ -130,13 +132,13 @@ describe('combineSessionDetails', () => {
   it('merges per-model usage by model and sorts by total tokens desc', () => {
     const a = session({ sessionId: 'a' }, {
       modelUsage: [
-        modelUsage('shared', { inputTokens: 10, outputTokens: 5, cachedTokens: 2, llmCalls: 1, reasoningTokens: 1 }),
+        modelUsage('shared', { inputTokens: 10, outputTokens: 5, cachedTokens: 2, llmCalls: 1, reasoningTokens: 1, aiuNano: 1_500_000_000 }),
         modelUsage('small', { inputTokens: 1, outputTokens: 1, llmCalls: 1 }),
       ],
     });
     const b = session({ sessionId: 'b' }, {
       modelUsage: [
-        modelUsage('shared', { inputTokens: 20, outputTokens: 5, cachedTokens: 3, llmCalls: 2, reasoningTokens: 4 }),
+        modelUsage('shared', { inputTokens: 20, outputTokens: 5, cachedTokens: 3, llmCalls: 2, reasoningTokens: 4, aiuNano: 2_500_000_000 }),
       ],
     });
 
@@ -150,6 +152,8 @@ describe('combineSessionDetails', () => {
       outputTokens: 10,
       cachedTokens: 5,
       reasoningTokens: 5,
+      // nano-AIU sums exactly across merged sessions (1.5 + 2.5 = 4 AIU).
+      aiuNano: 4_000_000_000,
     });
   });
 

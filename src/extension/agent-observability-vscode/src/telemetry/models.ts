@@ -210,6 +210,16 @@ export interface SessionModelUsage {
   cachedTokens: number;
   /** `spans.reasoning_tokens` when the optional column is present, else 0. */
   reasoningTokens: number;
+  /**
+   * GitHub's authoritative premium-request usage in NANO-AIU (1 AIU = 1e9), summed
+   * from the `copilot_chat.copilot_usage_nano_aiu` attribute over this model's
+   * `chat` spans. Unlike the token×rate estimate this is the unit GitHub actually
+   * bills, so it is the primary cost figure. Stored as an integer nano count so
+   * sums stay exact; divide by 1e9 for AIU at the display boundary. `0` when no
+   * billable AIU was recorded (e.g. free/included utility calls, or an
+   * orchestrator session whose AIU lives in its spawned sub-agents' own sessions).
+   */
+  aiuNano: number;
 }
 
 /**
@@ -244,6 +254,15 @@ export interface SessionAgentUsage {
   cachedTokens: number;
   /** `spans.reasoning_tokens` when the optional column is present, else 0. */
   reasoningTokens: number;
+  /**
+   * Premium-request usage in NANO-AIU (1 AIU = 1e9) for this (agent, model, kind),
+   * summed from `copilot_chat.copilot_usage_nano_aiu`. See
+   * {@link SessionModelUsage.aiuNano}. AIU is recorded only on `chat` spans, so
+   * `invoke_agent`-derived rows (the `subagent` kind, and a main-thread agent's own
+   * `invoke_agent` calls) carry `0` — a spawned sub-agent's real AIU is attributed
+   * within its own session, consistent with how its tokens are handled.
+   */
+  aiuNano: number;
 }
 
 /**

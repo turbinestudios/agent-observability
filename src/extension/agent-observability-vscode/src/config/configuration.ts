@@ -27,6 +27,7 @@ export const ConfigKeys = {
   maxSessionMinutes: 'deviation.maxSessionMinutes',
   workflows: 'workflows',
   pricingModelRates: 'pricing.modelRates',
+  pricingUsdPerAiu: 'pricing.usdPerAiu',
 } as const;
 
 /** Default values mirroring the package.json contribution defaults. */
@@ -38,6 +39,7 @@ export const ConfigDefaults = {
   sqlitePath: '',
   maxSessionMinutes: 60,
   pricingModelRates: {} as Record<string, ModelRate>,
+  pricingUsdPerAiu: 0,
 } as const;
 
 /** Minimum allowed sync interval, mirroring the package.json `minimum`. */
@@ -145,6 +147,20 @@ export class Configuration {
    */
   getPricingOverrides(): Record<string, ModelRate> {
     return parsePricingOverrides(this.config().get<unknown>(ConfigKeys.pricingModelRates, {}));
+  }
+
+  /**
+   * Optional USD-per-AIU rate for the LOCAL session-detail panel, used ONLY to
+   * render a dollar figure alongside the authoritative AIU (premium-request)
+   * usage that Copilot records on each `chat` span. Unlike
+   * {@link getPricingOverrides}, AIU is a real billed quantity — this rate just
+   * converts it to your plan's currency. Returns `0` (→ show AIU without a $
+   * figure) when unset or malformed (non-finite / negative). Stays entirely
+   * local — never uploaded.
+   */
+  getUsdPerAiu(): number {
+    const raw = this.config().get<number>(ConfigKeys.pricingUsdPerAiu, ConfigDefaults.pricingUsdPerAiu);
+    return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : 0;
   }
 
   /**
