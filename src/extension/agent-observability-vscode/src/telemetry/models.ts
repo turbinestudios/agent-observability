@@ -122,6 +122,61 @@ export interface SessionTimelineEntry {
 }
 
 /**
+ * One user-request "turn" for the LOCAL detail view: a top-level user request,
+ * the chronological tool/hook/sub-agent events it triggered, and the assistant's
+ * final response.
+ *
+ * A turn is anchored by a MAIN-THREAD LLM span carrying a
+ * `copilot_chat.user_request` — a `chat` span (ask mode) or an `invoke_agent`
+ * span whose conversation_id equals its chat_session_id (agent mode). Spawned
+ * sub-agents (invoke_agent with a distinct chat_session_id) never start a turn;
+ * they appear as {@link SessionTurn.events}.
+ *
+ * Privacy-critical: {@link userRequest} and {@link finalResponse} carry raw
+ * local-only content (`copilot_chat.user_request` / `gen_ai.output.messages`).
+ * They are read exclusively for the local webview, HTML-escaped before display,
+ * and never logged or uploaded.
+ */
+export interface SessionTurn {
+  /** `spans.start_time_ms` of the anchoring span (epoch ms). */
+  timestampMs: number;
+  /** Resolved agent mode (mapped to the known set). */
+  agentMode: AgentMode;
+  /** Resolved model id of the anchor span (response_model, else request_model). */
+  model: string;
+  /** Anchor span duration; for agent-mode turns this spans the whole turn. */
+  durationMs: number;
+  /** `true` when the anchor's `status_code` ∈ {0 unset, 1 ok}. */
+  success: boolean;
+  /**
+   * LOCAL-ONLY raw `copilot_chat.user_request` for this turn, when present.
+   * Absent on the synthetic leading turn that holds spans preceding the first
+   * anchor (or tool-only sessions with no anchor at all).
+   */
+  userRequest?: string;
+  /**
+   * LOCAL-ONLY assistant final-response text, extracted from the anchor span's
+   * `gen_ai.output.messages` attribute (see {@link ./responseText.extractResponseText}).
+   */
+  finalResponse?: string;
+  /**
+   * Token usage for this turn, summed over its MAIN-THREAD LLM spans (the anchor
+   * plus any main-thread `chat`/`invoke_agent` events) — the same spans that feed
+   * the session totals, so summing every turn reproduces the
+   * {@link SessionSummary} token counts. Spawned sub-agent events are excluded
+   * (their tokens belong to the sub-agent's own session).
+   */
+  llmCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  /** `spans.reasoning_tokens` when the optional column is present, else 0. */
+  reasoningTokens: number;
+  /** Tool/hook/sub-agent events that ran during this turn, in chronological order. */
+  events: SessionTimelineEntry[];
+}
+
+/**
  * Per-model token rollup within a single session, used by the LOCAL detail panel
  * to show a "cost & tokens by model" breakdown.
  *
@@ -136,7 +191,7 @@ export interface SessionTimelineEntry {
 export interface SessionModelUsage {
   /** Resolved model id (response_model, else request_model, else `unknown`). */
   model: string;
-  /** LLM spans (`chat` + `invoke_agent`) attributed to this model. */
+  /** LLM spans (`chat` + main-thread `invoke_agent`) attributed to this model. */
   llmCalls: number;
   inputTokens: number;
   outputTokens: number;
@@ -146,16 +201,79 @@ export interface SessionModelUsage {
 }
 
 /**
+ * Per-(agent, model) token rollup within a single session, distinguished by
+ * {@link SessionAgentUsage.kind}. This is the richer companion to
+ * {@link SessionModelUsage}: it preserves WHICH agent spent the tokens (e.g. the
+ * main `GitHub Copilot Chat` thread vs a spawned `Testing` / `Frontend`
+ * sub-agent), which the per-model rollup collapses away.
+ *
+ * `kind`:
+ * - `main` — the main conversation thread (`chat` spans and main-thread
+ *   `invoke_agent` spans whose chat_session_id equals the conversation). These
+ *   sum to the {@link SessionSummary} token totals.
+ * - `subagent` — a sub-agent the main agent spawned via a `runSubagent` tool
+ *   call (an `invoke_agent` span whose chat_session_id is the spawning tool-call
+ *   id, distinct from the conversation). Its tokens are ALSO attributed to the
+ *   sub-agent's own session, so they are shown for visibility but EXCLUDED from
+ *   the session totals to avoid double-counting (see
+ *   `invoke-agent-token-double-count`).
+ */
+export interface SessionAgentUsage {
+  /** `spans.agent_name`, defaulting to `copilot` when absent. */
+  agentName: string;
+  /** Resolved model id (response_model, else request_model, else `unknown`). */
+  model: string;
+  /** Whether this is the main conversation thread or a spawned sub-agent. */
+  kind: 'main' | 'subagent';
+  /** LLM spans attributed to this (agent, model, kind). */
+  llmCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  /** `spans.reasoning_tokens` when the optional column is present, else 0. */
+  reasoningTokens: number;
+}
+
+/**
+ * Stable composite key for a {@link SessionAgentUsage} row, used to correlate a
+ * rollup row with its computed cost estimate across the pure renderer / panel
+ * boundary. The NUL separator can never appear in an agent name or model id, so
+ * the three fields round-trip unambiguously.
+ */
+export function agentUsageKey(u: {
+  agentName: string;
+  model: string;
+  kind: 'main' | 'subagent';
+}): string {
+  return `${u.agentName} ${u.model} ${u.kind}`;
+}
+
+/**
  * A single session's full drill-down for the LOCAL detail panel: the safe
- * {@link SessionSummary} header plus the chronological {@link SessionTimelineEntry}
- * timeline (which may include local-only raw content) and a per-model usage
+ * {@link SessionSummary} header plus the per-user-request {@link SessionTurn}
+ * grouping (which may include local-only raw content) and a per-model usage
  * rollup ({@link SessionModelUsage}) for the cost/tokens breakdown.
  */
 export interface SessionDetail {
   summary: SessionSummary;
-  timeline: SessionTimelineEntry[];
-  /** Per-model token rollup (LLM ops only), sorted by total tokens desc. */
+  /**
+   * The session's interactions grouped into user-request turns, in chronological
+   * order. Every span is accounted for: anchored turns hold their triggered
+   * events, and a leading synthetic turn (no {@link SessionTurn.userRequest})
+   * holds any spans preceding the first anchor.
+   */
+  turns: SessionTurn[];
+  /**
+   * Per-model token rollup for the MAIN thread (chat + main-thread invoke_agent),
+   * sorted by total tokens desc. Sums to the {@link SessionSummary} token totals.
+   */
   modelUsage: SessionModelUsage[];
+  /**
+   * Per-(agent, model) token rollup over ALL LLM spans — main thread and spawned
+   * sub-agents — sorted main-first then by total tokens desc. Lets the detail view
+   * attribute usage to each agent; sub-agent rows are excluded from the totals.
+   */
+  agentUsage: SessionAgentUsage[];
 }
 
 /** Per-repository rollup used for the two-level Sessions tree. */

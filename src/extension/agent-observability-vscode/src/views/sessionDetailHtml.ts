@@ -1,4 +1,11 @@
-import { SessionDetail, SessionModelUsage, SessionTimelineEntry } from '../telemetry/models';
+import {
+  SessionDetail,
+  SessionModelUsage,
+  SessionAgentUsage,
+  SessionTimelineEntry,
+  SessionTurn,
+  agentUsageKey,
+} from '../telemetry/models';
 import { WorkflowDeviation } from '../deviation/models';
 import { CostEstimate, sumCost } from '../telemetry/pricing';
 import { escapeHtml } from './escapeHtml';
@@ -7,10 +14,13 @@ import { escapeHtml } from './escapeHtml';
  * Per-render cost data computed by the panel (where settings are available) and
  * passed in as plain data so this module stays `vscode`-free. `costByModel` is
  * keyed by the RAW resolved model id used in {@link SessionModelUsage.model};
- * `total` is the {@link ../telemetry/pricing.sumCost} rollup.
+ * `costByAgent` is keyed by {@link ../telemetry/models.agentUsageKey} for the
+ * per-agent breakdown; `total` is the {@link ../telemetry/pricing.sumCost} rollup
+ * over the main-thread per-model estimates (sub-agents are not in the total).
  */
 export interface SessionCostView {
   costByModel: ReadonlyMap<string, CostEstimate>;
+  costByAgent?: ReadonlyMap<string, CostEstimate>;
   total: { available: boolean; totalUsd: number; partial: boolean };
 }
 
@@ -72,8 +82,9 @@ export function renderSessionDetailHtml(
 <body>
   ${renderHeader(detail, cost)}
   ${renderModelUsage(detail.modelUsage, cost?.costByModel)}
+  ${renderSubAgentUsage(detail.agentUsage, cost?.costByAgent)}
   ${renderDeviations(deviations)}
-  ${renderTimeline(detail.timeline)}
+  ${renderTurns(detail.turns)}
 </body>
 </html>`;
 }
@@ -82,6 +93,15 @@ export function renderSessionDetailHtml(
 function renderHeader(detail: SessionDetail, cost?: SessionCostView): string {
   const s = detail.summary;
   const modes = s.agentModes.map(escapeHtml).join(', ');
+  // Distinct main-thread agent name(s) — usually just "GitHub Copilot Chat".
+  // Shown only when present so non-agent sessions keep the original layout.
+  const mainAgents = [
+    ...new Set(detail.agentUsage.filter((u) => u.kind === 'main').map((u) => u.agentName)),
+  ];
+  const agentRow =
+    mainAgents.length > 0
+      ? `\n      <div><dt>Agent</dt><dd>${mainAgents.map(escapeHtml).join(', ')}</dd></div>`
+      : '';
   // Estimated cost is shown only for sessions that made LLM calls (the same
   // condition that produces a model-usage rollup); otherwise it is meaningless.
   const costRow =
@@ -93,7 +113,7 @@ function renderHeader(detail: SessionDetail, cost?: SessionCostView): string {
     <h1>${escapeHtml(shortId(s.sessionId))}</h1>
     <dl class="meta">
       <div><dt>Repository</dt><dd>${escapeHtml(s.repository)}</dd></div>
-      <div><dt>Model</dt><dd>${escapeHtml(s.model)}</dd></div>
+      <div><dt>Model</dt><dd>${escapeHtml(s.model)}</dd></div>${agentRow}
       <div><dt>Modes</dt><dd>${modes}</dd></div>
       <div><dt>Started</dt><dd>${escapeHtml(formatLocal(s.startedAtMs))}</dd></div>
       <div><dt>Ended</dt><dd>${escapeHtml(formatLocal(s.endedAtMs))}</dd></div>
@@ -176,6 +196,81 @@ function renderModelUsage(
   </section>`;
 }
 
+/**
+ * "Spawned sub-agents" breakdown: one row per (agent, model) the main agent
+ * launched via a `runSubagent` tool call. Rendered only when the session spawned
+ * at least one sub-agent. These tokens are deliberately EXCLUDED from the session
+ * totals and the "by model" table above (they are counted in each sub-agent's own
+ * session); the heading note makes that explicit so the smaller header total is
+ * not mistaken for lost data.
+ */
+function renderSubAgentUsage(
+  usage: readonly SessionAgentUsage[],
+  costByAgent?: ReadonlyMap<string, CostEstimate>,
+): string {
+  const subs = usage.filter((u) => u.kind === 'subagent');
+  if (subs.length === 0) {
+    return '';
+  }
+
+  const totals = subs.reduce(
+    (acc, u) => {
+      acc.llmCalls += u.llmCalls;
+      acc.inputTokens += u.inputTokens;
+      acc.outputTokens += u.outputTokens;
+      acc.cachedTokens += u.cachedTokens;
+      acc.reasoningTokens += u.reasoningTokens;
+      return acc;
+    },
+    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0 },
+  );
+  const subtotalCost = sumCost(subs.map((u) => costByAgent?.get(agentUsageKey(u)) ?? { available: false }));
+
+  const bodyRows = subs
+    .map(
+      (u) => `<tr>
+        <td>${escapeHtml(u.agentName)}</td>
+        <td class="model">${escapeHtml(u.model)}</td>
+        <td class="n">${num(u.llmCalls)}</td>
+        <td class="n">${num(u.inputTokens)}</td>
+        <td class="n">${num(u.outputTokens)}</td>
+        <td class="n">${num(u.cachedTokens)}</td>
+        <td class="n">${num(u.reasoningTokens)}</td>
+        <td class="n">${formatCost(costByAgent?.get(agentUsageKey(u)))}</td>
+      </tr>`,
+    )
+    .join('\n');
+
+  return `<section class="panel">
+    <div class="panel-heading"><h2>Spawned sub-agents</h2><span>${num(subs.length)} invocation group(s)</span></div>
+    <p class="muted">Sub-agents launched by this session via <code>runSubagent</code>. Their tokens are counted in each sub-agent's own session, so they are shown here for visibility but are NOT included in the session totals above.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Agent</th><th>Model</th><th class="n">Calls</th><th class="n">Input</th>
+          <th class="n">Output</th><th class="n">Cached</th><th class="n">Reasoning</th>
+          <th class="n">Est. cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${bodyRows}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td>Sub-agent total</td>
+          <td class="model"></td>
+          <td class="n">${num(totals.llmCalls)}</td>
+          <td class="n">${num(totals.inputTokens)}</td>
+          <td class="n">${num(totals.outputTokens)}</td>
+          <td class="n">${num(totals.cachedTokens)}</td>
+          <td class="n">${num(totals.reasoningTokens)}</td>
+          <td class="n">${formatCost(subtotalCost)}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </section>`;
+}
+
 /** Workflow-deviations section (parity with the cloud SessionDetail page). */
 function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
   if (deviations.length === 0) {
@@ -219,16 +314,77 @@ function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
   </section>`;
 }
 
-/** Chronological timeline; chat entries expose their escaped userRequest. */
-function renderTimeline(timeline: readonly SessionTimelineEntry[]): string {
-  const rows = timeline.map(renderTimelineRow).join('\n');
+/**
+ * Timeline grouped into per-user-request turns. Each turn is a top-level block
+ * with two collapsed `<details>`: the User Request (which itself nests the
+ * collapsible event timeline) and the Final LLM Response.
+ */
+function renderTurns(turns: readonly SessionTurn[]): string {
+  const blocks = turns.map(renderTurn).join('\n');
   return `<section class="panel">
-    <div class="panel-heading"><h2>Timeline</h2><span>${num(timeline.length)} interaction(s)</span></div>
-    <div class="timeline">${rows}</div>
+    <div class="panel-heading"><h2>Timeline</h2><span>${num(turns.length)} turn(s)</span></div>
+    <div class="turns">${blocks}</div>
   </section>`;
 }
 
-/** One timeline row. The userRequest (if any) is escaped and collapsible. */
+/**
+ * One user-request turn. Renders (all collapsed by default — no `open`):
+ * - a **User Request** `<details>` whose body is the escaped request text plus a
+ *   nested **Timeline** `<details>` of the triggered events; and
+ * - a **Final LLM Response** `<details>` with the escaped response text.
+ *
+ * The synthetic request-less turn (spans before the first anchor) renders an
+ * "Activity" disclosure holding just the nested timeline. Exported so the
+ * webview's XSS-safety is unit-tested against crafted request/response content.
+ */
+export function renderTurn(turn: SessionTurn): string {
+  const time = escapeHtml(formatTime(turn.timestampMs));
+  const events = turn.events.map(renderTimelineRow).join('\n');
+  const timeline = `<details class="timeline-disclosure"><summary>Timeline (${num(
+    turn.events.length,
+  )} event(s))</summary><div class="timeline">${events}</div></details>`;
+
+  const hasRequest = turn.userRequest !== undefined && turn.userRequest.length > 0;
+  const requestBody = hasRequest
+    ? `<pre>${escapeHtml(turn.userRequest as string)}</pre>${timeline}`
+    : timeline;
+  const label = hasRequest
+    ? '<span class="turn-label">User request</span>'
+    : '<span class="turn-label muted">Activity (no user request)</span>';
+  const requestSummary = `<span class="time">${time}</span>${label}${renderTurnTokens(turn)}`;
+  const request = `<details class="turn-request"><summary>${requestSummary}</summary>${requestBody}</details>`;
+
+  const response =
+    turn.finalResponse !== undefined && turn.finalResponse.length > 0
+      ? `<details class="turn-response"><summary><span class="turn-label">Final LLM response</span></summary><pre>${escapeHtml(
+          turn.finalResponse,
+        )}</pre></details>`
+      : '';
+
+  return `<div class="turn">
+    ${request}
+    ${response}
+  </div>`;
+}
+
+/**
+ * Compact token badge for a turn's summary row: input ↑ / output ↓, with the
+ * cached/reasoning split and LLM-call count in the tooltip. Omitted when the turn
+ * made no main-thread LLM call (e.g. a tool-only synthetic turn).
+ */
+function renderTurnTokens(turn: SessionTurn): string {
+  if (turn.llmCalls === 0) {
+    return '';
+  }
+  const title =
+    `${turn.llmCalls} LLM call(s) · ${turn.inputTokens} in / ${turn.outputTokens} out ` +
+    `(cached ${turn.cachedTokens}, reasoning ${turn.reasoningTokens})`;
+  return `<span class="turn-tokens" title="${escapeHtml(title)}">↑ ${num(
+    turn.inputTokens,
+  )} ↓ ${num(turn.outputTokens)}</span>`;
+}
+
+/** One nested event row (tool / hook / sub-agent invocation) within a turn. */
 export function renderTimelineRow(entry: SessionTimelineEntry): string {
   const target =
     entry.toolName !== undefined && entry.toolName.length > 0
@@ -237,13 +393,6 @@ export function renderTimelineRow(entry: SessionTimelineEntry): string {
   const status = entry.success
     ? '<span class="status ok" title="Success">✓</span>'
     : '<span class="status fail" title="Failed">✗</span>';
-
-  const request =
-    entry.operation === 'chat' && entry.userRequest !== undefined && entry.userRequest.length > 0
-      ? `<details class="request"><summary>User request</summary><pre>${escapeHtml(
-          entry.userRequest,
-        )}</pre></details>`
-      : '';
 
   return `<div class="row">
     <div class="row-main">
@@ -254,7 +403,6 @@ export function renderTimelineRow(entry: SessionTimelineEntry): string {
       <span class="dur">${escapeHtml(formatDuration(entry.durationMs))}</span>
       ${status}
     </div>
-    ${request}
   </div>`;
 }
 
@@ -350,7 +498,20 @@ const STYLE = `
   td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
   td.model { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }
   tfoot td { font-weight: 600; border-bottom: none; border-top: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
-  .timeline { display: flex; flex-direction: column; }
+  .turns { display: flex; flex-direction: column; gap: .5rem; }
+  .turn { border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); border-radius: 5px; overflow: hidden; }
+  .turn-request > summary, .turn-response > summary { cursor: pointer; display: flex; align-items: center; gap: .65rem; padding: .45rem .6rem; list-style: none; }
+  .turn-request > summary::-webkit-details-marker, .turn-response > summary::-webkit-details-marker { display: none; }
+  .turn-request > summary::before, .turn-response > summary::before { content: '▸'; color: var(--vscode-descriptionForeground); font-size: .8rem; }
+  .turn-request[open] > summary::before, .turn-response[open] > summary::before { content: '▾'; }
+  .turn-request > summary:hover, .turn-response > summary:hover { background: var(--vscode-list-hoverBackground, transparent); }
+  .turn-response { border-top: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
+  .turn-label { font-weight: 600; }
+  .turn-tokens { margin-left: auto; font-variant-numeric: tabular-nums; font-size: .78rem; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+  .turn-request > pre, .turn-response > pre { white-space: pre-wrap; word-break: break-word; margin: 0 .6rem .6rem; padding: .5rem .6rem; background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background)); border-radius: 4px; max-height: 28rem; overflow: auto; }
+  .timeline-disclosure { margin: 0 .6rem .6rem; }
+  .timeline-disclosure > summary { cursor: pointer; color: var(--vscode-textLink-foreground); font-size: .82rem; padding: .2rem 0; }
+  .timeline { display: flex; flex-direction: column; padding-left: .4rem; border-left: 2px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   .row { padding: .35rem 0; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   .row:last-child { border-bottom: none; }
   .row-main { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
@@ -361,7 +522,4 @@ const STYLE = `
   .dur { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground); }
   .status.ok { color: var(--vscode-testing-iconPassed, #3a3); }
   .status.fail { color: var(--vscode-testing-iconFailed, #d33); }
-  .request { margin: .35rem 0 0 5.5em; }
-  .request summary { cursor: pointer; color: var(--vscode-textLink-foreground); font-size: .82rem; }
-  .request pre { white-space: pre-wrap; word-break: break-word; margin: .35rem 0 0; padding: .5rem .6rem; background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background)); border-radius: 4px; max-height: 22rem; overflow: auto; }
 `;

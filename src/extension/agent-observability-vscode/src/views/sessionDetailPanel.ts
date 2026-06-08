@@ -4,6 +4,7 @@ import { TelemetryService } from '../telemetry/telemetryService';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
 import { Configuration } from '../config/configuration';
 import { computeCost, sumCost, CostEstimate } from '../telemetry/pricing';
+import { agentUsageKey } from '../telemetry/models';
 import { renderSessionDetailHtml } from './sessionDetailHtml';
 
 /** Webview view type used for all session-detail panels. */
@@ -106,10 +107,20 @@ export class SessionDetailPanelManager {
     const costByModel = new Map<string, CostEstimate>(
       detail.modelUsage.map((u) => [u.model, computeCost(u.model, u, overrides)]),
     );
+    // Per-agent estimates (incl. sub-agents) keyed by agentUsageKey, for the
+    // "Spawned sub-agents" breakdown. The session total stays the main-thread
+    // per-model rollup (costByModel) — sub-agent costs are informational only.
+    const costByAgent = new Map<string, CostEstimate>(
+      detail.agentUsage.map((u) => [agentUsageKey(u), computeCost(u.model, u, overrides)]),
+    );
     const total = sumCost([...costByModel.values()]);
 
     const nonce = makeNonce();
-    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, { costByModel, total });
+    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, {
+      costByModel,
+      costByAgent,
+      total,
+    });
   }
 }
 

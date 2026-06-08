@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderSessionDetailHtml, SessionCostView } from './sessionDetailHtml';
-import { SessionDetail } from '../telemetry/models';
+import { SessionDetail, SessionTurn } from '../telemetry/models';
 import { CostEstimate } from '../telemetry/pricing';
 import { DeviationType, WorkflowDeviation } from '../deviation/models';
 
@@ -28,8 +28,9 @@ const detail: SessionDetail = {
     model: 'gpt-test',
     agentModes: ['agent'],
   },
-  timeline: [],
+  turns: [],
   modelUsage: [],
+  agentUsage: [],
 };
 
 function deviation(overrides: Partial<WorkflowDeviation>): WorkflowDeviation {
@@ -94,7 +95,7 @@ describe('renderSessionDetailHtml — cost & tokens by model', () => {
       outputTokens: 200,
       cachedTokens: 100,
     },
-    timeline: [],
+    turns: [],
     modelUsage: [
       {
         model: 'claude-opus-4-6',
@@ -121,6 +122,7 @@ describe('renderSessionDetailHtml — cost & tokens by model', () => {
         reasoningTokens: 0,
       },
     ],
+    agentUsage: [],
   };
 
   /** Two models priced (one a legitimate $0), one not → the session total is partial. */
@@ -188,5 +190,132 @@ describe('renderSessionDetailHtml — cost & tokens by model', () => {
     expect(html).not.toContain('(est.)');
     // The footer total is likewise unavailable.
     expect(footerRow(html)).toContain('<td class="n">n/a</td>');
+  });
+});
+
+describe('renderSessionDetailHtml — spawned sub-agents', () => {
+  /** Main thread + two spawned sub-agents on different models. */
+  const agentDetail: SessionDetail = {
+    summary: {
+      ...detail.summary,
+      llmCalls: 3,
+      inputTokens: 5000,
+      outputTokens: 200,
+      cachedTokens: 100,
+    },
+    turns: [],
+    modelUsage: [
+      { model: 'gpt-5.4', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0 },
+    ],
+    agentUsage: [
+      { agentName: 'GitHub Copilot Chat', model: 'gpt-5.4', kind: 'main', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0 },
+      { agentName: 'Testing', model: 'gpt-5.3-codex', kind: 'subagent', llmCalls: 2, inputTokens: 1300, outputTokens: 40, cachedTokens: 0, reasoningTokens: 0 },
+      { agentName: 'Frontend', model: 'gpt-5.4', kind: 'subagent', llmCalls: 1, inputTokens: 900, outputTokens: 10, cachedTokens: 0, reasoningTokens: 0 },
+    ],
+  };
+
+  it('renders the main agent in the header and a Spawned sub-agents section', () => {
+    const html = renderSessionDetailHtml(agentDetail, [], NONCE);
+    expect(html).toContain('<dt>Agent</dt><dd>GitHub Copilot Chat</dd>');
+    expect(html).toContain('Spawned sub-agents');
+    // Each spawned sub-agent appears with its name and model.
+    expect(html).toContain('<td>Testing</td>');
+    expect(html).toContain('<td>Frontend</td>');
+    expect(html).toContain('gpt-5.3-codex');
+  });
+
+  it('sub-agent subtotal sums only the sub-agent rows (excludes the main thread)', () => {
+    const html = renderSessionDetailHtml(agentDetail, [], NONCE);
+    const sub = html.match(/<td>Sub-agent total<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
+    expect(sub).toContain('<td class="n">3</td>'); // calls 2 + 1
+    expect(sub).toContain('<td class="n">2200</td>'); // input 1300 + 900
+    expect(sub).toContain('<td class="n">50</td>'); // output 40 + 10
+  });
+
+  it('omits the section entirely when there are no spawned sub-agents', () => {
+    const html = renderSessionDetailHtml(detail, [], NONCE);
+    expect(html).not.toContain('Spawned sub-agents');
+  });
+
+  it('does not let sub-agents inflate the session header totals', () => {
+    const html = renderSessionDetailHtml(agentDetail, [], NONCE);
+    // The header Tokens row reflects the main-thread totals only (5000 in / 200 out).
+    expect(html).toContain('5000 / 200 (cached 100)');
+  });
+});
+
+describe('renderSessionDetailHtml — grouped turns', () => {
+  const turn: SessionTurn = {
+    timestampMs: 1_700_000_000_000,
+    agentMode: 'agent',
+    model: 'gpt-test',
+    durationMs: 4321,
+    success: true,
+    userRequest: 'Refactor the parser',
+    finalResponse: 'Done — refactored into three modules.',
+    llmCalls: 2,
+    inputTokens: 1234,
+    outputTokens: 340,
+    cachedTokens: 100,
+    reasoningTokens: 0,
+    events: [
+      {
+        timestampMs: 1_700_000_001_000,
+        operation: 'execute_tool',
+        agentMode: 'agent',
+        model: 'gpt-test',
+        toolName: 'read_file',
+        durationMs: 12,
+        success: true,
+      },
+    ],
+  };
+  const turnDetail: SessionDetail = { ...detail, turns: [turn] };
+
+  it('renders a User Request disclosure nesting the event timeline', () => {
+    const html = renderSessionDetailHtml(turnDetail, [], NONCE);
+    expect(html).toContain('1 turn(s)');
+    expect(html).toContain('User request');
+    expect(html).toContain('Refactor the parser');
+    // The event timeline is nested under the request, as a second-level disclosure.
+    expect(html).toContain('Timeline (1 event(s))');
+    expect(html).toContain('read_file');
+  });
+
+  it('renders a Final LLM response disclosure with the response text', () => {
+    const html = renderSessionDetailHtml(turnDetail, [], NONCE);
+    expect(html).toContain('Final LLM response');
+    expect(html).toContain('Done — refactored into three modules.');
+  });
+
+  it('renders the per-turn token badge (input ↑ / output ↓)', () => {
+    const html = renderSessionDetailHtml(turnDetail, [], NONCE);
+    expect(html).toContain('↑ 1234 ↓ 340');
+  });
+
+  it('keeps every disclosure collapsed by default (no open attribute)', () => {
+    const html = renderSessionDetailHtml(turnDetail, [], NONCE);
+    expect(html).not.toMatch(/<details[^>]*\sopen[\s>]/);
+  });
+
+  it('labels a request-less synthetic turn as activity and omits the response block', () => {
+    const synthetic: SessionTurn = {
+      timestampMs: 1_700_000_000_000,
+      agentMode: 'agent',
+      model: 'gpt-test',
+      durationMs: 0,
+      success: true,
+      llmCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      reasoningTokens: 0,
+      events: [turn.events[0]],
+    };
+    const html = renderSessionDetailHtml({ ...detail, turns: [synthetic] }, [], NONCE);
+    expect(html).toContain('Activity (no user request)');
+    expect(html).not.toContain('Final LLM response');
+    // A turn with no main-thread LLM call shows no token badge.
+    expect(html).not.toContain('class="turn-tokens"');
   });
 });

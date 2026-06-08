@@ -10,11 +10,15 @@ import {
   SessionSummary,
   SessionDetail,
   SessionModelUsage,
+  SessionAgentUsage,
   SessionTimelineEntry,
+  SessionTurn,
   AgentMode,
+  agentUsageKey,
   mapAgentMode,
   statusToSuccess,
 } from './models';
+import { extractResponseText } from './responseText';
 
 /** Schema versions this reader understands. */
 export const SUPPORTED_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([1]);
@@ -549,11 +553,12 @@ export class TelemetryDatabase {
    * Full drill-down for a single session for the LOCAL detail panel: a
    * {@link SessionSummary} header plus a chronological timeline.
    *
-   * PRIVACY: this is the ONLY query that reads raw content. For `chat` spans it
-   * additionally reads the `copilot_chat.user_request` attribute into
-   * {@link SessionTimelineEntry.userRequest}. The caller renders it locally
-   * (HTML-escaped) and never logs or uploads it. All other metadata methods on
-   * this class stay strictly content-free.
+   * PRIVACY: this is the ONLY method that reads raw content. For the LLM spans
+   * (`chat` and `invoke_agent`) it additionally reads the
+   * `copilot_chat.user_request` and `gen_ai.output.messages` attributes into the
+   * per-turn {@link SessionTurn.userRequest} / {@link SessionTurn.finalResponse}.
+   * The caller renders them locally (HTML-escaped) and never logs or uploads
+   * them. All other metadata methods on this class stay strictly content-free.
    *
    * Returns `undefined` when the session key has no spans.
    */
@@ -574,16 +579,20 @@ export class TelemetryDatabase {
       end_time_ms: number;
       status_code: number;
       operation_name: string | null;
+      agent_name: string | null;
       request_model: string | null;
       response_model: string | null;
       tool_name: string | null;
+      conversation_id: string | null;
+      chat_session_id: string | null;
       input_tokens: number | null;
       output_tokens: number | null;
       cached_tokens: number | null;
       reasoning_tokens: number | null;
     }>(
       `SELECT span_id, start_time_ms, end_time_ms, status_code,
-                operation_name, request_model, response_model, tool_name,
+                operation_name, agent_name, request_model, response_model, tool_name,
+                conversation_id, chat_session_id,
                 input_tokens, output_tokens, cached_tokens, ${reasoningCol}
          FROM spans
          WHERE COALESCE(conversation_id, chat_session_id) = ?
@@ -595,8 +604,11 @@ export class TelemetryDatabase {
       return undefined;
     }
 
-    // LOCAL-ONLY raw user requests, keyed by span id, scoped to chat spans.
+    // LOCAL-ONLY raw user requests + assistant responses, keyed by span id,
+    // scoped to the LLM spans (chat + invoke_agent). Used only to build the
+    // per-turn request/response below; never logged or uploaded.
     const userRequests = this.userRequestsBySpan(sessionKey);
+    const responses = this.responsesBySpan(sessionKey);
     const mode = this.agentModesBySession().get(sessionKey)?.[0] ?? 'default';
 
     let startedAtMs = rows[0].start_time_ms;
@@ -609,11 +621,30 @@ export class TelemetryDatabase {
 
     // Per-model rollup, keyed by resolved model id. Accumulated only for the
     // LLM operations that actually carry a model and token counts: `chat` AND
-    // `invoke_agent` (Copilot agent-mode sessions emit their model/tokens on
-    // invoke_agent spans, not chat). Restricting to these avoids a spurious
-    // all-zero `unknown` bucket from tool/hook spans while keeping the rollup's
-    // token sums equal to the header totals (tool/hook spans carry no tokens).
+    // main-thread `invoke_agent` (Copilot agent-mode sessions emit their
+    // model/tokens on invoke_agent spans, not chat). Restricting to these avoids
+    // a spurious all-zero `unknown` bucket from tool/hook spans while keeping the
+    // rollup's token sums equal to the header totals (tool/hook spans carry no
+    // tokens).
+    //
+    // We EXCLUDE spawned sub-agent invocations: when the main agent launches a
+    // sub-agent via a tool call, Copilot emits an `invoke_agent` span carrying
+    // the SAME conversation_id but a `chat_session_id` that is the spawning
+    // tool-call id (`call_…`/`toolu_…`) rather than the conversation. Because the
+    // session key is COALESCE(conversation_id, chat_session_id), those sub-agent
+    // spans collapse into this session and their tokens are ALSO attributed to
+    // the sub-agent's own session — so counting them here double-counts and makes
+    // an agent session read ~2x its real usage. Counting only chat + main-thread
+    // invoke_agent matches GitHub's own per-session Agent Debug Logs. See the
+    // `invoke-agent-token-double-count` investigation.
     const usageByModel = new Map<string, SessionModelUsage>();
+
+    // Richer companion rollup keyed by (agent_name, model, kind): preserves WHICH
+    // agent spent the tokens — the main `GitHub Copilot Chat` thread vs each
+    // spawned sub-agent (`Testing`, `Frontend`, …) — which usageByModel collapses
+    // away. Sub-agent rows are surfaced for visibility but, like above, are NOT
+    // folded into the session totals (they belong to their own sessions).
+    const usageByAgent = new Map<string, SessionAgentUsage>();
 
     const timeline: SessionTimelineEntry[] = rows.map((row) => {
       const operation = row.operation_name ?? 'chat';
@@ -623,12 +654,59 @@ export class TelemetryDatabase {
       const rowCached = row.cached_tokens ?? 0;
       const rowReasoning = row.reasoning_tokens ?? 0;
 
-      if (operation === 'chat') {
+      // A spawned sub-agent invocation carries the parent conversation_id but a
+      // distinct chat_session_id (the spawning tool-call id); its tokens belong
+      // to the sub-agent's own session, so it must not contribute here.
+      const isSpawnedSubAgent =
+        operation === 'invoke_agent' &&
+        row.conversation_id !== null &&
+        row.chat_session_id !== null &&
+        row.conversation_id !== row.chat_session_id;
+      // Count tokens once per real main-thread LLM call.
+      const countsTokens =
+        operation === 'chat' || (operation === 'invoke_agent' && !isSpawnedSubAgent);
+
+      // Count an LLM call for every main-thread LLM span — `chat` (ask mode) AND
+      // main-thread `invoke_agent` (agent mode emits its turns here, not as
+      // `chat`). Mirrors `countsTokens` so the header LLM-call count agrees with
+      // the per-model/per-turn rollups; spawned sub-agents are excluded for the
+      // same reason their tokens are (they belong to their own session).
+      if (countsTokens) {
         llmCalls += 1;
       } else if (operation === 'execute_tool') {
         toolCalls += 1;
       }
+
+      // Per-(agent, model, kind) rollup over every LLM-operation span — main AND
+      // spawned sub-agents — so the detail view can attribute usage to each agent.
+      // Only the `main` rows feed the session totals below.
       if (operation === 'chat' || operation === 'invoke_agent') {
+        const agentName =
+          row.agent_name !== null && row.agent_name.length > 0 ? row.agent_name : DEFAULT_AGENT;
+        const kind: 'main' | 'subagent' = isSpawnedSubAgent ? 'subagent' : 'main';
+        const key = agentUsageKey({ agentName, model, kind });
+        let agentUsage = usageByAgent.get(key);
+        if (agentUsage === undefined) {
+          agentUsage = {
+            agentName,
+            model,
+            kind,
+            llmCalls: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedTokens: 0,
+            reasoningTokens: 0,
+          };
+          usageByAgent.set(key, agentUsage);
+        }
+        agentUsage.llmCalls += 1;
+        agentUsage.inputTokens += rowInput;
+        agentUsage.outputTokens += rowOutput;
+        agentUsage.cachedTokens += rowCached;
+        agentUsage.reasoningTokens += rowReasoning;
+      }
+
+      if (countsTokens) {
         let usage = usageByModel.get(model);
         if (usage === undefined) {
           usage = {
@@ -646,11 +724,11 @@ export class TelemetryDatabase {
         usage.outputTokens += rowOutput;
         usage.cachedTokens += rowCached;
         usage.reasoningTokens += rowReasoning;
-      }
 
-      inputTokens += rowInput;
-      outputTokens += rowOutput;
-      cachedTokens += rowCached;
+        inputTokens += rowInput;
+        outputTokens += rowOutput;
+        cachedTokens += rowCached;
+      }
       if (row.start_time_ms < startedAtMs) {
         startedAtMs = row.start_time_ms;
       }
@@ -658,9 +736,9 @@ export class TelemetryDatabase {
         endedAtMs = row.end_time_ms;
       }
 
-      // user_request is read for chat spans only (privacy-scoped, local display).
-      const userRequest =
-        operation === 'chat' ? userRequests.get(row.span_id) : undefined;
+      // user_request is read for any LLM span that carries it (privacy-scoped,
+      // local display); on a nested event this surfaces a sub-agent's own prompt.
+      const userRequest = userRequests.get(row.span_id);
 
       return {
         timestampMs: row.start_time_ms,
@@ -675,12 +753,102 @@ export class TelemetryDatabase {
       };
     });
 
+    // Group the chronological spans into per-user-request turns. A turn is
+    // anchored by a MAIN-THREAD LLM span carrying a user_request: a `chat` span
+    // (ask mode) or an `invoke_agent` span that is NOT a spawned sub-agent (agent
+    // mode). Every other span — tools, hooks, and spawned sub-agent invocations —
+    // becomes an `event` of the open turn. Spans preceding the first anchor (or
+    // tool-only sessions with no anchor at all) collect into a leading synthetic
+    // turn so `turns` always partitions every span. `rows` and `timeline` are
+    // index-aligned (timeline is `rows.map(...)`), so we zip them here.
+    const turns: SessionTurn[] = [];
+    let currentTurn: SessionTurn | undefined;
+    rows.forEach((row, i) => {
+      const operation = row.operation_name ?? 'chat';
+      const isSpawnedSubAgent =
+        operation === 'invoke_agent' &&
+        row.conversation_id !== null &&
+        row.chat_session_id !== null &&
+        row.conversation_id !== row.chat_session_id;
+      const isAnchor =
+        userRequests.has(row.span_id) &&
+        (operation === 'chat' || (operation === 'invoke_agent' && !isSpawnedSubAgent));
+
+      if (isAnchor) {
+        const responseRaw = responses.get(row.span_id);
+        currentTurn = {
+          timestampMs: row.start_time_ms,
+          agentMode: mode,
+          model: resolveModel(row.response_model, row.request_model),
+          durationMs: row.end_time_ms - row.start_time_ms,
+          success: statusToSuccess(row.status_code),
+          userRequest: userRequests.get(row.span_id),
+          finalResponse:
+            responseRaw !== undefined ? extractResponseText(responseRaw) : undefined,
+          llmCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          events: [],
+        };
+        turns.push(currentTurn);
+      } else {
+        if (currentTurn === undefined) {
+          // Leading spans before any user request: a synthetic, request-less turn.
+          currentTurn = {
+            timestampMs: row.start_time_ms,
+            agentMode: mode,
+            model: resolveModel(row.response_model, row.request_model),
+            durationMs: 0,
+            success: true,
+            llmCalls: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedTokens: 0,
+            reasoningTokens: 0,
+            events: [],
+          };
+          turns.push(currentTurn);
+        }
+        currentTurn.events.push(timeline[i]);
+      }
+
+      // Attribute MAIN-THREAD LLM tokens (the anchor itself, plus any main-thread
+      // chat/invoke_agent event) to the open turn — mirroring the session-total
+      // rule above. Sub-agent spans are excluded, so summing turns reproduces the
+      // header totals.
+      if (operation === 'chat' || (operation === 'invoke_agent' && !isSpawnedSubAgent)) {
+        currentTurn.llmCalls += 1;
+        currentTurn.inputTokens += row.input_tokens ?? 0;
+        currentTurn.outputTokens += row.output_tokens ?? 0;
+        currentTurn.cachedTokens += row.cached_tokens ?? 0;
+        currentTurn.reasoningTokens += row.reasoning_tokens ?? 0;
+      }
+    });
+
     // Sort by total tokens (input + output) desc, then model id asc for a stable
     // order when token counts tie.
     const modelUsage = [...usageByModel.values()].sort((a, b) => {
       const byTokens =
         b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens);
       return byTokens !== 0 ? byTokens : a.model.localeCompare(b.model);
+    });
+
+    // Main-thread rows first (they make up the session totals), then sub-agents;
+    // within each group, heaviest (input + output) first, then agent/model for a
+    // stable tie-break.
+    const agentUsage = [...usageByAgent.values()].sort((a, b) => {
+      if (a.kind !== b.kind) {
+        return a.kind === 'main' ? -1 : 1;
+      }
+      const byTokens =
+        b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens);
+      if (byTokens !== 0) {
+        return byTokens;
+      }
+      const byAgent = a.agentName.localeCompare(b.agentName);
+      return byAgent !== 0 ? byAgent : a.model.localeCompare(b.model);
     });
 
     const summary: SessionSummary = {
@@ -699,7 +867,7 @@ export class TelemetryDatabase {
       agentModes: this.agentModesBySession().get(sessionKey) ?? ['default'],
     };
 
-    return { summary, timeline, modelUsage };
+    return { summary, turns, modelUsage, agentUsage };
   }
 
   /**
@@ -736,20 +904,47 @@ export class TelemetryDatabase {
   }
 
   /**
-   * LOCAL-ONLY: map span id → raw `copilot_chat.user_request` value for the chat
-   * spans of a single session. Used solely by {@link getSessionDetail} for local
-   * webview display; never logged or uploaded. Only chat spans are included so
-   * the value is surfaced exactly where the detail view shows a user prompt.
+   * LOCAL-ONLY: map span id → raw `copilot_chat.user_request` value for the LLM
+   * spans (`chat` and `invoke_agent`) of a single session. Used solely by
+   * {@link getSessionDetail} for local webview display; never logged or uploaded.
+   *
+   * Both operations are included because agent-mode sessions carry the request on
+   * `invoke_agent` spans (often with ZERO `chat` spans); a chat-only filter would
+   * silently drop every agent-mode prompt. The caller separates main-thread
+   * anchors from spawned sub-agents via the conversation_id / chat_session_id
+   * relationship, so no extra scoping is needed here.
    */
   private userRequestsBySpan(sessionKey: string): Map<string, string> {
+    return this.contentBySpan(sessionKey, 'copilot_chat.user_request');
+  }
+
+  /**
+   * LOCAL-ONLY: map span id → raw `gen_ai.output.messages` value for the LLM
+   * spans (`chat` and `invoke_agent`) of a single session — the assistant's
+   * response messages. Used solely by {@link getSessionDetail} to surface each
+   * turn's final response (via {@link ./responseText.extractResponseText}); never
+   * logged or uploaded. Same privacy class and scoping as
+   * {@link userRequestsBySpan}.
+   */
+  private responsesBySpan(sessionKey: string): Map<string, string> {
+    return this.contentBySpan(sessionKey, 'gen_ai.output.messages');
+  }
+
+  /**
+   * LOCAL-ONLY shared helper for {@link userRequestsBySpan} /
+   * {@link responsesBySpan}: map span id → non-empty raw `attributeKey` value for
+   * the LLM spans (`chat` and `invoke_agent`) of a single session. `attributeKey`
+   * is bound as a SQL parameter, never interpolated.
+   */
+  private contentBySpan(sessionKey: string, attributeKey: string): Map<string, string> {
     const rows = this.allRows<{ span_id: string; value: string | null }>(
       `SELECT a.span_id AS span_id, a.value AS value
          FROM span_attributes a
          JOIN spans s ON s.span_id = a.span_id
-         WHERE a.key = 'copilot_chat.user_request'
-           AND s.operation_name = 'chat'
+         WHERE a.key = ?
+           AND s.operation_name IN ('chat', 'invoke_agent')
            AND COALESCE(s.conversation_id, s.chat_session_id) = ?`,
-      [sessionKey],
+      [attributeKey, sessionKey],
     );
 
     const map = new Map<string, string>();
