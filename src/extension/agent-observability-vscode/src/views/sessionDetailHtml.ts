@@ -1,4 +1,6 @@
 import {
+  CombinedSessionDetail,
+  CombinedSummary,
   SessionDetail,
   SessionModelUsage,
   SessionAgentUsage,
@@ -29,6 +31,28 @@ export interface SessionCostView {
  * {@link SessionCostView.total} rollup satisfy it structurally.
  */
 type Costish = { available: boolean; totalUsd?: number; partial?: boolean } | undefined;
+
+/** One combined session, paired with the data the panel resolves per session. */
+export interface CombinedSessionSection {
+  detail: SessionDetail;
+  /** Workflow deviations detected for THIS session (rendered in its section). */
+  deviations: readonly WorkflowDeviation[];
+  /** This session's total estimated cost, for the section summary line. */
+  totalCost?: Costish;
+}
+
+/**
+ * Everything the combined renderer needs, assembled by the panel (where settings
+ * and the deviation detector are available). {@link combined} carries the merged
+ * header + usage rollups; {@link cost} is the merged-usage cost view; each
+ * {@link CombinedSessionSection} renders one session's own meta, deviations, and
+ * turns. Sections are rendered in the order given (the panel sorts by start time).
+ */
+export interface CombinedSessionView {
+  combined: CombinedSessionDetail;
+  cost?: SessionCostView;
+  sections: readonly CombinedSessionSection[];
+}
 
 /**
  * Render a numeric field. Today these are typed `number` and stringify to safe
@@ -89,6 +113,120 @@ export function renderSessionDetailHtml(
 </html>`;
 }
 
+/**
+ * Pure HTML renderer for the LOCAL combined-sessions webview.
+ *
+ * Same security model as {@link renderSessionDetailHtml}: every dynamic value is
+ * {@link escapeHtml}-escaped, the document declares the strict nonce-only CSP, and
+ * the page is static HTML (native `<details>` for collapsing). The layout is an
+ * aggregate header + merged cost/token tables, then one collapsed `<details>`
+ * section per session holding that session's meta, deviations, and turns (the
+ * first section is open). All section helpers are shared with the single-session
+ * renderer.
+ */
+export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce: string): string {
+  const { combined, cost, sections } = view;
+  const csp = [
+    "default-src 'none'",
+    `style-src 'nonce-${nonce}'`,
+    "img-src 'none'",
+    "font-src 'none'",
+    "script-src 'none'",
+  ].join('; ');
+
+  const sectionsHtml = sections
+    .map((section, index) => renderSessionSection(section, index === 0))
+    .join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Combined sessions (${num(combined.summary.sessionCount)})</title>
+  <style nonce="${nonce}">${STYLE}</style>
+</head>
+<body>
+  ${renderCombinedHeader(combined.summary, cost)}
+  ${renderModelUsage(combined.modelUsage, cost?.costByModel)}
+  ${renderSubAgentUsage(combined.agentUsage, cost?.costByAgent)}
+  <section class="panel">
+    <div class="panel-heading"><h2>Sessions</h2><span>${num(sections.length)} session(s)</span></div>
+    <div class="turns">${sectionsHtml}</div>
+  </section>
+</body>
+</html>`;
+}
+
+/** Aggregate header for the combined view: counts, repos, models, totals, cost. */
+function renderCombinedHeader(summary: CombinedSummary, cost?: SessionCostView): string {
+  const repos = summary.repositories.map(escapeHtml).join(', ');
+  const models = summary.models.map(escapeHtml).join(', ');
+  const modes = summary.agentModes.map(escapeHtml).join(', ');
+  const costRow =
+    cost !== undefined
+      ? `\n      <div><dt>Estimated cost</dt><dd>${formatCost(cost.total)}</dd></div>`
+      : '';
+  return `<header class="header">
+    <p class="eyebrow">Combined sessions</p>
+    <h1>${num(summary.sessionCount)} sessions</h1>
+    <dl class="meta">
+      <div><dt>Repositories</dt><dd>${repos}</dd></div>
+      <div><dt>Models</dt><dd>${models}</dd></div>
+      <div><dt>Modes</dt><dd>${modes}</dd></div>
+      <div><dt>Earliest start</dt><dd>${escapeHtml(formatLocal(summary.startedAtMs))}</dd></div>
+      <div><dt>Latest end</dt><dd>${escapeHtml(formatLocal(summary.endedAtMs))}</dd></div>
+      <div><dt>Combined duration</dt><dd>${escapeHtml(formatDuration(summary.totalDurationMs))}</dd></div>
+      <div><dt>Wall-clock span</dt><dd>${escapeHtml(formatDuration(summary.spanMs))}</dd></div>
+      <div><dt>Interactions</dt><dd>${num(summary.interactionCount)}</dd></div>
+      <div><dt>LLM calls</dt><dd>${num(summary.llmCalls)}</dd></div>
+      <div><dt>Tool calls</dt><dd>${num(summary.toolCalls)}</dd></div>
+      <div><dt>Tokens in / out</dt><dd>${num(summary.inputTokens)} / ${num(summary.outputTokens)} (cached ${num(summary.cachedTokens)})</dd></div>${costRow}
+    </dl>
+  </header>`;
+}
+
+/**
+ * One session's section in the combined view: a `<details>` (open when `open`)
+ * whose summary is the session's id/title and headline counts, and whose body is
+ * a compact meta line, the session's deviations, and its turns. Reuses the same
+ * deviation/turn section helpers as the single-session renderer.
+ */
+function renderSessionSection(section: CombinedSessionSection, open: boolean): string {
+  const { detail, deviations, totalCost } = section;
+  const s = detail.summary;
+  const id = escapeHtml(shortId(s.sessionId));
+  const titleLabel =
+    s.title !== undefined && s.title.length > 0
+      ? `<span class="turn-label">${escapeHtml(truncate(s.title, 60))}</span>`
+      : `<span class="turn-label">Session ${id}</span>`;
+  const costLabel =
+    detail.modelUsage.length > 0
+      ? `<span class="turn-tokens">${escapeHtml(formatCost(totalCost))}</span>`
+      : '';
+  const summaryRow =
+    `<span class="time">${escapeHtml(formatTime(s.startedAtMs))}</span>${titleLabel}` +
+    `<span class="mode">${id} · ${num(detail.turns.length)} turn(s) · ${num(s.llmCalls)} LLM · ${num(s.toolCalls)} tool</span>${costLabel}`;
+
+  const meta = `<dl class="meta section-meta">
+      <div><dt>Repository</dt><dd>${escapeHtml(s.repository)}</dd></div>
+      <div><dt>Model</dt><dd>${escapeHtml(s.model)}</dd></div>
+      <div><dt>Started</dt><dd>${escapeHtml(formatLocal(s.startedAtMs))}</dd></div>
+      <div><dt>Duration</dt><dd>${escapeHtml(formatDuration(s.durationMs))}</dd></div>
+      <div><dt>Tokens in / out</dt><dd>${num(s.inputTokens)} / ${num(s.outputTokens)} (cached ${num(s.cachedTokens)})</dd></div>
+    </dl>`;
+
+  return `<details class="turn-request session-section"${open ? ' open' : ''}>
+    <summary>${summaryRow}</summary>
+    <div class="section-body">
+      ${meta}
+      ${renderDeviations(deviations)}
+      ${renderTurns(detail.turns)}
+    </div>
+  </details>`;
+}
+
 /** Sanitized header: repository, model, start/end, counts, token totals, cost. */
 function renderHeader(detail: SessionDetail, cost?: SessionCostView): string {
   const s = detail.summary;
@@ -146,10 +284,9 @@ function renderModelUsage(
       acc.inputTokens += u.inputTokens;
       acc.outputTokens += u.outputTokens;
       acc.cachedTokens += u.cachedTokens;
-      acc.reasoningTokens += u.reasoningTokens;
       return acc;
     },
-    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0 },
+    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
   );
 
   const totalCost = sumCostView(usage, costByModel);
@@ -162,7 +299,6 @@ function renderModelUsage(
         <td class="n">${num(u.inputTokens)}</td>
         <td class="n">${num(u.outputTokens)}</td>
         <td class="n">${num(u.cachedTokens)}</td>
-        <td class="n">${num(u.reasoningTokens)}</td>
         <td class="n">${formatCost(costByModel?.get(u.model))}</td>
       </tr>`,
     )
@@ -174,7 +310,7 @@ function renderModelUsage(
       <thead>
         <tr>
           <th>Model</th><th class="n" title="LLM calls to this model (chat and agent invocations)">Calls</th><th class="n">Input</th>
-          <th class="n">Output</th><th class="n">Cached</th><th class="n">Reasoning</th>
+          <th class="n">Output</th><th class="n">Cached</th>
           <th class="n">Est. cost</th>
         </tr>
       </thead>
@@ -188,7 +324,6 @@ function renderModelUsage(
           <td class="n">${num(totals.inputTokens)}</td>
           <td class="n">${num(totals.outputTokens)}</td>
           <td class="n">${num(totals.cachedTokens)}</td>
-          <td class="n">${num(totals.reasoningTokens)}</td>
           <td class="n">${formatCost(totalCost)}</td>
         </tr>
       </tfoot>
@@ -219,10 +354,9 @@ function renderSubAgentUsage(
       acc.inputTokens += u.inputTokens;
       acc.outputTokens += u.outputTokens;
       acc.cachedTokens += u.cachedTokens;
-      acc.reasoningTokens += u.reasoningTokens;
       return acc;
     },
-    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0 },
+    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
   );
   const subtotalCost = sumCost(subs.map((u) => costByAgent?.get(agentUsageKey(u)) ?? { available: false }));
 
@@ -235,7 +369,6 @@ function renderSubAgentUsage(
         <td class="n">${num(u.inputTokens)}</td>
         <td class="n">${num(u.outputTokens)}</td>
         <td class="n">${num(u.cachedTokens)}</td>
-        <td class="n">${num(u.reasoningTokens)}</td>
         <td class="n">${formatCost(costByAgent?.get(agentUsageKey(u)))}</td>
       </tr>`,
     )
@@ -248,7 +381,7 @@ function renderSubAgentUsage(
       <thead>
         <tr>
           <th>Agent</th><th>Model</th><th class="n">Calls</th><th class="n">Input</th>
-          <th class="n">Output</th><th class="n">Cached</th><th class="n">Reasoning</th>
+          <th class="n">Output</th><th class="n">Cached</th>
           <th class="n">Est. cost</th>
         </tr>
       </thead>
@@ -263,7 +396,6 @@ function renderSubAgentUsage(
           <td class="n">${num(totals.inputTokens)}</td>
           <td class="n">${num(totals.outputTokens)}</td>
           <td class="n">${num(totals.cachedTokens)}</td>
-          <td class="n">${num(totals.reasoningTokens)}</td>
           <td class="n">${formatCost(subtotalCost)}</td>
         </tr>
       </tfoot>
@@ -437,6 +569,12 @@ function formatCost(cost: Costish): string {
   return cost.partial === true ? `${base} + n/a` : base;
 }
 
+/** Collapse whitespace and truncate a label to `max` chars with an ellipsis. */
+function truncate(text: string, max: number): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  return collapsed.length > max ? `${collapsed.slice(0, max)}…` : collapsed;
+}
+
 /** First UUID segment, else a truncated id. */
 function shortId(sessionId: string): string {
   const dash = sessionId.indexOf('-');
@@ -498,6 +636,9 @@ const STYLE = `
   td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
   td.model { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }
   tfoot td { font-weight: 600; border-bottom: none; border-top: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
+  .section-body { padding: 0 .6rem .6rem; }
+  .section-body .panel { background: transparent; }
+  .section-meta { margin: .6rem 0; }
   .turns { display: flex; flex-direction: column; gap: .5rem; }
   .turn { border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); border-radius: 5px; overflow: hidden; }
   .turn-request > summary, .turn-response > summary { cursor: pointer; display: flex; align-items: center; gap: .65rem; padding: .45rem .6rem; list-style: none; }

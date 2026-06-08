@@ -95,6 +95,18 @@
         "command": "agentObservability.openSession",
         "title": "Open Session Detail",
         "category": "Agent Observability"
+      },
+      {
+        "command": "agentObservability.openCombinedSession",
+        "title": "Open Combined Detail",
+        "category": "Agent Observability",
+        "icon": "$(layers)"
+      },
+      {
+        "command": "agentObservability.refreshSessionDetail",
+        "title": "Refresh Session Detail",
+        "category": "Agent Observability",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -102,6 +114,21 @@
         {
           "command": "agentObservability.openSession",
           "when": "false"
+        },
+        {
+          "command": "agentObservability.openCombinedSession",
+          "when": "false"
+        },
+        {
+          "command": "agentObservability.refreshSessionDetail",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "agentObservability.openCombinedSession",
+          "when": "view == agentObservability.sessions && viewItem == agentObservability.sessionItem",
+          "group": "navigation"
         }
       ],
       "view/title": [
@@ -118,6 +145,13 @@
         {
           "command": "agentObservability.syncNow",
           "when": "view == agentObservability.sync",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "agentObservability.refreshSessionDetail",
+          "when": "activeWebviewPanelId == agentObservability.sessionDetail",
           "group": "navigation"
         }
       ]

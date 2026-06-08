@@ -2,10 +2,21 @@ import * as vscode from 'vscode';
 import * as crypto from 'node:crypto';
 import { TelemetryService } from '../telemetry/telemetryService';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
+import { WorkflowDeviation } from '../deviation/models';
 import { Configuration } from '../config/configuration';
 import { computeCost, sumCost, CostEstimate } from '../telemetry/pricing';
-import { agentUsageKey } from '../telemetry/models';
-import { renderSessionDetailHtml } from './sessionDetailHtml';
+import {
+  SessionAgentUsage,
+  SessionModelUsage,
+  agentUsageKey,
+} from '../telemetry/models';
+import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
+import {
+  CombinedSessionSection,
+  SessionCostView,
+  renderCombinedSessionDetailHtml,
+  renderSessionDetailHtml,
+} from './sessionDetailHtml';
 
 /** Webview view type used for all session-detail panels. */
 const VIEW_TYPE = 'agentObservability.sessionDetail';
@@ -22,6 +33,16 @@ const VIEW_TYPE = 'agentObservability.sessionDetail';
  */
 export class SessionDetailPanelManager {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
+
+  /**
+   * Per-panel re-render closure, used by {@link refreshActive} to redraw a panel
+   * without re-threading its session key(s). Kept in sync with {@link panels} on
+   * create/dispose.
+   */
+  private readonly rerenderers = new Map<vscode.WebviewPanel, () => void>();
+
+  /** The currently focused detail panel, tracked via `onDidChangeViewState`. */
+  private activePanel: vscode.WebviewPanel | undefined;
 
   constructor(
     private readonly telemetry: TelemetryService,
@@ -54,11 +75,94 @@ export class SessionDetailPanelManager {
     );
     panel.iconPath = new vscode.ThemeIcon('comment-discussion');
     this.panels.set(sessionKey, panel);
+    this.rerenderers.set(panel, () => this.render(panel, sessionKey));
+    this.trackActive(panel);
     panel.onDidDispose(() => {
       this.panels.delete(sessionKey);
+      this.forget(panel);
     });
 
     this.render(panel, sessionKey);
+  }
+
+  /**
+   * Open (or reveal) a SINGLE combined panel for a set of session keys. The keys
+   * are de-duplicated and sorted to form a stable panel id, so reopening the same
+   * selection reveals the existing panel. A selection of one falls back to the
+   * regular single-session view.
+   */
+  openCombined(sessionKeys: readonly string[]): void {
+    const keys = [...new Set(sessionKeys.filter((k) => k.length > 0))].sort();
+    if (keys.length === 0) {
+      return;
+    }
+    if (keys.length === 1) {
+      this.open(keys[0]);
+      return;
+    }
+
+    const panelId = `combined:${keys.join('|')}`;
+    const existing = this.panels.get(panelId);
+    if (existing !== undefined) {
+      existing.reveal(existing.viewColumn ?? vscode.ViewColumn.Active);
+      this.renderCombined(existing, keys);
+      return;
+    }
+
+    const panel = vscode.window.createWebviewPanel(
+      VIEW_TYPE,
+      `Combined sessions (${keys.length})`,
+      vscode.ViewColumn.Active,
+      { enableScripts: false, retainContextWhenHidden: false },
+    );
+    panel.iconPath = new vscode.ThemeIcon('layers');
+    this.panels.set(panelId, panel);
+    this.rerenderers.set(panel, () => this.renderCombined(panel, keys));
+    this.trackActive(panel);
+    panel.onDidDispose(() => {
+      this.panels.delete(panelId);
+      this.forget(panel);
+    });
+
+    this.renderCombined(panel, keys);
+  }
+
+  /**
+   * Re-fetch fresh local telemetry and redraw the currently focused detail panel
+   * — the title-bar Refresh button. Drops the cached snapshot first so the redraw
+   * reflects new on-disk telemetry (the same data the navigation click would
+   * load after a refresh), then replays the panel's render closure. Works for
+   * both the single and combined views; a no-op when no detail panel is focused.
+   */
+  refreshActive(): void {
+    const panel = this.activePanel;
+    if (panel === undefined) {
+      return;
+    }
+    this.telemetry.refresh();
+    this.rerenderers.get(panel)?.();
+  }
+
+  /** Track which detail panel is focused so {@link refreshActive} can find it. */
+  private trackActive(panel: vscode.WebviewPanel): void {
+    if (panel.active) {
+      this.activePanel = panel;
+    }
+    panel.onDidChangeViewState((e) => {
+      if (e.webviewPanel.active) {
+        this.activePanel = e.webviewPanel;
+      } else if (this.activePanel === e.webviewPanel) {
+        this.activePanel = undefined;
+      }
+    });
+  }
+
+  /** Drop a disposed panel from the rerender registry and active-panel slot. */
+  private forget(panel: vscode.WebviewPanel): void {
+    this.rerenderers.delete(panel);
+    if (this.activePanel === panel) {
+      this.activePanel = undefined;
+    }
   }
 
   /** Dispose every open panel (extension deactivate). */
@@ -67,6 +171,8 @@ export class SessionDetailPanelManager {
       panel.dispose();
     }
     this.panels.clear();
+    this.rerenderers.clear();
+    this.activePanel = undefined;
   }
 
   /** Load detail + deviations and set the panel HTML. */
@@ -77,50 +183,97 @@ export class SessionDetailPanelManager {
       return;
     }
     const detail = result.value;
-
-    // Run the deviation detector over the SAFE-metadata interactions (which
-    // carry the real agent_name the sequence/missing checks need). Workflow
-    // content predicates (if any) read raw span attributes through a LOCAL-ONLY
-    // lookup, memoized per attribute; that text is used only to compute booleans
-    // on-machine and never enters a WorkflowDeviation or any networked path.
-    let found: ReturnType<LocalDeviationDetector['detectForSession']> = [];
-    const interactions = this.telemetry.getSessionInteractions(sessionKey);
-    if (interactions.ok) {
-      const attributeCache = new Map<string, ReadonlyMap<string, string>>();
-      const contentLookup = (attribute: string): ReadonlyMap<string, string> => {
-        let values = attributeCache.get(attribute);
-        if (values === undefined) {
-          const result = this.telemetry.getSpanAttributes(sessionKey, attribute);
-          values = result.ok ? result.value : new Map<string, string>();
-          attributeCache.set(attribute, values);
-        }
-        return values;
-      };
-      found = this.deviations.detectForSession(interactions.value, contentLookup);
-    }
+    const found = this.detectDeviations(sessionKey);
 
     // Estimated cost (LOCAL-ONLY): read pricing overrides fresh each render — this
-    // path is already uncached, so editing rates and reopening reflects them — and
-    // compute a per-model estimate plus the session total. Copilot does not bill
-    // per token; this is a configurable estimate, `n/a` until rates are set.
-    const overrides = this.config.getPricingOverrides();
-    const costByModel = new Map<string, CostEstimate>(
-      detail.modelUsage.map((u) => [u.model, computeCost(u.model, u, overrides)]),
-    );
-    // Per-agent estimates (incl. sub-agents) keyed by agentUsageKey, for the
-    // "Spawned sub-agents" breakdown. The session total stays the main-thread
-    // per-model rollup (costByModel) — sub-agent costs are informational only.
-    const costByAgent = new Map<string, CostEstimate>(
-      detail.agentUsage.map((u) => [agentUsageKey(u), computeCost(u.model, u, overrides)]),
-    );
-    const total = sumCost([...costByModel.values()]);
+    // path is already uncached, so editing rates and reopening reflects them.
+    const cost = this.buildCostView(detail.modelUsage, detail.agentUsage);
 
     const nonce = makeNonce();
-    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, {
-      costByModel,
-      costByAgent,
-      total,
-    });
+    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, cost);
+  }
+
+  /**
+   * Render the COMBINED view for several session keys: fetch each session's
+   * detail + deviations, sort the sections by start time, merge the usage
+   * rollups, and compute both per-session and merged cost. Sessions that fail to
+   * load are skipped; when none load, a single explanatory message is shown.
+   */
+  private renderCombined(panel: vscode.WebviewPanel, keys: readonly string[]): void {
+    const sections: CombinedSessionSection[] = [];
+    for (const key of keys) {
+      const result = this.telemetry.getSessionDetail(key);
+      if (!result.ok) {
+        continue;
+      }
+      const detail = result.value;
+      const cost = this.buildCostView(detail.modelUsage, detail.agentUsage);
+      sections.push({
+        detail,
+        deviations: this.detectDeviations(key),
+        totalCost: cost.total,
+      });
+    }
+
+    if (sections.length === 0) {
+      panel.webview.html = renderMessageHtml('None of the selected sessions could be loaded.');
+      return;
+    }
+
+    // Chronological by session start so the timeline reads top-to-bottom.
+    sections.sort((a, b) => a.detail.summary.startedAtMs - b.detail.summary.startedAtMs);
+
+    const combined = combineSessionDetails(sections.map((s) => s.detail));
+    const cost = this.buildCostView(combined.modelUsage, combined.agentUsage);
+
+    const nonce = makeNonce();
+    panel.webview.html = renderCombinedSessionDetailHtml({ combined, cost, sections }, nonce);
+  }
+
+  /**
+   * Build the LOCAL-ONLY cost view for a set of usage rollups. Reads the pricing
+   * overrides fresh (the detail path is uncached) and computes a per-model and
+   * per-agent estimate plus the per-model total. Copilot does not bill per token;
+   * this is a configurable estimate, `n/a` until rates are set. The session total
+   * is the main-thread per-model rollup — sub-agent costs are informational only.
+   */
+  private buildCostView(
+    modelUsage: readonly SessionModelUsage[],
+    agentUsage: readonly SessionAgentUsage[],
+  ): SessionCostView {
+    const overrides = this.config.getPricingOverrides();
+    const costByModel = new Map<string, CostEstimate>(
+      modelUsage.map((u) => [u.model, computeCost(u.model, u, overrides)]),
+    );
+    const costByAgent = new Map<string, CostEstimate>(
+      agentUsage.map((u) => [agentUsageKey(u), computeCost(u.model, u, overrides)]),
+    );
+    return { costByModel, costByAgent, total: sumCost([...costByModel.values()]) };
+  }
+
+  /**
+   * Run the deviation detector over a session's SAFE-metadata interactions (which
+   * carry the real agent_name the sequence/missing checks need). Workflow content
+   * predicates (if any) read raw span attributes through a LOCAL-ONLY lookup,
+   * memoized per attribute; that text is used only to compute booleans on-machine
+   * and never enters a WorkflowDeviation or any networked path.
+   */
+  private detectDeviations(sessionKey: string): WorkflowDeviation[] {
+    const interactions = this.telemetry.getSessionInteractions(sessionKey);
+    if (!interactions.ok) {
+      return [];
+    }
+    const attributeCache = new Map<string, ReadonlyMap<string, string>>();
+    const contentLookup = (attribute: string): ReadonlyMap<string, string> => {
+      let values = attributeCache.get(attribute);
+      if (values === undefined) {
+        const result = this.telemetry.getSpanAttributes(sessionKey, attribute);
+        values = result.ok ? result.value : new Map<string, string>();
+        attributeCache.set(attribute, values);
+      }
+      return values;
+    };
+    return this.deviations.detectForSession(interactions.value, contentLookup);
   }
 }
 

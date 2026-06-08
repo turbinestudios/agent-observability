@@ -52,6 +52,8 @@ const EXPECTED_COMMANDS = [
   'agentObservability.toggleConsent',
   'agentObservability.previewPayload',
   'agentObservability.openSession',
+  'agentObservability.openCombinedSession',
+  'agentObservability.refreshSessionDetail',
 ] as const;
 
 const EXPECTED_VIEWS = [

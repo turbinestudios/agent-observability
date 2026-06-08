@@ -2,6 +2,11 @@ import { Configuration } from '../config/configuration';
 import { resolveDatabasePath, PathConfig } from './paths';
 import { createReadonlySnapshot, ReadonlySnapshot, sourceMtime } from './snapshot';
 import { TelemetryDatabase, SchemaMismatchError } from './database';
+import {
+  SessionTitleInfo,
+  readSessionTitles,
+  workspaceStorageDirFor,
+} from './sessionTitles';
 import { AggregationRow } from '../aggregate/aggregator';
 import {
   Interaction,
@@ -49,6 +54,12 @@ interface CacheEntry {
   repositories?: RepositorySummary[];
   /** Cache key: `${repository ?? '*'}::${limit ?? '*'}`. */
   sessions: Map<string, SessionSummary[]>;
+  /**
+   * LOCAL-ONLY session-name lookup (sessionId → title), read lazily from the
+   * Copilot chat-session store beside the telemetry DB. Reset with the rest of
+   * the cache whenever the snapshot is dropped or refreshed.
+   */
+  sessionTitles?: Map<string, SessionTitleInfo>;
 }
 
 /** A live, opened snapshot + its source mtime, kept between queries. */
@@ -117,9 +128,40 @@ export class TelemetryService {
         return cached;
       }
       const value = db.listSessions(repository, limit);
-      this.cache.sessions.set(key, value);
-      return value;
+      const withTitles = this.applyTitles(value);
+      this.cache.sessions.set(key, withTitles);
+      return withTitles;
     });
+  }
+
+  /**
+   * Attach LOCAL-ONLY session names (from the Copilot chat-session store) to
+   * session summaries. A no-op when no titles are available (e.g. a custom
+   * `sqlitePath` override or fixture that has no sibling `workspaceStorage`).
+   */
+  private applyTitles(sessions: SessionSummary[]): SessionSummary[] {
+    const titles = this.ensureSessionTitles();
+    if (titles.size === 0) {
+      return sessions;
+    }
+    return sessions.map((session) => {
+      const info = titles.get(session.sessionId);
+      return info === undefined
+        ? session
+        : { ...session, title: info.title, titleDerived: info.derived };
+    });
+  }
+
+  /** Build (once per snapshot) the sessionId → title lookup, cached. */
+  private ensureSessionTitles(): Map<string, SessionTitleInfo> {
+    if (this.cache.sessionTitles !== undefined) {
+      return this.cache.sessionTitles;
+    }
+    const dir =
+      this.handle !== undefined ? workspaceStorageDirFor(this.handle.sourcePath) : undefined;
+    const titles = dir !== undefined ? readSessionTitles(dir) : new Map<string, SessionTitleInfo>();
+    this.cache.sessionTitles = titles;
+    return titles;
   }
 
   /** Ordered interactions for a session (Phase 3 detail). Not cached. */

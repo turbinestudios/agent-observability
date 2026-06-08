@@ -89,6 +89,18 @@ export interface SessionSummary {
   model: string;
   /** Distinct mapped agent modes seen in the session. */
   agentModes: AgentMode[];
+  /**
+   * LOCAL-ONLY human-readable session name from Copilot's chat-session store
+   * (see {@link ../telemetry/sessionTitles}), when available. Either Copilot's
+   * auto-generated title / a user rename ({@link titleDerived} `false`) or the
+   * first request's text ({@link titleDerived} `true`).
+   *
+   * Privacy-critical: model-/user-derived raw content for the local Sessions
+   * view ONLY — never logged and never placed on the aggregate/sync path.
+   */
+  title?: string;
+  /** `true` when {@link title} was derived from the first request's text. */
+  titleDerived?: boolean;
 }
 
 /**
@@ -273,6 +285,54 @@ export interface SessionDetail {
    * sub-agents — sorted main-first then by total tokens desc. Lets the detail view
    * attribute usage to each agent; sub-agent rows are excluded from the totals.
    */
+  agentUsage: SessionAgentUsage[];
+}
+
+/**
+ * Aggregate header for a COMBINED view over several selected sessions
+ * ({@link CombinedSessionDetail}). Sums the per-session {@link SessionSummary}
+ * counters and records the distinct repositories / models / modes that appear.
+ * Like everything in this view it is built locally and never leaves the machine.
+ */
+export interface CombinedSummary {
+  /** Number of distinct sessions combined. */
+  sessionCount: number;
+  /** Distinct sanitized repositories across the sessions, sorted. */
+  repositories: string[];
+  /** Distinct responding models across the sessions, sorted. */
+  models: string[];
+  /** Union of mapped agent modes across the sessions. */
+  agentModes: AgentMode[];
+  /** Earliest session start (epoch ms). */
+  startedAtMs: number;
+  /** Latest session end (epoch ms). */
+  endedAtMs: number;
+  /** Sum of each session's duration (overlapping wall-clock is not deducted). */
+  totalDurationMs: number;
+  /** Wall-clock span from the earliest start to the latest end. */
+  spanMs: number;
+  interactionCount: number;
+  llmCalls: number;
+  toolCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+}
+
+/**
+ * A COMBINED drill-down over several selected sessions for the LOCAL detail
+ * panel. Holds the aggregate {@link CombinedSummary} plus per-model and
+ * per-(agent, model) usage rollups MERGED across every combined session — the
+ * same shapes the single-session view uses, so the cost helpers and renderer
+ * sections are reused verbatim. The individual {@link SessionDetail}s (with
+ * their local-only turns) are rendered as per-session sections by the panel and
+ * are not duplicated here.
+ */
+export interface CombinedSessionDetail {
+  summary: CombinedSummary;
+  /** Per-model token rollup merged across all combined sessions, sorted by total tokens desc. */
+  modelUsage: SessionModelUsage[];
+  /** Per-(agent, model) rollup merged across all sessions, sorted main-first then total tokens desc. */
   agentUsage: SessionAgentUsage[];
 }
 

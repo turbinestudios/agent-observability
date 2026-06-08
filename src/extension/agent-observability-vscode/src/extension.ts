@@ -76,10 +76,15 @@ export function activate(context: vscode.ExtensionContext): void {
   const sessions = new SessionsViewProvider(telemetry);
   const sync = new SyncViewProvider(config, telemetry, consent, secrets, syncState);
 
-  // Register each provider against its contributed view id.
+  // Register each provider against its contributed view id. The Sessions view
+  // uses createTreeView with canSelectMany so multiple sessions can be selected
+  // and combined into one detail view; the other two are simple data providers.
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider(OVERVIEW_VIEW_ID, overview),
-    vscode.window.registerTreeDataProvider(SESSIONS_VIEW_ID, sessions),
+    vscode.window.createTreeView(SESSIONS_VIEW_ID, {
+      treeDataProvider: sessions,
+      canSelectMany: true,
+    }),
     vscode.window.registerTreeDataProvider(SYNC_VIEW_ID, sync),
   );
 
@@ -91,6 +96,8 @@ export function activate(context: vscode.ExtensionContext): void {
     secrets,
     syncEngine,
     openSession: (sessionKey) => detailPanels.open(sessionKey),
+    openCombinedSession: (sessionKeys) => detailPanels.openCombined(sessionKeys),
+    refreshSessionDetail: () => detailPanels.refreshActive(),
     // LOCAL-ONLY preview of the outgoing aggregate payload. Builds a real batch
     // from local telemetry using the SecretStorage salt + local git identity and
     // opens it as a read-only untitled JSON document. Runs regardless of consent

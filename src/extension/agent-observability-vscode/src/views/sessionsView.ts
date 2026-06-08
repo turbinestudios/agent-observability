@@ -79,9 +79,14 @@ function repositoryItem(repo: RepositorySummary): SessionTreeItem {
 
 /** Build a leaf session row carrying a stable session-key id for Phase 3. */
 function sessionItem(session: SessionSummary): SessionTreeItem {
-  const label = shortId(session.sessionId);
+  // Prefer Copilot's session name; fall back to the short id when none exists.
+  const label =
+    session.title !== undefined ? truncate(session.title, 60) : shortId(session.sessionId);
   const item = new SessionTreeItem(label, vscode.TreeItemCollapsibleState.None, 'session');
-  item.description = `${session.interactionCount} call${session.interactionCount === 1 ? '' : 's'} · ${session.model}`;
+  // When a title labels the row, surface the short id in the description so the
+  // session is still identifiable at a glance.
+  const idHint = session.title !== undefined ? `${shortId(session.sessionId)} · ` : '';
+  item.description = `${idHint}${session.interactionCount} call${session.interactionCount === 1 ? '' : 's'} · ${session.model}`;
   item.tooltip = sessionTooltip(session);
   item.iconPath = new vscode.ThemeIcon('comment-discussion');
   item.sessionKey = session.sessionId;
@@ -99,7 +104,12 @@ function sessionItem(session: SessionSummary): SessionTreeItem {
 function sessionTooltip(s: SessionSummary): string {
   const start = new Date(s.startedAtMs).toISOString();
   const modes = s.agentModes.join(', ');
+  const titleLine =
+    s.title !== undefined
+      ? [s.titleDerived === true ? `Title (from first message): ${s.title}` : `Title: ${s.title}`]
+      : [];
   return [
+    ...titleLine,
     `Session ${s.sessionId}`,
     `Repository: ${s.repository}`,
     `Started: ${start}`,
@@ -117,6 +127,12 @@ function shortId(sessionId: string): string {
     return sessionId.slice(0, dash);
   }
   return sessionId.length > 12 ? `${sessionId.slice(0, 12)}…` : sessionId;
+}
+
+/** Collapse whitespace and truncate a label to `max` chars with an ellipsis. */
+function truncate(text: string, max: number): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  return collapsed.length > max ? `${collapsed.slice(0, max)}…` : collapsed;
 }
 
 /** Map a failure reason to a single explanatory tree row. */

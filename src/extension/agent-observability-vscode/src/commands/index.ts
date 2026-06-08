@@ -17,6 +17,8 @@ export const Commands = {
   toggleConsent: 'agentObservability.toggleConsent',
   previewPayload: 'agentObservability.previewPayload',
   openSession: 'agentObservability.openSession',
+  openCombinedSession: 'agentObservability.openCombinedSession',
+  refreshSessionDetail: 'agentObservability.refreshSessionDetail',
 } as const;
 
 /** The required prefix of an organization API key (`aoa_<keyId>_<secret>`). */
@@ -43,6 +45,10 @@ export interface CommandDeps {
   syncEngine: SyncEngine;
   /** Open the LOCAL session-detail webview for a session key. */
   openSession: (sessionKey: string) => void;
+  /** Open a single LOCAL combined-detail webview over several session keys. */
+  openCombinedSession: (sessionKeys: string[]) => void;
+  /** Re-fetch local telemetry and redraw the focused session-detail webview. */
+  refreshSessionDetail: () => void;
   /** Open the LOCAL aggregate-payload preview (Phase 5 surfaces real content). */
   previewPayload: () => void;
 }
@@ -65,7 +71,8 @@ export function registerCommands(
   refreshables: Refreshable[],
   deps: CommandDeps,
 ): void {
-  const { consent, secrets, syncEngine, openSession, previewPayload } = deps;
+  const { consent, secrets, syncEngine, openSession, openCombinedSession, refreshSessionDetail, previewPayload } =
+    deps;
 
   const register = (id: string, handler: (...args: unknown[]) => unknown): void => {
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
@@ -115,6 +122,42 @@ export function registerCommands(
       openSession(sessionKey);
     }
   });
+
+  // Open Combined Session Detail — invoked from the Sessions view context menu
+  // when one or more session rows are selected. VS Code passes the focused node
+  // first and the full multi-selection second; we combine the selected sessions
+  // into a single LOCAL webview. All detail stays on-machine.
+  register(Commands.openCombinedSession, (...args: unknown[]) => {
+    const keys = sessionKeysFromCommandArgs(args);
+    if (keys.length > 0) {
+      openCombinedSession(keys);
+    }
+  });
+
+  // Refresh Session Detail — title-bar button on the LOCAL session-detail webview
+  // (single or combined). Re-snapshots local telemetry and redraws the focused
+  // panel, the same fresh data a navigation click would load after a refresh.
+  register(Commands.refreshSessionDetail, () => {
+    refreshSessionDetail();
+  });
+}
+
+/**
+ * Extract session keys from a tree context-menu command invocation. VS Code
+ * passes `(focusedNode, selectedNodes[])`; we prefer the multi-selection array
+ * and fall back to the single focused node. Each node carries a `sessionKey`
+ * string set by the Sessions view; anything without one is ignored.
+ */
+function sessionKeysFromCommandArgs(args: unknown[]): string[] {
+  const selection = Array.isArray(args[1]) ? (args[1] as unknown[]) : [args[0]];
+  const keys: string[] = [];
+  for (const node of selection) {
+    const key = (node as { sessionKey?: unknown } | undefined)?.sessionKey;
+    if (typeof key === 'string' && key.length > 0) {
+      keys.push(key);
+    }
+  }
+  return keys;
 }
 
 /**
