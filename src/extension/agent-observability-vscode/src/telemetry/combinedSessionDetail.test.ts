@@ -139,6 +139,35 @@ describe('combineSessionDetails', () => {
     expect(summary.cachedTokens).toBe(30);
   });
 
+  it('sums each session\'s whole-tree treeStats and re-derives totalTokens', () => {
+    const a = session({ sessionId: 'a' }, {
+      treeStats: {
+        modelTurns: 2, toolCalls: 3, inputTokens: 100, outputTokens: 40,
+        cachedTokens: 10, totalTokens: 999, errorCount: 1, aiuNano: 1_000_000_000,
+      },
+    });
+    const b = session({ sessionId: 'b' }, {
+      treeStats: {
+        modelTurns: 5, toolCalls: 7, inputTokens: 200, outputTokens: 60,
+        cachedTokens: 20, totalTokens: 999, errorCount: 2, aiuNano: 3_000_000_000,
+      },
+    });
+
+    const { treeStats } = combineSessionDetails([a, b]);
+
+    expect(treeStats).toEqual({
+      modelTurns: 7,
+      toolCalls: 10,
+      inputTokens: 300,
+      outputTokens: 100,
+      cachedTokens: 30,
+      // Re-derived from merged input + output, NOT the bogus per-session 999s.
+      totalTokens: 400,
+      errorCount: 3,
+      aiuNano: 4_000_000_000,
+    });
+  });
+
   it('merges per-model usage by model and sorts by total tokens desc', () => {
     const a = session({ sessionId: 'a' }, {
       modelUsage: [

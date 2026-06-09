@@ -4,20 +4,26 @@ import { TelemetryDatabase } from './database';
 import { copyFixtureToTemp } from './testSupport';
 
 /**
- * AIU (Copilot premium-request units) rollup in getSessionDetail.
+ * AIU (Copilot premium-request units) rollups in getSessionDetail.
+ *
+ * AIU is recorded only on `chat` spans, and a spawned sub-agent's `chat` spans
+ * live under their OWN conversation id. The per-model/per-agent breakdowns
+ * therefore aggregate the WHOLE agent tree's chat spans (like getSessionTreeStats),
+ * so sub-agent AIU is no longer lost as 0 and the breakdown totals reconcile with
+ * the tree-stats card.
  *
  * The checked-in fixture carries the `copilot_chat.copilot_usage_nano_aiu`
  * attribute but with sanitized ZERO values, so to exercise a real sum we open a
  * WRITABLE connection to the temp COPY (never the checked-in fixture) and stamp a
- * known nano-AIU on a single-model session's `chat` spans, then read it back
- * through the normal read-only adapter.
- *
- * The chosen session records its turns on 11 `chat` spans, all `claude-opus-4-6`
- * (see sessionModelUsage.test.ts). Verifies: per-model AIU sums the chat spans,
- * the header/total equals that sum, and AIU stays an exact integer nano count.
+ * known nano-AIU on every chat span of an agent TREE, then read it back through the
+ * normal read-only adapter.
  */
 
-const SINGLE_MODEL_SESSION = 'e7c40c84-7288-42c2-8aa3-54a296fba4f4';
+/**
+ * An agent-mode run that spawned a sub-agent; its tree spans several conversation
+ * ids. Main thread = 22 chat turns, spawned sub-agent = 4 chat turns (26 total).
+ */
+const AGENT_RUN_SESSION = '97fb6af7-7d93-45fe-a00b-289fa761bf66';
 const AIU_KEY = 'copilot_chat.copilot_usage_nano_aiu';
 /** 1.25 AIU per chat span, as integer nano — chosen to expose any float drift. */
 const PER_SPAN_NANO = 1_250_000_000;
@@ -55,7 +61,7 @@ function treeIds(raw: Database, rootKey: string): string[] {
 /**
  * Stamp a known nano-AIU on every `chat` span of the whole agent TREE rooted at
  * `rootKey` (across all its conversation ids). Returns the number of chat spans
- * stamped. Exercises the tree-scoped AIU sum in getSessionTreeStats.
+ * stamped.
  */
 function stampAiuTree(dbPath: string, rootKey: string): number {
   const raw = new Database(dbPath, { fileMustExist: true });
@@ -88,66 +94,39 @@ function stampAiuTree(dbPath: string, rootKey: string): number {
   }
 }
 
-/** Stamp a known nano-AIU on every `chat` span of `sessionKey` in the copy. */
-function stampAiu(dbPath: string, sessionKey: string): number {
-  const raw = new Database(dbPath, { fileMustExist: true });
-  try {
-    const chatSpans = raw.all(
-      `SELECT span_id FROM spans
-         WHERE operation_name = 'chat'
-           AND COALESCE(conversation_id, chat_session_id) = ?`,
-      [sessionKey],
-    ) as Array<{ span_id: string }>;
-    raw.run(`DELETE FROM span_attributes WHERE key = ? AND span_id IN (
-               SELECT span_id FROM spans
-                 WHERE operation_name = 'chat'
-                   AND COALESCE(conversation_id, chat_session_id) = ?)`, [AIU_KEY, sessionKey]);
-    for (const { span_id } of chatSpans) {
-      raw.run('INSERT INTO span_attributes (span_id, key, value) VALUES (?, ?, ?)', [
-        span_id,
-        AIU_KEY,
-        String(PER_SPAN_NANO),
-      ]);
-    }
-    return chatSpans.length;
-  } finally {
-    raw.close();
-  }
-}
-
 describe('TelemetryDatabase.getSessionDetail — AIU rollup', () => {
-  it('sums nano-AIU per model and keeps the total exact', () => {
+  it('attributes AIU to each agent and model across the tree and stays exact', () => {
     const copy = copyFixtureToTemp();
     try {
-      const chatCount = stampAiu(copy.dbPath, SINGLE_MODEL_SESSION);
-      expect(chatCount).toBeGreaterThan(0);
+      const chatCount = stampAiuTree(copy.dbPath, AGENT_RUN_SESSION);
+      expect(chatCount).toBe(26); // 22 main + 4 sub-agent chat turns
       const expectedNano = chatCount * PER_SPAN_NANO;
 
       const db = TelemetryDatabase.open(copy.dbPath);
       try {
-        const detail = db.getSessionDetail(SINGLE_MODEL_SESSION);
-        expect(detail).toBeDefined();
+        const detail = db.getSessionDetail(AGENT_RUN_SESSION);
         if (detail === undefined) {
-          return;
+          throw new Error('expected detail');
         }
 
-        // Single model → one row carrying the full AIU sum.
-        expect(detail.modelUsage).toHaveLength(1);
-        expect(detail.modelUsage[0].model).toBe('claude-opus-4-6');
-        expect(detail.modelUsage[0].aiuNano).toBe(expectedNano);
+        // The per-model and per-agent breakdowns each sum to the whole-tree AIU,
+        // and that equals the tree-stats card — they all read from the same source.
+        const modelAiu = detail.modelUsage.reduce((a, u) => a + u.aiuNano, 0);
+        const agentAiu = detail.agentUsage.reduce((a, u) => a + u.aiuNano, 0);
+        expect(modelAiu).toBe(expectedNano);
+        expect(agentAiu).toBe(expectedNano);
+        expect(detail.treeStats.aiuNano).toBe(expectedNano);
 
-        // The per-model AIU sum reproduces the (renderer-computed) header total.
-        const totalNano = detail.modelUsage.reduce((acc, u) => acc + u.aiuNano, 0);
-        expect(totalNano).toBe(expectedNano);
-
-        // Main-thread agent rows carry the same AIU (chat spans are kind 'main').
-        const mainAiu = detail.agentUsage
-          .filter((u) => u.kind === 'main')
-          .reduce((acc, u) => acc + u.aiuNano, 0);
-        expect(mainAiu).toBe(expectedNano);
+        // The fix: the spawned sub-agent's rows now carry REAL AIU (4 chat turns),
+        // not 0 as the old single-session rollup reported.
+        const subAiu = detail.agentUsage
+          .filter((u) => u.kind === 'subagent')
+          .reduce((a, u) => a + u.aiuNano, 0);
+        expect(subAiu).toBe(4 * PER_SPAN_NANO);
 
         // Integer nano — no floating-point drift from accumulation.
-        expect(Number.isInteger(detail.modelUsage[0].aiuNano)).toBe(true);
+        expect(Number.isInteger(modelAiu)).toBe(true);
+        expect(detail.modelUsage.every((u) => Number.isInteger(u.aiuNano))).toBe(true);
       } finally {
         db.close();
       }
@@ -156,19 +135,23 @@ describe('TelemetryDatabase.getSessionDetail — AIU rollup', () => {
     }
   });
 
-  it('reports 0 AIU (not n/a) for a session whose spans carry no AIU attribute', () => {
+  it('reports 0 AIU (not n/a) when the tree spans carry no AIU attribute', () => {
     const copy = copyFixtureToTemp();
     try {
       const db = TelemetryDatabase.open(copy.dbPath);
       try {
-        const detail = db.getSessionDetail(SINGLE_MODEL_SESSION);
+        const detail = db.getSessionDetail(AGENT_RUN_SESSION);
         if (detail === undefined) {
           throw new Error('expected detail');
         }
-        // Fixture AIU values are sanitized to zero → the rollup is a clean 0.
+        // Fixture AIU values are sanitized to zero → every rollup is a clean 0.
         for (const u of detail.modelUsage) {
           expect(u.aiuNano).toBe(0);
         }
+        for (const u of detail.agentUsage) {
+          expect(u.aiuNano).toBe(0);
+        }
+        expect(detail.treeStats.aiuNano).toBe(0);
       } finally {
         db.close();
       }
@@ -179,11 +162,6 @@ describe('TelemetryDatabase.getSessionDetail — AIU rollup', () => {
 });
 
 describe('TelemetryDatabase.getSessionTreeStats — AIU rollup (whole agent tree)', () => {
-  // An agent-mode run that spawned sub-agents (its tree spans several conversation
-  // ids). Stamping every chat span in the tree proves getSessionTreeStats sums AIU
-  // ACROSS sub-agents, unlike the single-session getSessionDetail rollup.
-  const AGENT_RUN_SESSION = '97fb6af7-7d93-45fe-a00b-289fa761bf66';
-
   it('sums nano-AIU over the whole tree (every chat span, all sub-agents)', () => {
     const copy = copyFixtureToTemp();
     try {

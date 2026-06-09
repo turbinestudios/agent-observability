@@ -4,6 +4,7 @@ import {
   SessionAgentUsage,
   SessionDetail,
   SessionModelUsage,
+  SessionTreeStats,
   agentUsageKey,
 } from './models';
 
@@ -21,6 +22,15 @@ import {
  * Ordering matches the single-session renderer: `modelUsage` by total tokens
  * desc; `agentUsage` main-thread first, then by total tokens desc.
  *
+ * CAVEAT: each session's `modelUsage`/`agentUsage` is now whole-agent-tree scoped
+ * (see `TelemetryDatabase.treeUsageRollups`). Independent sessions never share a
+ * tree, so merging unrelated selections is exact; but if the user selects BOTH an
+ * orchestrator AND one of its own spawned sub-agents (two nodes of the same tree),
+ * that sub-agent's `chat` usage is included by each and double-counts on merge.
+ * The combined header `summary` is unaffected (it sums each session's main-thread
+ * {@link SessionSummary}). A full fix would aggregate once over the union of the
+ * selected sessions' tree ids — deferred as out of scope.
+ *
  * @throws when `details` is empty — a combined view of nothing is meaningless;
  *   callers guard the selection before invoking.
  */
@@ -31,9 +41,41 @@ export function combineSessionDetails(details: readonly SessionDetail[]): Combin
 
   return {
     summary: combineSummaries(details),
+    treeStats: mergeTreeStats(details),
     modelUsage: mergeModelUsage(details),
     agentUsage: mergeAgentUsage(details),
   };
+}
+
+/**
+ * Sum every session's whole-agent-tree totals into one {@link SessionTreeStats}.
+ * Each field adds directly; {@link SessionTreeStats.totalTokens} is re-derived as
+ * input + output so it stays consistent regardless of the per-session value. Shares
+ * the tree-overlap CAVEAT above: selecting an orchestrator and its own sub-agent
+ * would double-count, but independent selections sum exactly.
+ */
+function mergeTreeStats(details: readonly SessionDetail[]): SessionTreeStats {
+  const acc: SessionTreeStats = {
+    modelTurns: 0,
+    toolCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    totalTokens: 0,
+    errorCount: 0,
+    aiuNano: 0,
+  };
+  for (const { treeStats: t } of details) {
+    acc.modelTurns += t.modelTurns;
+    acc.toolCalls += t.toolCalls;
+    acc.inputTokens += t.inputTokens;
+    acc.outputTokens += t.outputTokens;
+    acc.cachedTokens += t.cachedTokens;
+    acc.errorCount += t.errorCount;
+    acc.aiuNano += t.aiuNano;
+  }
+  acc.totalTokens = acc.inputTokens + acc.outputTokens;
+  return acc;
 }
 
 /** Aggregate the per-session summaries into the combined header. */

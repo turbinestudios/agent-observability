@@ -630,10 +630,6 @@ export class TelemetryDatabase {
     // per-turn request/response below; never logged or uploaded.
     const userRequests = this.userRequestsBySpan(sessionKey);
     const responses = this.responsesBySpan(sessionKey);
-    // GitHub's premium-request billing units (nano-AIU) per span, for the AIU
-    // cost rollups below. Recorded only on `chat` spans (verified on live data);
-    // absent → 0.
-    const aiuBySpan = this.aiuBySpan(sessionKey);
     const mode = this.agentModesBySession().get(sessionKey)?.[0] ?? 'default';
 
     let startedAtMs = rows[0].start_time_ms;
@@ -644,43 +640,18 @@ export class TelemetryDatabase {
     let outputTokens = 0;
     let cachedTokens = 0;
 
-    // Per-model rollup, keyed by resolved model id. Accumulated only for the
-    // LLM operations that actually carry a model and token counts: `chat` AND
-    // main-thread `invoke_agent` (Copilot agent-mode sessions emit their
-    // model/tokens on invoke_agent spans, not chat). Restricting to these avoids
-    // a spurious all-zero `unknown` bucket from tool/hook spans while keeping the
-    // rollup's token sums equal to the header totals (tool/hook spans carry no
-    // tokens).
-    //
-    // We EXCLUDE spawned sub-agent invocations: when the main agent launches a
-    // sub-agent via a tool call, Copilot emits an `invoke_agent` span carrying
-    // the SAME conversation_id but a `chat_session_id` that is the spawning
-    // tool-call id (`call_…`/`toolu_…`) rather than the conversation. Because the
-    // session key is COALESCE(conversation_id, chat_session_id), those sub-agent
-    // spans collapse into this session and their tokens are ALSO attributed to
-    // the sub-agent's own session — so counting them here double-counts and makes
-    // an agent session read ~2x its real usage. Counting only chat + main-thread
-    // invoke_agent matches GitHub's own per-session Agent Debug Logs. See the
-    // `invoke-agent-token-double-count` investigation.
-    const usageByModel = new Map<string, SessionModelUsage>();
-
-    // Richer companion rollup keyed by (agent_name, model, kind): preserves WHICH
-    // agent spent the tokens — the main `GitHub Copilot Chat` thread vs each
-    // spawned sub-agent (`Testing`, `Frontend`, …) — which usageByModel collapses
-    // away. Sub-agent rows are surfaced for visibility but, like above, are NOT
-    // folded into the session totals (they belong to their own sessions).
-    const usageByAgent = new Map<string, SessionAgentUsage>();
-
+    // The per-model and per-agent breakdowns are NOT built here: they aggregate
+    // the whole agent tree's `chat` spans (incl. spawned sub-agents) via
+    // {@link treeUsageRollups}, so they reconcile with the tree-stats card. This
+    // loop builds only the main-thread {@link SessionSummary} totals, timeline,
+    // and turns. See the `invoke-agent-token-double-count` investigation for why
+    // the header summary stays main-thread (chat + main-thread invoke_agent).
     const timeline: SessionTimelineEntry[] = rows.map((row) => {
       const operation = row.operation_name ?? 'chat';
       const model = resolveModel(row.response_model, row.request_model);
       const rowInput = row.input_tokens ?? 0;
       const rowOutput = row.output_tokens ?? 0;
       const rowCached = row.cached_tokens ?? 0;
-      const rowReasoning = row.reasoning_tokens ?? 0;
-      // Premium-request units (nano-AIU) carried by this span; only `chat` spans
-      // have it, so non-chat spans contribute 0 to every AIU rollup below.
-      const rowAiu = aiuBySpan.get(row.span_id) ?? 0;
 
       // A spawned sub-agent invocation carries the parent conversation_id but a
       // distinct chat_session_id (the spawning tool-call id); its tokens belong
@@ -697,66 +668,17 @@ export class TelemetryDatabase {
       // Count an LLM call for every main-thread LLM span — `chat` (ask mode) AND
       // main-thread `invoke_agent` (agent mode emits its turns here, not as
       // `chat`). Mirrors `countsTokens` so the header LLM-call count agrees with
-      // the per-model/per-turn rollups; spawned sub-agents are excluded for the
-      // same reason their tokens are (they belong to their own session).
+      // the per-turn rollups; spawned sub-agents are excluded for the same reason
+      // their tokens are (they belong to their own session).
       if (countsTokens) {
         llmCalls += 1;
       } else if (operation === 'execute_tool') {
         toolCalls += 1;
       }
 
-      // Per-(agent, model, kind) rollup over every LLM-operation span — main AND
-      // spawned sub-agents — so the detail view can attribute usage to each agent.
-      // Only the `main` rows feed the session totals below.
-      if (operation === 'chat' || operation === 'invoke_agent') {
-        const agentName =
-          row.agent_name !== null && row.agent_name.length > 0 ? row.agent_name : DEFAULT_AGENT;
-        const kind: 'main' | 'subagent' = isSpawnedSubAgent ? 'subagent' : 'main';
-        const key = agentUsageKey({ agentName, model, kind });
-        let agentUsage = usageByAgent.get(key);
-        if (agentUsage === undefined) {
-          agentUsage = {
-            agentName,
-            model,
-            kind,
-            llmCalls: 0,
-            inputTokens: 0,
-            outputTokens: 0,
-            cachedTokens: 0,
-            reasoningTokens: 0,
-            aiuNano: 0,
-          };
-          usageByAgent.set(key, agentUsage);
-        }
-        agentUsage.llmCalls += 1;
-        agentUsage.inputTokens += rowInput;
-        agentUsage.outputTokens += rowOutput;
-        agentUsage.cachedTokens += rowCached;
-        agentUsage.reasoningTokens += rowReasoning;
-        agentUsage.aiuNano += rowAiu;
-      }
-
+      // Header (main-thread) token totals. The per-model/per-agent breakdowns are
+      // built separately over the whole tree in treeUsageRollups().
       if (countsTokens) {
-        let usage = usageByModel.get(model);
-        if (usage === undefined) {
-          usage = {
-            model,
-            llmCalls: 0,
-            inputTokens: 0,
-            outputTokens: 0,
-            cachedTokens: 0,
-            reasoningTokens: 0,
-            aiuNano: 0,
-          };
-          usageByModel.set(model, usage);
-        }
-        usage.llmCalls += 1;
-        usage.inputTokens += rowInput;
-        usage.outputTokens += rowOutput;
-        usage.cachedTokens += rowCached;
-        usage.reasoningTokens += rowReasoning;
-        usage.aiuNano += rowAiu;
-
         inputTokens += rowInput;
         outputTokens += rowOutput;
         cachedTokens += rowCached;
@@ -859,29 +781,11 @@ export class TelemetryDatabase {
       }
     });
 
-    // Sort by total tokens (input + output) desc, then model id asc for a stable
-    // order when token counts tie.
-    const modelUsage = [...usageByModel.values()].sort((a, b) => {
-      const byTokens =
-        b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens);
-      return byTokens !== 0 ? byTokens : a.model.localeCompare(b.model);
-    });
-
-    // Main-thread rows first (they make up the session totals), then sub-agents;
-    // within each group, heaviest (input + output) first, then agent/model for a
-    // stable tie-break.
-    const agentUsage = [...usageByAgent.values()].sort((a, b) => {
-      if (a.kind !== b.kind) {
-        return a.kind === 'main' ? -1 : 1;
-      }
-      const byTokens =
-        b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens);
-      if (byTokens !== 0) {
-        return byTokens;
-      }
-      const byAgent = a.agentName.localeCompare(b.agentName);
-      return byAgent !== 0 ? byAgent : a.model.localeCompare(b.model);
-    });
+    // Per-model and per-agent breakdowns over the WHOLE agent tree's chat spans
+    // (incl. spawned sub-agents), so each agent/model shows its real tokens AND
+    // AIU and the tables reconcile with the tree-stats card below — unlike the
+    // main-thread `summary`. See treeUsageRollups().
+    const { modelUsage, agentUsage } = this.treeUsageRollups(sessionKey);
 
     const summary: SessionSummary = {
       sessionId: sessionKey,
@@ -984,6 +888,164 @@ export class TelemetryDatabase {
       errorCount: agg.error_count ?? 0,
       aiuNano: aiuRow?.aiu_nano ?? 0,
     };
+  }
+
+  /**
+   * Per-model and per-(agent, model) usage breakdowns for the detail view, taken
+   * over the WHOLE agent tree's `chat` spans (the main conversation plus every
+   * spawned sub-agent — see {@link sessionTreeIds}). This mirrors the source the
+   * {@link getSessionTreeStats} card uses, so the breakdown tables reconcile with
+   * it: each agent and model shows its real tokens AND AIU. (The single-session
+   * `summary` stays main-thread by design; the breakdowns intentionally do not.)
+   *
+   * AIU lives only on `chat` spans, and a sub-agent's `chat` spans sit under their
+   * OWN conversation id — outside the single-session scope — which is why the old
+   * per-session breakdown read 0 AIU for sub-agents. Aggregating the tree's `chat`
+   * spans fixes that without double-counting (an `invoke_agent` rollup is excluded;
+   * each turn is one `chat` span). A turn is classified `subagent` by its
+   * `copilot_chat.debug_log_label` (`runSubagent-*`) / `agent_name`
+   * (`tool/runSubagent*`) — a root-INDEPENDENT signal, so opening any node of the
+   * tree (the agent root OR a constituent conversation, which share one tree)
+   * labels turns consistently. The friendly agent label comes from the same
+   * `debug_log_label`, which is reliable where `agent_name` is not.
+   */
+  private treeUsageRollups(rootKey: string): {
+    modelUsage: SessionModelUsage[];
+    agentUsage: SessionAgentUsage[];
+  } {
+    const ids = this.sessionTreeIds(rootKey);
+    const inList = ids.map(() => '?').join(', ');
+    // reasoning_tokens is optional/provider-specific; only sum it when present.
+    const reasoningSel = this.spansColumns().has('reasoning_tokens')
+      ? 'SUM(COALESCE(s.reasoning_tokens, 0))'
+      : '0';
+
+    const rows = this.allRows<{
+      agent_name: string | null;
+      response_model: string | null;
+      request_model: string | null;
+      chat_session_id: string | null;
+      debug_label: string | null;
+      llm_calls: number;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      cached_tokens: number | null;
+      reasoning_tokens: number | null;
+      aiu_nano: number | null;
+    }>(
+      // Each chat span carries at most one debug_log_label and one nano-AIU
+      // attribute, so the two LEFT JOINs are 1:1 and do not multiply rows.
+      `SELECT s.agent_name AS agent_name,
+              s.response_model AS response_model,
+              s.request_model AS request_model,
+              s.chat_session_id AS chat_session_id,
+              lbl.value AS debug_label,
+              COUNT(*) AS llm_calls,
+              SUM(COALESCE(s.input_tokens, 0)) AS input_tokens,
+              SUM(COALESCE(s.output_tokens, 0)) AS output_tokens,
+              SUM(COALESCE(s.cached_tokens, 0)) AS cached_tokens,
+              ${reasoningSel} AS reasoning_tokens,
+              SUM(CASE WHEN aiu.value IS NOT NULL THEN CAST(aiu.value AS INTEGER) ELSE 0 END) AS aiu_nano
+         FROM spans s
+         LEFT JOIN span_attributes lbl
+           ON lbl.span_id = s.span_id AND lbl.key = 'copilot_chat.debug_log_label'
+         LEFT JOIN span_attributes aiu
+           ON aiu.span_id = s.span_id AND aiu.key = 'copilot_chat.copilot_usage_nano_aiu'
+        WHERE s.operation_name = 'chat'
+          AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))
+        GROUP BY s.agent_name, s.response_model, s.request_model, s.chat_session_id, lbl.value`,
+      [...ids, ...ids],
+    );
+
+    const usageByModel = new Map<string, SessionModelUsage>();
+    const usageByAgent = new Map<string, SessionAgentUsage>();
+
+    for (const row of rows) {
+      const model = resolveModel(row.response_model, row.request_model);
+      // Spawned sub-agent turns are tagged by Copilot with a `runSubagent-*`
+      // debug-log label and a `tool/runSubagent*` agent_name; the main thread
+      // carries neither. This is independent of which tree node `rootKey` is.
+      const isSubagent =
+        (row.debug_label !== null && row.debug_label.startsWith('runSubagent-')) ||
+        (row.agent_name !== null && row.agent_name.startsWith('tool/runSubagent'));
+      const kind: 'main' | 'subagent' = isSubagent ? 'subagent' : 'main';
+      const agentName = friendlyAgentName(kind, row.agent_name, row.debug_label);
+      const calls = row.llm_calls;
+      const input = row.input_tokens ?? 0;
+      const output = row.output_tokens ?? 0;
+      const cached = row.cached_tokens ?? 0;
+      const reasoning = row.reasoning_tokens ?? 0;
+      const aiu = row.aiu_nano ?? 0;
+
+      // Per-(agent, model, kind): multiple main conversations (all carrying the
+      // root chat_session_id) and repeat invocations of the same-named sub-agent
+      // fold together here.
+      const agentKey = agentUsageKey({ agentName, model, kind });
+      let agent = usageByAgent.get(agentKey);
+      if (agent === undefined) {
+        agent = {
+          agentName,
+          model,
+          kind,
+          llmCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          aiuNano: 0,
+        };
+        usageByAgent.set(agentKey, agent);
+      }
+      agent.llmCalls += calls;
+      agent.inputTokens += input;
+      agent.outputTokens += output;
+      agent.cachedTokens += cached;
+      agent.reasoningTokens += reasoning;
+      agent.aiuNano += aiu;
+
+      let usage = usageByModel.get(model);
+      if (usage === undefined) {
+        usage = {
+          model,
+          llmCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          aiuNano: 0,
+        };
+        usageByModel.set(model, usage);
+      }
+      usage.llmCalls += calls;
+      usage.inputTokens += input;
+      usage.outputTokens += output;
+      usage.cachedTokens += cached;
+      usage.reasoningTokens += reasoning;
+      usage.aiuNano += aiu;
+    }
+
+    // Sort by total tokens (input + output) desc, then model id asc for a stable
+    // order when token counts tie.
+    const modelUsage = [...usageByModel.values()].sort((a, b) => {
+      const byTokens = b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens);
+      return byTokens !== 0 ? byTokens : a.model.localeCompare(b.model);
+    });
+
+    // Main-thread rows first, then sub-agents; within each group, heaviest
+    // (input + output) first, then agent/model for a stable tie-break.
+    const agentUsage = [...usageByAgent.values()].sort((a, b) => {
+      if (a.kind !== b.kind) {
+        return a.kind === 'main' ? -1 : 1;
+      }
+      const byTokens = b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens);
+      if (byTokens !== 0) {
+        return byTokens;
+      }
+      const byAgent = a.agentName.localeCompare(b.agentName);
+      return byAgent !== 0 ? byAgent : a.model.localeCompare(b.model);
+    });
+
+    return { modelUsage, agentUsage };
   }
 
   /**
@@ -1118,44 +1180,6 @@ export class TelemetryDatabase {
     return map;
   }
 
-  /**
-   * Map span id → premium-request usage in NANO-AIU for the LLM spans of a single
-   * session, read from the `copilot_chat.copilot_usage_nano_aiu` attribute. This
-   * is GitHub's authoritative billing unit (1 AIU = 1e9 nano-AIU) and the basis
-   * for the AIU cost rollups in {@link getSessionDetail}.
-   *
-   * SAFE metadata (a numeric usage count, not content) — unlike
-   * {@link contentBySpan} this value is non-sensitive. It is read here only for
-   * the local detail panel; the aggregate/sync path does not use it. Spans whose
-   * attribute is absent or non-numeric are omitted (callers default to 0). Scoped
-   * to `chat`/`invoke_agent` to mirror the other per-span LLM lookups, though in
-   * practice only `chat` spans carry it.
-   */
-  private aiuBySpan(sessionKey: string): Map<string, number> {
-    const rows = this.allRows<{ span_id: string; value: string | null }>(
-      `SELECT a.span_id AS span_id, a.value AS value
-         FROM span_attributes a
-         JOIN spans s ON s.span_id = a.span_id
-         WHERE a.key = 'copilot_chat.copilot_usage_nano_aiu'
-           AND s.operation_name IN ('chat', 'invoke_agent')
-           AND COALESCE(s.conversation_id, s.chat_session_id) = ?`,
-      [sessionKey],
-    );
-
-    const map = new Map<string, number>();
-    for (const row of rows) {
-      if (row.value === null) {
-        continue;
-      }
-      // The attribute is an integer string of nano-AIU; tolerate odd values by
-      // skipping anything that does not parse to a finite, non-negative number.
-      const nano = Number(row.value);
-      if (Number.isFinite(nano) && nano >= 0) {
-        map.set(row.span_id, nano);
-      }
-    }
-    return map;
-  }
 
   /**
    * Representative model per session key using the uniform resolution rule
@@ -1234,4 +1258,31 @@ function resolveModel(response: string | null, request: string | null): string {
     return request;
   }
   return 'unknown';
+}
+
+/**
+ * Friendly label for an agent in the tree-scoped usage breakdown. The main thread
+ * is `Main agent`. A spawned sub-agent's identity comes from its
+ * `copilot_chat.debug_log_label` (`runSubagent-<Name>`), which is consistent where
+ * the `agent_name` column is not; `runSubagent-default` is Copilot's unnamed
+ * sub-agent, so its suffix is dropped. Falls back to the raw `agent_name` (else a
+ * generic `Sub-agent`) when no usable label is present.
+ */
+function friendlyAgentName(
+  kind: 'main' | 'subagent',
+  agentName: string | null,
+  debugLabel: string | null,
+): string {
+  if (kind === 'main') {
+    return 'Main agent';
+  }
+  const match = /^runSubagent-(.+)$/.exec(debugLabel ?? '');
+  if (match !== null) {
+    const name = match[1];
+    return name === 'default' ? 'Sub-agent' : `Sub-agent: ${name}`;
+  }
+  if (agentName !== null && agentName.length > 0) {
+    return agentName;
+  }
+  return 'Sub-agent';
 }

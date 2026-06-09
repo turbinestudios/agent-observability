@@ -3,33 +3,39 @@ import { TelemetryDatabase } from './database';
 import { copyFixtureToTemp } from './testSupport';
 
 /**
- * Exercises the per-model usage rollup (`SessionDetail.modelUsage`) added to
- * getSessionDetail, against the sanitized fixture from a temp COPY.
+ * Exercises the per-model (`SessionDetail.modelUsage`) and per-agent
+ * (`SessionDetail.agentUsage`) breakdowns in getSessionDetail.
  *
- * Verified against the fixture (see the plan): the rollup accumulates over LLM
- * operations — `chat` AND MAIN-THREAD `invoke_agent`. The multi-model fixture
- * session below records its models/tokens ENTIRELY on `invoke_agent` spans (it
- * has no `chat` spans at all), so a chat-only rollup would wrongly produce zero
- * rows. SPAWNED sub-agent invoke_agent spans (a distinct chat_session_id from the
- * conversation) are excluded to avoid double-counting — see the
- * `invoke-agent-token-double-count` investigation.
+ * These breakdowns aggregate the WHOLE agent tree's `chat` spans (the main
+ * conversation plus every spawned sub-agent — see treeUsageRollups), so each
+ * agent and model shows its real tokens AND AIU and the tables RECONCILE with the
+ * `treeStats` card. This is deliberately different from the main-thread
+ * `SessionSummary`, which still excludes spawned sub-agents (see the
+ * `invoke-agent-token-double-count` investigation).
+ *
+ * Numbers below are verified against the sanitized fixture.
  */
 
 /**
- * Multi-model session: 7 invoke_agent spans. SIX are main-thread (chat_session_id
- * == conversation_id) across two distinct RESOLVED ids — `claude-opus-4-6`
- * (dashed response form) and `claude-opus-4.6` (a request-only span whose dotted
- * id stays a separate row). The SEVENTH is a spawned `claude-sonnet-4-6`
- * sub-agent (chat_session_id is a `toolu_…` tool-call id) that is EXCLUDED from
- * the rollup. Tool/hook spans (no model, no tokens) are likewise excluded.
+ * The "Infrastructure" agent run. Its tree (8 ids) is one main thread
+ * (`claude-opus-4-6`, 26 chat turns) plus a single spawned sub-agent
+ * (`Infrastructure`) that ran two model forms (`claude-sonnet-4-6` and the
+ * request-only dotted `claude-sonnet-4.6`).
  */
-const MULTI_MODEL_SESSION = '8319bef8-8bca-40ce-9eb5-026215d785c0';
-/** Single-model session: 11 `chat` spans, all `claude-opus-4-6`. */
-const SINGLE_MODEL_SESSION = 'e7c40c84-7288-42c2-8aa3-54a296fba4f4';
-/** Tool-only session (3 execute_tool spans, no LLM ops) → empty rollup. */
-const TOOL_ONLY_SESSION = 'toolu_bdrk_01JXcDn11Bw6B9EfCNPTTnWU';
+const AGENT_RUN_INFRA = '8319bef8-8bca-40ce-9eb5-026215d785c0';
+/**
+ * A CONSTITUENT chat conversation of the same Infrastructure run (its turns carry
+ * `chat_session_id = 8319bef8`). Opening it resolves to the same tree — proving the
+ * breakdown is independent of which tree node you open.
+ */
+const CONSTITUENT_CONVERSATION = 'e7c40c84-7288-42c2-8aa3-54a296fba4f4';
+/**
+ * The "default" agent run: one main thread plus a spawned (unnamed) sub-agent, all
+ * `claude-opus-4-6`. Main 22 turns / 541,672 in; sub-agent 4 turns / 36,452 in.
+ */
+const AGENT_RUN_DEFAULT = '97fb6af7-7d93-45fe-a00b-289fa761bf66';
 
-describe('TelemetryDatabase.getSessionDetail — modelUsage rollup', () => {
+describe('TelemetryDatabase.getSessionDetail — tree-scoped model/agent breakdowns', () => {
   let db: TelemetryDatabase;
   let cleanup: () => void;
 
@@ -44,150 +50,151 @@ describe('TelemetryDatabase.getSessionDetail — modelUsage rollup', () => {
     cleanup();
   });
 
-  it('rolls up a multi-model session into one row per resolved main-thread model', () => {
-    const detail = db.getSessionDetail(MULTI_MODEL_SESSION);
+  it('rolls the whole tree up into one row per resolved model, heaviest first', () => {
+    const detail = db.getSessionDetail(AGENT_RUN_INFRA);
     expect(detail).toBeDefined();
     if (detail === undefined) {
       return;
     }
 
-    expect(detail.modelUsage).toHaveLength(2);
-    // Assert the NATURAL (rendered) order — not a re-sorted copy — so the
-    // (input+output) desc primary sort is actually locked against regression.
+    // One main model + the sub-agent's two model forms. Assert the NATURAL
+    // (rendered) order so the (input+output) desc primary sort is locked.
     expect(detail.modelUsage.map((u) => u.model)).toEqual([
-      'claude-opus-4-6', // 5 main-thread spans, heaviest
-      'claude-opus-4.6', // request-only span, 0 tokens
+      'claude-opus-4-6', // main thread, heaviest
+      'claude-sonnet-4-6', // sub-agent
+      'claude-sonnet-4.6', // sub-agent request-only form, 0 tokens
     ]);
 
-    // The request-only dotted span carries no tokens but still counts as a call.
-    const dotted = detail.modelUsage.find((u) => u.model === 'claude-opus-4.6');
-    expect(dotted).toBeDefined();
-    expect(dotted?.llmCalls).toBe(1);
-    expect(dotted?.inputTokens).toBe(0);
+    const opus = detail.modelUsage[0];
+    expect(opus).toMatchObject({
+      model: 'claude-opus-4-6',
+      llmCalls: 26,
+      inputTokens: 458647,
+      outputTokens: 16392,
+      cachedTokens: 435540,
+    });
+
+    const sonnet = detail.modelUsage.find((u) => u.model === 'claude-sonnet-4-6');
+    expect(sonnet).toMatchObject({ llmCalls: 1, inputTokens: 10814, outputTokens: 247 });
+
+    // No spurious `unknown` bucket — only `chat` spans (which carry a model) feed
+    // the rollup, never tool/hook spans.
+    expect(detail.modelUsage.some((u) => u.model === 'unknown')).toBe(false);
   });
 
-  it('excludes the spawned sub-agent (a distinct chat_session_id) from the rollup', () => {
-    const detail = db.getSessionDetail(MULTI_MODEL_SESSION);
+  it('reconciles the per-model rollup with the tree-stats card (NOT the main-thread summary)', () => {
+    const detail = db.getSessionDetail(AGENT_RUN_INFRA);
     if (detail === undefined) {
       throw new Error('expected detail');
     }
-    // The only claude-sonnet-4-6 span in this session is a spawned sub-agent
-    // (chat_session_id is a `toolu_…` tool-call id), so it must not appear.
-    expect(detail.modelUsage.some((u) => u.model === 'claude-sonnet-4-6')).toBe(false);
-    // Main-thread total: the sub-agent's 10,814 input tokens are NOT counted
-    // (counting all invoke_agent spans would yield 469,461).
-    expect(detail.summary.inputTokens).toBe(458647);
-  });
-
-  it('keeps the rollup token sums equal to the header totals', () => {
-    const detail = db.getSessionDetail(MULTI_MODEL_SESSION);
-    if (detail === undefined) {
-      throw new Error('expected detail');
-    }
-    const sum = (key: 'inputTokens' | 'outputTokens' | 'cachedTokens') =>
+    const sum = (key: 'inputTokens' | 'outputTokens' | 'cachedTokens' | 'llmCalls') =>
       detail.modelUsage.reduce((acc, u) => acc + u[key], 0);
-    expect(sum('inputTokens')).toBe(detail.summary.inputTokens);
-    expect(sum('outputTokens')).toBe(detail.summary.outputTokens);
-    expect(sum('cachedTokens')).toBe(detail.summary.cachedTokens);
+
+    // The breakdown sums to the whole-tree card.
+    expect(sum('inputTokens')).toBe(detail.treeStats.inputTokens); // 469,461
+    expect(sum('outputTokens')).toBe(detail.treeStats.outputTokens);
+    expect(sum('cachedTokens')).toBe(detail.treeStats.cachedTokens);
+    expect(sum('llmCalls')).toBe(detail.treeStats.modelTurns); // 28 chat spans
+
+    // And it is strictly larger than the main-thread summary (which omits the
+    // spawned sub-agent) — the whole point of the change.
+    expect(detail.treeStats.inputTokens).toBeGreaterThan(detail.summary.inputTokens);
+    expect(sum('inputTokens')).not.toBe(detail.summary.inputTokens);
   });
 
-  it('counts main-thread invoke_agent spans in the header llmCalls (agent mode)', () => {
-    // This session records its turns entirely on invoke_agent spans (no `chat`).
-    // SIX are main-thread; the header LLM-call count must include them — counting
-    // only `chat` (the old bug) would report 0 for every agent-mode session.
-    const detail = db.getSessionDetail(MULTI_MODEL_SESSION);
+  it('includes spawned sub-agent usage that the main-thread summary excludes', () => {
+    const detail = db.getSessionDetail(AGENT_RUN_INFRA);
     if (detail === undefined) {
       throw new Error('expected detail');
     }
-    expect(detail.summary.llmCalls).toBe(6);
-    // And the header count agrees with the per-model rollup (both count chat +
-    // main-thread invoke_agent, excluding spawned sub-agents).
-    const rollupCalls = detail.modelUsage.reduce((acc, u) => acc + u.llmCalls, 0);
-    expect(detail.summary.llmCalls).toBe(rollupCalls);
+    // The sub-agent's model now appears (the old single-session rollup dropped it).
+    expect(detail.modelUsage.some((u) => u.model === 'claude-sonnet-4-6')).toBe(true);
+    // The main-thread summary still excludes it (458,647 main vs 469,461 tree).
+    expect(detail.summary.inputTokens).toBe(458647);
+    expect(detail.summary.llmCalls).toBe(6); // 6 main-thread invoke_agent spans
   });
 
-  it('reads the optional reasoning_tokens column (present in this fixture, all zero)', () => {
-    const detail = db.getSessionDetail(MULTI_MODEL_SESSION);
-    if (detail === undefined) {
-      throw new Error('expected detail');
-    }
-    // The column exists in the fixture, so the field is wired through as a number.
-    for (const u of detail.modelUsage) {
-      expect(typeof u.reasoningTokens).toBe('number');
-    }
-    const reasoningTotal = detail.modelUsage.reduce((acc, u) => acc + u.reasoningTokens, 0);
-    expect(reasoningTotal).toBe(0);
-  });
-
-  it('produces a single row for a single-model chat session', () => {
-    const detail = db.getSessionDetail(SINGLE_MODEL_SESSION);
-    expect(detail).toBeDefined();
-    if (detail === undefined) {
-      return;
-    }
-    expect(detail.modelUsage).toHaveLength(1);
-    expect(detail.modelUsage[0].model).toBe('claude-opus-4-6');
-    expect(detail.modelUsage[0].llmCalls).toBe(detail.summary.llmCalls);
-    expect(detail.modelUsage[0].inputTokens).toBe(detail.summary.inputTokens);
-  });
-
-  it('returns an empty rollup for a session with no LLM-operation spans', () => {
-    const detail = db.getSessionDetail(TOOL_ONLY_SESSION);
-    expect(detail).toBeDefined();
-    if (detail === undefined) {
-      return;
-    }
-    // Tool/hook spans carry no model and no tokens — no spurious unknown bucket.
-    expect(detail.modelUsage).toEqual([]);
-  });
-
-  it('attributes the spawned sub-agent in agentUsage without inflating the totals', () => {
-    // 8319bef8: main thread is "GitHub Copilot Chat"; the lone spawned sub-agent
-    // is "Infrastructure" on claude-sonnet-4-6 (10,814 input tokens).
-    const detail = db.getSessionDetail(MULTI_MODEL_SESSION);
+  it('attributes each agent (main + sub) in agentUsage with its real tokens', () => {
+    const detail = db.getSessionDetail(AGENT_RUN_INFRA);
     if (detail === undefined) {
       throw new Error('expected detail');
     }
     const main = detail.agentUsage.filter((u) => u.kind === 'main');
     const subs = detail.agentUsage.filter((u) => u.kind === 'subagent');
 
-    // Main-thread rows are all the one agent; they sum to the header totals.
-    expect(new Set(main.map((u) => u.agentName))).toEqual(new Set(['GitHub Copilot Chat']));
-    expect(main.reduce((a, u) => a + u.inputTokens, 0)).toBe(detail.summary.inputTokens);
+    // Main thread is one friendly-labelled agent on claude-opus-4-6.
+    expect(new Set(main.map((u) => u.agentName))).toEqual(new Set(['Main agent']));
+    expect(main.reduce((a, u) => a + u.inputTokens, 0)).toBe(458647);
 
-    // The sub-agent is surfaced with its own agent name + model, but its tokens
-    // are NOT in the session totals.
-    expect(subs).toHaveLength(1);
-    expect(subs[0].agentName).toBe('Infrastructure');
-    expect(subs[0].model).toBe('claude-sonnet-4-6');
-    expect(subs[0].inputTokens).toBe(10814);
-    expect(main.some((u) => u.inputTokens === 10814)).toBe(false);
+    // The spawned sub-agent surfaces under its debug-log name, across both model
+    // forms it ran.
+    expect(new Set(subs.map((u) => u.agentName))).toEqual(new Set(['Sub-agent: Infrastructure']));
+    expect(subs.reduce((a, u) => a + u.inputTokens, 0)).toBe(10814);
 
-    // agentUsage is ordered main-thread first.
+    // The whole breakdown reconciles with the tree card and is ordered main-first.
+    expect(detail.agentUsage.reduce((a, u) => a + u.inputTokens, 0)).toBe(
+      detail.treeStats.inputTokens,
+    );
     expect(detail.agentUsage[0].kind).toBe('main');
     expect(detail.agentUsage[detail.agentUsage.length - 1].kind).toBe('subagent');
   });
 
-  it('counts only main-thread tokens for an agent session that spawned a sub-agent', () => {
-    // 97fb6af7: 8 invoke_agent spans, no chat. SEVEN are main-thread; ONE is a
-    // spawned sub-agent (36,452 input tokens). Counting all eight (the old bug)
-    // yields 578,124 input — this asserts the deduped main-thread totals, which
-    // match what GitHub's per-session Agent Debug Logs reports.
-    const detail = db.getSessionDetail('97fb6af7-7d93-45fe-a00b-289fa761bf66');
+  it('reads the optional reasoning_tokens column (present in this fixture, all zero)', () => {
+    const detail = db.getSessionDetail(AGENT_RUN_INFRA);
     if (detail === undefined) {
       throw new Error('expected detail');
     }
+    for (const u of detail.modelUsage) {
+      expect(typeof u.reasoningTokens).toBe('number');
+    }
+    expect(detail.modelUsage.reduce((acc, u) => acc + u.reasoningTokens, 0)).toBe(0);
+  });
+
+  it('classifies main vs sub-agent independently of which tree node is opened', () => {
+    // A constituent chat conversation and the agent root share one tree, so their
+    // breakdowns are identical — and the main thread is still labelled `main`
+    // (classification keys on the runSubagent debug label, not the root key).
+    const fromRoot = db.getSessionDetail(AGENT_RUN_INFRA);
+    const fromLeaf = db.getSessionDetail(CONSTITUENT_CONVERSATION);
+    if (fromRoot === undefined || fromLeaf === undefined) {
+      throw new Error('expected detail');
+    }
+    expect(fromLeaf.modelUsage).toEqual(fromRoot.modelUsage);
+    expect(fromLeaf.agentUsage).toEqual(fromRoot.agentUsage);
+    expect(fromLeaf.agentUsage.some((u) => u.kind === 'main')).toBe(true);
+  });
+
+  it('breaks down an agent run with a single shared model (main + default sub-agent)', () => {
+    const detail = db.getSessionDetail(AGENT_RUN_DEFAULT);
+    if (detail === undefined) {
+      throw new Error('expected detail');
+    }
+    // Both threads ran claude-opus-4-6, so one model row carrying the tree total.
+    expect(detail.modelUsage).toHaveLength(1);
+    expect(detail.modelUsage[0]).toMatchObject({
+      model: 'claude-opus-4-6',
+      llmCalls: 26,
+      inputTokens: 578124,
+    });
+    expect(detail.modelUsage[0].inputTokens).toBe(detail.treeStats.inputTokens);
+
+    // Main-thread summary is unchanged (excludes the spawned sub-agent).
     expect(detail.summary.inputTokens).toBe(541672);
     expect(detail.summary.outputTokens).toBe(10792);
     expect(detail.summary.cachedTokens).toBe(403638);
-    // SEVEN main-thread invoke_agent spans → header LLM-call count of 7 (the
-    // spawned sub-agent is excluded), not 0 as the chat-only counter produced.
     expect(detail.summary.llmCalls).toBe(7);
-    // Single model, and the rollup still equals the header totals.
-    expect(detail.modelUsage).toHaveLength(1);
-    expect(detail.modelUsage[0].model).toBe('claude-opus-4-6');
-    expect(detail.modelUsage[0].inputTokens).toBe(detail.summary.inputTokens);
-    expect(detail.modelUsage[0].llmCalls).toBe(detail.summary.llmCalls);
+
+    // agentUsage splits the one model across the main thread and the unnamed
+    // ("default") sub-agent.
+    const main = detail.agentUsage.filter((u) => u.kind === 'main');
+    const subs = detail.agentUsage.filter((u) => u.kind === 'subagent');
+    expect(main).toHaveLength(1);
+    expect(main[0]).toMatchObject({ agentName: 'Main agent', llmCalls: 22, inputTokens: 541672 });
+    expect(subs).toHaveLength(1);
+    expect(subs[0]).toMatchObject({ agentName: 'Sub-agent', llmCalls: 4, inputTokens: 36452 });
+    expect(detail.agentUsage.reduce((a, u) => a + u.inputTokens, 0)).toBe(
+      detail.treeStats.inputTokens,
+    );
   });
 
   it('returns undefined (no detail) for an unknown session key', () => {

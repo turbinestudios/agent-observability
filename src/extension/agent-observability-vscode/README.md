@@ -120,9 +120,9 @@ The privacy boundary is what makes the two tiers different:
 
 ## Model pricing & cost estimates
 
-Click a session in the **Sessions** view to open its detail panel. Alongside the
-token totals it shows an **Estimated cost** and a **Cost & tokens by model**
-table.
+Click a session in the **Sessions** view to open its detail panel. The **Main
+agent** table breaks the main-thread token totals down per model and shows an
+**Estimated cost** for each.
 
 > **It is always an estimate.** GitHub Copilot does not record or bill per token,
 > so there is no authoritative cost in the local data. The figure shown is purely

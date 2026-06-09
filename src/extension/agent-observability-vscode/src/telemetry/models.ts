@@ -203,7 +203,7 @@ export interface SessionTurn {
 export interface SessionModelUsage {
   /** Resolved model id (response_model, else request_model, else `unknown`). */
   model: string;
-  /** LLM spans (`chat` + main-thread `invoke_agent`) attributed to this model. */
+  /** `chat` model turns across the agent tree attributed to this model. */
   llmCalls: number;
   inputTokens: number;
   outputTokens: number;
@@ -213,41 +213,41 @@ export interface SessionModelUsage {
   /**
    * GitHub's authoritative premium-request usage in NANO-AIU (1 AIU = 1e9), summed
    * from the `copilot_chat.copilot_usage_nano_aiu` attribute over this model's
-   * `chat` spans. Unlike the token×rate estimate this is the unit GitHub actually
-   * bills, so it is the primary cost figure. Stored as an integer nano count so
-   * sums stay exact; divide by 1e9 for AIU at the display boundary. `0` when no
-   * billable AIU was recorded (e.g. free/included utility calls, or an
-   * orchestrator session whose AIU lives in its spawned sub-agents' own sessions).
+   * `chat` spans across the WHOLE agent tree. Unlike the token×rate estimate this
+   * is the unit GitHub actually bills, so it is the primary cost figure. Stored as
+   * an integer nano count so sums stay exact; divide by 1e9 for AIU at the display
+   * boundary. `0` only when no billable AIU was recorded (e.g. free/included
+   * utility calls). Because this is tree-scoped, a spawned sub-agent's AIU is now
+   * captured here (it is not lost to the sub-agent's own session as before).
    */
   aiuNano: number;
 }
 
 /**
- * Per-(agent, model) token rollup within a single session, distinguished by
+ * Per-(agent, model) token rollup over the whole agent tree, distinguished by
  * {@link SessionAgentUsage.kind}. This is the richer companion to
- * {@link SessionModelUsage}: it preserves WHICH agent spent the tokens (e.g. the
- * main `GitHub Copilot Chat` thread vs a spawned `Testing` / `Frontend`
- * sub-agent), which the per-model rollup collapses away.
+ * {@link SessionModelUsage}: it preserves WHICH agent spent the tokens (the
+ * `Main agent` thread vs each spawned `Sub-agent: <Name>`), which the per-model
+ * rollup collapses away. Both are aggregated over the tree's `chat` spans, so they
+ * reconcile with {@link SessionTreeStats}.
  *
- * `kind`:
- * - `main` — the main conversation thread (`chat` spans and main-thread
- *   `invoke_agent` spans whose chat_session_id equals the conversation). These
- *   sum to the {@link SessionSummary} token totals.
- * - `subagent` — a sub-agent the main agent spawned via a `runSubagent` tool
- *   call (an `invoke_agent` span whose chat_session_id is the spawning tool-call
- *   id, distinct from the conversation). Its tokens are ALSO attributed to the
- *   sub-agent's own session, so they are shown for visibility but EXCLUDED from
- *   the session totals to avoid double-counting (see
- *   `invoke-agent-token-double-count`).
+ * `kind` is classified from each `chat` turn's `copilot_chat.debug_log_label`
+ * (`runSubagent-*`) / `agent_name` (`tool/runSubagent*`) — a signal independent of
+ * which tree node was opened:
+ * - `main` — the main conversation thread.
+ * - `subagent` — a sub-agent the main agent spawned via a `runSubagent` tool call.
+ *
+ * Unlike the main-thread {@link SessionSummary}, these rows include the spawned
+ * sub-agents' real tokens AND AIU (recorded on the sub-agents' own `chat` spans).
  */
 export interface SessionAgentUsage {
-  /** `spans.agent_name`, defaulting to `copilot` when absent. */
+  /** Friendly agent label: `Main agent`, or `Sub-agent[: <Name>]` for a spawn. */
   agentName: string;
   /** Resolved model id (response_model, else request_model, else `unknown`). */
   model: string;
   /** Whether this is the main conversation thread or a spawned sub-agent. */
   kind: 'main' | 'subagent';
-  /** LLM spans attributed to this (agent, model, kind). */
+  /** `chat` model turns attributed to this (agent, model, kind). */
   llmCalls: number;
   inputTokens: number;
   outputTokens: number;
@@ -256,11 +256,10 @@ export interface SessionAgentUsage {
   reasoningTokens: number;
   /**
    * Premium-request usage in NANO-AIU (1 AIU = 1e9) for this (agent, model, kind),
-   * summed from `copilot_chat.copilot_usage_nano_aiu`. See
-   * {@link SessionModelUsage.aiuNano}. AIU is recorded only on `chat` spans, so
-   * `invoke_agent`-derived rows (the `subagent` kind, and a main-thread agent's own
-   * `invoke_agent` calls) carry `0` — a spawned sub-agent's real AIU is attributed
-   * within its own session, consistent with how its tokens are handled.
+   * summed from `copilot_chat.copilot_usage_nano_aiu` over the tree's `chat` spans.
+   * See {@link SessionModelUsage.aiuNano}. Because the breakdown is tree-scoped, a
+   * spawned sub-agent's rows now carry their real AIU (their `chat` spans live
+   * under their own conversation id), rather than reading `0` as before.
    */
   aiuNano: number;
 }
@@ -312,8 +311,9 @@ export interface SessionTreeStats {
   /**
    * Σ `copilot_chat.copilot_usage_nano_aiu` over the tree's `chat` spans, in
    * integer NANO-AIU (1 AIU = 1e9). Divide by 1e9 for GitHub's "Copilot Usage
-   * (AIU)". Includes sub-agents' AIU (where the real billing lives), unlike the
-   * single-session {@link SessionModelUsage.aiuNano}.
+   * (AIU)". Includes sub-agents' AIU (where the real billing lives); the per-model
+   * and per-agent breakdowns ({@link SessionModelUsage}/{@link SessionAgentUsage})
+   * are taken over the same tree `chat` spans and so sum to this value.
    */
   aiuNano: number;
 }
@@ -340,14 +340,16 @@ export interface SessionDetail {
    */
   turns: SessionTurn[];
   /**
-   * Per-model token rollup for the MAIN thread (chat + main-thread invoke_agent),
-   * sorted by total tokens desc. Sums to the {@link SessionSummary} token totals.
+   * Per-model token rollup over the WHOLE agent tree's `chat` spans (incl. spawned
+   * sub-agents), sorted by total tokens desc. Sums to the {@link treeStats} token
+   * totals — NOT to the main-thread {@link summary}.
    */
   modelUsage: SessionModelUsage[];
   /**
-   * Per-(agent, model) token rollup over ALL LLM spans — main thread and spawned
-   * sub-agents — sorted main-first then by total tokens desc. Lets the detail view
-   * attribute usage to each agent; sub-agent rows are excluded from the totals.
+   * Per-(agent, model) token rollup over the WHOLE agent tree's `chat` spans —
+   * the main thread and every spawned sub-agent — sorted main-first then by total
+   * tokens desc. Lets the detail view attribute real tokens AND AIU to each agent;
+   * sums to {@link treeStats}.
    */
   agentUsage: SessionAgentUsage[];
 }
@@ -394,6 +396,14 @@ export interface CombinedSummary {
  */
 export interface CombinedSessionDetail {
   summary: CombinedSummary;
+  /**
+   * Whole-agent-tree totals (incl. spawned sub-agents) summed across every
+   * combined session — the merged counterpart of {@link SessionDetail.treeStats}.
+   * Rendered as the combined "Agent run totals" card, mirroring the single-session
+   * view. Because each session's {@link SessionTreeStats} is already tree-scoped
+   * and rooted at a distinct opened session, summing them never double-counts.
+   */
+  treeStats: SessionTreeStats;
   /** Per-model token rollup merged across all combined sessions, sorted by total tokens desc. */
   modelUsage: SessionModelUsage[];
   /** Per-(agent, model) rollup merged across all sessions, sorted main-first then total tokens desc. */

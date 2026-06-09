@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderSessionDetailHtml, SessionCostView } from './sessionDetailHtml';
-import { SessionDetail, SessionTreeStats, SessionTurn } from '../telemetry/models';
+import { SessionDetail, SessionTreeStats, SessionTurn, agentUsageKey } from '../telemetry/models';
 import { CostEstimate } from '../telemetry/pricing';
 import { DeviationType, WorkflowDeviation } from '../deviation/models';
 
@@ -86,20 +86,48 @@ describe('renderSessionDetailHtml — local-only badge', () => {
     expect(html).not.toContain('class="badge badge-local"');
   });
 
-  it('omits the cost section and header row when there are no model-usage rows', () => {
+  it('omits the main-agent section when there are no agent-usage rows', () => {
     const html = renderSessionDetailHtml(detail, [], NONCE);
-    expect(html).not.toContain('Cost &amp; tokens by model');
+    expect(html).not.toContain('<h2>Main agent</h2>');
     expect(html).not.toContain('Estimated cost');
+  });
+
+  it('keeps the header to start / end / duration only', () => {
+    const html = renderSessionDetailHtml(detail, [], NONCE);
+    expect(html).toContain('<dt>Started</dt>');
+    expect(html).toContain('<dt>Ended</dt>');
+    expect(html).toContain('<dt>Duration</dt>');
+    // The richer per-thread fields have moved out of the header.
+    expect(html).not.toContain('<dt>Repository</dt>');
+    expect(html).not.toContain('<dt>Interactions</dt>');
+    expect(html).not.toContain('<dt>Tokens in / out</dt>');
   });
 });
 
-describe('renderSessionDetailHtml — cost & tokens by model', () => {
+describe('renderSessionDetailHtml — Main agent cost & tokens', () => {
   /**
-   * Three models exercising every cost outcome in one render:
+   * The Main agent table is driven by `agentUsage` (kind `main`) and priced via
+   * `costByAgent`. Three models on the main thread exercise every cost outcome:
    * - `claude-opus-4-6`: priced, non-zero tokens → `$0.0234 (est.)`;
    * - `gpt-zero`: a KNOWN rate applied to ZERO tokens → a legitimate `$0.0000 (est.)`;
    * - `<script>evil</script>`: unpriced (and XSS-laden) → `n/a` (never `$0`).
    */
+  const main = (
+    model: string,
+    over: Partial<SessionDetail['agentUsage'][number]>,
+  ): SessionDetail['agentUsage'][number] => ({
+    agentName: 'Main agent',
+    model,
+    kind: 'main',
+    llmCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    reasoningTokens: 0,
+    aiuNano: 0,
+    ...over,
+  });
+
   const usageDetail: SessionDetail = {
     summary: {
       ...detail.summary,
@@ -110,60 +138,37 @@ describe('renderSessionDetailHtml — cost & tokens by model', () => {
     },
     treeStats: ZERO_TREE_STATS,
     turns: [],
-    modelUsage: [
-      {
-        model: 'claude-opus-4-6',
-        llmCalls: 2,
-        inputTokens: 800,
-        outputTokens: 150,
-        cachedTokens: 100,
-        reasoningTokens: 0,
-        aiuNano: 2_042_500_000,
-      },
-      {
-        model: 'gpt-zero',
-        llmCalls: 1,
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedTokens: 0,
-        reasoningTokens: 0,
-        aiuNano: 0,
-      },
-      {
-        model: '<script>evil</script>',
-        llmCalls: 1,
-        inputTokens: 200,
-        outputTokens: 50,
-        cachedTokens: 0,
-        reasoningTokens: 0,
-        aiuNano: 500_000_000,
-      },
+    modelUsage: [],
+    agentUsage: [
+      main('claude-opus-4-6', { llmCalls: 2, inputTokens: 800, outputTokens: 150, cachedTokens: 100, aiuNano: 2_042_500_000 }),
+      main('gpt-zero', { llmCalls: 1 }),
+      main('<script>evil</script>', { llmCalls: 1, inputTokens: 200, outputTokens: 50, aiuNano: 500_000_000 }),
     ],
-    agentUsage: [],
   };
 
-  /** Two models priced (one a legitimate $0), one not → the session total is partial. */
+  /** Two models priced (one a legitimate $0), one not → the subtotal is partial. */
   const cost: SessionCostView = {
-    costByModel: new Map<string, CostEstimate>([
-      ['claude-opus-4-6', { available: true, inputUsd: 0.012, outputUsd: 0.011, totalUsd: 0.0234 }],
-      ['gpt-zero', { available: true, inputUsd: 0, outputUsd: 0, totalUsd: 0 }],
-      ['<script>evil</script>', { available: false }],
+    costByModel: new Map<string, CostEstimate>(),
+    costByAgent: new Map<string, CostEstimate>([
+      [agentUsageKey({ agentName: 'Main agent', model: 'claude-opus-4-6', kind: 'main' }), { available: true, inputUsd: 0.012, outputUsd: 0.011, totalUsd: 0.0234 }],
+      [agentUsageKey({ agentName: 'Main agent', model: 'gpt-zero', kind: 'main' }), { available: true, inputUsd: 0, outputUsd: 0, totalUsd: 0 }],
+      [agentUsageKey({ agentName: 'Main agent', model: '<script>evil</script>', kind: 'main' }), { available: false }],
     ]),
     total: { available: true, totalUsd: 0.0234, partial: true },
   };
 
   /** Extract the rendered `<tfoot>` Total row so footer cells can be asserted in isolation. */
   function footerRow(html: string): string {
-    return html.match(/<td class="model">Total<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
+    return html.match(/<td>Total<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
   }
 
-  it('renders the table heading, the header Estimated-cost row, and the est.-labelled cost', () => {
+  it('renders the "Main agent" heading and the est.-labelled cost in the footer total', () => {
     const html = renderSessionDetailHtml(usageDetail, [], NONCE, cost);
-    expect(html).toContain('Cost &amp; tokens by model');
-    // The header Estimated-cost row reflects the passed-in session total (partial).
-    expect(html).toContain('<dt>Estimated cost</dt><dd>$0.0234 (est.) + n/a</dd>');
+    expect(html).toContain('<h2>Main agent</h2>');
     // The priced model shows a labelled estimate; the `(est.)` label is mandatory.
     expect(html).toContain('$0.0234 (est.)');
+    // The footer Total reflects the main-agent subtotal (partial).
+    expect(footerRow(html)).toContain('$0.0234 (est.) + n/a');
   });
 
   it('renders a legitimate $0 for a KNOWN rate with zero tokens (not n/a)', () => {
@@ -183,13 +188,13 @@ describe('renderSessionDetailHtml — cost & tokens by model', () => {
     );
   });
 
-  it('renders a footer Total row that sums the per-model token columns and cost', () => {
+  it('renders a footer Total row that sums the per-row token columns and cost', () => {
     const footer = footerRow(renderSessionDetailHtml(usageDetail, [], NONCE, cost));
     expect(footer).toContain('<td class="n">4</td>'); // llmCalls 2 + 1 + 1
     expect(footer).toContain('<td class="n">1000</td>'); // input 800 + 0 + 200
     expect(footer).toContain('<td class="n">200</td>'); // output 150 + 0 + 50
     expect(footer).toContain('<td class="n">100</td>'); // cached 100 + 0 + 0
-    // Footer total matches the header rollup, partial marker included.
+    // Footer total sums the main-agent rows, partial marker included.
     expect(footer).toContain('$0.0234 (est.) + n/a');
   });
 
@@ -201,7 +206,7 @@ describe('renderSessionDetailHtml — cost & tokens by model', () => {
 
   it('renders without throwing on the 3-arg call (no cost data) — all costs n/a', () => {
     const html = renderSessionDetailHtml(usageDetail, [], NONCE);
-    expect(html).toContain('Cost &amp; tokens by model');
+    expect(html).toContain('<h2>Main agent</h2>');
     expect(html).toContain('<td class="n">n/a</td>');
     // With no rates supplied there is no estimate to label anywhere.
     expect(html).not.toContain('(est.)');
@@ -232,9 +237,9 @@ describe('renderSessionDetailHtml — spawned sub-agents', () => {
     ],
   };
 
-  it('renders the main agent in the header and a Spawned sub-agents section', () => {
+  it('renders the Main agent table and a Spawned sub-agents section', () => {
     const html = renderSessionDetailHtml(agentDetail, [], NONCE);
-    expect(html).toContain('<dt>Agent</dt><dd>GitHub Copilot Chat</dd>');
+    expect(html).toContain('<h2>Main agent</h2>');
     expect(html).toContain('Spawned sub-agents');
     // Each spawned sub-agent appears with its name and model.
     expect(html).toContain('<td>Testing</td>');
@@ -255,10 +260,13 @@ describe('renderSessionDetailHtml — spawned sub-agents', () => {
     expect(html).not.toContain('Spawned sub-agents');
   });
 
-  it('does not let sub-agents inflate the session header totals', () => {
+  it('does not let sub-agents inflate the main-agent totals', () => {
     const html = renderSessionDetailHtml(agentDetail, [], NONCE);
-    // The header Tokens row reflects the main-thread totals only (5000 in / 200 out).
-    expect(html).toContain('5000 / 200 (cached 100)');
+    // The "Main agent" footer reflects main-thread tokens only (5000 in), not the
+    // 7200 it would show if the 1300 + 900 sub-agent inputs were folded in.
+    const mainFooter = html.match(/<td>Total<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
+    expect(mainFooter).toContain('<td class="n">5000</td>');
+    expect(mainFooter).not.toContain('<td class="n">7200</td>');
   });
 });
 
@@ -354,30 +362,30 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     },
   };
 
-  it('renders all eight stat tiles with the agent-tree totals', () => {
+  it('renders all eight totals as an acronym flat list with the agent-tree values', () => {
     const html = renderSessionDetailHtml(treeDetail, [], NONCE);
     expect(html).toContain('Agent run totals');
     expect(html).toContain('incl. spawned sub-agents');
-    // Labels.
-    for (const label of [
-      'Model Turns',
-      'Tool Calls',
-      'Total Input Tokens',
-      'Total Output Tokens',
-      'Total Cached Input Tokens',
-      'Total Tokens',
-      'Errors',
-      'Copilot Usage (AIU)',
+    // Acronym labels, with the full name preserved in the title for discoverability.
+    for (const [acr, label] of [
+      ['MT', 'Model Turns'],
+      ['TC', 'Tool Calls'],
+      ['TIN', 'Total Input Tokens'],
+      ['TOUT', 'Total Output Tokens'],
+      ['TCI', 'Total Cached Input Tokens'],
+      ['TT', 'Total Tokens'],
+      ['ERR', 'Errors'],
+      ['AIU', 'Copilot Usage (AIU)'],
     ]) {
-      expect(html).toContain(label);
+      expect(html).toContain(`title="${label}">${acr}</dt>`);
     }
-    // Values (raw integers, no thousands separators).
+    // Values with thousands separators, matching GitHub's Agent Debug Logs.
     expect(html).toContain('<dd>183</dd>');
     expect(html).toContain('<dd>289</dd>');
-    expect(html).toContain('<dd>9042804</dd>');
-    expect(html).toContain('<dd>85089</dd>');
-    expect(html).toContain('<dd>8562370</dd>');
-    expect(html).toContain('<dd>9127893</dd>');
+    expect(html).toContain('<dd>9,042,804</dd>');
+    expect(html).toContain('<dd>85,089</dd>');
+    expect(html).toContain('<dd>8,562,370</dd>');
+    expect(html).toContain('<dd>9,127,893</dd>');
     expect(html).toContain('<dd>1</dd>');
     // AIU: 536_264_925_000 nano / 1e9 = 536.26 (2-dp when ≥ 1).
     expect(html).toContain('<dd>536.26</dd>');
@@ -387,6 +395,51 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     const html = renderSessionDetailHtml(detail, [], NONCE);
     expect(html).toContain('Agent run totals');
     // Errors / turns read 0 rather than being omitted.
-    expect(html).toContain('Copilot Usage (AIU)');
+    expect(html).toContain('title="Copilot Usage (AIU)">AIU</dt>');
+  });
+
+  it('plots an input/cached/output token trend across turns (≥ 2 turns)', () => {
+    const turn = (input: number, output: number, cached: number): SessionTurn => ({
+      timestampMs: 1_700_000_000_000,
+      agentMode: 'agent',
+      model: 'gpt-test',
+      durationMs: 1,
+      success: true,
+      llmCalls: 1,
+      inputTokens: input,
+      outputTokens: output,
+      cachedTokens: cached,
+      reasoningTokens: 0,
+      events: [],
+    });
+    const html = renderSessionDetailHtml(
+      { ...treeDetail, turns: [turn(100, 20, 5), turn(200, 40, 50)] },
+      [],
+      NONCE,
+    );
+    // One polyline (and point dots) per series, plus a legend swatch for each.
+    expect(html).toContain('class="trend-line trend-input"');
+    expect(html).toContain('class="trend-line trend-cached"');
+    expect(html).toContain('class="trend-line trend-output"');
+    expect(html).toContain('class="trend-dot trend-output"');
+    expect(html).toContain('class="trend-swatch trend-output"');
+    // X-axis + grid background, but NO y-axis scale (read values on hover instead).
+    expect(html).toContain('class="trend-axis"');
+    expect(html).toContain('class="trend-grid"');
+    expect(html).toContain('class="trend-axis-label trend-axis-x"');
+    expect(html).not.toContain('trend-axis-y');
+    // Per-turn hover columns expose every line's value via a native <title> tooltip.
+    expect(html).toContain('class="trend-hover"');
+    expect(html).toContain('<title>Turn 1 · Input 100 · Cached 5 · Output 20</title>');
+    expect(html).toContain('<title>Turn 2 · Input 200 · Cached 50 · Output 40</title>');
+    // CSP-safe: SVG geometry only, no inline style attributes anywhere.
+    expect(html).toContain('<svg class="trend-svg"');
+    expect(html).not.toContain('style="');
+  });
+
+  it('shows a placeholder instead of a trend when there are fewer than two turns', () => {
+    const html = renderSessionDetailHtml(treeDetail, [], NONCE); // treeDetail has no turns
+    expect(html).toContain('Not enough turns to plot a token trend.');
+    expect(html).not.toContain('class="trend-line');
   });
 });
