@@ -2,6 +2,7 @@ import {
   CombinedSessionDetail,
   CombinedSummary,
   SessionDetail,
+  SessionTreeStats,
   SessionModelUsage,
   SessionAgentUsage,
   SessionTimelineEntry,
@@ -112,6 +113,7 @@ export function renderSessionDetailHtml(
 </head>
 <body>
   ${renderHeader(detail, cost)}
+  ${renderTreeSummary(detail.treeStats, cost?.usdPerAiu)}
   ${renderModelUsage(detail.modelUsage, cost?.costByModel, cost?.usdPerAiu)}
   ${renderSubAgentUsage(detail.agentUsage, cost?.costByAgent, cost?.usdPerAiu)}
   ${renderDeviations(deviations)}
@@ -280,6 +282,41 @@ function renderHeader(detail: SessionDetail, cost?: SessionCostView): string {
       <div><dt>Tokens in / out</dt><dd>${num(s.inputTokens)} / ${num(s.outputTokens)} (cached ${num(s.cachedTokens)})</dd></div>${aiuRow}${costRow}
     </dl>
   </header>`;
+}
+
+/**
+ * "Agent run totals" card: the whole-agent-tree rollup that mirrors GitHub's
+ * per-session Agent Debug Logs summary, as a grid of stat tiles. Unlike the
+ * header (main thread only), this INCLUDES every spawned sub-agent, so its
+ * token/turn counts read larger by design — the note makes that explicit so the
+ * smaller header totals are not mistaken for a discrepancy. AIU is GitHub's
+ * actual billed unit ({@link formatAiu}); the values are all numeric and still
+ * routed through {@link num}/{@link formatAiu} for defense-in-depth.
+ */
+function renderTreeSummary(stats: SessionTreeStats, usdPerAiu?: number): string {
+  const tiles: Array<{ label: string; value: string }> = [
+    { label: 'Model Turns', value: num(stats.modelTurns) },
+    { label: 'Tool Calls', value: num(stats.toolCalls) },
+    { label: 'Total Input Tokens', value: num(stats.inputTokens) },
+    { label: 'Total Output Tokens', value: num(stats.outputTokens) },
+    { label: 'Total Cached Input Tokens', value: num(stats.cachedTokens) },
+    { label: 'Total Tokens', value: num(stats.totalTokens) },
+    { label: 'Errors', value: num(stats.errorCount) },
+    { label: 'Copilot Usage (AIU)', value: formatAiu(stats.aiuNano, usdPerAiu) },
+  ];
+  const cells = tiles
+    .map(
+      (t) => `<div class="stat"><dt>${escapeHtml(t.label)}</dt><dd>${t.value}</dd></div>`,
+    )
+    .join('\n');
+
+  return `<section class="panel">
+    <div class="panel-heading"><h2>Agent run totals</h2><span>incl. spawned sub-agents</span></div>
+    <p class="muted">The whole agent run — this conversation plus every sub-agent it spawned — matching GitHub's per-session Agent Debug Logs. These totals are larger than the main-thread figures above, which exclude sub-agents (counted in each sub-agent's own session).</p>
+    <dl class="stats-grid">
+      ${cells}
+    </dl>
+  </section>`;
 }
 
 /**
@@ -676,6 +713,10 @@ const STYLE = `
   .panel { border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); border-radius: 6px; padding: .75rem .9rem; margin-bottom: 1rem; background: var(--vscode-editorWidget-background); }
   .panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .5rem; }
   .panel-heading span { color: var(--vscode-descriptionForeground); font-size: .8rem; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .6rem; margin: .5rem 0 0; }
+  .stat { border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); border-radius: 5px; padding: .5rem .65rem; background: var(--vscode-editor-background); }
+  .stat dt { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); }
+  .stat dd { margin: .2rem 0 0; font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
   .deviation-list { display: flex; flex-direction: column; gap: .6rem; }
   .deviation { border-left: 3px solid var(--vscode-editorWarning-foreground, #c90); padding: .4rem .6rem; background: var(--vscode-inputValidation-warningBackground, transparent); border-radius: 0 4px 4px 0; }
   .deviation p { margin: .3rem 0; }

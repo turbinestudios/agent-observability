@@ -280,6 +280,45 @@ export function agentUsageKey(u: {
 }
 
 /**
+ * Whole-agent-tree totals matching GitHub's per-session **Agent Debug Logs**
+ * summary card. Unlike {@link SessionSummary} (main thread only — `chat` +
+ * main-thread `invoke_agent`, sub-agents EXCLUDED to avoid the cross-session
+ * double-count), this INCLUDES every spawned sub-agent, so it reads larger and
+ * equals what GitHub shows for the session.
+ *
+ * The "agent tree" is the connected component over `conversation_id` /
+ * `chat_session_id` edges rooted at the opened session (it reaches sub-agents via
+ * their `call_…`/`toolu_…` spawn ids and their own conversation ids). All counts
+ * and token sums are taken over that component's `chat` spans (each model turn is
+ * counted once; `invoke_agent` spans are just per-agent rollups of the same chat
+ * turns, so summing them would double-count). See the verified metric definitions
+ * in the plan / the `agent-debug-log-session-stats` memory.
+ */
+export interface SessionTreeStats {
+  /** `chat` span count across the tree → GitHub's "Model Turns". */
+  modelTurns: number;
+  /** `execute_tool` span count across the tree → GitHub's "Tool Calls". */
+  toolCalls: number;
+  /** Σ `input_tokens` over the tree's `chat` spans. */
+  inputTokens: number;
+  /** Σ `output_tokens` over the tree's `chat` spans. */
+  outputTokens: number;
+  /** Σ `cached_tokens` over the tree's `chat` spans → "Total Cached Input Tokens". */
+  cachedTokens: number;
+  /** {@link inputTokens} + {@link outputTokens} → GitHub's "Total Tokens". */
+  totalTokens: number;
+  /** Count of spans with `status_code === 2` across the tree → "Errors". */
+  errorCount: number;
+  /**
+   * Σ `copilot_chat.copilot_usage_nano_aiu` over the tree's `chat` spans, in
+   * integer NANO-AIU (1 AIU = 1e9). Divide by 1e9 for GitHub's "Copilot Usage
+   * (AIU)". Includes sub-agents' AIU (where the real billing lives), unlike the
+   * single-session {@link SessionModelUsage.aiuNano}.
+   */
+  aiuNano: number;
+}
+
+/**
  * A single session's full drill-down for the LOCAL detail panel: the safe
  * {@link SessionSummary} header plus the per-user-request {@link SessionTurn}
  * grouping (which may include local-only raw content) and a per-model usage
@@ -287,6 +326,12 @@ export function agentUsageKey(u: {
  */
 export interface SessionDetail {
   summary: SessionSummary;
+  /**
+   * Whole-agent-tree totals (incl. spawned sub-agents) matching GitHub's Agent
+   * Debug Logs card. Rendered as a dedicated summary card in the detail view,
+   * distinct from the main-thread {@link summary} totals.
+   */
+  treeStats: SessionTreeStats;
   /**
    * The session's interactions grouped into user-request turns, in chronological
    * order. Every span is accounted for: anchored turns hold their triggered

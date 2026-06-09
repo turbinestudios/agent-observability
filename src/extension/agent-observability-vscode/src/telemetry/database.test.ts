@@ -111,4 +111,43 @@ describe('TelemetryDatabase against the fixture', () => {
     expect(future.totalInteractions).toBe(0);
     expect(future.totalInteractions).toBeLessThan(full.totalInteractions);
   });
+
+  // Whole-agent-tree rollup (incl. spawned sub-agents) matching GitHub's Agent
+  // Debug Logs card. KNOWN_SESSION is an agent-mode run that spawned sub-agents,
+  // so its tree spans several conversation ids; the values below are the fixture's
+  // ground truth (sum of chat spans across the connected component).
+  it('rolls up the whole agent tree (incl. sub-agents) for getSessionTreeStats', () => {
+    const stats = db.getSessionTreeStats(KNOWN_SESSION);
+    expect(stats).toBeDefined();
+    if (stats === undefined) {
+      return;
+    }
+    expect(stats.modelTurns).toBe(26);
+    expect(stats.toolCalls).toBe(52);
+    expect(stats.inputTokens).toBe(578124);
+    expect(stats.outputTokens).toBe(11507);
+    expect(stats.cachedTokens).toBe(430747);
+    expect(stats.totalTokens).toBe(589631);
+    expect(stats.errorCount).toBe(97);
+    // Fixture AIU values are sanitized to zero (exercised non-zero in sessionAiu.test.ts).
+    expect(stats.aiuNano).toBe(0);
+  });
+
+  it('tree totals exceed the main-thread summary (sub-agents are added back)', () => {
+    const tree = db.getSessionTreeStats(KNOWN_SESSION);
+    const detail = db.getSessionDetail(KNOWN_SESSION);
+    expect(tree).toBeDefined();
+    expect(detail).toBeDefined();
+    if (tree === undefined || detail === undefined) {
+      return;
+    }
+    // The detail header excludes spawned sub-agents; the tree includes them.
+    expect(tree.inputTokens).toBeGreaterThan(detail.summary.inputTokens);
+    // getSessionDetail surfaces the same tree rollup it computed.
+    expect(detail.treeStats).toEqual(tree);
+  });
+
+  it('returns undefined from getSessionTreeStats for an unknown session', () => {
+    expect(db.getSessionTreeStats('does-not-exist-0000')).toBeUndefined();
+  });
 });

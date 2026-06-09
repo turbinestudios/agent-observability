@@ -9,6 +9,7 @@ import {
   RepositorySummary,
   SessionSummary,
   SessionDetail,
+  SessionTreeStats,
   SessionModelUsage,
   SessionAgentUsage,
   SessionTimelineEntry,
@@ -37,6 +38,26 @@ export class SchemaMismatchError extends Error {
 
 /** Default agent name when a span carries none. */
 const DEFAULT_AGENT = 'copilot';
+
+/**
+ * Defensive cap on the breadth-first agent-tree walk in {@link
+ * TelemetryDatabase.sessionTreeIds}. Each hop expands the frontier by one edge in
+ * the conversation/chat-session id graph; real agent runs nest only a few levels,
+ * so this is a safety backstop against a pathological cycle, not a real limit.
+ */
+const MAX_TREE_HOPS = 64;
+
+/** All-zero {@link SessionTreeStats}, used as a belt-and-braces fallback. */
+const EMPTY_TREE_STATS: SessionTreeStats = {
+  modelTurns: 0,
+  toolCalls: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedTokens: 0,
+  totalTokens: 0,
+  errorCount: 0,
+  aiuNano: 0,
+};
 
 /**
  * Read-only wrapper over a snapshot-copy connection to `agent-traces.db`.
@@ -878,7 +899,137 @@ export class TelemetryDatabase {
       agentModes: this.agentModesBySession().get(sessionKey) ?? ['default'],
     };
 
-    return { summary, turns, modelUsage, agentUsage };
+    // Whole-agent-tree rollup (incl. spawned sub-agents) for the GitHub-matching
+    // summary card. rows.length > 0 here, so the root is part of a non-empty tree
+    // and getSessionTreeStats never returns undefined; the ?? is belt-and-braces.
+    const treeStats = this.getSessionTreeStats(sessionKey) ?? EMPTY_TREE_STATS;
+
+    return { summary, treeStats, turns, modelUsage, agentUsage };
+  }
+
+  /**
+   * Whole-agent-tree totals for the LOCAL detail panel's summary card, matching
+   * GitHub's per-session Agent Debug Logs. Unlike {@link getSessionDetail}'s
+   * main-thread {@link SessionSummary} (which excludes spawned sub-agents to avoid
+   * the cross-session double-count), this aggregates the ENTIRE agent tree rooted
+   * at `sessionKey` — the main conversation plus every sub-agent it spawned.
+   *
+   * The tree is the connected component over `conversation_id` / `chat_session_id`
+   * edges (see {@link sessionTreeIds}). All counts and token sums are taken over
+   * that component's `chat` spans: each model turn is counted once, and because an
+   * `invoke_agent` span is only a per-agent rollup of its own `chat` turns,
+   * summing `chat` avoids the double-count that summing both would cause.
+   *
+   * Returns `undefined` when the tree has no spans (unknown session key).
+   */
+  getSessionTreeStats(sessionKey: string): SessionTreeStats | undefined {
+    const ids = this.sessionTreeIds(sessionKey);
+    if (ids.length === 0) {
+      return undefined;
+    }
+    // Dynamic placeholder list — ids are bound as parameters, never interpolated
+    // (same safe-assembly discipline as the optional reasoningCol elsewhere).
+    const inList = ids.map(() => '?').join(', ');
+
+    const agg = this.getRow<{
+      span_count: number;
+      model_turns: number;
+      tool_calls: number;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      cached_tokens: number | null;
+      error_count: number;
+    }>(
+      `SELECT
+           COUNT(*) AS span_count,
+           SUM(CASE WHEN operation_name = 'chat' THEN 1 ELSE 0 END) AS model_turns,
+           SUM(CASE WHEN operation_name = 'execute_tool' THEN 1 ELSE 0 END) AS tool_calls,
+           SUM(CASE WHEN operation_name = 'chat' THEN COALESCE(input_tokens, 0) ELSE 0 END) AS input_tokens,
+           SUM(CASE WHEN operation_name = 'chat' THEN COALESCE(output_tokens, 0) ELSE 0 END) AS output_tokens,
+           SUM(CASE WHEN operation_name = 'chat' THEN COALESCE(cached_tokens, 0) ELSE 0 END) AS cached_tokens,
+           SUM(CASE WHEN status_code = 2 THEN 1 ELSE 0 END) AS error_count
+         FROM spans
+         WHERE conversation_id IN (${inList}) OR chat_session_id IN (${inList})`,
+      [...ids, ...ids],
+    );
+
+    // No spans matched — the root key is unknown (no spans anchor to it). An
+    // aggregate query always returns one row, so distinguish "empty" by the count
+    // rather than a missing row.
+    if (agg === undefined || agg.span_count === 0) {
+      return undefined;
+    }
+
+    // AIU (GitHub's billed premium-request units) is recorded on `chat` spans via
+    // a span attribute; sum it over the same tree. Integer nano keeps sums exact.
+    const aiuRow = this.getRow<{ aiu_nano: number | null }>(
+      `SELECT SUM(CAST(a.value AS INTEGER)) AS aiu_nano
+         FROM span_attributes a
+         JOIN spans s ON s.span_id = a.span_id
+         WHERE a.key = 'copilot_chat.copilot_usage_nano_aiu'
+           AND s.operation_name = 'chat'
+           AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))`,
+      [...ids, ...ids],
+    );
+
+    const inputTokens = agg.input_tokens ?? 0;
+    const outputTokens = agg.output_tokens ?? 0;
+    return {
+      modelTurns: agg.model_turns ?? 0,
+      toolCalls: agg.tool_calls ?? 0,
+      inputTokens,
+      outputTokens,
+      cachedTokens: agg.cached_tokens ?? 0,
+      totalTokens: inputTokens + outputTokens,
+      errorCount: agg.error_count ?? 0,
+      aiuNano: aiuRow?.aiu_nano ?? 0,
+    };
+  }
+
+  /**
+   * The set of session ids forming the agent tree rooted at `rootKey`: the
+   * connected component over `conversation_id` / `chat_session_id` edges. A
+   * Copilot agent run links its main conversation to each spawned sub-agent by
+   * sharing ids — the spawned `invoke_agent` span carries the parent
+   * `conversation_id` and the spawn tool-call id as `chat_session_id`, and the
+   * sub-agent's own spans carry that sub-agent's `conversation_id` with the parent
+   * `chat_session_id` — so walking both edges transitively collects the whole run.
+   *
+   * Implemented as a bounded breadth-first walk (each round expands the frontier
+   * by one hop); the {@link MAX_TREE_HOPS} cap is a defensive backstop against a
+   * pathological cycle and is far above any real agent nesting depth. In real data
+   * the component is exactly one agent run; independent sessions never share ids.
+   */
+  private sessionTreeIds(rootKey: string): string[] {
+    const seen = new Set<string>([rootKey]);
+    let frontier: string[] = [rootKey];
+    for (let hop = 0; hop < MAX_TREE_HOPS && frontier.length > 0; hop++) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        const rows = this.allRows<{
+          conversation_id: string | null;
+          chat_session_id: string | null;
+        }>(
+          `SELECT DISTINCT conversation_id, chat_session_id
+             FROM spans
+             WHERE conversation_id = ? OR chat_session_id = ?`,
+          [id, id],
+        );
+        for (const row of rows) {
+          for (const value of [row.conversation_id, row.chat_session_id]) {
+            if (value !== null && value.length > 0 && !seen.has(value)) {
+              seen.add(value);
+              next.push(value);
+            }
+          }
+        }
+      }
+      frontier = next;
+    }
+    // Always includes rootKey. When rootKey is unknown (no spans), the walk adds
+    // nothing and this is just [rootKey]; the caller detects emptiness via the
+    // span COUNT, not the id-set size.
+    return [...seen];
   }
 
   /**

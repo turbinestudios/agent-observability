@@ -22,6 +22,72 @@ const AIU_KEY = 'copilot_chat.copilot_usage_nano_aiu';
 /** 1.25 AIU per chat span, as integer nano — chosen to expose any float drift. */
 const PER_SPAN_NANO = 1_250_000_000;
 
+/**
+ * Derive the agent-tree id set (connected component over conversation/chat-session
+ * edges) for `rootKey`, mirroring TelemetryDatabase.sessionTreeIds — used to stamp
+ * AIU across a whole run so the tree rollup's cross-conversation sum is exercised.
+ */
+function treeIds(raw: Database, rootKey: string): string[] {
+  const seen = new Set<string>([rootKey]);
+  let frontier = [rootKey];
+  while (frontier.length > 0) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      const rows = raw.all(
+        `SELECT DISTINCT conversation_id, chat_session_id FROM spans
+           WHERE conversation_id = ? OR chat_session_id = ?`,
+        [id, id],
+      ) as Array<{ conversation_id: string | null; chat_session_id: string | null }>;
+      for (const r of rows) {
+        for (const v of [r.conversation_id, r.chat_session_id]) {
+          if (v !== null && v.length > 0 && !seen.has(v)) {
+            seen.add(v);
+            next.push(v);
+          }
+        }
+      }
+    }
+    frontier = next;
+  }
+  return [...seen];
+}
+
+/**
+ * Stamp a known nano-AIU on every `chat` span of the whole agent TREE rooted at
+ * `rootKey` (across all its conversation ids). Returns the number of chat spans
+ * stamped. Exercises the tree-scoped AIU sum in getSessionTreeStats.
+ */
+function stampAiuTree(dbPath: string, rootKey: string): number {
+  const raw = new Database(dbPath, { fileMustExist: true });
+  try {
+    const ids = treeIds(raw, rootKey);
+    const inList = ids.map(() => '?').join(', ');
+    const chatSpans = raw.all(
+      `SELECT span_id FROM spans
+         WHERE operation_name = 'chat'
+           AND (conversation_id IN (${inList}) OR chat_session_id IN (${inList}))`,
+      [...ids, ...ids],
+    ) as Array<{ span_id: string }>;
+    raw.run(
+      `DELETE FROM span_attributes WHERE key = ? AND span_id IN (
+         SELECT span_id FROM spans
+           WHERE operation_name = 'chat'
+             AND (conversation_id IN (${inList}) OR chat_session_id IN (${inList})))`,
+      [AIU_KEY, ...ids, ...ids],
+    );
+    for (const { span_id } of chatSpans) {
+      raw.run('INSERT INTO span_attributes (span_id, key, value) VALUES (?, ?, ?)', [
+        span_id,
+        AIU_KEY,
+        String(PER_SPAN_NANO),
+      ]);
+    }
+    return chatSpans.length;
+  } finally {
+    raw.close();
+  }
+}
+
 /** Stamp a known nano-AIU on every `chat` span of `sessionKey` in the copy. */
 function stampAiu(dbPath: string, sessionKey: string): number {
   const raw = new Database(dbPath, { fileMustExist: true });
@@ -103,6 +169,40 @@ describe('TelemetryDatabase.getSessionDetail — AIU rollup', () => {
         for (const u of detail.modelUsage) {
           expect(u.aiuNano).toBe(0);
         }
+      } finally {
+        db.close();
+      }
+    } finally {
+      copy.cleanup();
+    }
+  });
+});
+
+describe('TelemetryDatabase.getSessionTreeStats — AIU rollup (whole agent tree)', () => {
+  // An agent-mode run that spawned sub-agents (its tree spans several conversation
+  // ids). Stamping every chat span in the tree proves getSessionTreeStats sums AIU
+  // ACROSS sub-agents, unlike the single-session getSessionDetail rollup.
+  const AGENT_RUN_SESSION = '97fb6af7-7d93-45fe-a00b-289fa761bf66';
+
+  it('sums nano-AIU over the whole tree (every chat span, all sub-agents)', () => {
+    const copy = copyFixtureToTemp();
+    try {
+      const chatCount = stampAiuTree(copy.dbPath, AGENT_RUN_SESSION);
+      expect(chatCount).toBeGreaterThan(0);
+      const expectedNano = chatCount * PER_SPAN_NANO;
+
+      const db = TelemetryDatabase.open(copy.dbPath);
+      try {
+        const stats = db.getSessionTreeStats(AGENT_RUN_SESSION);
+        expect(stats).toBeDefined();
+        if (stats === undefined) {
+          return;
+        }
+        // Every model turn in the tree is a stamped chat span, so the count and
+        // the AIU sum agree exactly — and stay exact integer nano.
+        expect(stats.modelTurns).toBe(chatCount);
+        expect(stats.aiuNano).toBe(expectedNano);
+        expect(Number.isInteger(stats.aiuNano)).toBe(true);
       } finally {
         db.close();
       }

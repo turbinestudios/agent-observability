@@ -31,6 +31,16 @@ function session(over: Partial<SessionDetail['summary']>, detail: Partial<Sessio
       agentModes: ['agent'],
       ...over,
     },
+    treeStats: {
+      modelTurns: 0,
+      toolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      totalTokens: 0,
+      errorCount: 0,
+      aiuNano: 0,
+    },
     turns: [],
     modelUsage: [],
     agentUsage: [],
@@ -61,6 +71,8 @@ describe('renderCombinedSessionDetailHtml', () => {
     expect(html).toContain('bbbb'); // short id of b
     // The first section is expanded, later ones collapsed.
     expect(html).toContain('class="turn-request session-section" open');
+    // The single-session "Agent run totals" card is NOT part of the combined view.
+    expect(html).not.toContain('Agent run totals');
   });
 
   it('escapes a malicious session title', () => {

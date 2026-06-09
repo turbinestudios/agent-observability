@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderSessionDetailHtml, SessionCostView } from './sessionDetailHtml';
-import { SessionDetail, SessionTurn } from '../telemetry/models';
+import { SessionDetail, SessionTreeStats, SessionTurn } from '../telemetry/models';
 import { CostEstimate } from '../telemetry/pricing';
 import { DeviationType, WorkflowDeviation } from '../deviation/models';
 
@@ -11,6 +11,18 @@ import { DeviationType, WorkflowDeviation } from '../deviation/models';
  */
 
 const NONCE = 'test-nonce';
+
+/** Zeroed agent-tree rollup for fixtures that don't exercise the summary card. */
+const ZERO_TREE_STATS: SessionTreeStats = {
+  modelTurns: 0,
+  toolCalls: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedTokens: 0,
+  totalTokens: 0,
+  errorCount: 0,
+  aiuNano: 0,
+};
 
 const detail: SessionDetail = {
   summary: {
@@ -28,6 +40,7 @@ const detail: SessionDetail = {
     model: 'gpt-test',
     agentModes: ['agent'],
   },
+  treeStats: ZERO_TREE_STATS,
   turns: [],
   modelUsage: [],
   agentUsage: [],
@@ -95,6 +108,7 @@ describe('renderSessionDetailHtml — cost & tokens by model', () => {
       outputTokens: 200,
       cachedTokens: 100,
     },
+    treeStats: ZERO_TREE_STATS,
     turns: [],
     modelUsage: [
       {
@@ -206,6 +220,7 @@ describe('renderSessionDetailHtml — spawned sub-agents', () => {
       outputTokens: 200,
       cachedTokens: 100,
     },
+    treeStats: ZERO_TREE_STATS,
     turns: [],
     modelUsage: [
       { model: 'gpt-5.4', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0, aiuNano: 3_000_000_000 },
@@ -320,5 +335,58 @@ describe('renderSessionDetailHtml — grouped turns', () => {
     expect(html).not.toContain('Final LLM response');
     // A turn with no main-thread LLM call shows no token badge.
     expect(html).not.toContain('class="turn-tokens"');
+  });
+});
+
+describe('renderSessionDetailHtml — Agent run totals card', () => {
+  // The verified c1eb060a Agent Debug Logs numbers (whole agent tree, incl. sub-agents).
+  const treeDetail: SessionDetail = {
+    ...detail,
+    treeStats: {
+      modelTurns: 183,
+      toolCalls: 289,
+      inputTokens: 9_042_804,
+      outputTokens: 85_089,
+      cachedTokens: 8_562_370,
+      totalTokens: 9_127_893,
+      errorCount: 1,
+      aiuNano: 536_264_925_000,
+    },
+  };
+
+  it('renders all eight stat tiles with the agent-tree totals', () => {
+    const html = renderSessionDetailHtml(treeDetail, [], NONCE);
+    expect(html).toContain('Agent run totals');
+    expect(html).toContain('incl. spawned sub-agents');
+    // Labels.
+    for (const label of [
+      'Model Turns',
+      'Tool Calls',
+      'Total Input Tokens',
+      'Total Output Tokens',
+      'Total Cached Input Tokens',
+      'Total Tokens',
+      'Errors',
+      'Copilot Usage (AIU)',
+    ]) {
+      expect(html).toContain(label);
+    }
+    // Values (raw integers, no thousands separators).
+    expect(html).toContain('<dd>183</dd>');
+    expect(html).toContain('<dd>289</dd>');
+    expect(html).toContain('<dd>9042804</dd>');
+    expect(html).toContain('<dd>85089</dd>');
+    expect(html).toContain('<dd>8562370</dd>');
+    expect(html).toContain('<dd>9127893</dd>');
+    expect(html).toContain('<dd>1</dd>');
+    // AIU: 536_264_925_000 nano / 1e9 = 536.26 (2-dp when ≥ 1).
+    expect(html).toContain('<dd>536.26</dd>');
+  });
+
+  it('always renders the card, even for a zeroed (non-agent) session', () => {
+    const html = renderSessionDetailHtml(detail, [], NONCE);
+    expect(html).toContain('Agent run totals');
+    // Errors / turns read 0 rather than being omitted.
+    expect(html).toContain('Copilot Usage (AIU)');
   });
 });
