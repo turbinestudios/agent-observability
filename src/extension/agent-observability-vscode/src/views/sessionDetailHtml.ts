@@ -199,11 +199,9 @@ function renderSessionSection(section: CombinedSessionSection, open: boolean): s
     `<span class="mode">${id} · ${num(detail.turns.length)} turn(s) · ${num(s.llmCalls)} LLM · ${num(s.toolCalls)} tool</span>${costLabel}`;
 
   const meta = `<dl class="meta section-meta">
-      <div><dt>Repository</dt><dd>${escapeHtml(s.repository)}</dd></div>
-      <div><dt>Model</dt><dd>${escapeHtml(s.model)}</dd></div>
       <div><dt>Started</dt><dd>${escapeHtml(formatLocal(s.startedAtMs))}</dd></div>
+      <div><dt>Ended</dt><dd>${escapeHtml(formatLocal(s.endedAtMs))}</dd></div>
       <div><dt>Duration</dt><dd>${escapeHtml(formatDuration(s.durationMs))}</dd></div>
-      <div><dt>Tokens in / out</dt><dd>${num(s.inputTokens)} / ${num(s.outputTokens)} (cached ${num(s.cachedTokens)})</dd></div>
     </dl>`;
 
   return `<details class="turn-request session-section"${open ? ' open' : ''}>
@@ -263,8 +261,8 @@ function renderTreeSummary(
     { acr: 'AIU', label: 'Copilot Usage (AIU)', value: formatAiu(stats.aiuNano) },
     { acr: 'LOC', label: 'Lines of Code (added)', value: formatInt(stats.linesOfCode) },
     { acr: 'LOD', label: 'Lines of Documentation (added)', value: formatInt(stats.linesOfDoc) },
-    { acr: 'nLOC', label: 'Lines of Code (removed)', value: formatInt(-stats.linesOfCodeRemoved) },
-    { acr: 'nLOD', label: 'Lines of Documentation (removed)', value: formatInt(-stats.linesOfDocRemoved) },
+    { acr: 'nLOC', label: 'Lines of Code (removed)', value: formatInt(stats.linesOfCodeRemoved) },
+    { acr: 'nLOD', label: 'Lines of Documentation (removed)', value: formatInt(stats.linesOfDocRemoved) },
   ];
   const rows = totals
     .map(
@@ -297,44 +295,111 @@ interface TrendSession {
   turnCount: number;
 }
 
+/** Token + line-count totals for one time bucket of the trend. */
+interface TrendBucket {
+  input: number;
+  cached: number;
+  output: number;
+  loc: number;
+  lod: number;
+  nloc: number;
+  nlod: number;
+  /** Clock-time (HH:MM) of the bucket's start, used as its x-axis label. */
+  axisLabel: string;
+}
+
 /**
- * Inline-SVG multi-line trend of the MAIN-THREAD token usage across the session's
- * turns: one polyline each for input, cached, and output tokens, in chronological
- * (turn) order. Fills the rest of the "Agent run totals" row beside the flat
- * totals list.
+ * Bucket a chronological run of turns into fixed-width time slots, summing each
+ * turn's token and line counts into the slot its start time falls in. The slot
+ * width adapts to the run's span: per-MINUTE while it stays under 15 minutes,
+ * per-5-MINUTES once it grows beyond that, so short sessions keep fine detail and
+ * long ones stay legible. Empty slots inside the span are kept so the x-axis reads
+ * as real elapsed time rather than as evenly-spaced turns. Returns `[]` for an
+ * empty input.
+ */
+function bucketTurnsByTime(turns: readonly SessionTurn[]): TrendBucket[] {
+  if (turns.length === 0) {
+    return [];
+  }
+  const MINUTE_MS = 60_000;
+  const startMs = Math.min(...turns.map((t) => t.timestampMs));
+  const endMs = Math.max(...turns.map((t) => t.timestampMs));
+  const bucketMs = endMs - startMs < 15 * MINUTE_MS ? MINUTE_MS : 5 * MINUTE_MS;
+  const count = Math.floor((endMs - startMs) / bucketMs) + 1;
+  const buckets: TrendBucket[] = Array.from({ length: count }, (_v, i) => ({
+    input: 0,
+    cached: 0,
+    output: 0,
+    loc: 0,
+    lod: 0,
+    nloc: 0,
+    nlod: 0,
+    axisLabel: formatClock(startMs + i * bucketMs),
+  }));
+  for (const t of turns) {
+    const b = buckets[Math.floor((t.timestampMs - startMs) / bucketMs)];
+    b.input += t.inputTokens;
+    b.cached += t.cachedTokens;
+    b.output += t.outputTokens;
+    b.loc += t.linesOfCode;
+    b.lod += t.linesOfDoc;
+    b.nloc += t.linesOfCodeRemoved;
+    b.nlod += t.linesOfDocRemoved;
+  }
+  return buckets;
+}
+
+/**
+ * Inline-SVG multi-line trend of the MAIN-THREAD token usage across TIME: one
+ * polyline each for input, cached, and output tokens, plotted over the session's
+ * time buckets (per-minute under 15 min, per-5-minutes beyond — see
+ * {@link bucketTurnsByTime}). Fills the rest of the "Agent run totals" row beside
+ * the flat totals list.
  *
  * When `sessions` is supplied (the COMBINED view, where `turns` is the sessions'
- * turns concatenated), each session's scope is marked with a faint vertical divider
- * at every boundary and a centered short-id label, so it is clear which stretch of
- * the trend belongs to which session. The single-session view omits it.
+ * turns concatenated), each session is bucketed on its OWN clock and the buckets
+ * are laid end-to-end, so sessions recorded far apart stay adjacent. Each session's
+ * scope is marked with a faint vertical divider at every boundary and a centered
+ * short-id label, so it is clear which stretch of the trend belongs to which
+ * session. The single-session view omits it.
  *
  * CSP-safe: pure SVG with numeric geometry as presentation attributes and colours
  * applied via classes in the nonce'd `<style>` block — no inline `style=` (blocked
  * by `style-src 'nonce-…'`), no script. All values are numeric and the only text
- * (session ids) is {@link escapeHtml}-escaped. With fewer than two turns there is
- * nothing to plot, so a muted placeholder is shown instead.
+ * (session ids, clock labels) is {@link escapeHtml}-escaped. With fewer than two
+ * buckets there is nothing to plot, so a muted placeholder is shown instead.
  */
 function renderTokenTrend(
   turns: readonly SessionTurn[],
   sessions?: readonly TrendSession[],
 ): string {
-  const points = turns.map((t) => ({
-    input: t.inputTokens,
-    cached: t.cachedTokens,
-    output: t.outputTokens,
-    loc: t.linesOfCode,
-    lod: t.linesOfDoc,
-    nloc: t.linesOfCodeRemoved,
-    nlod: t.linesOfDocRemoved,
-  }));
+  // Bucket turns into time slots. In the COMBINED view each session is bucketed on
+  // its own clock and the slots laid end-to-end; `ranges` records the bucket span
+  // each session owns, for the scope dividers below. The single-session view is one
+  // segment with no scope ranges.
+  const points: TrendBucket[] = [];
+  const ranges: Array<{ label: string; start: number; end: number }> = [];
+  if (sessions !== undefined && sessions.length > 0) {
+    let cursor = 0;
+    for (const s of sessions) {
+      const segBuckets = bucketTurnsByTime(turns.slice(cursor, cursor + s.turnCount));
+      cursor += s.turnCount;
+      if (segBuckets.length > 0) {
+        ranges.push({ label: s.label, start: points.length, end: points.length + segBuckets.length - 1 });
+        points.push(...segBuckets);
+      }
+    }
+  } else {
+    points.push(...bucketTurnsByTime(turns));
+  }
   if (points.length < 2) {
     return `<div class="tree-trend tree-trend-empty"><p class="muted">Not enough turns to plot a token trend.</p></div>`;
   }
 
   // Uniform-scaling viewBox (preserveAspectRatio default) so axis text is never
-  // stretched. There is no y-axis scale — per-turn values are read on hover (the
+  // stretched. There is no y-axis scale — per-bucket values are read on hover (the
   // <title> tooltips below) — so only the bottom margin reserves space for the x
-  // turn labels. All coordinates are numeric → safe to inject.
+  // clock-time labels. All coordinates are numeric → safe to inject.
   const W = 600;
   const H = 200;
   const m = { top: 10, right: 12, bottom: 26, left: 12 };
@@ -344,6 +409,23 @@ function renderTokenTrend(
   const max = Math.max(1, ...points.flatMap((p) => [p.input, p.cached, p.output]));
   const x = (i: number): number => m.left + (innerW * i) / (points.length - 1);
   const y = (v: number): number => m.top + innerH - (innerH * v) / max;
+  // Hover value labels are centre-anchored over their dot/stapel, but near the left or
+  // right edge a centred number would spill past the viewBox and get clipped. Shift the
+  // anchor x inward just enough that the whole label fits, estimating its half-width
+  // from the character count (≈6 units/char at the 10px label font, an over-estimate so
+  // commas never tip it over). Labels wider than the plot fall back to dead-centre.
+  const labelX = (cx: number, text: string): string => {
+    const halfW = (text.length * 6) / 2;
+    const lo = m.left + halfW;
+    const hi = W - m.right - halfW;
+    const fitted = lo > hi ? (m.left + (W - m.right)) / 2 : Math.min(hi, Math.max(lo, cx));
+    return fitted.toFixed(1);
+  };
+  // Vertical companion to `labelX`: labels are drawn ABOVE their dot/stapel and stacked
+  // upward, so near the top edge the highest one would clip past the viewBox. `LABEL_TOP`
+  // is the smallest baseline y (in viewBox units) that still keeps a label's glyphs and
+  // halo fully inside. Callers floor the TOP-most label of a stack at it.
+  const LABEL_TOP = 10;
 
   // Horizontal grid background (no value labels — the y-axis is intentionally
   // omitted; hover the chart to read exact numbers instead).
@@ -356,18 +438,18 @@ function renderTokenTrend(
     );
   }
 
-  // Vertical grid + x-axis turn-number labels, thinned to at most ~8 columns so
-  // long sessions stay legible. The last turn is always labelled.
+  // Vertical grid + x-axis clock-time labels (each bucket's start), thinned to at
+  // most ~8 columns so long sessions stay legible. The last bucket is always labelled.
   const step = Math.max(1, Math.ceil(points.length / 8));
   const xGrid: string[] = [];
-  points.forEach((_p, i) => {
+  points.forEach((p, i) => {
     if (i % step !== 0 && i !== points.length - 1) {
       return;
     }
     const gx = x(i).toFixed(1);
     xGrid.push(
       `<line class="trend-grid" x1="${gx}" y1="${m.top}" x2="${gx}" y2="${baseline.toFixed(1)}" vector-effect="non-scaling-stroke" />` +
-        `<text class="trend-axis-label trend-axis-x" x="${gx}" y="${(baseline + 16).toFixed(1)}">${num(i + 1)}</text>`,
+        `<text class="trend-axis-label trend-axis-x" x="${gx}" y="${(baseline + 16).toFixed(1)}">${escapeHtml(p.axisLabel)}</text>`,
     );
   });
 
@@ -376,21 +458,12 @@ function renderTokenTrend(
 
   // COMBINED view only: overlay each session's scope. `dividers` are faint vertical
   // lines at every boundary between consecutive sessions; `sessionLabels` are the
-  // short session ids, horizontally centered within each session's stretch. Sessions
-  // that contributed no turns have no scope and are skipped.
+  // short session ids, horizontally centered within each session's stretch. `ranges`
+  // (built above as inclusive bucket-index spans) holds one entry per session that
+  // contributed buckets; sessions that contributed none are already excluded.
   let dividers = '';
   let sessionLabels = '';
-  if (sessions !== undefined && sessions.length > 0) {
-    // Inclusive merged-turn index ranges, one per session that has turns. Adjacent
-    // ranges are contiguous (end of one + 1 === start of the next).
-    const ranges: Array<{ label: string; start: number; end: number }> = [];
-    let cursor = 0;
-    for (const s of sessions) {
-      if (s.turnCount > 0) {
-        ranges.push({ label: s.label, start: cursor, end: cursor + s.turnCount - 1 });
-      }
-      cursor += s.turnCount;
-    }
+  if (ranges.length > 0) {
     // Boundary x between range r-1 and r is the midpoint of their adjacent points;
     // the first range opens at the plot's left edge, the last closes at its right.
     const leftEdge = (r: number): number =>
@@ -424,14 +497,14 @@ function renderTokenTrend(
       .join('\n');
   }
 
-  // Lines written/removed as two adjacent STACKED bars per turn (additions left,
-  // removals right). These live on a SECONDARY scale: token counts dwarf line
-  // counts, so reusing `max` would flatten the bars to nothing — `linesMax` is an
-  // independent maximum over the per-turn stack totals. Both stacks rise from the
-  // baseline (the colour, not the direction, distinguishes added from removed);
-  // exact signed numbers are in the hover tooltip. Rendered before the polylines
-  // so the lines and dots overlay them. `Math.max(1, …)` guards div-by-zero, and
-  // zero-height segments are omitted.
+  // Lines written/removed as two staplar (bars) per bucket: additions to the LEFT of
+  // the bucket's x, removals to the RIGHT. They live on a SECONDARY scale — token
+  // counts dwarf line counts, so reusing `max` would flatten the bars to nothing —
+  // `linesMax` is an independent maximum over the per-turn stack totals. Both stacks
+  // rise from the baseline (the colour, not the direction, distinguishes added from
+  // removed; the "n" prefix on the removal labels already denotes negative lines, so
+  // the COUNTS themselves are shown positive). `Math.max(1, …)` guards div-by-zero
+  // and zero-height segments are omitted.
   const linesMax = Math.max(1, ...points.map((p) => Math.max(p.loc + p.lod, p.nloc + p.nlod)));
   const barH = (v: number): number => (innerH * v) / linesMax;
   const pitch = innerW / points.length;
@@ -447,17 +520,82 @@ function renderTokenTrend(
       1,
     )}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" />`;
   };
+  // Two count labels (code over doc) centered over a stapel, shown only while that
+  // stapel is hovered (CSS `.trend-col:hover`). Drawn just above the stack top but
+  // clamped inside the plot for tall bars; zero counts are omitted. Each tspan is
+  // coloured to match its bar segment via `colourCls`.
+  const barValue = (
+    vx: number,
+    stackTop: number,
+    code: number,
+    codeCls: string,
+    doc: number,
+    docCls: string,
+  ): string => {
+    // `lower` is the code (bottom) row's baseline; the doc row sits 11 above it. Floor
+    // `lower` so the TOP-most present row (doc if any, else code) clears `LABEL_TOP`.
+    const lower = Math.max(LABEL_TOP + (doc > 0 ? 11 : 0), stackTop - 4);
+    const spans: string[] = [];
+    if (doc > 0) {
+      const docText = formatInt(doc);
+      spans.push(
+        `<tspan class="${docCls}" x="${labelX(vx, docText)}" y="${(lower - 11).toFixed(
+          1,
+        )}">${docText}</tspan>`,
+      );
+    }
+    if (code > 0) {
+      const codeText = formatInt(code);
+      spans.push(
+        `<tspan class="${codeCls}" x="${labelX(vx, codeText)}" y="${lower.toFixed(
+          1,
+        )}">${codeText}</tspan>`,
+      );
+    }
+    return spans.length > 0 ? `<text class="trend-bar-value">${spans.join('')}</text>` : '';
+  };
+  // Each stapel is its own `.trend-col` group: the stacked segments, the on-hover
+  // value labels, and a TRANSPARENT hit rect (last, so it sits on top and reliably
+  // receives the hover). The hit rect exactly covers the RENDERED stapel — its width
+  // and its stacked height — so hovering only the drawn bar highlights it, never the
+  // empty space above or beside it. It carries the native <title> with every value at
+  // that turn (removed counts positive). Rendered AFTER the polylines so hovering the
+  // stapel highlights it and reveals its numbers; see the `.trend-col` rules in the
+  // stylesheet. A zero-total stack draws no bar and so has no hit area.
+  const barHit = (bx: number, total: number, title: string): string => {
+    const h = barH(total);
+    if (h <= 0) {
+      return '';
+    }
+    return `<rect class="trend-col-hit" x="${bx.toFixed(1)}" y="${(baseline - h).toFixed(
+      1,
+    )}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}"><title>${title}</title></rect>`;
+  };
   const bars = points
     .map((p, i) => {
       const cx = x(i);
       const addX = cx - barGap / 2 - barW;
       const remX = cx + barGap / 2;
-      return (
+      const title = `${escapeHtml(p.axisLabel)} · Input ${formatInt(p.input)} · Cached ${formatInt(
+        p.cached,
+      )} · Output ${formatInt(p.output)} · LoC ${formatInt(p.loc)} · LoD ${formatInt(
+        p.lod,
+      )} · nLoC ${formatInt(p.nloc)} · nLoD ${formatInt(p.nlod)}`;
+      const addGroup =
+        `<g class="trend-col">` +
         barSeg(addX, 0, p.loc, 'trend-bar-loc') +
         barSeg(addX, p.loc, p.loc + p.lod, 'trend-bar-lod') +
+        barValue(addX + barW / 2, baseline - barH(p.loc + p.lod), p.loc, 'trend-val-loc', p.lod, 'trend-val-lod') +
+        barHit(addX, p.loc + p.lod, title) +
+        `</g>`;
+      const remGroup =
+        `<g class="trend-col">` +
         barSeg(remX, 0, p.nloc, 'trend-bar-nloc') +
-        barSeg(remX, p.nloc, p.nloc + p.nlod, 'trend-bar-nlod')
-      );
+        barSeg(remX, p.nloc, p.nloc + p.nlod, 'trend-bar-nlod') +
+        barValue(remX + barW / 2, baseline - barH(p.nloc + p.nlod), p.nloc, 'trend-val-nloc', p.nlod, 'trend-val-nlod') +
+        barHit(remX, p.nloc + p.nlod, title) +
+        `</g>`;
+      return addGroup + remGroup;
     })
     .join('\n');
 
@@ -472,33 +610,69 @@ function renderTokenTrend(
       return `<polyline class="trend-line trend-${s.key}" points="${pts}" vector-effect="non-scaling-stroke" />`;
     })
     .join('\n');
-  // Visible point markers per line, for hover affordance.
-  const dots = series
-    .map((s) =>
-      points
-        .map(
-          (p, i) =>
-            `<circle class="trend-dot trend-${s.key}" cx="${x(i).toFixed(1)}" cy="${y(p[s.key]).toFixed(1)}" r="2.2" />`,
-        )
-        .join(''),
-    )
-    .join('\n');
-  // Invisible full-height hover columns (one per turn) carrying a native <title>
-  // tooltip with every line's value at that turn — CSP-safe (no script). The
-  // column spans the midpoints to its neighbours so the whole vertical strip is
-  // hoverable.
-  const hover = points
+  // Visible point markers, grouped per bucket so dots sitting close together share ONE
+  // hover group: hovering any of them enlarges all and reveals ALL their numbers,
+  // stacked upward so the labels don't collide. Dots far enough apart stay independent
+  // (each its own `.trend-dot-col`). Within a group: the markers, the on-hover value
+  // labels, and a transparent hit circle per dot (a touch larger than the marker so
+  // the tiny dots are easily hoverable). See the `.trend-dot-col` rules in the
+  // stylesheet.
+  const DOT_CLUSTER_GAP = 11; // viewBox units; closer than this two dots' labels would overlap
+  const DOT_LABEL_LINE = 11; // vertical spacing between stacked labels in a cluster
+  const dots = points
     .map((p, i) => {
-      const left = i === 0 ? m.left : (x(i - 1) + x(i)) / 2;
-      const right = i === points.length - 1 ? W - m.right : (x(i) + x(i + 1)) / 2;
-      const title = `Turn ${num(i + 1)} · Input ${formatInt(p.input)} · Cached ${formatInt(
-        p.cached,
-      )} · Output ${formatInt(p.output)} · LoC ${formatInt(p.loc)} · LoD ${formatInt(
-        p.lod,
-      )} · nLoC ${formatInt(-p.nloc)} · nLoD ${formatInt(-p.nlod)}`;
-      return `<rect class="trend-hover" x="${left.toFixed(1)}" y="${m.top}" width="${(
-        right - left
-      ).toFixed(1)}" height="${innerH}"><title>${title}</title></rect>`;
+      const cxv = x(i);
+      // This bucket's three series dots, sorted top-to-bottom (smallest y first).
+      const ds = series
+        .map((s) => ({ key: s.key, cy: y(p[s.key]), value: p[s.key] }))
+        .sort((a, b) => a.cy - b.cy);
+      // Partition into clusters of vertically-adjacent dots within the gap threshold.
+      const clusters: Array<typeof ds> = [];
+      for (const d of ds) {
+        const last = clusters[clusters.length - 1];
+        if (last && d.cy - last[last.length - 1].cy < DOT_CLUSTER_GAP) {
+          last.push(d);
+        } else {
+          clusters.push([d]);
+        }
+      }
+      return clusters
+        .map((cluster) => {
+          const topCy = cluster[0].cy;
+          // Lowest label sits just above the cluster's top dot; the rest stack upward.
+          // Floor the base so the highest label (j = n−1) still clears `LABEL_TOP`.
+          const labelBase = Math.max(topCy - 7, LABEL_TOP + (cluster.length - 1) * DOT_LABEL_LINE);
+          const markers = cluster
+            .map(
+              (d) =>
+                `<circle class="trend-dot trend-${d.key}" cx="${cxv.toFixed(1)}" cy="${d.cy.toFixed(
+                  1,
+                )}" r="2.2" />`,
+            )
+            .join('');
+          // Stack labels upward from just above the cluster's top dot, clamped inside
+          // the plot, so every number in the cluster stays readable.
+          const labels = cluster
+            .map((d, j) => {
+              const ly = labelBase - j * DOT_LABEL_LINE;
+              const text = formatInt(d.value);
+              return `<text class="trend-dot-value trend-dot-val-${d.key}" x="${labelX(
+                cxv,
+                text,
+              )}" y="${ly.toFixed(1)}">${text}</text>`;
+            })
+            .join('');
+          const hits = cluster
+            .map(
+              (d) =>
+                `<circle class="trend-dot-hit" cx="${cxv.toFixed(1)}" cy="${d.cy.toFixed(
+                  1,
+                )}" r="5" />`,
+            )
+            .join('');
+          return `<g class="trend-dot-col">${markers}${labels}${hits}</g>`;
+        })
+        .join('');
     })
     .join('\n');
   // Token-line keys plus the four line-count bar keys (additions then removals).
@@ -523,15 +697,14 @@ function renderTokenTrend(
       .join('');
 
   return `<div class="tree-trend">
-    <svg class="trend-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Main-thread token usage and lines written across turns">
+    <svg class="trend-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Main-thread token usage and lines written over time">
       ${hGrid.join('\n')}
       ${xGrid.join('\n')}
       ${dividers}
       ${axis}
-      ${bars}
       ${lines}
       ${dots}
-      ${hover}
+      ${bars}
       ${sessionLabels}
     </svg>
     <div class="trend-legend">${legend}</div>
@@ -826,6 +999,12 @@ function formatTime(epochMs: number): string {
   return new Date(epochMs).toLocaleTimeString();
 }
 
+/** Zero-padded local HH:MM, used for the token-trend bucket x-axis labels. */
+function formatClock(epochMs: number): string {
+  const d = new Date(epochMs);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 /** Human duration: sub-second in ms, otherwise seconds. */
 function formatDuration(ms: number): string {
   if (ms < 1000) {
@@ -872,13 +1051,30 @@ const STYLE = `
   .trend-dot.trend-input { fill: var(--vscode-charts-blue, #4e94ce); }
   .trend-dot.trend-cached { fill: var(--vscode-charts-yellow, #b89500); }
   .trend-dot.trend-output { fill: var(--vscode-charts-green, #388a34); }
+  .trend-dot { transition: r .08s ease; }
+  .trend-dot-col { cursor: crosshair; }
+  .trend-dot-hit { fill: transparent; pointer-events: all; }
+  .trend-dot-col:hover .trend-dot { r: 3.6; }
+  .trend-dot-value { opacity: 0; text-anchor: middle; font-family: var(--vscode-font-family); font-size: 10px; font-weight: 600; paint-order: stroke; stroke: var(--vscode-editor-background, var(--vscode-editorWidget-background)); stroke-width: 3px; stroke-linejoin: round; }
+  .trend-dot-col:hover .trend-dot-value { opacity: 1; }
+  .trend-dot-val-input { fill: var(--vscode-charts-blue, #4e94ce); }
+  .trend-dot-val-cached { fill: var(--vscode-charts-yellow, #b89500); }
+  .trend-dot-val-output { fill: var(--vscode-charts-green, #388a34); }
   .trend-bar { opacity: .55; }
   .trend-bar.trend-bar-loc { fill: var(--vscode-charts-purple, #b180d7); }
   .trend-bar.trend-bar-lod { fill: var(--vscode-charts-orange, #d18616); }
   .trend-bar.trend-bar-nloc { fill: var(--vscode-charts-red, #be1100); }
   .trend-bar.trend-bar-nlod { fill: #e07b86; }
-  .trend-hover { fill: transparent; cursor: crosshair; }
-  .trend-hover:hover { fill: var(--vscode-list-hoverBackground, var(--vscode-foreground)); opacity: .12; }
+  .trend-col { cursor: crosshair; }
+  .trend-col-hit { fill: transparent; pointer-events: all; }
+  .trend-col:hover .trend-col-hit { fill: var(--vscode-list-hoverBackground, var(--vscode-foreground)); opacity: .12; }
+  .trend-col:hover .trend-bar { opacity: 1; }
+  .trend-bar-value { opacity: 0; text-anchor: middle; font-family: var(--vscode-font-family); font-size: 10px; font-weight: 600; paint-order: stroke; stroke: var(--vscode-editor-background, var(--vscode-editorWidget-background)); stroke-width: 3px; stroke-linejoin: round; }
+  .trend-col:hover .trend-bar-value { opacity: 1; }
+  .trend-val-loc { fill: var(--vscode-charts-purple, #b180d7); }
+  .trend-val-lod { fill: var(--vscode-charts-orange, #d18616); }
+  .trend-val-nloc { fill: var(--vscode-charts-red, #be1100); }
+  .trend-val-nlod { fill: #d6409a; }
   .trend-legend { display: flex; gap: .9rem; font-size: .75rem; color: var(--vscode-descriptionForeground); }
   .trend-key { display: inline-flex; align-items: center; gap: .3rem; }
   .trend-swatch { width: .7rem; height: .7rem; border-radius: 2px; display: inline-block; }
@@ -888,7 +1084,7 @@ const STYLE = `
   .trend-swatch.trend-loc { background: var(--vscode-charts-purple, #b180d7); }
   .trend-swatch.trend-lod { background: var(--vscode-charts-orange, #d18616); }
   .trend-swatch.trend-nloc { background: var(--vscode-charts-red, #be1100); }
-  .trend-swatch.trend-nlod { background: #e07b86; }
+  .trend-swatch.trend-nlod { background: #d6409a; }
   .tree-totals { flex: 0 0 20%; display: flex; flex-direction: column; gap: .3rem; margin: 0; text-align: right; }
   .tree-totals .tt-row { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; padding-bottom: .15rem; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   .tree-totals .tt-row:last-child { border-bottom: none; }

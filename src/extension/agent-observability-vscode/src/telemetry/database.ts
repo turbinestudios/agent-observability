@@ -20,7 +20,7 @@ import {
   statusToSuccess,
 } from './models';
 import { extractResponseText } from './responseText';
-import { countWrittenLines, sumWrittenLines } from './locAnalysis';
+import { countWrittenLines, sumWrittenLines, WriteLineDelta } from './locAnalysis';
 
 /** Span attribute key holding a tool call's raw arguments (file path + content/diff). */
 const TOOL_ARGUMENTS_KEY = 'gen_ai.tool.call.arguments';
@@ -644,14 +644,11 @@ export class TelemetryDatabase {
     const responses = this.responsesBySpan(sessionKey);
     const mode = this.agentModesBySession().get(sessionKey)?.[0] ?? 'default';
 
-    // LOCAL-ONLY raw tool-call arguments (file path + content/diff), keyed by span
-    // id, for this session's file-writing `execute_tool` spans. Fetched once and
-    // parsed into per-turn LoC/LoD counts below; only the integer counts are kept.
-    // Skipped entirely when no extension lists are configured (every count is 0).
+    // Whether to compute LoC/LoD at all — skipped (counts stay 0) when no extension
+    // lists are configured. The per-turn counts are NOT filled in this loop; they
+    // are bucketed in AFTER the turns are built, from the WHOLE TREE's file-writes
+    // (incl. spawned sub-agents) — see the timestamp bucketing below.
     const wantsLineCounts = codeExts.length > 0 || docExts.length > 0;
-    const toolArguments = wantsLineCounts
-      ? this.toolArgumentsBySpan(sessionKey)
-      : new Map<string, string>();
 
     let startedAtMs = rows[0].start_time_ms;
     let endedAtMs = rows[0].end_time_ms;
@@ -808,21 +805,35 @@ export class TelemetryDatabase {
         currentTurn.cachedTokens += row.cached_tokens ?? 0;
         currentTurn.reasoningTokens += row.reasoning_tokens ?? 0;
       }
-
-      // Attribute LOCAL-ONLY written/removed lines from this turn's file-writing
-      // tool calls, split into code vs documentation by file extension. The raw
-      // arguments stay local; only the per-turn counts are retained.
-      if (operation === 'execute_tool') {
-        const args = toolArguments.get(row.span_id);
-        if (args !== undefined) {
-          const delta = countWrittenLines(row.tool_name ?? '', args, codeExts, docExts);
-          currentTurn.linesOfCode += delta.added.code;
-          currentTurn.linesOfDoc += delta.added.doc;
-          currentTurn.linesOfCodeRemoved += delta.removed.code;
-          currentTurn.linesOfDocRemoved += delta.removed.doc;
-        }
-      }
     });
+
+    // Per-turn LoC/LoD over the WHOLE agent tree (incl. spawned sub-agents), so the
+    // trend bars reconcile with the "Agent run totals" card. In agent mode the file
+    // edits run inside sub-agents whose `execute_tool` spans are NOT in `rows`
+    // (scoped to the main session), which is why a main-thread-only count left every
+    // bar at 0 even though the tree total was non-zero. Each tree-wide file-write is
+    // attributed to the turn whose window contains its start time: turns are in
+    // ascending start order, so the last turn whose start <= the write's start owns
+    // it (the main thread blocks on a spawned sub-agent, so its writes fall inside
+    // the spawning turn's window). Summing the turns therefore reproduces the tree
+    // line totals.
+    if (wantsLineCounts && turns.length > 0) {
+      for (const w of this.treeWrittenLinesBySpan(sessionKey, codeExts, docExts)) {
+        let idx = 0;
+        for (let t = 0; t < turns.length; t++) {
+          if (turns[t].timestampMs <= w.startMs) {
+            idx = t;
+          } else {
+            break;
+          }
+        }
+        const turn = turns[idx];
+        turn.linesOfCode += w.delta.added.code;
+        turn.linesOfDoc += w.delta.added.doc;
+        turn.linesOfCodeRemoved += w.delta.removed.code;
+        turn.linesOfDocRemoved += w.delta.removed.doc;
+      }
+    }
 
     // Per-model and per-agent breakdowns over the WHOLE agent tree's chat spans
     // (incl. spawned sub-agents), so each agent/model shows its real tokens AND
@@ -1260,30 +1271,50 @@ export class TelemetryDatabase {
   }
 
   /**
-   * LOCAL-ONLY map of span id → raw `gen_ai.tool.call.arguments` for this
-   * session's file-writing `execute_tool` spans (the file path + content/diff).
-   * Consumed only by {@link getSessionDetail} to compute per-turn LoC/LoD counts;
-   * the raw value is never logged or uploaded. Scoped to the single session
-   * (same `COALESCE(conversation_id, chat_session_id)` rule as the timeline).
+   * LOCAL-ONLY per-span file-write line counts over the WHOLE agent tree rooted at
+   * `rootKey` (the root session plus every spawned sub-agent — see
+   * {@link sessionTreeIds}), each tagged with the span's start time so the caller can
+   * bucket it into the main-thread turn that was active. Mirrors the span selection
+   * {@link getSessionTreeStats} uses for its LoC/LoD total, so summing these
+   * reproduces that total. The raw `gen_ai.tool.call.arguments` (file path +
+   * content/diff) are parsed into integer counts here and discarded; the raw value
+   * is never logged or uploaded.
    */
-  private toolArgumentsBySpan(sessionKey: string): Map<string, string> {
-    const rows = this.allRows<{ span_id: string; value: string | null }>(
-      `SELECT a.span_id AS span_id, a.value AS value
+  private treeWrittenLinesBySpan(
+    rootKey: string,
+    codeExts: readonly string[],
+    docExts: readonly string[],
+  ): Array<{ startMs: number; delta: WriteLineDelta }> {
+    const ids = this.sessionTreeIds(rootKey);
+    if (ids.length === 0) {
+      return [];
+    }
+    // Dynamic placeholder list — ids are bound as parameters, never interpolated
+    // (same safe-assembly discipline as getSessionTreeStats).
+    const inList = ids.map(() => '?').join(', ');
+    const rows = this.allRows<{
+      start_time_ms: number;
+      tool_name: string | null;
+      value: string | null;
+    }>(
+      `SELECT s.start_time_ms AS start_time_ms, s.tool_name AS tool_name, a.value AS value
          FROM span_attributes a
          JOIN spans s ON s.span_id = a.span_id
          WHERE a.key = ?
            AND s.operation_name = 'execute_tool'
-           AND COALESCE(s.conversation_id, s.chat_session_id) = ?`,
-      [TOOL_ARGUMENTS_KEY, sessionKey],
+           AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))`,
+      [TOOL_ARGUMENTS_KEY, ...ids, ...ids],
     );
 
-    const map = new Map<string, string>();
-    for (const row of rows) {
-      if (row.value !== null && row.value.length > 0) {
-        map.set(row.span_id, row.value);
-      }
-    }
-    return map;
+    return rows
+      .filter(
+        (r): r is { start_time_ms: number; tool_name: string | null; value: string } =>
+          r.value !== null && r.value.length > 0,
+      )
+      .map((r) => ({
+        startMs: r.start_time_ms,
+        delta: countWrittenLines(r.tool_name ?? '', r.value, codeExts, docExts),
+      }));
   }
 
 

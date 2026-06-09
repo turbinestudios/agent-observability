@@ -93,7 +93,7 @@ function stampToolArgs(dbPath: string, rootKey: string): { tree: number; main: n
 }
 
 describe('TelemetryDatabase LoC/LoD rollups', () => {
-  it('sums whole-tree code lines and attributes main-thread lines per turn', () => {
+  it('sums whole-tree code lines and buckets the whole tree into turns', () => {
     const copy = copyFixtureToTemp();
     try {
       const counts = stampToolArgs(copy.dbPath, AGENT_RUN_SESSION);
@@ -112,9 +112,12 @@ describe('TelemetryDatabase LoC/LoD rollups', () => {
         expect(detail.treeStats.linesOfCodeRemoved).toBe(0);
         expect(detail.treeStats.linesOfDocRemoved).toBe(0);
 
-        // Per-turn (main-thread) counts sum to the main-thread execute_tool subset.
+        // Per-turn counts now cover the WHOLE tree (sub-agent edits bucketed into the
+        // turn that was active), so they RECONCILE with the tree total above — a
+        // main-thread-only count would have under-reported by the sub-agent spans.
         const turnLoc = detail.turns.reduce((a, t) => a + t.linesOfCode, 0);
-        expect(turnLoc).toBe(counts.main * LINES_PER_SPAN);
+        expect(turnLoc).toBe(counts.tree * LINES_PER_SPAN);
+        expect(turnLoc).toBe(detail.treeStats.linesOfCode);
         expect(detail.turns.reduce((a, t) => a + t.linesOfDoc, 0)).toBe(0);
       } finally {
         db.close();

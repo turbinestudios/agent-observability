@@ -384,11 +384,12 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     // AIU: 536_264_925_000 nano / 1e9 = 536.26 (2-dp when ≥ 1), with the derived
     // cost at $0.01/AIU shown inline (536.264925 × $0.01 = $5.36).
     expect(html).toContain('<dd>536.26 ($5.36)</dd>');
-    // LoC/LoD added as positive counts; removed shown as negatives.
+    // LoC/LoD added and removed both shown as positive counts (the "n" prefix on the
+    // removal acronyms already denotes negative/removed lines).
     expect(html).toContain('<dd>742</dd>');
     expect(html).toContain('<dd>196</dd>');
-    expect(html).toContain('<dd>-88</dd>');
-    expect(html).toContain('<dd>-14</dd>');
+    expect(html).toContain('<dd>88</dd>');
+    expect(html).toContain('<dd>14</dd>');
   });
 
   it('always renders the card, even for a zeroed (non-agent) session', () => {
@@ -398,6 +399,7 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     expect(html).toContain('title="Copilot Usage (AIU)">AIU</dt>');
   });
 
+  const TREND_BASE_TS = 1_700_000_000_000;
   const trendTurn = (
     input: number,
     output: number,
@@ -405,8 +407,11 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     lines: Partial<
       Pick<SessionTurn, 'linesOfCode' | 'linesOfDoc' | 'linesOfCodeRemoved' | 'linesOfDocRemoved'>
     > = {},
+    // The trend now buckets by time, so each turn needs its own minute slot to plot
+    // as a distinct point. Offset is in minutes from TREND_BASE_TS.
+    minuteOffset = 0,
   ): SessionTurn => ({
-    timestampMs: 1_700_000_000_000,
+    timestampMs: TREND_BASE_TS + minuteOffset * 60_000,
     agentMode: 'agent',
     model: 'gpt-test',
     durationMs: 1,
@@ -424,9 +429,9 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     events: [],
   });
 
-  it('plots an input/cached/output token trend across turns (≥ 2 turns)', () => {
+  it('plots an input/cached/output token trend across time (≥ 2 buckets)', () => {
     const html = renderSessionDetailHtml(
-      { ...treeDetail, turns: [trendTurn(100, 20, 5), trendTurn(200, 40, 50)] },
+      { ...treeDetail, turns: [trendTurn(100, 20, 5, {}, 0), trendTurn(200, 40, 50, {}, 1)] },
       [],
       NONCE,
     );
@@ -441,15 +446,15 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     expect(html).toContain('class="trend-grid"');
     expect(html).toContain('class="trend-axis-label trend-axis-x"');
     expect(html).not.toContain('trend-axis-y');
-    // Per-turn hover columns expose every line's value via a native <title> tooltip,
-    // now including the LoC/LoD counts (removed shown as negatives).
-    expect(html).toContain('class="trend-hover"');
-    expect(html).toContain(
-      '<title>Turn 1 · Input 100 · Cached 5 · Output 20 · LoC 0 · LoD 0 · nLoC 0 · nLoD 0</title>',
-    );
-    expect(html).toContain(
-      '<title>Turn 2 · Input 200 · Cached 50 · Output 40 · LoC 0 · LoD 0 · nLoC 0 · nLoD 0</title>',
-    );
+    // Each line dot is a hover group: a marker, an on-hover value label, and a
+    // transparent hit circle. The label carries that turn's token count for the series.
+    expect(html).toContain('class="trend-dot-col"');
+    expect(html).toContain('class="trend-dot-hit"');
+    expect(html).toContain('class="trend-dot-value trend-dot-val-output"');
+    // Turns with no line changes draw no stapel, so they expose no hit rect or tooltip
+    // (token values are read from the dot labels instead).
+    expect(html).not.toContain('class="trend-col-hit"');
+    expect(html).not.toContain('<title>Turn 1');
     // CSP-safe: SVG geometry only, no inline style attributes anywhere.
     expect(html).toContain('<svg class="trend-svg"');
     expect(html).not.toContain('style="');
@@ -460,8 +465,8 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
       {
         ...treeDetail,
         turns: [
-          trendTurn(100, 20, 5, { linesOfCode: 30, linesOfDoc: 10 }),
-          trendTurn(200, 40, 50, { linesOfCode: 12, linesOfCodeRemoved: 8, linesOfDocRemoved: 4 }),
+          trendTurn(100, 20, 5, { linesOfCode: 30, linesOfDoc: 10 }, 0),
+          trendTurn(200, 40, 50, { linesOfCode: 12, linesOfCodeRemoved: 8, linesOfDocRemoved: 4 }, 1),
         ],
       },
       [],
@@ -472,8 +477,13 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     expect(html).toContain('class="trend-bar trend-bar-lod"');
     expect(html).toContain('class="trend-bar trend-bar-nloc"');
     expect(html).toContain('class="trend-bar trend-bar-nlod"');
-    // The hover tooltip reports removed counts as negatives.
-    expect(html).toContain('· LoC 12 · LoD 0 · nLoC -8 · nLoD -4</title>');
+    // The hover tooltip reports removed counts as positive numbers.
+    expect(html).toContain('· LoC 12 · LoD 0 · nLoC 8 · nLoD 4</title>');
+    // On-bar value labels (revealed on hover via CSS) carry the per-segment counts,
+    // coloured to match their bar segment.
+    expect(html).toContain('class="trend-bar-value"');
+    expect(html).toContain('class="trend-val-loc"');
+    expect(html).toContain('class="trend-val-nloc"');
     // Legend gains the four line-count swatches.
     expect(html).toContain('class="trend-swatch trend-loc"');
     expect(html).toContain('class="trend-swatch trend-nlod"');
@@ -485,5 +495,39 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     const html = renderSessionDetailHtml(treeDetail, [], NONCE); // treeDetail has no turns
     expect(html).toContain('Not enough turns to plot a token trend.');
     expect(html).not.toContain('class="trend-line');
+  });
+
+  it('aggregates turns sharing a minute slot into one bucket', () => {
+    // Two turns in minute 0 (0s and 20s) and one in minute 1 → 2 buckets, not 3.
+    const t0a = trendTurn(100, 20, 5, { linesOfCode: 10 }, 0);
+    const t0b: SessionTurn = {
+      ...trendTurn(50, 10, 2, { linesOfCode: 5 }, 0),
+      timestampMs: TREND_BASE_TS + 20_000,
+    };
+    const t1 = trendTurn(200, 40, 50, { linesOfCode: 7 }, 1);
+    const html = renderSessionDetailHtml({ ...treeDetail, turns: [t0a, t0b, t1] }, [], NONCE);
+    // The minute-0 bucket sums both its turns' lines: LoC 10 + 5 = 15.
+    expect(html).toContain('· LoC 15 ·');
+    // x-axis labels are clock times (HH:MM), not turn numbers.
+    expect(html).toMatch(/class="trend-axis-label trend-axis-x"[^>]*>\d{2}:\d{2}</);
+  });
+
+  it('collapses sub-minute turns to a single bucket (placeholder, nothing to plot)', () => {
+    // Two turns 30s apart fall in the same 1-minute slot → one bucket → no line.
+    const a = trendTurn(100, 20, 5, {}, 0);
+    const b: SessionTurn = { ...trendTurn(200, 40, 50, {}, 0), timestampMs: TREND_BASE_TS + 30_000 };
+    const html = renderSessionDetailHtml({ ...treeDetail, turns: [a, b] }, [], NONCE);
+    expect(html).toContain('Not enough turns to plot a token trend.');
+    expect(html).not.toContain('class="trend-line');
+  });
+
+  it('switches to 5-minute buckets once the span passes 15 minutes', () => {
+    // Turns 0 and 16 min apart → span ≥ 15 min → 5-min slots; still plots a trend.
+    const html = renderSessionDetailHtml(
+      { ...treeDetail, turns: [trendTurn(100, 20, 5, {}, 0), trendTurn(200, 40, 50, {}, 16)] },
+      [],
+      NONCE,
+    );
+    expect(html).toContain('class="trend-line trend-input"');
   });
 });
