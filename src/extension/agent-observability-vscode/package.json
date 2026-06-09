@@ -390,46 +390,29 @@
             }
           }
         },
-        "agentObservability.pricing.modelRates": {
-          "type": "object",
-          "default": {},
-          "markdownDescription": "Optional per-model rates used ONLY to show an estimated cost on the local session-detail panel. GitHub Copilot does not record or bill per token, so any figure shown is an **estimate** = tokens × your configured rate; models without a rate show `n/a`. Rates stay entirely local — nothing about cost or tokens is ever uploaded. Keys are model ids (the dotted request form and dashed response form, and dated `-YYYY-MM-DD` suffixes, are matched to a single key). When omitted, `cachedInputPerMTok` defaults to 0.1× `inputPerMTok` and `reasoningPerMTok` defaults to `outputPerMTok`.",
-          "additionalProperties": {
-            "type": "object",
-            "required": [
-              "inputPerMTok",
-              "outputPerMTok"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "inputPerMTok": {
-                "type": "number",
-                "minimum": 0,
-                "markdownDescription": "USD per 1,000,000 uncached input tokens."
-              },
-              "outputPerMTok": {
-                "type": "number",
-                "minimum": 0,
-                "markdownDescription": "USD per 1,000,000 output tokens."
-              },
-              "cachedInputPerMTok": {
-                "type": "number",
-                "minimum": 0,
-                "markdownDescription": "USD per 1,000,000 cached input tokens. Defaults to 0.1× `inputPerMTok` when omitted."
-              },
-              "reasoningPerMTok": {
-                "type": "number",
-                "minimum": 0,
-                "markdownDescription": "USD per 1,000,000 reasoning tokens. Defaults to `outputPerMTok` when omitted."
-              }
-            }
-          }
+        "agentObservability.analysis.codeFileExtensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java", ".c",
+            ".cc", ".cpp", ".h", ".hpp", ".cs", ".go", ".rs", ".rb", ".php",
+            ".swift", ".kt", ".kts", ".scala", ".sh", ".bash", ".ps1", ".sql",
+            ".css", ".scss", ".sass", ".less", ".html", ".vue", ".svelte",
+            ".json", ".yaml", ".yml", ".toml", ".xml", ".gradle", ".dart", ".lua", ".r"
+          ],
+          "markdownDescription": "File extensions counted as **source code** (LoC / nLoC) on the local session-detail panel. Lines the agent writes to / removes from files with these extensions are tallied by reading each file-writing tool call's arguments. Classification is by extension only; files matching neither this nor `#agentObservability.analysis.docFileExtensions#` are ignored. Leading dots are optional and case is ignored. Computed entirely locally from raw tool arguments — nothing is ever uploaded."
         },
-        "agentObservability.pricing.usdPerAiu": {
-          "type": "number",
-          "minimum": 0,
-          "default": 0,
-          "markdownDescription": "Optional USD per 1 AIU (Copilot premium-request unit) used ONLY to show a dollar figure next to the **billed AIU** on the local session-detail panel. Unlike `#agentObservability.pricing.modelRates#` (a token×rate *estimate*), AIU is the unit GitHub actually records per request, so it is shown as the primary cost. Leave at `0` to display AIU without a dollar conversion. Stays entirely local — nothing about cost or usage is ever uploaded."
+        "agentObservability.analysis.docFileExtensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".md", ".mdx", ".markdown", ".rst", ".txt", ".adoc", ".asciidoc"
+          ],
+          "markdownDescription": "File extensions counted as **documentation** (LoD / nLoD) on the local session-detail panel. Lines the agent writes to / removes from files with these extensions are tallied by reading each file-writing tool call's arguments. Classification is by extension only; files matching neither this nor `#agentObservability.analysis.codeFileExtensions#` are ignored. Leading dots are optional and case is ignored. Computed entirely locally from raw tool arguments — nothing is ever uploaded."
         }
       }
     }

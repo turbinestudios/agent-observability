@@ -99,6 +99,8 @@ function makeConfig(override: string): ServiceConfig {
   return {
     isLocalTelemetryEnabled: () => true,
     getSqlitePathOverride: () => override,
+    getCodeFileExtensions: () => [],
+    getDocFileExtensions: () => [],
   };
 }
 

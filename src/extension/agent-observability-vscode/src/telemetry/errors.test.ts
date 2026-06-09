@@ -16,6 +16,8 @@ function makeConfig(opts: { enabled?: boolean; override?: string }): ServiceConf
   return {
     isLocalTelemetryEnabled: () => opts.enabled ?? true,
     getSqlitePathOverride: () => opts.override,
+    getCodeFileExtensions: () => [],
+    getDocFileExtensions: () => [],
   };
 }
 

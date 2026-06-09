@@ -70,8 +70,8 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.sqlitePath',
   'agentObservability.deviation.maxSessionMinutes',
   'agentObservability.workflows',
-  'agentObservability.pricing.modelRates',
-  'agentObservability.pricing.usdPerAiu',
+  'agentObservability.analysis.codeFileExtensions',
+  'agentObservability.analysis.docFileExtensions',
 ] as const;
 
 describe('manifest contract is stable', () => {

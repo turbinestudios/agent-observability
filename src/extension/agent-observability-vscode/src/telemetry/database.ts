@@ -20,6 +20,10 @@ import {
   statusToSuccess,
 } from './models';
 import { extractResponseText } from './responseText';
+import { countWrittenLines, sumWrittenLines } from './locAnalysis';
+
+/** Span attribute key holding a tool call's raw arguments (file path + content/diff). */
+const TOOL_ARGUMENTS_KEY = 'gen_ai.tool.call.arguments';
 
 /** Schema versions this reader understands. */
 export const SUPPORTED_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([1]);
@@ -57,6 +61,10 @@ const EMPTY_TREE_STATS: SessionTreeStats = {
   totalTokens: 0,
   errorCount: 0,
   aiuNano: 0,
+  linesOfCode: 0,
+  linesOfDoc: 0,
+  linesOfCodeRemoved: 0,
+  linesOfDocRemoved: 0,
 };
 
 /**
@@ -583,7 +591,11 @@ export class TelemetryDatabase {
    *
    * Returns `undefined` when the session key has no spans.
    */
-  getSessionDetail(sessionKey: string): SessionDetail | undefined {
+  getSessionDetail(
+    sessionKey: string,
+    codeExts: readonly string[] = [],
+    docExts: readonly string[] = [],
+  ): SessionDetail | undefined {
     const resolver = this.resolver();
     const repository = resolver.resolve(sessionKey);
 
@@ -631,6 +643,15 @@ export class TelemetryDatabase {
     const userRequests = this.userRequestsBySpan(sessionKey);
     const responses = this.responsesBySpan(sessionKey);
     const mode = this.agentModesBySession().get(sessionKey)?.[0] ?? 'default';
+
+    // LOCAL-ONLY raw tool-call arguments (file path + content/diff), keyed by span
+    // id, for this session's file-writing `execute_tool` spans. Fetched once and
+    // parsed into per-turn LoC/LoD counts below; only the integer counts are kept.
+    // Skipped entirely when no extension lists are configured (every count is 0).
+    const wantsLineCounts = codeExts.length > 0 || docExts.length > 0;
+    const toolArguments = wantsLineCounts
+      ? this.toolArgumentsBySpan(sessionKey)
+      : new Map<string, string>();
 
     let startedAtMs = rows[0].start_time_ms;
     let endedAtMs = rows[0].end_time_ms;
@@ -744,6 +765,10 @@ export class TelemetryDatabase {
           outputTokens: 0,
           cachedTokens: 0,
           reasoningTokens: 0,
+          linesOfCode: 0,
+          linesOfDoc: 0,
+          linesOfCodeRemoved: 0,
+          linesOfDocRemoved: 0,
           events: [],
         };
         turns.push(currentTurn);
@@ -761,6 +786,10 @@ export class TelemetryDatabase {
             outputTokens: 0,
             cachedTokens: 0,
             reasoningTokens: 0,
+            linesOfCode: 0,
+            linesOfDoc: 0,
+            linesOfCodeRemoved: 0,
+            linesOfDocRemoved: 0,
             events: [],
           };
           turns.push(currentTurn);
@@ -778,6 +807,20 @@ export class TelemetryDatabase {
         currentTurn.outputTokens += row.output_tokens ?? 0;
         currentTurn.cachedTokens += row.cached_tokens ?? 0;
         currentTurn.reasoningTokens += row.reasoning_tokens ?? 0;
+      }
+
+      // Attribute LOCAL-ONLY written/removed lines from this turn's file-writing
+      // tool calls, split into code vs documentation by file extension. The raw
+      // arguments stay local; only the per-turn counts are retained.
+      if (operation === 'execute_tool') {
+        const args = toolArguments.get(row.span_id);
+        if (args !== undefined) {
+          const delta = countWrittenLines(row.tool_name ?? '', args, codeExts, docExts);
+          currentTurn.linesOfCode += delta.added.code;
+          currentTurn.linesOfDoc += delta.added.doc;
+          currentTurn.linesOfCodeRemoved += delta.removed.code;
+          currentTurn.linesOfDocRemoved += delta.removed.doc;
+        }
       }
     });
 
@@ -806,7 +849,7 @@ export class TelemetryDatabase {
     // Whole-agent-tree rollup (incl. spawned sub-agents) for the GitHub-matching
     // summary card. rows.length > 0 here, so the root is part of a non-empty tree
     // and getSessionTreeStats never returns undefined; the ?? is belt-and-braces.
-    const treeStats = this.getSessionTreeStats(sessionKey) ?? EMPTY_TREE_STATS;
+    const treeStats = this.getSessionTreeStats(sessionKey, codeExts, docExts) ?? EMPTY_TREE_STATS;
 
     return { summary, treeStats, turns, modelUsage, agentUsage };
   }
@@ -825,8 +868,17 @@ export class TelemetryDatabase {
    * summing `chat` avoids the double-count that summing both would cause.
    *
    * Returns `undefined` when the tree has no spans (unknown session key).
+   *
+   * When `codeExts`/`docExts` are supplied, the whole-tree Lines-of-Code /
+   * Lines-of-Documentation counts (added and removed) are computed LOCALLY from
+   * the file-writing tool calls' raw `gen_ai.tool.call.arguments`; only the
+   * integer counts are retained. With no lists (the default) those counts are 0.
    */
-  getSessionTreeStats(sessionKey: string): SessionTreeStats | undefined {
+  getSessionTreeStats(
+    sessionKey: string,
+    codeExts: readonly string[] = [],
+    docExts: readonly string[] = [],
+  ): SessionTreeStats | undefined {
     const ids = this.sessionTreeIds(sessionKey);
     if (ids.length === 0) {
       return undefined;
@@ -876,6 +928,29 @@ export class TelemetryDatabase {
       [...ids, ...ids],
     );
 
+    // LOCAL-ONLY Lines-of-Code / Lines-of-Documentation over the tree's
+    // file-writing tool calls. Skipped (counts stay 0) when no extension lists
+    // are configured. The raw arguments are read here and discarded; only the
+    // parsed integer line counts leave this method.
+    const writeLines =
+      codeExts.length > 0 || docExts.length > 0
+        ? sumWrittenLines(
+            this.allRows<{ tool_name: string | null; value: string | null }>(
+              `SELECT s.tool_name AS tool_name, a.value AS value
+                 FROM span_attributes a
+                 JOIN spans s ON s.span_id = a.span_id
+                 WHERE a.key = ?
+                   AND s.operation_name = 'execute_tool'
+                   AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))`,
+              [TOOL_ARGUMENTS_KEY, ...ids, ...ids],
+            )
+              .filter((r): r is { tool_name: string | null; value: string } => r.value !== null)
+              .map((r) => ({ toolName: r.tool_name ?? '', argumentsJson: r.value })),
+            codeExts,
+            docExts,
+          )
+        : { added: { code: 0, doc: 0 }, removed: { code: 0, doc: 0 } };
+
     const inputTokens = agg.input_tokens ?? 0;
     const outputTokens = agg.output_tokens ?? 0;
     return {
@@ -887,6 +962,10 @@ export class TelemetryDatabase {
       totalTokens: inputTokens + outputTokens,
       errorCount: agg.error_count ?? 0,
       aiuNano: aiuRow?.aiu_nano ?? 0,
+      linesOfCode: writeLines.added.code,
+      linesOfDoc: writeLines.added.doc,
+      linesOfCodeRemoved: writeLines.removed.code,
+      linesOfDocRemoved: writeLines.removed.doc,
     };
   }
 
@@ -1169,6 +1248,33 @@ export class TelemetryDatabase {
            AND s.operation_name IN ('chat', 'invoke_agent')
            AND COALESCE(s.conversation_id, s.chat_session_id) = ?`,
       [attributeKey, sessionKey],
+    );
+
+    const map = new Map<string, string>();
+    for (const row of rows) {
+      if (row.value !== null && row.value.length > 0) {
+        map.set(row.span_id, row.value);
+      }
+    }
+    return map;
+  }
+
+  /**
+   * LOCAL-ONLY map of span id → raw `gen_ai.tool.call.arguments` for this
+   * session's file-writing `execute_tool` spans (the file path + content/diff).
+   * Consumed only by {@link getSessionDetail} to compute per-turn LoC/LoD counts;
+   * the raw value is never logged or uploaded. Scoped to the single session
+   * (same `COALESCE(conversation_id, chat_session_id)` rule as the timeline).
+   */
+  private toolArgumentsBySpan(sessionKey: string): Map<string, string> {
+    const rows = this.allRows<{ span_id: string; value: string | null }>(
+      `SELECT a.span_id AS span_id, a.value AS value
+         FROM span_attributes a
+         JOIN spans s ON s.span_id = a.span_id
+         WHERE a.key = ?
+           AND s.operation_name = 'execute_tool'
+           AND COALESCE(s.conversation_id, s.chat_session_id) = ?`,
+      [TOOL_ARGUMENTS_KEY, sessionKey],
     );
 
     const map = new Map<string, string>();

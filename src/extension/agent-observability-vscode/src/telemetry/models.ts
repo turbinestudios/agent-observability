@@ -184,6 +184,18 @@ export interface SessionTurn {
   cachedTokens: number;
   /** `spans.reasoning_tokens` when the optional column is present, else 0. */
   reasoningTokens: number;
+  /**
+   * LOCAL-ONLY lines this turn's MAIN-THREAD file-writing tool calls added to /
+   * removed from source-code vs documentation files, classified by file
+   * extension (see {@link ./locAnalysis.countWrittenLines}). Derived from the
+   * raw `gen_ai.tool.call.arguments` attribute, which never leaves the machine;
+   * only these integer counts are retained. All `0` when extension lists are
+   * unset or the turn wrote nothing classifiable.
+   */
+  linesOfCode: number;
+  linesOfDoc: number;
+  linesOfCodeRemoved: number;
+  linesOfDocRemoved: number;
   /** Tool/hook/sub-agent events that ran during this turn, in chronological order. */
   events: SessionTimelineEntry[];
 }
@@ -316,6 +328,20 @@ export interface SessionTreeStats {
    * are taken over the same tree `chat` spans and so sum to this value.
    */
   aiuNano: number;
+  /**
+   * LOCAL-ONLY lines the whole agent tree's file-writing tool calls added to /
+   * removed from source-code vs documentation files, classified by file
+   * extension (see {@link ./locAnalysis.sumWrittenLines}). `linesOfCode` /
+   * `linesOfDoc` are additions (LoC / LoD); `linesOfCodeRemoved` /
+   * `linesOfDocRemoved` are removals (nLoC / nLoD). Derived from the raw
+   * `gen_ai.tool.call.arguments` attribute — which never leaves the machine —
+   * with only these integer counts retained. All `0` when the extension lists
+   * are unset (the cloud-safe call sites pass none).
+   */
+  linesOfCode: number;
+  linesOfDoc: number;
+  linesOfCodeRemoved: number;
+  linesOfDocRemoved: number;
 }
 
 /**

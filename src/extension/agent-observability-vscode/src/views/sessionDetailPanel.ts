@@ -3,17 +3,9 @@ import * as crypto from 'node:crypto';
 import { TelemetryService } from '../telemetry/telemetryService';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
 import { WorkflowDeviation } from '../deviation/models';
-import { Configuration } from '../config/configuration';
-import { computeCost, sumCost, CostEstimate } from '../telemetry/pricing';
-import {
-  SessionAgentUsage,
-  SessionModelUsage,
-  agentUsageKey,
-} from '../telemetry/models';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
 import {
   CombinedSessionSection,
-  SessionCostView,
   renderCombinedSessionDetailHtml,
   renderSessionDetailHtml,
 } from './sessionDetailHtml';
@@ -47,7 +39,6 @@ export class SessionDetailPanelManager {
   constructor(
     private readonly telemetry: TelemetryService,
     private readonly deviations: LocalDeviationDetector,
-    private readonly config: Configuration,
   ) {}
 
   /**
@@ -198,19 +189,15 @@ export class SessionDetailPanelManager {
     const detail = result.value;
     const found = this.detectDeviations(sessionKey);
 
-    // Estimated cost (LOCAL-ONLY): read pricing overrides fresh each render — this
-    // path is already uncached, so editing rates and reopening reflects them.
-    const cost = this.buildCostView(detail.modelUsage, detail.agentUsage);
-
     const nonce = makeNonce();
-    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, cost);
+    panel.webview.html = renderSessionDetailHtml(detail, found, nonce);
   }
 
   /**
    * Render the COMBINED view for several session keys: fetch each session's
-   * detail + deviations, sort the sections by start time, merge the usage
-   * rollups, and compute both per-session and merged cost. Sessions that fail to
-   * load are skipped; when none load, a single explanatory message is shown.
+   * detail + deviations, sort the sections by start time, and merge the usage
+   * rollups. Cost is derived from each session's AIU at render time. Sessions that
+   * fail to load are skipped; when none load, a single explanatory message is shown.
    */
   private renderCombined(panel: vscode.WebviewPanel, keys: readonly string[]): void {
     const sections: CombinedSessionSection[] = [];
@@ -219,12 +206,9 @@ export class SessionDetailPanelManager {
       if (!result.ok) {
         continue;
       }
-      const detail = result.value;
-      const cost = this.buildCostView(detail.modelUsage, detail.agentUsage);
       sections.push({
-        detail,
+        detail: result.value,
         deviations: this.detectDeviations(key),
-        totalCost: cost.total,
       });
     }
 
@@ -237,39 +221,9 @@ export class SessionDetailPanelManager {
     sections.sort((a, b) => a.detail.summary.startedAtMs - b.detail.summary.startedAtMs);
 
     const combined = combineSessionDetails(sections.map((s) => s.detail));
-    const cost = this.buildCostView(combined.modelUsage, combined.agentUsage);
 
     const nonce = makeNonce();
-    panel.webview.html = renderCombinedSessionDetailHtml({ combined, cost, sections }, nonce);
-  }
-
-  /**
-   * Build the LOCAL-ONLY cost view for a set of usage rollups. Reads the pricing
-   * overrides fresh (the detail path is uncached) and computes a per-model and
-   * per-agent estimate plus the per-model total. Copilot does not bill per token;
-   * this is a configurable estimate, `n/a` until rates are set. The session total
-   * is the main-thread per-model rollup — sub-agent costs are informational only.
-   */
-  private buildCostView(
-    modelUsage: readonly SessionModelUsage[],
-    agentUsage: readonly SessionAgentUsage[],
-  ): SessionCostView {
-    const overrides = this.config.getPricingOverrides();
-    const costByModel = new Map<string, CostEstimate>(
-      modelUsage.map((u) => [u.model, computeCost(u.model, u, overrides)]),
-    );
-    const costByAgent = new Map<string, CostEstimate>(
-      agentUsage.map((u) => [agentUsageKey(u), computeCost(u.model, u, overrides)]),
-    );
-    // AIU is the authoritative billed usage (read straight from the rollups); the
-    // optional usdPerAiu rate only adds a currency view of it.
-    const usdPerAiu = this.config.getUsdPerAiu();
-    return {
-      costByModel,
-      costByAgent,
-      total: sumCost([...costByModel.values()]),
-      usdPerAiu: usdPerAiu > 0 ? usdPerAiu : undefined,
-    };
+    panel.webview.html = renderCombinedSessionDetailHtml({ combined, sections }, nonce);
   }
 
   /**

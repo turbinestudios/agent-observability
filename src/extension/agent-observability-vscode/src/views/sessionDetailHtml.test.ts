@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { renderSessionDetailHtml, SessionCostView } from './sessionDetailHtml';
-import { SessionDetail, SessionTreeStats, SessionTurn, agentUsageKey } from '../telemetry/models';
-import { CostEstimate } from '../telemetry/pricing';
+import { renderSessionDetailHtml } from './sessionDetailHtml';
+import { SessionDetail, SessionTreeStats, SessionTurn } from '../telemetry/models';
 import { DeviationType, WorkflowDeviation } from '../deviation/models';
 
 /**
@@ -22,6 +21,10 @@ const ZERO_TREE_STATS: SessionTreeStats = {
   totalTokens: 0,
   errorCount: 0,
   aiuNano: 0,
+  linesOfCode: 0,
+  linesOfDoc: 0,
+  linesOfCodeRemoved: 0,
+  linesOfDocRemoved: 0,
 };
 
 const detail: SessionDetail = {
@@ -89,7 +92,7 @@ describe('renderSessionDetailHtml — local-only badge', () => {
   it('omits the main-agent section when there are no agent-usage rows', () => {
     const html = renderSessionDetailHtml(detail, [], NONCE);
     expect(html).not.toContain('<h2>Main agent</h2>');
-    expect(html).not.toContain('Estimated cost');
+    expect(html).not.toContain('Est. cost');
   });
 
   it('keeps the header to start / end / duration only', () => {
@@ -104,13 +107,14 @@ describe('renderSessionDetailHtml — local-only badge', () => {
   });
 });
 
-describe('renderSessionDetailHtml — Main agent cost & tokens', () => {
+describe('renderSessionDetailHtml — Main agent AIU & cost', () => {
   /**
-   * The Main agent table is driven by `agentUsage` (kind `main`) and priced via
-   * `costByAgent`. Three models on the main thread exercise every cost outcome:
-   * - `claude-opus-4-6`: priced, non-zero tokens → `$0.0234 (est.)`;
-   * - `gpt-zero`: a KNOWN rate applied to ZERO tokens → a legitimate `$0.0000 (est.)`;
-   * - `<script>evil</script>`: unpriced (and XSS-laden) → `n/a` (never `$0`).
+   * The Main agent table is driven by `agentUsage` (kind `main`). Cost is derived
+   * directly from each row's AIU at the fixed $0.01/AIU rate and shown inline in the
+   * AIU column (`X.XX ($Y.YY)`) — there is no separate cost column and no `n/a`:
+   * - `claude-opus-4-6`: 2.0425 AIU → `2.04 ($0.02)`;
+   * - `gpt-zero`: zero AIU → `0` (not billed, no `$`);
+   * - `<script>evil</script>`: 0.5 AIU (XSS-laden id, must be escaped).
    */
   const main = (
     model: string,
@@ -146,72 +150,46 @@ describe('renderSessionDetailHtml — Main agent cost & tokens', () => {
     ],
   };
 
-  /** Two models priced (one a legitimate $0), one not → the subtotal is partial. */
-  const cost: SessionCostView = {
-    costByModel: new Map<string, CostEstimate>(),
-    costByAgent: new Map<string, CostEstimate>([
-      [agentUsageKey({ agentName: 'Main agent', model: 'claude-opus-4-6', kind: 'main' }), { available: true, inputUsd: 0.012, outputUsd: 0.011, totalUsd: 0.0234 }],
-      [agentUsageKey({ agentName: 'Main agent', model: 'gpt-zero', kind: 'main' }), { available: true, inputUsd: 0, outputUsd: 0, totalUsd: 0 }],
-      [agentUsageKey({ agentName: 'Main agent', model: '<script>evil</script>', kind: 'main' }), { available: false }],
-    ]),
-    total: { available: true, totalUsd: 0.0234, partial: true },
-  };
-
   /** Extract the rendered `<tfoot>` Total row so footer cells can be asserted in isolation. */
   function footerRow(html: string): string {
     return html.match(/<td>Total<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
   }
 
-  it('renders the "Main agent" heading and the est.-labelled cost in the footer total', () => {
-    const html = renderSessionDetailHtml(usageDetail, [], NONCE, cost);
+  it('renders the "Main agent" heading and an AIU column (no separate cost column)', () => {
+    const html = renderSessionDetailHtml(usageDetail, [], NONCE);
     expect(html).toContain('<h2>Main agent</h2>');
-    // The priced model shows a labelled estimate; the `(est.)` label is mandatory.
-    expect(html).toContain('$0.0234 (est.)');
-    // The footer Total reflects the main-agent subtotal (partial).
-    expect(footerRow(html)).toContain('$0.0234 (est.) + n/a');
+    // The standalone estimate column is gone; cost is carried inline on AIU.
+    expect(html).not.toContain('Est. cost');
+    expect(html).not.toContain('(est.)');
+    expect(html).not.toContain('n/a');
   });
 
-  it('renders a legitimate $0 for a KNOWN rate with zero tokens (not n/a)', () => {
-    const html = renderSessionDetailHtml(usageDetail, [], NONCE, cost);
-    // A configured rate applied to zero tokens is a real $0 estimate — not n/a.
-    expect(html).toContain('$0.0000 (est.)');
+  it('shows the per-row AIU with its derived dollar cost inline', () => {
+    const html = renderSessionDetailHtml(usageDetail, [], NONCE);
+    // 2_042_500_000 nano → 2.0425 AIU → 2.04, × $0.01 = $0.02.
+    expect(html).toContain('2.04 ($0.02)');
   });
 
-  it("renders n/a (never $0) in the unpriced model's own cost cell", () => {
-    const html = renderSessionDetailHtml(usageDetail, [], NONCE, cost);
-    // Row-scoped: this exact cell appears only for the unpriced model — the partial
-    // total embeds `+ n/a` in a larger string and the priced cells are `$…`.
-    expect(html).toContain('<td class="n">n/a</td>');
-    // The escaped unpriced model id and its n/a cost cell are in the same row.
-    expect(html).toMatch(
-      /&lt;script&gt;evil&lt;\/script&gt;<\/td>[\s\S]*?<td class="n">n\/a<\/td>[\s\S]*?<\/tr>/,
-    );
+  it('shows a bare 0 (no dollar figure) for a model with no billed AIU', () => {
+    const html = renderSessionDetailHtml(usageDetail, [], NONCE);
+    // gpt-zero has aiuNano 0 → "0", never "0 ($0.00)".
+    expect(html).toMatch(/gpt-zero<\/td>[\s\S]*?<td class="n">0<\/td>[\s\S]*?<\/tr>/);
   });
 
-  it('renders a footer Total row that sums the per-row token columns and cost', () => {
-    const footer = footerRow(renderSessionDetailHtml(usageDetail, [], NONCE, cost));
+  it('renders a footer Total row that sums the per-row token and AIU columns', () => {
+    const footer = footerRow(renderSessionDetailHtml(usageDetail, [], NONCE));
     expect(footer).toContain('<td class="n">4</td>'); // llmCalls 2 + 1 + 1
     expect(footer).toContain('<td class="n">1000</td>'); // input 800 + 0 + 200
     expect(footer).toContain('<td class="n">200</td>'); // output 150 + 0 + 50
     expect(footer).toContain('<td class="n">100</td>'); // cached 100 + 0 + 0
-    // Footer total sums the main-agent rows, partial marker included.
-    expect(footer).toContain('$0.0234 (est.) + n/a');
+    // AIU 2_042_500_000 + 0 + 500_000_000 = 2_542_500_000 → 2.5425 → 2.54, × $0.01 = $0.03.
+    expect(footer).toContain('2.54 ($0.03)');
   });
 
   it('escapes a model id containing markup', () => {
-    const html = renderSessionDetailHtml(usageDetail, [], NONCE, cost);
+    const html = renderSessionDetailHtml(usageDetail, [], NONCE);
     expect(html).toContain('&lt;script&gt;evil&lt;/script&gt;');
     expect(html).not.toContain('<script>evil</script>');
-  });
-
-  it('renders without throwing on the 3-arg call (no cost data) — all costs n/a', () => {
-    const html = renderSessionDetailHtml(usageDetail, [], NONCE);
-    expect(html).toContain('<h2>Main agent</h2>');
-    expect(html).toContain('<td class="n">n/a</td>');
-    // With no rates supplied there is no estimate to label anywhere.
-    expect(html).not.toContain('(est.)');
-    // The footer total is likewise unavailable.
-    expect(footerRow(html)).toContain('<td class="n">n/a</td>');
   });
 });
 
@@ -284,6 +262,10 @@ describe('renderSessionDetailHtml — grouped turns', () => {
     outputTokens: 340,
     cachedTokens: 100,
     reasoningTokens: 0,
+    linesOfCode: 0,
+    linesOfDoc: 0,
+    linesOfCodeRemoved: 0,
+    linesOfDocRemoved: 0,
     events: [
       {
         timestampMs: 1_700_000_001_000,
@@ -336,6 +318,10 @@ describe('renderSessionDetailHtml — grouped turns', () => {
       outputTokens: 0,
       cachedTokens: 0,
       reasoningTokens: 0,
+      linesOfCode: 0,
+      linesOfDoc: 0,
+      linesOfCodeRemoved: 0,
+      linesOfDocRemoved: 0,
       events: [turn.events[0]],
     };
     const html = renderSessionDetailHtml({ ...detail, turns: [synthetic] }, [], NONCE);
@@ -359,10 +345,14 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
       totalTokens: 9_127_893,
       errorCount: 1,
       aiuNano: 536_264_925_000,
+      linesOfCode: 742,
+      linesOfDoc: 196,
+      linesOfCodeRemoved: 88,
+      linesOfDocRemoved: 14,
     },
   };
 
-  it('renders all eight totals as an acronym flat list with the agent-tree values', () => {
+  it('renders all twelve totals as an acronym flat list with the agent-tree values', () => {
     const html = renderSessionDetailHtml(treeDetail, [], NONCE);
     expect(html).toContain('Agent run totals');
     expect(html).toContain('incl. spawned sub-agents');
@@ -376,6 +366,10 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
       ['TT', 'Total Tokens'],
       ['ERR', 'Errors'],
       ['AIU', 'Copilot Usage (AIU)'],
+      ['LOC', 'Lines of Code (added)'],
+      ['LOD', 'Lines of Documentation (added)'],
+      ['nLOC', 'Lines of Code (removed)'],
+      ['nLOD', 'Lines of Documentation (removed)'],
     ]) {
       expect(html).toContain(`title="${label}">${acr}</dt>`);
     }
@@ -387,8 +381,14 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     expect(html).toContain('<dd>8,562,370</dd>');
     expect(html).toContain('<dd>9,127,893</dd>');
     expect(html).toContain('<dd>1</dd>');
-    // AIU: 536_264_925_000 nano / 1e9 = 536.26 (2-dp when ≥ 1).
-    expect(html).toContain('<dd>536.26</dd>');
+    // AIU: 536_264_925_000 nano / 1e9 = 536.26 (2-dp when ≥ 1), with the derived
+    // cost at $0.01/AIU shown inline (536.264925 × $0.01 = $5.36).
+    expect(html).toContain('<dd>536.26 ($5.36)</dd>');
+    // LoC/LoD added as positive counts; removed shown as negatives.
+    expect(html).toContain('<dd>742</dd>');
+    expect(html).toContain('<dd>196</dd>');
+    expect(html).toContain('<dd>-88</dd>');
+    expect(html).toContain('<dd>-14</dd>');
   });
 
   it('always renders the card, even for a zeroed (non-agent) session', () => {
@@ -398,22 +398,35 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     expect(html).toContain('title="Copilot Usage (AIU)">AIU</dt>');
   });
 
+  const trendTurn = (
+    input: number,
+    output: number,
+    cached: number,
+    lines: Partial<
+      Pick<SessionTurn, 'linesOfCode' | 'linesOfDoc' | 'linesOfCodeRemoved' | 'linesOfDocRemoved'>
+    > = {},
+  ): SessionTurn => ({
+    timestampMs: 1_700_000_000_000,
+    agentMode: 'agent',
+    model: 'gpt-test',
+    durationMs: 1,
+    success: true,
+    llmCalls: 1,
+    inputTokens: input,
+    outputTokens: output,
+    cachedTokens: cached,
+    reasoningTokens: 0,
+    linesOfCode: 0,
+    linesOfDoc: 0,
+    linesOfCodeRemoved: 0,
+    linesOfDocRemoved: 0,
+    ...lines,
+    events: [],
+  });
+
   it('plots an input/cached/output token trend across turns (≥ 2 turns)', () => {
-    const turn = (input: number, output: number, cached: number): SessionTurn => ({
-      timestampMs: 1_700_000_000_000,
-      agentMode: 'agent',
-      model: 'gpt-test',
-      durationMs: 1,
-      success: true,
-      llmCalls: 1,
-      inputTokens: input,
-      outputTokens: output,
-      cachedTokens: cached,
-      reasoningTokens: 0,
-      events: [],
-    });
     const html = renderSessionDetailHtml(
-      { ...treeDetail, turns: [turn(100, 20, 5), turn(200, 40, 50)] },
+      { ...treeDetail, turns: [trendTurn(100, 20, 5), trendTurn(200, 40, 50)] },
       [],
       NONCE,
     );
@@ -428,12 +441,43 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     expect(html).toContain('class="trend-grid"');
     expect(html).toContain('class="trend-axis-label trend-axis-x"');
     expect(html).not.toContain('trend-axis-y');
-    // Per-turn hover columns expose every line's value via a native <title> tooltip.
+    // Per-turn hover columns expose every line's value via a native <title> tooltip,
+    // now including the LoC/LoD counts (removed shown as negatives).
     expect(html).toContain('class="trend-hover"');
-    expect(html).toContain('<title>Turn 1 · Input 100 · Cached 5 · Output 20</title>');
-    expect(html).toContain('<title>Turn 2 · Input 200 · Cached 50 · Output 40</title>');
+    expect(html).toContain(
+      '<title>Turn 1 · Input 100 · Cached 5 · Output 20 · LoC 0 · LoD 0 · nLoC 0 · nLoD 0</title>',
+    );
+    expect(html).toContain(
+      '<title>Turn 2 · Input 200 · Cached 50 · Output 40 · LoC 0 · LoD 0 · nLoC 0 · nLoD 0</title>',
+    );
     // CSP-safe: SVG geometry only, no inline style attributes anywhere.
     expect(html).toContain('<svg class="trend-svg"');
+    expect(html).not.toContain('style="');
+  });
+
+  it('plots LoC/LoD as stacked bars (added and removed) on the trend', () => {
+    const html = renderSessionDetailHtml(
+      {
+        ...treeDetail,
+        turns: [
+          trendTurn(100, 20, 5, { linesOfCode: 30, linesOfDoc: 10 }),
+          trendTurn(200, 40, 50, { linesOfCode: 12, linesOfCodeRemoved: 8, linesOfDocRemoved: 4 }),
+        ],
+      },
+      [],
+      NONCE,
+    );
+    // A <rect> bar per non-zero stack segment, with its class.
+    expect(html).toContain('class="trend-bar trend-bar-loc"');
+    expect(html).toContain('class="trend-bar trend-bar-lod"');
+    expect(html).toContain('class="trend-bar trend-bar-nloc"');
+    expect(html).toContain('class="trend-bar trend-bar-nlod"');
+    // The hover tooltip reports removed counts as negatives.
+    expect(html).toContain('· LoC 12 · LoD 0 · nLoC -8 · nLoD -4</title>');
+    // Legend gains the four line-count swatches.
+    expect(html).toContain('class="trend-swatch trend-loc"');
+    expect(html).toContain('class="trend-swatch trend-nlod"');
+    // Still CSP-safe (geometry + classes only).
     expect(html).not.toContain('style="');
   });
 

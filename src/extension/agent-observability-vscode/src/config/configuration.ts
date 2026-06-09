@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { WorkflowConfig } from '../deviation/models';
-import { ModelRate, parsePricingOverrides } from '../telemetry/pricing';
+import { normalizeExtensions } from '../telemetry/locAnalysis';
 import { MIN_SESSION_MINUTES, parseWorkflowConfigs } from './workflowParsing';
 
 export { MIN_SESSION_MINUTES } from './workflowParsing';
@@ -26,8 +26,8 @@ export const ConfigKeys = {
   sqlitePath: 'sqlitePath',
   maxSessionMinutes: 'deviation.maxSessionMinutes',
   workflows: 'workflows',
-  pricingModelRates: 'pricing.modelRates',
-  pricingUsdPerAiu: 'pricing.usdPerAiu',
+  analysisCodeFileExtensions: 'analysis.codeFileExtensions',
+  analysisDocFileExtensions: 'analysis.docFileExtensions',
 } as const;
 
 /** Default values mirroring the package.json contribution defaults. */
@@ -38,8 +38,16 @@ export const ConfigDefaults = {
   localTelemetryEnabled: true,
   sqlitePath: '',
   maxSessionMinutes: 60,
-  pricingModelRates: {} as Record<string, ModelRate>,
-  pricingUsdPerAiu: 0,
+  analysisCodeFileExtensions: [
+    '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.java', '.c',
+    '.cc', '.cpp', '.h', '.hpp', '.cs', '.go', '.rs', '.rb', '.php',
+    '.swift', '.kt', '.kts', '.scala', '.sh', '.bash', '.ps1', '.sql',
+    '.css', '.scss', '.sass', '.less', '.html', '.vue', '.svelte',
+    '.json', '.yaml', '.yml', '.toml', '.xml', '.gradle', '.dart', '.lua', '.r',
+  ] as readonly string[],
+  analysisDocFileExtensions: [
+    '.md', '.mdx', '.markdown', '.rst', '.txt', '.adoc', '.asciidoc',
+  ] as readonly string[],
 } as const;
 
 /** Minimum allowed sync interval, mirroring the package.json `minimum`. */
@@ -137,30 +145,30 @@ export class Configuration {
   }
 
   /**
-   * Per-model pricing overrides for the LOCAL session-detail cost estimate,
-   * parsed and validated from `agentObservability.pricing.modelRates`.
-   *
-   * There is NO built-in rate table: cost reads `n/a` until the user provides
-   * rates here (Copilot does not bill per token — the figure is always an
-   * estimate). Malformed entries are skipped rather than throwing, so a
-   * hand-edited settings.json can never break the detail panel.
+   * File extensions counted as SOURCE CODE for the local session-detail
+   * Lines-of-Code metric (LoC / nLoC), normalized to lowercase, deduplicated,
+   * and dot-prefixed. Used only to classify lines the agent wrote/removed; the
+   * raw tool arguments they are derived from never leave the machine.
    */
-  getPricingOverrides(): Record<string, ModelRate> {
-    return parsePricingOverrides(this.config().get<unknown>(ConfigKeys.pricingModelRates, {}));
+  getCodeFileExtensions(): string[] {
+    const raw = this.config().get<unknown>(
+      ConfigKeys.analysisCodeFileExtensions,
+      ConfigDefaults.analysisCodeFileExtensions as unknown as string[],
+    );
+    return normalizeExtensions(raw);
   }
 
   /**
-   * Optional USD-per-AIU rate for the LOCAL session-detail panel, used ONLY to
-   * render a dollar figure alongside the authoritative AIU (premium-request)
-   * usage that Copilot records on each `chat` span. Unlike
-   * {@link getPricingOverrides}, AIU is a real billed quantity — this rate just
-   * converts it to your plan's currency. Returns `0` (→ show AIU without a $
-   * figure) when unset or malformed (non-finite / negative). Stays entirely
-   * local — never uploaded.
+   * File extensions counted as DOCUMENTATION for the local session-detail
+   * Lines-of-Documentation metric (LoD / nLoD), normalized like
+   * {@link getCodeFileExtensions}.
    */
-  getUsdPerAiu(): number {
-    const raw = this.config().get<number>(ConfigKeys.pricingUsdPerAiu, ConfigDefaults.pricingUsdPerAiu);
-    return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : 0;
+  getDocFileExtensions(): string[] {
+    const raw = this.config().get<unknown>(
+      ConfigKeys.analysisDocFileExtensions,
+      ConfigDefaults.analysisDocFileExtensions as unknown as string[],
+    );
+    return normalizeExtensions(raw);
   }
 
   /**

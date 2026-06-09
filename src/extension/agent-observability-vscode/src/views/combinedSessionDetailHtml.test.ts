@@ -40,6 +40,10 @@ function session(over: Partial<SessionDetail['summary']>, detail: Partial<Sessio
       totalTokens: 0,
       errorCount: 0,
       aiuNano: 0,
+      linesOfCode: 0,
+      linesOfDoc: 0,
+      linesOfCodeRemoved: 0,
+      linesOfDocRemoved: 0,
     },
     turns: [],
     modelUsage: [],
@@ -80,12 +84,14 @@ describe('renderCombinedSessionDetailHtml', () => {
       treeStats: {
         modelTurns: 2, toolCalls: 3, inputTokens: 100, outputTokens: 40,
         cachedTokens: 10, totalTokens: 140, errorCount: 1, aiuNano: 1_000_000_000,
+        linesOfCode: 0, linesOfDoc: 0, linesOfCodeRemoved: 0, linesOfDocRemoved: 0,
       },
     });
     const b = session({ sessionId: 'b-2' }, {
       treeStats: {
         modelTurns: 5, toolCalls: 7, inputTokens: 200, outputTokens: 60,
         cachedTokens: 20, totalTokens: 260, errorCount: 0, aiuNano: 3_000_000_000,
+        linesOfCode: 0, linesOfDoc: 0, linesOfCodeRemoved: 0, linesOfDocRemoved: 0,
       },
     });
 
@@ -111,6 +117,10 @@ describe('renderCombinedSessionDetailHtml', () => {
       outputTokens: 1,
       cachedTokens: 0,
       reasoningTokens: 0,
+      linesOfCode: 0,
+      linesOfDoc: 0,
+      linesOfCodeRemoved: 0,
+      linesOfDocRemoved: 0,
       events: [],
     });
     const a = session({ sessionId: 'aaaa-1111' }, { turns: [turn(10), turn(20)] });

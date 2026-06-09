@@ -47,6 +47,10 @@ export type Result<T> =
 /** Minimal config surface the service needs (satisfied by {@link Configuration}). */
 export interface ServiceConfig extends PathConfig {
   isLocalTelemetryEnabled(): boolean;
+  /** Extensions classified as source code for the LoC/nLoC metric. */
+  getCodeFileExtensions(): string[];
+  /** Extensions classified as documentation for the LoD/nLoD metric. */
+  getDocFileExtensions(): string[];
 }
 
 interface CacheEntry {
@@ -201,8 +205,13 @@ export class TelemetryService {
    * (no spans) so the panel can render a single explanatory message.
    */
   getSessionDetail(sessionKey: string): Result<SessionDetail> {
+    // LoC/LoD classification lists come from local settings; passed down so the
+    // raw tool arguments are parsed into counts inside the DB layer and never
+    // surfaced to the service or beyond.
+    const codeExts = this.config.getCodeFileExtensions();
+    const docExts = this.config.getDocFileExtensions();
     return this.withDatabase((db) => {
-      const detail = db.getSessionDetail(sessionKey);
+      const detail = db.getSessionDetail(sessionKey, codeExts, docExts);
       if (detail === undefined) {
         throw sessionNotFoundError(sessionKey);
       }

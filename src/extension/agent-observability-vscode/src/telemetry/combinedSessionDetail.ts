@@ -64,6 +64,10 @@ function mergeTreeStats(details: readonly SessionDetail[]): SessionTreeStats {
     totalTokens: 0,
     errorCount: 0,
     aiuNano: 0,
+    linesOfCode: 0,
+    linesOfDoc: 0,
+    linesOfCodeRemoved: 0,
+    linesOfDocRemoved: 0,
   };
   for (const { treeStats: t } of details) {
     acc.modelTurns += t.modelTurns;
@@ -73,6 +77,10 @@ function mergeTreeStats(details: readonly SessionDetail[]): SessionTreeStats {
     acc.cachedTokens += t.cachedTokens;
     acc.errorCount += t.errorCount;
     acc.aiuNano += t.aiuNano;
+    acc.linesOfCode += t.linesOfCode;
+    acc.linesOfDoc += t.linesOfDoc;
+    acc.linesOfCodeRemoved += t.linesOfCodeRemoved;
+    acc.linesOfDocRemoved += t.linesOfDocRemoved;
   }
   acc.totalTokens = acc.inputTokens + acc.outputTokens;
   return acc;

@@ -6,58 +6,27 @@ import {
   SessionAgentUsage,
   SessionTimelineEntry,
   SessionTurn,
-  agentUsageKey,
 } from '../telemetry/models';
 import { WorkflowDeviation } from '../deviation/models';
-import { CostEstimate, sumCost } from '../telemetry/pricing';
+import { aiuToUsd } from '../telemetry/pricing';
 import { escapeHtml } from './escapeHtml';
-
-/**
- * Per-render cost data computed by the panel (where settings are available) and
- * passed in as plain data so this module stays `vscode`-free. `costByModel` is
- * keyed by the RAW resolved model id ({@link ../telemetry/models.SessionModelUsage});
- * `costByAgent` is keyed by {@link ../telemetry/models.agentUsageKey} for the
- * per-agent breakdown (used by the Main agent + sub-agent tables); `total` is the
- * {@link ../telemetry/pricing.sumCost} rollup over the per-model estimates.
- */
-export interface SessionCostView {
-  costByModel: ReadonlyMap<string, CostEstimate>;
-  costByAgent?: ReadonlyMap<string, CostEstimate>;
-  total: { available: boolean; totalUsd: number; partial: boolean };
-  /**
-   * Optional USD-per-AIU rate (`agentObservability.pricing.usdPerAiu`). When > 0,
-   * AIU figures are annotated with a converted dollar amount; otherwise AIU is
-   * shown on its own. AIU itself comes from the usage rollups' `aiuNano` and
-   * needs no configuration — this only adds a currency view.
-   */
-  usdPerAiu?: number;
-}
-
-/**
- * The minimal shape {@link formatCost} reads. Both a {@link CostEstimate} and the
- * {@link SessionCostView.total} rollup satisfy it structurally.
- */
-type Costish = { available: boolean; totalUsd?: number; partial?: boolean } | undefined;
 
 /** One combined session, paired with the data the panel resolves per session. */
 export interface CombinedSessionSection {
   detail: SessionDetail;
   /** Workflow deviations detected for THIS session (rendered in its section). */
   deviations: readonly WorkflowDeviation[];
-  /** This session's total estimated cost, for the section summary line. */
-  totalCost?: Costish;
 }
 
 /**
- * Everything the combined renderer needs, assembled by the panel (where settings
- * and the deviation detector are available). {@link combined} carries the merged
- * header + usage rollups; {@link cost} is the merged-usage cost view; each
- * {@link CombinedSessionSection} renders one session's own meta, deviations, and
- * turns. Sections are rendered in the order given (the panel sorts by start time).
+ * Everything the combined renderer needs, assembled by the panel (where the
+ * deviation detector is available). {@link combined} carries the merged header +
+ * usage rollups; each {@link CombinedSessionSection} renders one session's own
+ * meta, deviations, and turns. Sections are rendered in the order given (the panel
+ * sorts by start time).
  */
 export interface CombinedSessionView {
   combined: CombinedSessionDetail;
-  cost?: SessionCostView;
   sections: readonly CombinedSessionSection[];
 }
 
@@ -99,7 +68,6 @@ export function renderSessionDetailHtml(
   detail: SessionDetail,
   deviations: readonly WorkflowDeviation[],
   nonce: string,
-  cost?: SessionCostView,
 ): string {
   const { summary } = detail;
   const csp = [
@@ -121,9 +89,9 @@ export function renderSessionDetailHtml(
 </head>
 <body>
   ${renderHeader(detail)}
-  ${renderTreeSummary(detail.treeStats, detail.turns, cost?.usdPerAiu)}
-  ${renderMainAgentUsage(detail.agentUsage, cost?.costByAgent, cost?.usdPerAiu)}
-  ${renderSubAgentUsage(detail.agentUsage, cost?.costByAgent, cost?.usdPerAiu)}
+  ${renderTreeSummary(detail.treeStats, detail.turns)}
+  ${renderMainAgentUsage(detail.agentUsage)}
+  ${renderSubAgentUsage(detail.agentUsage)}
   ${renderDeviations(deviations)}
   ${renderTurns(detail.turns)}
 </body>
@@ -142,7 +110,7 @@ export function renderSessionDetailHtml(
  * renderer.
  */
 export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce: string): string {
-  const { combined, cost, sections } = view;
+  const { combined, sections } = view;
   const csp = [
     "default-src 'none'",
     `style-src 'nonce-${nonce}'`,
@@ -177,9 +145,9 @@ export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce
 </head>
 <body>
   ${renderCombinedHeader(combined.summary)}
-  ${renderTreeSummary(combined.treeStats, mergedTurns, cost?.usdPerAiu, trendSessions)}
-  ${renderMainAgentUsage(combined.agentUsage, cost?.costByAgent, cost?.usdPerAiu)}
-  ${renderSubAgentUsage(combined.agentUsage, cost?.costByAgent, cost?.usdPerAiu)}
+  ${renderTreeSummary(combined.treeStats, mergedTurns, trendSessions)}
+  ${renderMainAgentUsage(combined.agentUsage)}
+  ${renderSubAgentUsage(combined.agentUsage)}
   <section class="panel">
     <div class="panel-heading"><h2>Sessions</h2><span>${num(sections.length)} session(s)</span></div>
     <div class="turns">${sectionsHtml}</div>
@@ -214,16 +182,17 @@ function renderCombinedHeader(summary: CombinedSummary): string {
  * deviation/turn section helpers as the single-session renderer.
  */
 function renderSessionSection(section: CombinedSessionSection, open: boolean): string {
-  const { detail, deviations, totalCost } = section;
+  const { detail, deviations } = section;
   const s = detail.summary;
   const id = escapeHtml(shortId(s.sessionId));
   const titleLabel =
     s.title !== undefined && s.title.length > 0
       ? `<span class="turn-label">${escapeHtml(truncate(s.title, 60))}</span>`
       : `<span class="turn-label">Session ${id}</span>`;
+  // This session's cost = its whole-tree AIU at the fixed rate (no estimate).
   const costLabel =
-    detail.modelUsage.length > 0
-      ? `<span class="turn-tokens">${escapeHtml(formatCost(totalCost))}</span>`
+    detail.treeStats.aiuNano > 0
+      ? `<span class="turn-tokens">$${aiuToUsd(detail.treeStats.aiuNano).toFixed(2)}</span>`
       : '';
   const summaryRow =
     `<span class="time">${escapeHtml(formatTime(s.startedAtMs))}</span>${titleLabel}` +
@@ -278,7 +247,6 @@ function renderHeader(detail: SessionDetail): string {
 function renderTreeSummary(
   stats: SessionTreeStats,
   turns: readonly SessionTurn[],
-  usdPerAiu?: number,
   trendSessions?: readonly TrendSession[],
 ): string {
   // Flat right-aligned totals, each labelled by a short acronym (full name kept in
@@ -292,7 +260,11 @@ function renderTreeSummary(
     { acr: 'TCI', label: 'Total Cached Input Tokens', value: formatInt(stats.cachedTokens) },
     { acr: 'TT', label: 'Total Tokens', value: formatInt(stats.totalTokens) },
     { acr: 'ERR', label: 'Errors', value: formatInt(stats.errorCount) },
-    { acr: 'AIU', label: 'Copilot Usage (AIU)', value: formatAiu(stats.aiuNano, usdPerAiu) },
+    { acr: 'AIU', label: 'Copilot Usage (AIU)', value: formatAiu(stats.aiuNano) },
+    { acr: 'LOC', label: 'Lines of Code (added)', value: formatInt(stats.linesOfCode) },
+    { acr: 'LOD', label: 'Lines of Documentation (added)', value: formatInt(stats.linesOfDoc) },
+    { acr: 'nLOC', label: 'Lines of Code (removed)', value: formatInt(-stats.linesOfCodeRemoved) },
+    { acr: 'nLOD', label: 'Lines of Documentation (removed)', value: formatInt(-stats.linesOfDocRemoved) },
   ];
   const rows = totals
     .map(
@@ -350,6 +322,10 @@ function renderTokenTrend(
     input: t.inputTokens,
     cached: t.cachedTokens,
     output: t.outputTokens,
+    loc: t.linesOfCode,
+    lod: t.linesOfDoc,
+    nloc: t.linesOfCodeRemoved,
+    nlod: t.linesOfDocRemoved,
   }));
   if (points.length < 2) {
     return `<div class="tree-trend tree-trend-empty"><p class="muted">Not enough turns to plot a token trend.</p></div>`;
@@ -448,6 +424,43 @@ function renderTokenTrend(
       .join('\n');
   }
 
+  // Lines written/removed as two adjacent STACKED bars per turn (additions left,
+  // removals right). These live on a SECONDARY scale: token counts dwarf line
+  // counts, so reusing `max` would flatten the bars to nothing — `linesMax` is an
+  // independent maximum over the per-turn stack totals. Both stacks rise from the
+  // baseline (the colour, not the direction, distinguishes added from removed);
+  // exact signed numbers are in the hover tooltip. Rendered before the polylines
+  // so the lines and dots overlay them. `Math.max(1, …)` guards div-by-zero, and
+  // zero-height segments are omitted.
+  const linesMax = Math.max(1, ...points.map((p) => Math.max(p.loc + p.lod, p.nloc + p.nlod)));
+  const barH = (v: number): number => (innerH * v) / linesMax;
+  const pitch = innerW / points.length;
+  const barW = Math.min(8, Math.max(2, pitch * 0.3));
+  const barGap = Math.max(1, barW * 0.3);
+  // One stacked segment from cumulative `lower` to `upper` lines, at left edge `bx`.
+  const barSeg = (bx: number, lower: number, upper: number, cls: string): string => {
+    const h = barH(upper) - barH(lower);
+    if (h <= 0) {
+      return '';
+    }
+    return `<rect class="trend-bar ${cls}" x="${bx.toFixed(1)}" y="${(baseline - barH(upper)).toFixed(
+      1,
+    )}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" />`;
+  };
+  const bars = points
+    .map((p, i) => {
+      const cx = x(i);
+      const addX = cx - barGap / 2 - barW;
+      const remX = cx + barGap / 2;
+      return (
+        barSeg(addX, 0, p.loc, 'trend-bar-loc') +
+        barSeg(addX, p.loc, p.loc + p.lod, 'trend-bar-lod') +
+        barSeg(remX, 0, p.nloc, 'trend-bar-nloc') +
+        barSeg(remX, p.nloc, p.nloc + p.nlod, 'trend-bar-nlod')
+      );
+    })
+    .join('\n');
+
   const series: Array<{ key: 'input' | 'cached' | 'output'; label: string }> = [
     { key: 'input', label: 'Input' },
     { key: 'cached', label: 'Cached' },
@@ -480,25 +493,42 @@ function renderTokenTrend(
       const right = i === points.length - 1 ? W - m.right : (x(i) + x(i + 1)) / 2;
       const title = `Turn ${num(i + 1)} · Input ${formatInt(p.input)} · Cached ${formatInt(
         p.cached,
-      )} · Output ${formatInt(p.output)}`;
+      )} · Output ${formatInt(p.output)} · LoC ${formatInt(p.loc)} · LoD ${formatInt(
+        p.lod,
+      )} · nLoC ${formatInt(-p.nloc)} · nLoD ${formatInt(-p.nlod)}`;
       return `<rect class="trend-hover" x="${left.toFixed(1)}" y="${m.top}" width="${(
         right - left
       ).toFixed(1)}" height="${innerH}"><title>${title}</title></rect>`;
     })
     .join('\n');
-  const legend = series
-    .map(
-      (s) =>
-        `<span class="trend-key"><span class="trend-swatch trend-${s.key}"></span>${s.label}</span>`,
-    )
-    .join('');
+  // Token-line keys plus the four line-count bar keys (additions then removals).
+  const barKeys: Array<{ key: string; label: string }> = [
+    { key: 'loc', label: 'LoC' },
+    { key: 'lod', label: 'LoD' },
+    { key: 'nloc', label: 'LoC removed' },
+    { key: 'nlod', label: 'LoD removed' },
+  ];
+  const legend =
+    series
+      .map(
+        (s) =>
+          `<span class="trend-key"><span class="trend-swatch trend-${s.key}"></span>${s.label}</span>`,
+      )
+      .join('') +
+    barKeys
+      .map(
+        (s) =>
+          `<span class="trend-key"><span class="trend-swatch trend-${s.key}"></span>${s.label}</span>`,
+      )
+      .join('');
 
   return `<div class="tree-trend">
-    <svg class="trend-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Main-thread token usage across turns">
+    <svg class="trend-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Main-thread token usage and lines written across turns">
       ${hGrid.join('\n')}
       ${xGrid.join('\n')}
       ${dividers}
       ${axis}
+      ${bars}
       ${lines}
       ${dots}
       ${hover}
@@ -515,11 +545,7 @@ function renderTokenTrend(
  * total (incl. sub-agents) lives in the "Agent run totals" card, so this table
  * carries only its own subtotal.
  */
-function renderMainAgentUsage(
-  usage: readonly SessionAgentUsage[],
-  costByAgent?: ReadonlyMap<string, CostEstimate>,
-  usdPerAiu?: number,
-): string {
+function renderMainAgentUsage(usage: readonly SessionAgentUsage[]): string {
   return renderAgentUsage(
     usage.filter((u) => u.kind === 'main'),
     {
@@ -528,8 +554,6 @@ function renderMainAgentUsage(
       footerLabel: 'Total',
       callsTitle: 'Main-thread model turns (chat spans) for this model',
     },
-    costByAgent,
-    usdPerAiu,
   );
 }
 
@@ -539,11 +563,7 @@ function renderMainAgentUsage(
  * `subagent`). Rendered only when the session spawned at least one sub-agent. Each
  * row shows the sub-agent's real tokens AND AIU, read from its own `chat` spans.
  */
-function renderSubAgentUsage(
-  usage: readonly SessionAgentUsage[],
-  costByAgent?: ReadonlyMap<string, CostEstimate>,
-  usdPerAiu?: number,
-): string {
+function renderSubAgentUsage(usage: readonly SessionAgentUsage[]): string {
   return renderAgentUsage(
     usage.filter((u) => u.kind === 'subagent'),
     {
@@ -554,24 +574,19 @@ function renderSubAgentUsage(
       note:
         'Sub-agents launched by this session via <code>runSubagent</code>, with the real tokens and AIU recorded on their own <code>chat</code> spans. The whole-run rollup is in the "Agent run totals" card above.',
     },
-    costByAgent,
-    usdPerAiu,
   );
 }
 
 /**
  * Shared renderer for a per-(agent, model) usage table — used for both the main
  * thread and the spawned sub-agents so they share one column layout (Agent, Model,
- * Calls, Input, Output, Cached, AIU, Est. cost). Each row's cost comes from
- * `costByAgent` keyed by {@link agentUsageKey}; the footer is this table's own
- * subtotal. Costs are ESTIMATES (`n/a` until rates are set); AIU is the actual
- * billed figure. Returns `''` when there are no rows.
+ * Calls, Input, Output, Cached, AIU). The AIU column is the actual billed figure
+ * and carries the derived dollar cost inline ({@link formatAiu}); the footer is
+ * this table's own subtotal. Returns `''` when there are no rows.
  */
 function renderAgentUsage(
   rows: readonly SessionAgentUsage[],
   opts: { heading: string; countNoun: string; footerLabel: string; callsTitle: string; note?: string },
-  costByAgent?: ReadonlyMap<string, CostEstimate>,
-  usdPerAiu?: number,
 ): string {
   if (rows.length === 0) {
     return '';
@@ -588,7 +603,6 @@ function renderAgentUsage(
     },
     { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, aiuNano: 0 },
   );
-  const subtotalCost = sumCost(rows.map((u) => costByAgent?.get(agentUsageKey(u)) ?? { available: false }));
 
   const bodyRows = rows
     .map(
@@ -599,8 +613,7 @@ function renderAgentUsage(
         <td class="n">${num(u.inputTokens)}</td>
         <td class="n">${num(u.outputTokens)}</td>
         <td class="n">${num(u.cachedTokens)}</td>
-        <td class="n">${formatAiu(u.aiuNano, usdPerAiu)}</td>
-        <td class="n">${formatCost(costByAgent?.get(agentUsageKey(u)))}</td>
+        <td class="n">${formatAiu(u.aiuNano)}</td>
       </tr>`,
     )
     .join('\n');
@@ -614,8 +627,7 @@ function renderAgentUsage(
         <tr>
           <th>Agent</th><th>Model</th><th class="n" title="${escapeHtml(opts.callsTitle)}">Calls</th><th class="n">Input</th>
           <th class="n">Output</th><th class="n">Cached</th>
-          <th class="n" title="AIU (Copilot premium-request units) recorded on these spans — the actual billed usage, not an estimate">AIU</th>
-          <th class="n" title="Token × your configured rate — an estimate; n/a until rates are set">Est. cost</th>
+          <th class="n" title="AIU (Copilot premium-request units) recorded on these spans — the actual billed usage — with the derived cost at $0.01/AIU">AIU</th>
         </tr>
       </thead>
       <tbody>
@@ -629,8 +641,7 @@ function renderAgentUsage(
           <td class="n">${num(totals.inputTokens)}</td>
           <td class="n">${num(totals.outputTokens)}</td>
           <td class="n">${num(totals.cachedTokens)}</td>
-          <td class="n">${formatAiu(totals.aiuNano, usdPerAiu)}</td>
-          <td class="n">${formatCost(subtotalCost)}</td>
+          <td class="n">${formatAiu(totals.aiuNano)}</td>
         </tr>
       </tfoot>
     </table>
@@ -773,38 +784,21 @@ export function renderTimelineRow(entry: SessionTimelineEntry): string {
 }
 
 /**
- * Format a cost as a clearly-labelled ESTIMATE:
- * - available → `$0.0000 (est.)` (the `(est.)` label is mandatory — Copilot does
- *   not bill per token, so this is never an authoritative figure);
- * - a partial session total → append ` + n/a` (some models priced, some not);
- * - unavailable (no rate configured) → `n/a`, never `$0`.
+ * Format premium-request usage held as integer NANO-AIU (1 AIU = 1e9) for display.
+ * This is GitHub's ACTUAL billed unit, so the derived dollar cost is always shown
+ * inline at the fixed rate ({@link ../telemetry/pricing.aiuToUsd}, $0.01/AIU) —
+ * e.g. `536.26 ($5.36)`. Zero/absent → `0` (honest: not billed, never `n/a`).
+ * Small AIU values get extra precision on the unit figure. The output is digits
+ * and `$.()` only, so it is safe to inject without escaping (it never derives from
+ * user content).
  */
-function formatCost(cost: Costish): string {
-  if (cost === undefined || !cost.available) {
-    return 'n/a';
-  }
-  const base = `$${(cost.totalUsd ?? 0).toFixed(4)} (est.)`;
-  return cost.partial === true ? `${base} + n/a` : base;
-}
-
-/**
- * Format premium-request usage held as integer NANO-AIU (1 AIU = 1e9) for
- * display. Unlike {@link formatCost} this is GitHub's ACTUAL billed unit, not an
- * estimate. Zero/absent → `0` (honest: not billed, never `n/a`). Small values get
- * extra precision; when `usdPerAiu` > 0 a converted dollar amount is appended. The
- * output is digits and `$.()` only, so it is safe to inject without escaping (it
- * never derives from user content).
- */
-function formatAiu(aiuNano: number, usdPerAiu?: number): string {
+function formatAiu(aiuNano: number): string {
   if (!(aiuNano > 0)) {
     return '0';
   }
   const aiu = aiuNano / 1_000_000_000;
   const value = aiu.toFixed(aiu < 1 ? 4 : 2);
-  if (usdPerAiu !== undefined && usdPerAiu > 0) {
-    return `${value} ($${(aiu * usdPerAiu).toFixed(4)})`;
-  }
-  return value;
+  return `${value} ($${aiuToUsd(aiuNano).toFixed(2)})`;
 }
 
 /** Collapse whitespace and truncate a label to `max` chars with an ellipsis. */
@@ -878,6 +872,11 @@ const STYLE = `
   .trend-dot.trend-input { fill: var(--vscode-charts-blue, #4e94ce); }
   .trend-dot.trend-cached { fill: var(--vscode-charts-yellow, #b89500); }
   .trend-dot.trend-output { fill: var(--vscode-charts-green, #388a34); }
+  .trend-bar { opacity: .55; }
+  .trend-bar.trend-bar-loc { fill: var(--vscode-charts-purple, #b180d7); }
+  .trend-bar.trend-bar-lod { fill: var(--vscode-charts-orange, #d18616); }
+  .trend-bar.trend-bar-nloc { fill: var(--vscode-charts-red, #be1100); }
+  .trend-bar.trend-bar-nlod { fill: #e07b86; }
   .trend-hover { fill: transparent; cursor: crosshair; }
   .trend-hover:hover { fill: var(--vscode-list-hoverBackground, var(--vscode-foreground)); opacity: .12; }
   .trend-legend { display: flex; gap: .9rem; font-size: .75rem; color: var(--vscode-descriptionForeground); }
@@ -886,6 +885,10 @@ const STYLE = `
   .trend-swatch.trend-input { background: var(--vscode-charts-blue, #4e94ce); }
   .trend-swatch.trend-cached { background: var(--vscode-charts-yellow, #b89500); }
   .trend-swatch.trend-output { background: var(--vscode-charts-green, #388a34); }
+  .trend-swatch.trend-loc { background: var(--vscode-charts-purple, #b180d7); }
+  .trend-swatch.trend-lod { background: var(--vscode-charts-orange, #d18616); }
+  .trend-swatch.trend-nloc { background: var(--vscode-charts-red, #be1100); }
+  .trend-swatch.trend-nlod { background: #e07b86; }
   .tree-totals { flex: 0 0 20%; display: flex; flex-direction: column; gap: .3rem; margin: 0; text-align: right; }
   .tree-totals .tt-row { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; padding-bottom: .15rem; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   .tree-totals .tt-row:last-child { border-bottom: none; }

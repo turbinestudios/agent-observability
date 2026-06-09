@@ -46,7 +46,6 @@ All under the **Agent Observability** category:
 | `agentObservability.sqlitePath` | `""` | Override path to `agent-traces.db` (blank = auto-detect). |
 | `agentObservability.deviation.maxSessionMinutes` | `60` | Local deviation detector: max expected session duration. |
 | `agentObservability.workflows` | `[]` | Optional per-repository expected workflows for the local deviation detector. Evaluated on-machine; never uploaded. |
-| `agentObservability.pricing.modelRates` | `{}` | Per-model USD rates (per 1M tokens) used to show an **estimated** cost on the session detail panel. Local only; never uploaded. See [Model pricing](#model-pricing--cost-estimates). |
 
 ## Workflow predicate DSL
 
@@ -118,69 +117,28 @@ The privacy boundary is what makes the two tiers different:
   the network at all today; the flag makes that boundary explicit and
   future-proof. See `docs/privacy-validation.md` and `aggregate/privacy.test.ts`.
 
-## Model pricing & cost estimates
+## AIU usage & cost
 
-Click a session in the **Sessions** view to open its detail panel. The **Main
-agent** table breaks the main-thread token totals down per model and shows an
-**Estimated cost** for each.
+Click a session in the **Sessions** view to open its detail panel. The **Agent
+run totals** card and the **Main agent** / **Spawned sub-agents** tables show the
+**AIU** (Copilot premium-request units) recorded for each scope, with the derived
+dollar cost shown inline next to it (e.g. `536.26 ($5.36)`).
 
-> **It is always an estimate.** GitHub Copilot does not record or bill per token,
-> so there is no authoritative cost in the local data. The figure shown is purely
-> `tokens × a rate you configure`, and every cost is labelled `(est.)`. There is
-> **no built-in rate table**: until you set rates, every cost reads `n/a`.
-
-Configure rates with `agentObservability.pricing.modelRates` — an object keyed by
-model id, where each value gives the **USD price per 1,000,000 tokens**:
-
-```jsonc
-// Example rates only — substitute your provider's actual numbers.
-"agentObservability.pricing.modelRates": {
-  "claude-opus-4-6": {
-    "inputPerMTok": 15,        // required: USD / 1M uncached input tokens
-    "outputPerMTok": 75,       // required: USD / 1M output tokens
-    "cachedInputPerMTok": 1.5, // optional: USD / 1M cached input tokens
-    "reasoningPerMTok": 75     // optional: USD / 1M reasoning tokens
-  },
-  "claude-sonnet-4-6": {
-    "inputPerMTok": 3,
-    "outputPerMTok": 15
-  },
-  "gpt-4o-mini": {
-    "inputPerMTok": 0.15,
-    "outputPerMTok": 0.6
-  }
-}
-```
-
-**Required vs optional fields.** `inputPerMTok` and `outputPerMTok` are required;
-an entry missing either is ignored. When omitted, `cachedInputPerMTok` defaults to
-`0.1 × inputPerMTok` (a cached-read discount) and `reasoningPerMTok` defaults to
-`outputPerMTok`.
-
-**How cost is computed** (per model, then summed):
-
-- `uncached input = max(0, input − cached)`, billed at `inputPerMTok`;
-- `cached` billed at `cachedInputPerMTok`;
-- `output` billed at `outputPerMTok`;
-- `reasoning` billed at `reasoningPerMTok`.
-
-**Finding the model id.** Use the id shown in the session detail's **Model**
-column / per-model table. You only need one key per model: the request side
-records dotted versions (`claude-opus-4.6`) and the response side dashed
-(`claude-opus-4-6`), and dated suffixes like `gpt-4o-mini-2024-07-18` are
-trimmed — all of these are matched case-insensitively to a single key, so
-`"claude-opus-4-6"` covers every form.
+> **AIU is the billed unit — cost is derived from it, not estimated.** Unlike a
+> token×rate estimate, AIU is the quantity GitHub Copilot actually records on each
+> `chat` span (`copilot_chat.copilot_usage_nano_aiu`). Cost is simply that AIU
+> converted at the fixed published rate of **1 AIU = $0.01 USD**. There is nothing
+> to configure.
 
 **What you'll see.**
 
-- A model with no configured rate → `n/a` (never `$0`).
-- A configured rate applied to zero tokens → a real `$0.0000 (est.)`.
-- A session mixing priced and unpriced models → the priced subtotal followed by a
-  `+ n/a` marker (e.g. `$0.0234 (est.) + n/a`), rather than blanking the total.
+- A scope with no billed AIU → `0` (no dollar figure — it was not billed).
+- A billed scope → its AIU with the inline cost, e.g. `2.04 ($0.02)`.
+- The footer/totals sum each table's AIU and show the combined cost the same way.
 
-**Privacy.** Rates and all derived cost/token figures stay entirely on your
-machine. Nothing about cost or per-session tokens is ever added to the opt-in
-aggregate batch — this is a local-only display.
+**Privacy.** AIU and all derived cost figures stay entirely on your machine.
+Nothing about cost or per-session usage is ever added to the opt-in aggregate
+batch — this is a local-only display.
 
 ## Privacy
 

@@ -44,6 +44,10 @@ describe('renderTurn XSS safety', () => {
       outputTokens: 0,
       cachedTokens: 0,
       reasoningTokens: 0,
+      linesOfCode: 0,
+      linesOfDoc: 0,
+      linesOfCodeRemoved: 0,
+      linesOfDocRemoved: 0,
       events: [],
       ...overrides,
     };
