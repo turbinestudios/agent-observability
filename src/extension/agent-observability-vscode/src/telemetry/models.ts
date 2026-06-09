@@ -201,6 +201,42 @@ export interface SessionTurn {
 }
 
 /**
+ * One model turn (a single `chat` span) of the WHOLE agent tree — the finest unit
+ * the local token trend plots. Unlike the main-thread {@link SessionTurn} grouping
+ * (which only sees the root conversation's spans), these are taken over the entire
+ * `conversation_id`/`chat_session_id` component, so they include the nested chat
+ * turns that agent mode records under child conversation ids (and any spawned
+ * sub-agents). The series therefore reconciles with {@link SessionTreeStats}: the
+ * point count equals {@link SessionTreeStats.modelTurns} and the per-field sums
+ * equal the card's token / line totals.
+ *
+ * Holds the span's own token counts plus the source/doc lines its requested file
+ * writes added/removed (attributed to the model turn that requested them; see the
+ * attribution in {@link ../telemetry/database}). Carries no raw content, only
+ * integer counts and a timestamp, so it is safe for the local webview.
+ */
+export interface SessionModelTurnPoint {
+  /** `spans.start_time_ms` of the `chat` span (epoch ms), used to order the series. */
+  timestampMs: number;
+  /** Resolved model id (response_model, else request_model, else `unknown`). */
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  /** `spans.reasoning_tokens` when the optional column is present, else 0. */
+  reasoningTokens: number;
+  /**
+   * Lines this model turn's requested file-writing tool calls added to / removed
+   * from source-code vs documentation files (LoC / LoD / nLoC / nLoD). All `0`
+   * when extension lists are unset or it wrote nothing classifiable.
+   */
+  linesOfCode: number;
+  linesOfDoc: number;
+  linesOfCodeRemoved: number;
+  linesOfDocRemoved: number;
+}
+
+/**
  * Per-model token rollup within a single session, used by the LOCAL detail panel
  * to show a "cost & tokens by model" breakdown.
  *
@@ -378,6 +414,15 @@ export interface SessionDetail {
    * sums to {@link treeStats}.
    */
   agentUsage: SessionAgentUsage[];
+  /**
+   * Every model turn of the WHOLE agent tree as an ordered series of points, for
+   * the detail panel's token trend. Taken over the same tree `chat` spans as
+   * {@link treeStats} (NOT the narrower main-thread {@link turns} grouping, which
+   * misses the chat turns agent mode records under child conversation ids), so the
+   * trend reconciles with the "Agent run totals" card it sits in: one point per
+   * {@link SessionTreeStats.modelTurns}, summing to the card's token / line totals.
+   */
+  treeModelTurns: SessionModelTurnPoint[];
 }
 
 /**

@@ -81,6 +81,7 @@ function session(over: Partial<SessionDetail['summary']>, detail: Partial<Sessio
     turns: [],
     modelUsage: [],
     agentUsage: [],
+    treeModelTurns: [],
     ...detail,
   };
 }

@@ -6,6 +6,7 @@ import {
   SessionAgentUsage,
   SessionTimelineEntry,
   SessionTurn,
+  SessionModelTurnPoint,
 } from '../telemetry/models';
 import { WorkflowDeviation } from '../deviation/models';
 import { aiuToUsd } from '../telemetry/pricing';
@@ -89,7 +90,7 @@ export function renderSessionDetailHtml(
 </head>
 <body>
   ${renderHeader(detail)}
-  ${renderTreeSummary(detail.treeStats, detail.turns)}
+  ${renderTreeSummary(detail.treeStats, detail.treeModelTurns)}
   ${renderMainAgentUsage(detail.agentUsage)}
   ${renderSubAgentUsage(detail.agentUsage)}
   ${renderDeviations(deviations)}
@@ -124,14 +125,14 @@ export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce
     .join('\n');
 
   // The combined "Agent run totals" card mirrors the single-session one, over the
-  // merged whole-tree stats. Its token trend is the sections' turns concatenated in
-  // section order (the panel sorts sections by start time), giving one continuous
-  // chronological line across the selected sessions. `trendSessions` (the short id +
-  // turn count of each section, same order) lets the trend mark each session's scope.
-  const mergedTurns = sections.flatMap((section) => section.detail.turns);
+  // merged whole-tree stats. Its token trend is the sections' whole-tree model-turn
+  // series concatenated in section order (the panel sorts sections by start time),
+  // giving one continuous line across the selected sessions. `trendSessions` (the
+  // short id + model-turn count of each section, same order) marks each scope.
+  const mergedModelTurns = sections.flatMap((section) => section.detail.treeModelTurns);
   const trendSessions = sections.map((section) => ({
     label: shortId(section.detail.summary.sessionId),
-    turnCount: section.detail.turns.length,
+    pointCount: section.detail.treeModelTurns.length,
   }));
 
   return `<!DOCTYPE html>
@@ -145,7 +146,7 @@ export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce
 </head>
 <body>
   ${renderCombinedHeader(combined.summary)}
-  ${renderTreeSummary(combined.treeStats, mergedTurns, trendSessions)}
+  ${renderTreeSummary(combined.treeStats, mergedModelTurns, trendSessions)}
   ${renderMainAgentUsage(combined.agentUsage)}
   ${renderSubAgentUsage(combined.agentUsage)}
   <section class="panel">
@@ -244,7 +245,7 @@ function renderHeader(detail: SessionDetail): string {
  */
 function renderTreeSummary(
   stats: SessionTreeStats,
-  turns: readonly SessionTurn[],
+  modelTurns: readonly SessionModelTurnPoint[],
   trendSessions?: readonly TrendSession[],
 ): string {
   // Flat right-aligned totals, each labelled by a short acronym (full name kept in
@@ -274,7 +275,7 @@ function renderTreeSummary(
   return `<section class="panel">
     <div class="panel-heading"><h2>Agent run totals</h2><span>incl. spawned sub-agents</span></div>
     <div class="tree-row">
-      ${renderTokenTrend(turns, trendSessions)}
+      ${renderTokenTrend(modelTurns, trendSessions)}
       <dl class="tree-totals">
         ${rows}
       </dl>
@@ -284,19 +285,19 @@ function renderTreeSummary(
 
 /**
  * One session's contribution to the COMBINED token trend: its short session id and
- * how many consecutive turns it owns in the merged turn sequence (the panel
+ * how many consecutive model-turn points it owns in the merged series (the panel
  * concatenates sessions in start-time order). Drives the per-session scope dividers
  * and centered id labels overlaid on the trend; the single-session view passes none.
  */
 interface TrendSession {
   /** Short session id shown centered over the session's scope. */
   label: string;
-  /** Number of consecutive merged turns this session owns (may be 0). */
-  turnCount: number;
+  /** Number of consecutive merged model-turn points this session owns (may be 0). */
+  pointCount: number;
 }
 
-/** Token + line-count totals for one time bucket of the trend. */
-interface TrendBucket {
+/** Token + line-count totals for one plotted point (one model turn) of the trend. */
+interface TrendPoint {
   input: number;
   cached: number;
   output: number;
@@ -304,96 +305,62 @@ interface TrendBucket {
   lod: number;
   nloc: number;
   nlod: number;
-  /** Clock-time (HH:MM) of the bucket's start, used as its x-axis label. */
-  axisLabel: string;
+}
+
+/** Map one whole-tree model turn ({@link SessionModelTurnPoint}) to a plotted point. */
+function modelTurnToPoint(mt: SessionModelTurnPoint): TrendPoint {
+  return {
+    input: mt.inputTokens,
+    cached: mt.cachedTokens,
+    output: mt.outputTokens,
+    loc: mt.linesOfCode,
+    lod: mt.linesOfDoc,
+    nloc: mt.linesOfCodeRemoved,
+    nlod: mt.linesOfDocRemoved,
+  };
 }
 
 /**
- * Bucket a chronological run of turns into fixed-width time slots, summing each
- * turn's token and line counts into the slot its start time falls in. The slot
- * width adapts to the run's span: per-MINUTE while it stays under 15 minutes,
- * per-5-MINUTES once it grows beyond that, so short sessions keep fine detail and
- * long ones stay legible. Empty slots inside the span are kept so the x-axis reads
- * as real elapsed time rather than as evenly-spaced turns. Returns `[]` for an
- * empty input.
- */
-function bucketTurnsByTime(turns: readonly SessionTurn[]): TrendBucket[] {
-  if (turns.length === 0) {
-    return [];
-  }
-  const MINUTE_MS = 60_000;
-  const startMs = Math.min(...turns.map((t) => t.timestampMs));
-  const endMs = Math.max(...turns.map((t) => t.timestampMs));
-  const bucketMs = endMs - startMs < 15 * MINUTE_MS ? MINUTE_MS : 5 * MINUTE_MS;
-  const count = Math.floor((endMs - startMs) / bucketMs) + 1;
-  const buckets: TrendBucket[] = Array.from({ length: count }, (_v, i) => ({
-    input: 0,
-    cached: 0,
-    output: 0,
-    loc: 0,
-    lod: 0,
-    nloc: 0,
-    nlod: 0,
-    axisLabel: formatClock(startMs + i * bucketMs),
-  }));
-  for (const t of turns) {
-    const b = buckets[Math.floor((t.timestampMs - startMs) / bucketMs)];
-    b.input += t.inputTokens;
-    b.cached += t.cachedTokens;
-    b.output += t.outputTokens;
-    b.loc += t.linesOfCode;
-    b.lod += t.linesOfDoc;
-    b.nloc += t.linesOfCodeRemoved;
-    b.nlod += t.linesOfDocRemoved;
-  }
-  return buckets;
-}
-
-/**
- * Inline-SVG multi-line trend of the MAIN-THREAD token usage across TIME: one
- * polyline each for input, cached, and output tokens, plotted over the session's
- * time buckets (per-minute under 15 min, per-5-minutes beyond — see
- * {@link bucketTurnsByTime}). Fills the rest of the "Agent run totals" row beside
- * the flat totals list.
+ * Inline-SVG multi-line trend of the WHOLE-TREE token usage across MODEL TURNS:
+ * one polyline each for input, cached, and output tokens, plotted over the run's
+ * individual model turns (one x-position per tree `chat` span — see
+ * {@link ../telemetry/models.SessionModelTurnPoint}). The x-axis is ORDINAL and
+ * evenly spaced — one tick per model turn, labelled with the turn's ORDINAL NUMBER
+ * (1-based), NOT a clock time — so it stays dense and gap-free and never implies a
+ * wall-clock scale. Fills the rest of the "Agent run totals" row beside the flat
+ * totals list, and reconciles with it (the point count is the card's Model Turns).
  *
- * When `sessions` is supplied (the COMBINED view, where `turns` is the sessions'
- * turns concatenated), each session is bucketed on its OWN clock and the buckets
- * are laid end-to-end, so sessions recorded far apart stay adjacent. Each session's
- * scope is marked with a faint vertical divider at every boundary and a centered
- * short-id label, so it is clear which stretch of the trend belongs to which
- * session. The single-session view omits it.
+ * When `sessions` is supplied (the COMBINED view, where `modelTurns` is the
+ * sessions' point series concatenated), each session's scope is marked with a faint
+ * vertical divider at its boundary and a centered short-id label. The single-session
+ * view passes none.
  *
  * CSP-safe: pure SVG with numeric geometry as presentation attributes and colours
  * applied via classes in the nonce'd `<style>` block — no inline `style=` (blocked
  * by `style-src 'nonce-…'`), no script. All values are numeric and the only text
- * (session ids, clock labels) is {@link escapeHtml}-escaped. With fewer than two
- * buckets there is nothing to plot, so a muted placeholder is shown instead.
+ * (session ids, turn numbers) is {@link escapeHtml}-escaped. With fewer than two
+ * model turns there is nothing to plot, so a muted placeholder is shown instead.
  */
 function renderTokenTrend(
-  turns: readonly SessionTurn[],
+  modelTurns: readonly SessionModelTurnPoint[],
   sessions?: readonly TrendSession[],
 ): string {
-  // Bucket turns into time slots. In the COMBINED view each session is bucketed on
-  // its own clock and the slots laid end-to-end; `ranges` records the bucket span
-  // each session owns, for the scope dividers below. The single-session view is one
-  // segment with no scope ranges.
-  const points: TrendBucket[] = [];
+  // Map the tree model turns to plotted points. `ranges` records the point span
+  // each SESSION owns (combined view, for the session dividers + labels); the
+  // single-session view has no ranges. The series is already in chronological order.
+  const points: TrendPoint[] = modelTurns.map(modelTurnToPoint);
   const ranges: Array<{ label: string; start: number; end: number }> = [];
   if (sessions !== undefined && sessions.length > 0) {
     let cursor = 0;
     for (const s of sessions) {
-      const segBuckets = bucketTurnsByTime(turns.slice(cursor, cursor + s.turnCount));
-      cursor += s.turnCount;
-      if (segBuckets.length > 0) {
-        ranges.push({ label: s.label, start: points.length, end: points.length + segBuckets.length - 1 });
-        points.push(...segBuckets);
+      if (s.pointCount > 0) {
+        ranges.push({ label: s.label, start: cursor, end: cursor + s.pointCount - 1 });
       }
+      cursor += s.pointCount;
     }
-  } else {
-    points.push(...bucketTurnsByTime(turns));
   }
   if (points.length < 2) {
-    return `<div class="tree-trend tree-trend-empty"><p class="muted">Not enough turns to plot a token trend.</p></div>`;
+    return `<div class="tree-trend tree-trend-empty"><p class="muted">Not enough model turns to plot a token trend.</p></div>`;
   }
 
   // Uniform-scaling viewBox (preserveAspectRatio default) so axis text is never
@@ -438,18 +405,19 @@ function renderTokenTrend(
     );
   }
 
-  // Vertical grid + x-axis clock-time labels (each bucket's start), thinned to at
-  // most ~8 columns so long sessions stay legible. The last bucket is always labelled.
+  // Vertical grid + x-axis labels: the 1-based MODEL-TURN NUMBER (not a clock time),
+  // thinned to at most ~8 columns so long runs stay legible. The last turn is always
+  // labelled. The axis is ordinal — position is turn order, not elapsed time.
   const step = Math.max(1, Math.ceil(points.length / 8));
   const xGrid: string[] = [];
-  points.forEach((p, i) => {
+  points.forEach((_p, i) => {
     if (i % step !== 0 && i !== points.length - 1) {
       return;
     }
     const gx = x(i).toFixed(1);
     xGrid.push(
       `<line class="trend-grid" x1="${gx}" y1="${m.top}" x2="${gx}" y2="${baseline.toFixed(1)}" vector-effect="non-scaling-stroke" />` +
-        `<text class="trend-axis-label trend-axis-x" x="${gx}" y="${(baseline + 16).toFixed(1)}">${escapeHtml(p.axisLabel)}</text>`,
+        `<text class="trend-axis-label trend-axis-x" x="${gx}" y="${(baseline + 16).toFixed(1)}">${i + 1}</text>`,
     );
   });
 
@@ -576,7 +544,7 @@ function renderTokenTrend(
       const cx = x(i);
       const addX = cx - barGap / 2 - barW;
       const remX = cx + barGap / 2;
-      const title = `${escapeHtml(p.axisLabel)} · Input ${formatInt(p.input)} · Cached ${formatInt(
+      const title = `Turn ${i + 1} · Input ${formatInt(p.input)} · Cached ${formatInt(
         p.cached,
       )} · Output ${formatInt(p.output)} · LoC ${formatInt(p.loc)} · LoD ${formatInt(
         p.lod,
@@ -697,7 +665,7 @@ function renderTokenTrend(
       .join('');
 
   return `<div class="tree-trend">
-    <svg class="trend-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Main-thread token usage and lines written over time">
+    <svg class="trend-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Whole-tree token usage and lines written per model turn">
       ${hGrid.join('\n')}
       ${xGrid.join('\n')}
       ${dividers}
@@ -997,12 +965,6 @@ function formatLocal(epochMs: number): string {
 /** Local time-of-day for timeline rows. */
 function formatTime(epochMs: number): string {
   return new Date(epochMs).toLocaleTimeString();
-}
-
-/** Zero-padded local HH:MM, used for the token-trend bucket x-axis labels. */
-function formatClock(epochMs: number): string {
-  const d = new Date(epochMs);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 /** Human duration: sub-second in ms, otherwise seconds. */

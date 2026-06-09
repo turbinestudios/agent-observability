@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderCombinedSessionDetailHtml, CombinedSessionView } from './sessionDetailHtml';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
-import { SessionDetail, SessionTurn } from '../telemetry/models';
+import { SessionDetail } from '../telemetry/models';
 import { DeviationType, WorkflowDeviation } from '../deviation/models';
 
 /**
@@ -48,6 +48,7 @@ function session(over: Partial<SessionDetail['summary']>, detail: Partial<Sessio
     turns: [],
     modelUsage: [],
     agentUsage: [],
+    treeModelTurns: [],
     ...detail,
   };
 }
@@ -106,13 +107,11 @@ describe('renderCombinedSessionDetailHtml', () => {
   });
 
   it('overlays a scope divider and centered short-id label per session on the trend', () => {
-    const turn = (input: number): SessionTurn => ({
+    // One whole-tree model turn → one plotted point; two per session gives each
+    // session a scope wide enough to draw a divider and label.
+    const mt = (input: number): SessionDetail['treeModelTurns'][number] => ({
       timestampMs: 0,
-      agentMode: 'agent',
       model: 'gpt',
-      durationMs: 1,
-      success: true,
-      llmCalls: 1,
       inputTokens: input,
       outputTokens: 1,
       cachedTokens: 0,
@@ -121,10 +120,9 @@ describe('renderCombinedSessionDetailHtml', () => {
       linesOfDoc: 0,
       linesOfCodeRemoved: 0,
       linesOfDocRemoved: 0,
-      events: [],
     });
-    const a = session({ sessionId: 'aaaa-1111' }, { turns: [turn(10), turn(20)] });
-    const b = session({ sessionId: 'bbbb-2222' }, { turns: [turn(30), turn(40)] });
+    const a = session({ sessionId: 'aaaa-1111' }, { treeModelTurns: [mt(10), mt(20)] });
+    const b = session({ sessionId: 'bbbb-2222' }, { treeModelTurns: [mt(30), mt(40)] });
 
     const html = renderCombinedSessionDetailHtml(viewFor([a, b]), NONCE);
 

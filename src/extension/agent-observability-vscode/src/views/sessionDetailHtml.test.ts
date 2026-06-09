@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { renderSessionDetailHtml } from './sessionDetailHtml';
-import { SessionDetail, SessionTreeStats, SessionTurn } from '../telemetry/models';
+import {
+  SessionDetail,
+  SessionTreeStats,
+  SessionTurn,
+  SessionModelTurnPoint,
+} from '../telemetry/models';
 import { DeviationType, WorkflowDeviation } from '../deviation/models';
 
 /**
@@ -47,6 +52,7 @@ const detail: SessionDetail = {
   turns: [],
   modelUsage: [],
   agentUsage: [],
+  treeModelTurns: [],
 };
 
 function deviation(overrides: Partial<WorkflowDeviation>): WorkflowDeviation {
@@ -148,6 +154,7 @@ describe('renderSessionDetailHtml — Main agent AIU & cost', () => {
       main('gpt-zero', { llmCalls: 1 }),
       main('<script>evil</script>', { llmCalls: 1, inputTokens: 200, outputTokens: 50, aiuNano: 500_000_000 }),
     ],
+    treeModelTurns: [],
   };
 
   /** Extract the rendered `<tfoot>` Total row so footer cells can be asserted in isolation. */
@@ -213,6 +220,7 @@ describe('renderSessionDetailHtml — spawned sub-agents', () => {
       { agentName: 'Testing', model: 'gpt-5.3-codex', kind: 'subagent', llmCalls: 2, inputTokens: 1300, outputTokens: 40, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0 },
       { agentName: 'Frontend', model: 'gpt-5.4', kind: 'subagent', llmCalls: 1, inputTokens: 900, outputTokens: 10, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0 },
     ],
+    treeModelTurns: [],
   };
 
   it('renders the Main agent table and a Spawned sub-agents section', () => {
@@ -400,23 +408,22 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
   });
 
   const TREND_BASE_TS = 1_700_000_000_000;
-  const trendTurn = (
+  // One whole-tree model turn (a trend point), at `secondOffset` seconds past
+  // TREND_BASE_TS. The x-axis is ordinal, so the timestamp only orders the series.
+  const point = (
     input: number,
     output: number,
     cached: number,
     lines: Partial<
-      Pick<SessionTurn, 'linesOfCode' | 'linesOfDoc' | 'linesOfCodeRemoved' | 'linesOfDocRemoved'>
+      Pick<
+        SessionModelTurnPoint,
+        'linesOfCode' | 'linesOfDoc' | 'linesOfCodeRemoved' | 'linesOfDocRemoved'
+      >
     > = {},
-    // The trend now buckets by time, so each turn needs its own minute slot to plot
-    // as a distinct point. Offset is in minutes from TREND_BASE_TS.
-    minuteOffset = 0,
-  ): SessionTurn => ({
-    timestampMs: TREND_BASE_TS + minuteOffset * 60_000,
-    agentMode: 'agent',
+    secondOffset = 0,
+  ): SessionModelTurnPoint => ({
+    timestampMs: TREND_BASE_TS + secondOffset * 1000,
     model: 'gpt-test',
-    durationMs: 1,
-    success: true,
-    llmCalls: 1,
     inputTokens: input,
     outputTokens: output,
     cachedTokens: cached,
@@ -426,12 +433,11 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     linesOfCodeRemoved: 0,
     linesOfDocRemoved: 0,
     ...lines,
-    events: [],
   });
 
-  it('plots an input/cached/output token trend across time (≥ 2 buckets)', () => {
+  it('plots an input/cached/output token trend across model turns (≥ 2 points)', () => {
     const html = renderSessionDetailHtml(
-      { ...treeDetail, turns: [trendTurn(100, 20, 5, {}, 0), trendTurn(200, 40, 50, {}, 1)] },
+      { ...treeDetail, treeModelTurns: [point(100, 20, 5, {}, 0), point(200, 40, 50, {}, 30)] },
       [],
       NONCE,
     );
@@ -446,27 +452,50 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     expect(html).toContain('class="trend-grid"');
     expect(html).toContain('class="trend-axis-label trend-axis-x"');
     expect(html).not.toContain('trend-axis-y');
+    // x-axis labels are ordinal MODEL-TURN NUMBERS (1-based), never clock times.
+    expect(html).toMatch(/class="trend-axis-label trend-axis-x"[^>]*>1</);
+    expect(html).not.toMatch(/class="trend-axis-label trend-axis-x"[^>]*>\d{2}:\d{2}</);
     // Each line dot is a hover group: a marker, an on-hover value label, and a
     // transparent hit circle. The label carries that turn's token count for the series.
     expect(html).toContain('class="trend-dot-col"');
     expect(html).toContain('class="trend-dot-hit"');
     expect(html).toContain('class="trend-dot-value trend-dot-val-output"');
-    // Turns with no line changes draw no stapel, so they expose no hit rect or tooltip
-    // (token values are read from the dot labels instead).
+    // Points with no line changes draw no stapel, so they expose no hit rect.
     expect(html).not.toContain('class="trend-col-hit"');
-    expect(html).not.toContain('<title>Turn 1');
     // CSP-safe: SVG geometry only, no inline style attributes anywhere.
     expect(html).toContain('<svg class="trend-svg"');
     expect(html).not.toContain('style="');
   });
 
-  it('plots LoC/LoD as stacked bars (added and removed) on the trend', () => {
+  it('plots one point per whole-tree model turn', () => {
+    // Five tree model turns → five plotted points, one per model turn.
     const html = renderSessionDetailHtml(
       {
         ...treeDetail,
-        turns: [
-          trendTurn(100, 20, 5, { linesOfCode: 30, linesOfDoc: 10 }, 0),
-          trendTurn(200, 40, 50, { linesOfCode: 12, linesOfCodeRemoved: 8, linesOfDocRemoved: 4 }, 1),
+        treeModelTurns: [
+          point(100, 10, 0, {}, 0),
+          point(110, 12, 0, {}, 20),
+          point(120, 14, 0, {}, 40),
+          point(200, 20, 0, {}, 60),
+          point(210, 22, 0, {}, 80),
+        ],
+      },
+      [],
+      NONCE,
+    );
+    expect(html.match(/class="trend-dot trend-output"/g)?.length).toBe(5);
+    // The x-axis is labelled by ordinal turn number; with 5 points all are labelled,
+    // so the last tick reads "5" (never a clock time).
+    expect(html).toMatch(/class="trend-axis-label trend-axis-x"[^>]*>5</);
+  });
+
+  it('plots LoC/LoD as stacked bars (added and removed) per model turn', () => {
+    const html = renderSessionDetailHtml(
+      {
+        ...treeDetail,
+        treeModelTurns: [
+          point(100, 20, 5, { linesOfCode: 30, linesOfDoc: 10 }, 0),
+          point(200, 40, 50, { linesOfCode: 12, linesOfCodeRemoved: 8, linesOfDocRemoved: 4 }, 30),
         ],
       },
       [],
@@ -477,7 +506,7 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     expect(html).toContain('class="trend-bar trend-bar-lod"');
     expect(html).toContain('class="trend-bar trend-bar-nloc"');
     expect(html).toContain('class="trend-bar trend-bar-nlod"');
-    // The hover tooltip reports removed counts as positive numbers.
+    // The hover tooltip reports removed counts as positive numbers, per model turn.
     expect(html).toContain('· LoC 12 · LoD 0 · nLoC 8 · nLoD 4</title>');
     // On-bar value labels (revealed on hover via CSS) carry the per-segment counts,
     // coloured to match their bar segment.
@@ -491,43 +520,18 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     expect(html).not.toContain('style="');
   });
 
-  it('shows a placeholder instead of a trend when there are fewer than two turns', () => {
-    const html = renderSessionDetailHtml(treeDetail, [], NONCE); // treeDetail has no turns
-    expect(html).toContain('Not enough turns to plot a token trend.');
-    expect(html).not.toContain('class="trend-line');
-  });
-
-  it('aggregates turns sharing a minute slot into one bucket', () => {
-    // Two turns in minute 0 (0s and 20s) and one in minute 1 → 2 buckets, not 3.
-    const t0a = trendTurn(100, 20, 5, { linesOfCode: 10 }, 0);
-    const t0b: SessionTurn = {
-      ...trendTurn(50, 10, 2, { linesOfCode: 5 }, 0),
-      timestampMs: TREND_BASE_TS + 20_000,
-    };
-    const t1 = trendTurn(200, 40, 50, { linesOfCode: 7 }, 1);
-    const html = renderSessionDetailHtml({ ...treeDetail, turns: [t0a, t0b, t1] }, [], NONCE);
-    // The minute-0 bucket sums both its turns' lines: LoC 10 + 5 = 15.
-    expect(html).toContain('· LoC 15 ·');
-    // x-axis labels are clock times (HH:MM), not turn numbers.
-    expect(html).toMatch(/class="trend-axis-label trend-axis-x"[^>]*>\d{2}:\d{2}</);
-  });
-
-  it('collapses sub-minute turns to a single bucket (placeholder, nothing to plot)', () => {
-    // Two turns 30s apart fall in the same 1-minute slot → one bucket → no line.
-    const a = trendTurn(100, 20, 5, {}, 0);
-    const b: SessionTurn = { ...trendTurn(200, 40, 50, {}, 0), timestampMs: TREND_BASE_TS + 30_000 };
-    const html = renderSessionDetailHtml({ ...treeDetail, turns: [a, b] }, [], NONCE);
-    expect(html).toContain('Not enough turns to plot a token trend.');
-    expect(html).not.toContain('class="trend-line');
-  });
-
-  it('switches to 5-minute buckets once the span passes 15 minutes', () => {
-    // Turns 0 and 16 min apart → span ≥ 15 min → 5-min slots; still plots a trend.
-    const html = renderSessionDetailHtml(
-      { ...treeDetail, turns: [trendTurn(100, 20, 5, {}, 0), trendTurn(200, 40, 50, {}, 16)] },
+  it('shows a placeholder instead of a trend when there are fewer than two model turns', () => {
+    // treeDetail has no model turns at all.
+    const noTurns = renderSessionDetailHtml(treeDetail, [], NONCE);
+    expect(noTurns).toContain('Not enough model turns to plot a token trend.');
+    expect(noTurns).not.toContain('class="trend-line');
+    // A single model turn is also just one point → placeholder.
+    const onePoint = renderSessionDetailHtml(
+      { ...treeDetail, treeModelTurns: [point(100, 20, 5, {}, 0)] },
       [],
       NONCE,
     );
-    expect(html).toContain('class="trend-line trend-input"');
+    expect(onePoint).toContain('Not enough model turns to plot a token trend.');
+    expect(onePoint).not.toContain('class="trend-line');
   });
 });

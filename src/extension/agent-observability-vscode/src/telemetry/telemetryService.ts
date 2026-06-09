@@ -7,6 +7,7 @@ import {
   readSessionTitles,
   workspaceStorageDirFor,
 } from './sessionTitles';
+import { readChatSessionIndexTitles } from './chatSessionIndex';
 import { AggregationRow } from '../aggregate/aggregator';
 import {
   Interaction,
@@ -64,6 +65,12 @@ interface CacheEntry {
    * the cache whenever the snapshot is dropped or refreshed.
    */
   sessionTitles?: Map<string, SessionTitleInfo>;
+  /**
+   * Session key → its UUID `chat_session_id` (when distinct), so a title keyed
+   * by the chat-session id resolves even when the session key is a per-turn
+   * `conversation_id`. Cached per snapshot alongside {@link sessionTitles}.
+   */
+  chatSessionIds?: Map<string, string>;
 }
 
 /** A live, opened snapshot + its source mtime, kept between queries. */
@@ -132,7 +139,7 @@ export class TelemetryService {
         return cached;
       }
       const value = db.listSessions(repository, limit);
-      const withTitles = this.applyTitles(value);
+      const withTitles = this.applyTitles(value, db);
       this.cache.sessions.set(key, withTitles);
       return withTitles;
     });
@@ -142,21 +149,35 @@ export class TelemetryService {
    * Attach LOCAL-ONLY session names (from the Copilot chat-session store) to
    * session summaries. A no-op when no titles are available (e.g. a custom
    * `sqlitePath` override or fixture that has no sibling `workspaceStorage`).
+   *
+   * Resolves by the session key first; when that misses (the key is a per-turn
+   * `conversation_id`, not the chat-session id), retries via the session's UUID
+   * `chat_session_id`, which is what the title store is keyed by.
    */
-  private applyTitles(sessions: SessionSummary[]): SessionSummary[] {
+  private applyTitles(sessions: SessionSummary[], db: TelemetryDatabase): SessionSummary[] {
     const titles = this.ensureSessionTitles();
     if (titles.size === 0) {
       return sessions;
     }
+    const chatSessionIds = this.ensureChatSessionIds(db);
     return sessions.map((session) => {
-      const info = titles.get(session.sessionId);
+      const chatId = chatSessionIds.get(session.sessionId);
+      const info =
+        titles.get(session.sessionId) ?? (chatId !== undefined ? titles.get(chatId) : undefined);
       return info === undefined
         ? session
         : { ...session, title: info.title, titleDerived: info.derived };
     });
   }
 
-  /** Build (once per snapshot) the sessionId → title lookup, cached. */
+  /**
+   * Build (once per snapshot) the sessionId → title lookup, cached. The
+   * authoritative auto-generated title lives in each workspace's `state.vscdb`
+   * chat-session index; the per-session JSONL `customTitle` / first-request
+   * fallback ({@link readSessionTitles}) is layered UNDER it, covering older
+   * sessions the rolling index no longer lists. Precedence on a clash:
+   * `state.vscdb` index title (non-derived) > JSONL `customTitle` > derived.
+   */
   private ensureSessionTitles(): Map<string, SessionTitleInfo> {
     if (this.cache.sessionTitles !== undefined) {
       return this.cache.sessionTitles;
@@ -164,8 +185,22 @@ export class TelemetryService {
     const dir =
       this.handle !== undefined ? workspaceStorageDirFor(this.handle.sourcePath) : undefined;
     const titles = dir !== undefined ? readSessionTitles(dir) : new Map<string, SessionTitleInfo>();
+    if (dir !== undefined) {
+      // Override JSONL entries with the authoritative index title (non-derived).
+      for (const [id, title] of readChatSessionIndexTitles(dir)) {
+        titles.set(id, { title, derived: false });
+      }
+    }
     this.cache.sessionTitles = titles;
     return titles;
+  }
+
+  /** Build (once per snapshot) the session-key → chat-session-id lookup, cached. */
+  private ensureChatSessionIds(db: TelemetryDatabase): Map<string, string> {
+    if (this.cache.chatSessionIds === undefined) {
+      this.cache.chatSessionIds = db.chatSessionIdBySessionKey();
+    }
+    return this.cache.chatSessionIds;
   }
 
   /** Ordered interactions for a session (Phase 3 detail). Not cached. */

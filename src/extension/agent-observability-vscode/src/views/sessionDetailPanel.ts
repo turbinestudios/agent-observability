@@ -134,19 +134,6 @@ export class SessionDetailPanelManager {
     this.rerenderers.get(panel)?.();
   }
 
-  /**
-   * Re-render EVERY open detail panel against the current telemetry, without
-   * itself re-snapshotting — the caller (e.g. the live source watcher) is
-   * expected to have already called {@link TelemetryService.refresh} once, so a
-   * single fresh snapshot is shared across all panels. A no-op when nothing is
-   * open. Used for near-live updates as Copilot writes new spans.
-   */
-  refreshAll(): void {
-    for (const rerender of this.rerenderers.values()) {
-      rerender();
-    }
-  }
-
   /** Track which detail panel is focused so {@link refreshActive} can find it. */
   private trackActive(panel: vscode.WebviewPanel): void {
     if (panel.active) {

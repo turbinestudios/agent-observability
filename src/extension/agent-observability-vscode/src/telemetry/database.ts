@@ -14,6 +14,7 @@ import {
   SessionAgentUsage,
   SessionTimelineEntry,
   SessionTurn,
+  SessionModelTurnPoint,
   AgentMode,
   agentUsageKey,
   mapAgentMode,
@@ -42,6 +43,12 @@ export class SchemaMismatchError extends Error {
 
 /** Default agent name when a span carries none. */
 const DEFAULT_AGENT = 'copilot';
+
+/**
+ * A whole-string UUID. Distinguishes a real chat-session id (joinable to the
+ * LOCAL title store) from a `call_…` sub-agent spawn id in `chat_session_id`.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Defensive cap on the breadth-first agent-tree walk in {@link
@@ -862,7 +869,92 @@ export class TelemetryDatabase {
     // and getSessionTreeStats never returns undefined; the ?? is belt-and-braces.
     const treeStats = this.getSessionTreeStats(sessionKey, codeExts, docExts) ?? EMPTY_TREE_STATS;
 
-    return { summary, treeStats, turns, modelUsage, agentUsage };
+    // Whole-tree model-turn series for the token trend, taken over the same tree
+    // `chat` spans as treeStats so the trend reconciles with the card it sits in.
+    const treeModelTurns = this.treeModelTurnPoints(sessionKey, codeExts, docExts);
+
+    return { summary, treeStats, turns, modelUsage, agentUsage, treeModelTurns };
+  }
+
+  /**
+   * The WHOLE agent tree's model turns as an ordered point series for the detail
+   * panel's token trend ({@link SessionModelTurnPoint}). Taken over the same tree
+   * `chat` spans as {@link getSessionTreeStats} — the connected
+   * `conversation_id`/`chat_session_id` component rooted at `sessionKey` — so the
+   * count equals the card's Model Turns and the per-field sums equal its token /
+   * line totals. This deliberately differs from the main-thread {@link SessionTurn}
+   * grouping, whose single-id `rows` query misses the chat turns agent mode records
+   * under child conversation ids.
+   *
+   * LoC/LoD (when extension lists are supplied) come from the same whole-tree
+   * file-writes as the card; each write is attributed to the model turn that
+   * requested it — the last `chat` span whose start <= the write's start —
+   * falling back to the first when a write precedes every model turn. Summing the
+   * points' line counts therefore reproduces the card's tree totals.
+   */
+  private treeModelTurnPoints(
+    sessionKey: string,
+    codeExts: readonly string[],
+    docExts: readonly string[],
+  ): SessionModelTurnPoint[] {
+    const ids = this.sessionTreeIds(sessionKey);
+    if (ids.length === 0) {
+      return [];
+    }
+    const inList = ids.map(() => '?').join(', ');
+    const reasoningCol = this.spansColumns().has('reasoning_tokens')
+      ? 'reasoning_tokens'
+      : 'NULL AS reasoning_tokens';
+
+    const rows = this.allRows<{
+      start_time_ms: number;
+      request_model: string | null;
+      response_model: string | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      cached_tokens: number | null;
+      reasoning_tokens: number | null;
+    }>(
+      `SELECT start_time_ms, request_model, response_model,
+              input_tokens, output_tokens, cached_tokens, ${reasoningCol}
+         FROM spans
+         WHERE operation_name = 'chat'
+           AND (conversation_id IN (${inList}) OR chat_session_id IN (${inList}))
+         ORDER BY start_time_ms ASC, span_id ASC`,
+      [...ids, ...ids],
+    );
+
+    const points: SessionModelTurnPoint[] = rows.map((row) => ({
+      timestampMs: row.start_time_ms,
+      model: resolveModel(row.response_model, row.request_model),
+      inputTokens: row.input_tokens ?? 0,
+      outputTokens: row.output_tokens ?? 0,
+      cachedTokens: row.cached_tokens ?? 0,
+      reasoningTokens: row.reasoning_tokens ?? 0,
+      linesOfCode: 0,
+      linesOfDoc: 0,
+      linesOfCodeRemoved: 0,
+      linesOfDocRemoved: 0,
+    }));
+
+    const wantsLineCounts = codeExts.length > 0 || docExts.length > 0;
+    if (wantsLineCounts && points.length > 0) {
+      for (const w of this.treeWrittenLinesBySpan(sessionKey, codeExts, docExts)) {
+        let idx = 0;
+        for (let p = 0; p < points.length; p++) {
+          if (points[p].timestampMs <= w.startMs) {
+            idx = p;
+          } else {
+            break;
+          }
+        }
+        points[idx].linesOfCode += w.delta.added.code;
+        points[idx].linesOfDoc += w.delta.added.doc;
+        points[idx].linesOfCodeRemoved += w.delta.removed.code;
+        points[idx].linesOfDocRemoved += w.delta.removed.doc;
+      }
+    }
+    return points;
   }
 
   /**
@@ -1317,6 +1409,36 @@ export class TelemetryDatabase {
       }));
   }
 
+
+  /**
+   * Map each session key (the `sessions` view's `COALESCE(conversation_id,
+   * chat_session_id)`) to the UUID `chat_session_id` of its spans, when one
+   * exists. The LOCAL title store is keyed by the chat-session UUID, but a
+   * session key is frequently a `conversation_id` (a per-turn id) that differs
+   * from it; this lets {@link ../telemetry/telemetryService} recover the title
+   * via the real chat-session id. Only UUID-shaped ids are kept — a `call_…`
+   * spawn id is a sub-agent anchor, not a chat session. First UUID wins per key.
+   */
+  chatSessionIdBySessionKey(): Map<string, string> {
+    const rows = this.allRows<{ sk: string; chat: string }>(
+      `SELECT DISTINCT COALESCE(conversation_id, chat_session_id) AS sk,
+                chat_session_id AS chat
+         FROM spans
+         WHERE chat_session_id IS NOT NULL
+           AND COALESCE(conversation_id, chat_session_id) IS NOT NULL`,
+    );
+
+    const map = new Map<string, string>();
+    for (const row of rows) {
+      if (!UUID_RE.test(row.chat)) {
+        continue;
+      }
+      if (!map.has(row.sk)) {
+        map.set(row.sk, row.chat.toLowerCase());
+      }
+    }
+    return map;
+  }
 
   /**
    * Representative model per session key using the uniform resolution rule

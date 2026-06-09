@@ -55,6 +55,15 @@
         "contents": "Sync uploads only opt-in, aggregated, non-sensitive statistics to your organization dashboard. Raw prompts, completions, tool I/O and file paths never leave your machine.\n\nCloud sharing is OFF by default and arrives in a later phase.\n\n[Set Organization API Key](command:agentObservability.setApiKey)\n[Open Settings](command:agentObservability.openSettings)"
       }
     ],
+    "chatParticipants": [
+      {
+        "id": "agentObservability.chat",
+        "name": "obs",
+        "fullName": "Agent Observability",
+        "description": "Open a local agent session-detail view (@obs, or @obs <id or title>)",
+        "isSticky": true
+      }
+    ],
     "commands": [
       {
         "command": "agentObservability.refresh",

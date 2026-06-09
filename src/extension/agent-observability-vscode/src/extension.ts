@@ -6,7 +6,6 @@ import { SessionsViewProvider, SESSIONS_VIEW_ID } from './views/sessionsView';
 import { SyncViewProvider, SYNC_VIEW_ID } from './views/syncView';
 import { SessionDetailPanelManager } from './views/sessionDetailPanel';
 import { TelemetryService } from './telemetry/telemetryService';
-import { watchTelemetrySource, SourceWatcherHandle } from './telemetry/sourceWatcher';
 import { LocalDeviationDetector } from './deviation/localDeviations';
 import { ConsentManager } from './consent/consentManager';
 import { SecretManager } from './secrets/secretManager';
@@ -17,6 +16,7 @@ import { SyncClient } from './sync/syncClient';
 import { GlobalStateSyncStateStore } from './sync/syncState';
 import { SyncEngine, systemClock } from './sync/syncEngine';
 import { SyncScheduler } from './sync/scheduler';
+import { registerObservabilityChatParticipant } from './chat/observabilityChat';
 
 /**
  * Extension entrypoint.
@@ -40,7 +40,6 @@ let telemetryService: TelemetryService | undefined;
 let sessionDetailPanels: SessionDetailPanelManager | undefined;
 let consentManager: ConsentManager | undefined;
 let syncScheduler: SyncScheduler | undefined;
-let liveSourceWatcher: SourceWatcherHandle | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const config = new Configuration();
@@ -109,26 +108,16 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   });
 
+  // `@obs` chat participant — lives in the GitHub Copilot chat window and renders
+  // buttons that open the LOCAL session-detail webview. Reads local telemetry
+  // only; nothing is uploaded. No-ops on hosts without the chat API.
+  registerObservabilityChatParticipant(context, telemetry);
+
   // Background scheduler — OFF by default (sync.enabled=false). It still re-checks
   // the consent+key gate on every tick, and refreshes the Sync view after a run.
   const scheduler = new SyncScheduler(config, syncEngine, () => sync.refresh());
   syncScheduler = scheduler;
   scheduler.start();
-
-  // Near-live updates: watch the live agent-traces.db (+ its -wal sidecar, where
-  // Copilot appends each committed span) and, debounced, re-snapshot and redraw
-  // the views + any open detail panels — approximating the Agent Debug Logs'
-  // live feel. Only COMMITTED spans are visible (the in-memory ones the debug
-  // view shows pre-commit are not on disk). Dropping the snapshot here forces the
-  // next query to re-read, so a stale source mtime can't suppress the update.
-  const triggerLiveRefresh = (): void => {
-    telemetry.refresh();
-    overview.refresh();
-    sessions.refresh();
-    detailPanels.refreshAll();
-  };
-  liveSourceWatcher = watchTelemetrySource(config, triggerLiveRefresh);
-  context.subscriptions.push({ dispose: () => liveSourceWatcher?.dispose() });
 
   // Keep the Sync view live when consent flips (set-key already refreshes via
   // the command path, but consent can also change programmatically).
@@ -150,9 +139,6 @@ export function activate(context: vscode.ExtensionContext): void {
       overview.refresh();
       sessions.refresh();
       sync.refresh();
-      // The sqlitePath override may have moved the source — re-arm the watcher.
-      liveSourceWatcher?.dispose();
-      liveSourceWatcher = watchTelemetrySource(config, triggerLiveRefresh);
     }),
   );
 }
@@ -242,6 +228,4 @@ export function deactivate(): void {
   consentManager = undefined;
   syncScheduler?.dispose();
   syncScheduler = undefined;
-  liveSourceWatcher?.dispose();
-  liveSourceWatcher = undefined;
 }

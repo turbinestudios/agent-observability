@@ -99,6 +99,33 @@ describe('TelemetryDatabase.getSessionDetail against the fixture', () => {
     expect(detail.summary.llmCalls).toBe(11);
   });
 
+  it('builds a whole-tree model-turn series that reconciles with the tree-stats card', () => {
+    const detail = db.getSessionDetail(KNOWN_SESSION);
+    expect(detail).toBeDefined();
+    if (detail === undefined) {
+      return;
+    }
+
+    // The trend series is taken over the SAME tree `chat` spans as the "Agent run
+    // totals" card, so its point count equals the card's Model Turns and summing
+    // the points reproduces the card's token totals. (This is the whole point of
+    // the tree-scoped series: it does NOT undercount the way the main-thread turn
+    // grouping does when agent mode nests chat turns under child conversation ids.)
+    const points = detail.treeModelTurns;
+    expect(points.length).toBe(detail.treeStats.modelTurns);
+    const sum = (pick: (p: (typeof points)[number]) => number) =>
+      points.reduce((acc, p) => acc + pick(p), 0);
+    expect(sum((p) => p.inputTokens)).toBe(detail.treeStats.inputTokens);
+    expect(sum((p) => p.outputTokens)).toBe(detail.treeStats.outputTokens);
+    expect(sum((p) => p.cachedTokens)).toBe(detail.treeStats.cachedTokens);
+
+    // The series is ordered by model-turn start time.
+    const stamps = points.map((p) => p.timestampMs);
+    for (let i = 1; i < stamps.length; i++) {
+      expect(stamps[i]).toBeGreaterThanOrEqual(stamps[i - 1]);
+    }
+  });
+
   it('populates userRequest and finalResponse per turn (redacted placeholder is expected)', () => {
     const detail = db.getSessionDetail(KNOWN_SESSION);
     expect(detail).toBeDefined();
