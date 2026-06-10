@@ -18,8 +18,8 @@ const VIEW_TYPE = 'agentObservability.sessionDetail';
  *
  * One panel per session key (keyed registry): opening an already-open session
  * reveals the existing panel instead of creating a duplicate. Panels render
- * STATIC HTML (no scripts) under a strict per-render CSP with a fresh nonce, and
- * are created WITHOUT `enableScripts`. The session timeline — including the
+ * HTML under a strict per-render CSP with a fresh nonce (scripts are nonce-gated
+ * for the interactive legend filter). The session timeline — including the
  * local-only `userRequest` — is rendered HTML-escaped and never leaves the
  * machine.
  */
@@ -59,8 +59,7 @@ export class SessionDetailPanelManager {
       `Session ${shortLabel(sessionKey)}`,
       vscode.ViewColumn.Active,
       {
-        // Static HTML only — no scripts, no local resource roots needed.
-        enableScripts: false,
+        enableScripts: true,
         retainContextWhenHidden: false,
       },
     );
@@ -104,7 +103,7 @@ export class SessionDetailPanelManager {
       VIEW_TYPE,
       `Combined sessions (${keys.length})`,
       vscode.ViewColumn.Active,
-      { enableScripts: false, retainContextWhenHidden: false },
+      { enableScripts: true, retainContextWhenHidden: false },
     );
     panel.iconPath = new vscode.ThemeIcon('layers');
     this.panels.set(panelId, panel);

@@ -61,9 +61,8 @@ function formatInt(value: number): string {
  * - Every dynamic value passes through {@link escapeHtml} (privacy-critical for
  *   `userRequest`, which may contain arbitrary markup).
  * - The document declares a strict Content-Security-Policy: `default-src 'none'`,
- *   styles allowed only via the supplied nonce, no scripts, no external/CDN
- *   resources. The webview itself is created WITHOUT `enableScripts` — the page
- *   is static HTML using native `<details>` for collapsing.
+ *   styles and scripts allowed only via the supplied nonce, no external/CDN
+ *   resources. Scripts are limited to the inline legend-filter interaction.
  */
 export function renderSessionDetailHtml(
   detail: SessionDetail,
@@ -74,9 +73,9 @@ export function renderSessionDetailHtml(
   const csp = [
     "default-src 'none'",
     `style-src 'nonce-${nonce}'`,
+    `script-src 'nonce-${nonce}'`,
     "img-src 'none'",
     "font-src 'none'",
-    "script-src 'none'",
   ].join('; ');
 
   return `<!DOCTYPE html>
@@ -95,6 +94,7 @@ export function renderSessionDetailHtml(
   ${renderSubAgentUsage(detail.agentUsage)}
   ${renderDeviations(deviations)}
   ${renderTurns(detail.turns)}
+  <script nonce="${nonce}">${TREND_FILTER_SCRIPT}</script>
 </body>
 </html>`;
 }
@@ -115,9 +115,9 @@ export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce
   const csp = [
     "default-src 'none'",
     `style-src 'nonce-${nonce}'`,
+    `script-src 'nonce-${nonce}'`,
     "img-src 'none'",
     "font-src 'none'",
-    "script-src 'none'",
   ].join('; ');
 
   const sectionsHtml = sections
@@ -153,6 +153,7 @@ export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce
     <div class="panel-heading"><h2>Sessions</h2><span>${num(sections.length)} session(s)</span></div>
     <div class="turns">${sectionsHtml}</div>
   </section>
+  <script nonce="${nonce}">${TREND_FILTER_SCRIPT}</script>
 </body>
 </html>`;
 }
@@ -380,7 +381,8 @@ function turnLabel(p: TrendPoint): string {
  *
  * CSP-safe: pure SVG with numeric geometry as presentation attributes and colours
  * applied via classes in the nonce'd `<style>` block — no inline `style=` (blocked
- * by `style-src 'nonce-…'`), no script. All values are numeric and the only text
+ * by `style-src 'nonce-…'`). The companion nonce'd script provides interactive
+ * legend filtering with y-axis rescaling. All values are numeric and the only text
  * (session ids, turn numbers) is {@link escapeHtml}-escaped. With fewer than two
  * points there is nothing to plot, so a muted placeholder is shown instead.
  */
@@ -715,26 +717,38 @@ function renderTokenTrend(
     { key: 'nloc', label: 'LoC removed' },
     { key: 'nlod', label: 'LoD removed' },
   ];
+  const allKeys = [
+    ...series.map((s) => ({ key: s.key, label: s.label })),
+    ...barKeys,
+  ];
   const legend =
-    series
+    allKeys
       .map(
         (s) =>
-          `<span class="trend-key"><span class="trend-swatch trend-${s.key}"></span>${s.label}</span>`,
+          `<span class="trend-key" data-series="${s.key}" role="button" tabindex="0"><span class="trend-swatch trend-${s.key}"></span>${s.label}</span>`,
       )
       .join('') +
-    barKeys
-      .map(
-        (s) =>
-          `<span class="trend-key"><span class="trend-swatch trend-${s.key}"></span>${s.label}</span>`,
-      )
-      .join('') +
+    `<span class="trend-reset" role="button" tabindex="0">Reset filter</span>` +
     // When bucketed, make the grouping explicit so a point reading "Turns 1–5" is
     // understood as a sum, not a single turn.
     (bucketSize > 1
       ? `<span class="trend-key trend-group-note">grouped by ${GROUP_SIZE} model turns</span>`
       : '');
 
-  return `<div class="tree-trend">
+  // Embed the point data for the filter script to rescale the y-axis dynamically.
+  const trendData = JSON.stringify(
+    points.map((p) => ({
+      input: p.input,
+      cached: p.cached,
+      output: p.output,
+      loc: p.loc,
+      lod: p.lod,
+      nloc: p.nloc,
+      nlod: p.nlod,
+    })),
+  );
+
+  return `<div class="tree-trend" data-trend-points="${escapeHtml(trendData)}">
     <svg class="trend-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Whole-tree token usage and lines written per model turn">
       ${hGrid.join('\n')}
       ${xGrid.join('\n')}
@@ -1096,7 +1110,8 @@ const STYLE = `
   .tree-trend { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .4rem; }
   .tree-trend-empty { align-items: center; justify-content: center; border: 1px dashed var(--vscode-panel-border, var(--vscode-editorWidget-border)); border-radius: 5px; padding: 1rem; }
   .trend-svg { width: 100%; height: auto; display: block; }
-  .trend-line { fill: none; stroke-width: 1.5px; }
+  .trend-line { fill: none; stroke-width: 1.5px; transition: opacity .15s ease; }
+  .trend-line.trend-hidden { opacity: 0; pointer-events: none; }
   .trend-line.trend-input { stroke: var(--vscode-charts-blue, #4e94ce); }
   .trend-line.trend-cached { stroke: var(--vscode-charts-yellow, #b89500); }
   .trend-line.trend-output { stroke: var(--vscode-charts-green, #388a34); }
@@ -1110,6 +1125,7 @@ const STYLE = `
   .trend-dot.trend-cached { fill: var(--vscode-charts-yellow, #b89500); }
   .trend-dot.trend-output { fill: var(--vscode-charts-green, #388a34); }
   .trend-dot { transition: r .08s ease; }
+  .trend-dot.trend-dot-hidden { opacity: 0; pointer-events: none; }
   .trend-dot-col { cursor: crosshair; }
   .trend-dot-hit { fill: transparent; pointer-events: all; }
   .trend-dot-col:hover .trend-dot { r: 3.6; }
@@ -1118,12 +1134,14 @@ const STYLE = `
   .trend-dot-val-input { fill: var(--vscode-charts-blue, #4e94ce); }
   .trend-dot-val-cached { fill: var(--vscode-charts-yellow, #b89500); }
   .trend-dot-val-output { fill: var(--vscode-charts-green, #388a34); }
-  .trend-bar { opacity: .55; }
+  .trend-bar { opacity: .55; transition: opacity .15s ease; }
+  .trend-bar.trend-bar-hidden { opacity: 0; pointer-events: none; }
   .trend-bar.trend-bar-loc { fill: var(--vscode-charts-purple, #b180d7); }
   .trend-bar.trend-bar-lod { fill: var(--vscode-charts-orange, #d18616); }
   .trend-bar.trend-bar-nloc { fill: var(--vscode-charts-red, #be1100); }
   .trend-bar.trend-bar-nlod { fill: #e07b86; }
   .trend-col { cursor: crosshair; }
+  .trend-col.trend-col-hidden { opacity: 0; pointer-events: none; }
   .trend-col-hit { fill: transparent; pointer-events: all; }
   .trend-col:hover .trend-col-hit { fill: var(--vscode-list-hoverBackground, var(--vscode-foreground)); opacity: .12; }
   .trend-col:hover .trend-bar { opacity: 1; }
@@ -1133,8 +1151,14 @@ const STYLE = `
   .trend-val-lod { fill: var(--vscode-charts-orange, #d18616); }
   .trend-val-nloc { fill: var(--vscode-charts-red, #be1100); }
   .trend-val-nlod { fill: #d6409a; }
-  .trend-legend { display: flex; gap: .9rem; font-size: .75rem; color: var(--vscode-descriptionForeground); }
-  .trend-key { display: inline-flex; align-items: center; gap: .3rem; }
+  .trend-legend { display: flex; flex-wrap: wrap; gap: .9rem; font-size: .75rem; color: var(--vscode-descriptionForeground); align-items: center; }
+  .trend-key { display: inline-flex; align-items: center; gap: .3rem; cursor: pointer; border-radius: 3px; padding: .1rem .3rem; transition: opacity .12s ease, background .12s ease; }
+  .trend-key:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.1)); }
+  .trend-key.trend-key-active { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+  .trend-key.trend-key-dimmed { opacity: .35; }
+  .trend-reset { display: none; cursor: pointer; font-size: .7rem; font-weight: 600; padding: .15rem .45rem; border-radius: 3px; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,.2)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); transition: background .1s ease; }
+  .trend-reset:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.35)); }
+  .trend-reset.trend-reset-visible { display: inline-flex; }
   .trend-group-note { margin-left: auto; font-style: italic; opacity: .8; }
   .trend-swatch { width: .7rem; height: .7rem; border-radius: 2px; display: inline-block; }
   .trend-swatch.trend-input { background: var(--vscode-charts-blue, #4e94ce); }
@@ -1189,4 +1213,215 @@ const STYLE = `
   .dur { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground); }
   .status.ok { color: var(--vscode-testing-iconPassed, #3a3); }
   .status.fail { color: var(--vscode-testing-iconFailed, #d33); }
+`;
+
+/**
+ * Client-side script for interactive legend filtering on the token trend chart.
+ * Clicking a legend key toggles that series into a filter set; when any filters are
+ * active only those series are visible, and the y-axis rescales to their maximum.
+ * A "Reset filter" button clears all filters and restores the original view.
+ */
+const TREND_FILTER_SCRIPT = `
+(function() {
+  var TOKEN_SERIES = ['input', 'cached', 'output'];
+  var BAR_SERIES = ['loc', 'lod', 'nloc', 'nlod'];
+  var ALL_SERIES = TOKEN_SERIES.concat(BAR_SERIES);
+
+  document.querySelectorAll('.tree-trend').forEach(function(container) {
+    var svg = container.querySelector('.trend-svg');
+    var legend = container.querySelector('.trend-legend');
+    if (!svg || !legend) return;
+
+    var pointsJson = container.getAttribute('data-trend-points');
+    if (!pointsJson) return;
+    var points = JSON.parse(pointsJson);
+    if (points.length < 2) return;
+
+    var activeFilters = new Set();
+    var resetBtn = legend.querySelector('.trend-reset');
+
+    // Chart geometry constants (must match the server render).
+    var W = 600, H = 200;
+    var m = { top: 10, right: 12, bottom: 26, left: 12 };
+    var innerW = W - m.left - m.right;
+    var innerH = H - m.top - m.bottom;
+    var baseline = m.top + innerH;
+    var n = points.length;
+
+    function x(i) { return m.left + (innerW * i) / (n - 1); }
+    function y(v, max) { return m.top + innerH - (innerH * v) / max; }
+
+    function applyFilter() {
+      var hasFilter = activeFilters.size > 0;
+
+      // Update legend key styling.
+      legend.querySelectorAll('.trend-key[data-series]').forEach(function(key) {
+        var s = key.getAttribute('data-series');
+        key.classList.toggle('trend-key-active', hasFilter && activeFilters.has(s));
+        key.classList.toggle('trend-key-dimmed', hasFilter && !activeFilters.has(s));
+      });
+
+      // Show/hide reset button.
+      if (resetBtn) resetBtn.classList.toggle('trend-reset-visible', hasFilter);
+
+      // Determine which token series and bar series are visible.
+      var visibleTokens = hasFilter ? TOKEN_SERIES.filter(function(s) { return activeFilters.has(s); }) : TOKEN_SERIES;
+      var visibleBars = hasFilter ? BAR_SERIES.filter(function(s) { return activeFilters.has(s); }) : BAR_SERIES;
+
+      // Rescale token lines and dots.
+      var tokenMax = 1;
+      if (visibleTokens.length > 0) {
+        for (var i = 0; i < points.length; i++) {
+          for (var t = 0; t < visibleTokens.length; t++) {
+            var v = points[i][visibleTokens[t]];
+            if (v > tokenMax) tokenMax = v;
+          }
+        }
+      }
+
+      // Update polylines.
+      TOKEN_SERIES.forEach(function(s) {
+        var line = svg.querySelector('.trend-line.trend-' + s);
+        if (!line) return;
+        var visible = !hasFilter || activeFilters.has(s);
+        line.classList.toggle('trend-hidden', !visible);
+        if (visible) {
+          var pts = [];
+          for (var i = 0; i < points.length; i++) {
+            pts.push(x(i).toFixed(1) + ',' + y(points[i][s], tokenMax).toFixed(1));
+          }
+          line.setAttribute('points', pts.join(' '));
+        }
+      });
+
+      // Update dots.
+      var dotCols = svg.querySelectorAll('.trend-dot-col');
+      dotCols.forEach(function(col, idx) {
+        var dots = col.querySelectorAll('.trend-dot');
+        dots.forEach(function(dot) {
+          TOKEN_SERIES.forEach(function(s) {
+            if (dot.classList.contains('trend-' + s)) {
+              var visible = !hasFilter || activeFilters.has(s);
+              dot.classList.toggle('trend-dot-hidden', !visible);
+              if (visible && idx < points.length) {
+                dot.setAttribute('cy', y(points[idx][s], tokenMax).toFixed(1));
+              }
+            }
+          });
+        });
+      });
+
+      // Rescale bars.
+      var barsMax = 1;
+      if (visibleBars.length > 0) {
+        for (var i = 0; i < points.length; i++) {
+          var addTotal = 0, remTotal = 0;
+          if ((!hasFilter || activeFilters.has('loc'))) addTotal += points[i].loc;
+          if ((!hasFilter || activeFilters.has('lod'))) addTotal += points[i].lod;
+          if ((!hasFilter || activeFilters.has('nloc'))) remTotal += points[i].nloc;
+          if ((!hasFilter || activeFilters.has('nlod'))) remTotal += points[i].nlod;
+          var total = Math.max(addTotal, remTotal);
+          if (total > barsMax) barsMax = total;
+        }
+      }
+
+      // Update bar visibility (hide bars whose series is filtered out, rescale those visible).
+      var barH = function(v) { return (innerH * v) / barsMax; };
+      var pitch = innerW / n;
+      var barW = Math.min(8, Math.max(2, pitch * 0.3));
+      var barGap = Math.max(1, barW * 0.3);
+      var cols = svg.querySelectorAll('.trend-col');
+      // Bars are rendered as pairs of .trend-col per point (additions, removals).
+      cols.forEach(function(col, colIdx) {
+        var ptIdx = Math.floor(colIdx / 2);
+        var isRemoval = colIdx % 2 === 1;
+        if (ptIdx >= points.length) return;
+        var p = points[ptIdx];
+
+        if (isRemoval) {
+          var showNloc = !hasFilter || activeFilters.has('nloc');
+          var showNlod = !hasFilter || activeFilters.has('nlod');
+          var anyVisible = showNloc || showNlod;
+          col.classList.toggle('trend-col-hidden', !anyVisible);
+          if (anyVisible) {
+            var bars = col.querySelectorAll('.trend-bar');
+            bars.forEach(function(bar) {
+              if (bar.classList.contains('trend-bar-nloc')) {
+                bar.classList.toggle('trend-bar-hidden', !showNloc);
+                if (showNloc) {
+                  var h = barH(p.nloc);
+                  bar.setAttribute('y', (baseline - barH(p.nloc)).toFixed(1));
+                  bar.setAttribute('height', h.toFixed(1));
+                }
+              } else if (bar.classList.contains('trend-bar-nlod')) {
+                bar.classList.toggle('trend-bar-hidden', !showNlod);
+                if (showNlod) {
+                  var lower = showNloc ? p.nloc : 0;
+                  var upper = lower + p.nlod;
+                  var h = barH(upper) - barH(lower);
+                  bar.setAttribute('y', (baseline - barH(upper)).toFixed(1));
+                  bar.setAttribute('height', h.toFixed(1));
+                }
+              }
+            });
+          }
+        } else {
+          var showLoc = !hasFilter || activeFilters.has('loc');
+          var showLod = !hasFilter || activeFilters.has('lod');
+          var anyVisible = showLoc || showLod;
+          col.classList.toggle('trend-col-hidden', !anyVisible);
+          if (anyVisible) {
+            var bars = col.querySelectorAll('.trend-bar');
+            bars.forEach(function(bar) {
+              if (bar.classList.contains('trend-bar-loc')) {
+                bar.classList.toggle('trend-bar-hidden', !showLoc);
+                if (showLoc) {
+                  var h = barH(p.loc);
+                  bar.setAttribute('y', (baseline - barH(p.loc)).toFixed(1));
+                  bar.setAttribute('height', h.toFixed(1));
+                }
+              } else if (bar.classList.contains('trend-bar-lod')) {
+                bar.classList.toggle('trend-bar-hidden', !showLod);
+                if (showLod) {
+                  var lower = showLoc ? p.loc : 0;
+                  var upper = lower + p.lod;
+                  var h = barH(upper) - barH(lower);
+                  bar.setAttribute('y', (baseline - barH(upper)).toFixed(1));
+                  bar.setAttribute('height', h.toFixed(1));
+                }
+              }
+            });
+          }
+        }
+      });
+    }
+
+    // Legend key click handler.
+    legend.querySelectorAll('.trend-key[data-series]').forEach(function(key) {
+      key.addEventListener('click', function() {
+        var s = key.getAttribute('data-series');
+        if (activeFilters.has(s)) {
+          activeFilters.delete(s);
+        } else {
+          activeFilters.add(s);
+        }
+        applyFilter();
+      });
+      key.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); key.click(); }
+      });
+    });
+
+    // Reset button click handler.
+    if (resetBtn) {
+      resetBtn.addEventListener('click', function() {
+        activeFilters.clear();
+        applyFilter();
+      });
+      resetBtn.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); resetBtn.click(); }
+      });
+    }
+  });
+})();
 `;
