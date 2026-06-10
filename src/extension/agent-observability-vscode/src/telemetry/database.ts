@@ -846,7 +846,7 @@ export class TelemetryDatabase {
     // (incl. spawned sub-agents), so each agent/model shows its real tokens AND
     // AIU and the tables reconcile with the tree-stats card below — unlike the
     // main-thread `summary`. See treeUsageRollups().
-    const { modelUsage, agentUsage } = this.treeUsageRollups(sessionKey);
+    const { modelUsage, agentUsage } = this.treeUsageRollups(sessionKey, codeExts, docExts);
 
     const summary: SessionSummary = {
       sessionId: sessionKey,
@@ -1091,7 +1091,11 @@ export class TelemetryDatabase {
    * labels turns consistently. The friendly agent label comes from the same
    * `debug_log_label`, which is reliable where `agent_name` is not.
    */
-  private treeUsageRollups(rootKey: string): {
+  private treeUsageRollups(
+    rootKey: string,
+    codeExts: readonly string[] = [],
+    docExts: readonly string[] = [],
+  ): {
     modelUsage: SessionModelUsage[];
     agentUsage: SessionAgentUsage[];
   } {
@@ -1175,6 +1179,10 @@ export class TelemetryDatabase {
           cachedTokens: 0,
           reasoningTokens: 0,
           aiuNano: 0,
+          linesOfCode: 0,
+          linesOfDoc: 0,
+          linesOfCodeRemoved: 0,
+          linesOfDocRemoved: 0,
         };
         usageByAgent.set(agentKey, agent);
       }
@@ -1206,6 +1214,37 @@ export class TelemetryDatabase {
       usage.aiuNano += aiu;
     }
 
+    // Per-(agent, model, kind) LoC/LoD over the WHOLE tree's file-writes, attributed
+    // the same way as the trend points / the per-turn counts: each write is owned by
+    // the model turn (`chat` span) that requested it — the last chat span whose start
+    // <= the write's start (fallback to the first when a write precedes every turn) —
+    // and that turn's (agent, model, kind) accrues the lines. Because every chat span
+    // already produced a token row above, its key exists in `usageByAgent`; summing
+    // the rows therefore reproduces the tree's line totals.
+    const wantsLineCounts = codeExts.length > 0 || docExts.length > 0;
+    if (wantsLineCounts) {
+      const turns = this.treeChatSpanKeys(rootKey);
+      if (turns.length > 0) {
+        for (const w of this.treeWrittenLinesBySpan(rootKey, codeExts, docExts)) {
+          let idx = 0;
+          for (let t = 0; t < turns.length; t++) {
+            if (turns[t].startMs <= w.startMs) {
+              idx = t;
+            } else {
+              break;
+            }
+          }
+          const agent = usageByAgent.get(turns[idx].key);
+          if (agent !== undefined) {
+            agent.linesOfCode += w.delta.added.code;
+            agent.linesOfDoc += w.delta.added.doc;
+            agent.linesOfCodeRemoved += w.delta.removed.code;
+            agent.linesOfDocRemoved += w.delta.removed.doc;
+          }
+        }
+      }
+    }
+
     // Sort by total tokens (input + output) desc, then model id asc for a stable
     // order when token counts tie.
     const modelUsage = [...usageByModel.values()].sort((a, b) => {
@@ -1228,6 +1267,53 @@ export class TelemetryDatabase {
     });
 
     return { modelUsage, agentUsage };
+  }
+
+  /**
+   * The WHOLE agent tree's `chat` spans as an ordered list of (start time →
+   * {@link agentUsageKey}) pairs, for attributing each file-write to the (agent,
+   * model, kind) of the model turn that requested it. Classifies every span exactly
+   * as {@link treeUsageRollups} does (same `runSubagent` sub-agent detection,
+   * {@link friendlyAgentName}, and {@link resolveModel}), so each key here matches a
+   * row produced there. Ordered by start time so the caller can pick the last turn
+   * whose start precedes a write — the same attribution rule the trend points use.
+   */
+  private treeChatSpanKeys(rootKey: string): Array<{ startMs: number; key: string }> {
+    const ids = this.sessionTreeIds(rootKey);
+    if (ids.length === 0) {
+      return [];
+    }
+    const inList = ids.map(() => '?').join(', ');
+    const rows = this.allRows<{
+      start_time_ms: number;
+      agent_name: string | null;
+      response_model: string | null;
+      request_model: string | null;
+      debug_label: string | null;
+    }>(
+      `SELECT s.start_time_ms AS start_time_ms,
+              s.agent_name AS agent_name,
+              s.response_model AS response_model,
+              s.request_model AS request_model,
+              lbl.value AS debug_label
+         FROM spans s
+         LEFT JOIN span_attributes lbl
+           ON lbl.span_id = s.span_id AND lbl.key = 'copilot_chat.debug_log_label'
+        WHERE s.operation_name = 'chat'
+          AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))
+        ORDER BY s.start_time_ms ASC, s.span_id ASC`,
+      [...ids, ...ids],
+    );
+
+    return rows.map((row) => {
+      const model = resolveModel(row.response_model, row.request_model);
+      const isSubagent =
+        (row.debug_label !== null && row.debug_label.startsWith('runSubagent-')) ||
+        (row.agent_name !== null && row.agent_name.startsWith('tool/runSubagent'));
+      const kind: 'main' | 'subagent' = isSubagent ? 'subagent' : 'main';
+      const agentName = friendlyAgentName(kind, row.agent_name, row.debug_label);
+      return { startMs: row.start_time_ms, key: agentUsageKey({ agentName, model, kind }) };
+    });
   }
 
   /**

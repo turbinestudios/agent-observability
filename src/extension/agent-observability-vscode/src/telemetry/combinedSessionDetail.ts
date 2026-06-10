@@ -159,6 +159,12 @@ function mergeAgentUsage(details: readonly SessionDetail[]): SessionAgentUsage[]
         byAgent.set(key, { ...u });
       } else {
         addTokens(existing, u);
+        // LoC/LoD live only on agentUsage (not the shared TokenCounts), so sum them
+        // here so the merged per-agent lines reconcile with the merged tree totals.
+        existing.linesOfCode += u.linesOfCode;
+        existing.linesOfDoc += u.linesOfDoc;
+        existing.linesOfCodeRemoved += u.linesOfCodeRemoved;
+        existing.linesOfDocRemoved += u.linesOfDocRemoved;
       }
     }
   }

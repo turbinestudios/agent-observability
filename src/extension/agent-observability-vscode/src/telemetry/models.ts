@@ -310,6 +310,19 @@ export interface SessionAgentUsage {
    * under their own conversation id), rather than reading `0` as before.
    */
   aiuNano: number;
+  /**
+   * LOCAL-ONLY lines this (agent, model, kind)'s file-writing tool calls added to /
+   * removed from source-code vs documentation files (LoC / LoD / nLoC / nLoD). Each
+   * tree file-write is attributed to the `chat` model turn that requested it (by
+   * timestamp — see {@link ../telemetry/database}), and that turn's (agent, model,
+   * kind) owns the lines; summing the rows therefore reproduces the
+   * {@link SessionTreeStats} line totals. All `0` when extension lists are unset or
+   * nothing classifiable was written.
+   */
+  linesOfCode: number;
+  linesOfDoc: number;
+  linesOfCodeRemoved: number;
+  linesOfDocRemoved: number;
 }
 
 /**

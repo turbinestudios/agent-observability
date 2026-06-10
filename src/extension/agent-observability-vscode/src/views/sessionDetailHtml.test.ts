@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { renderSessionDetailHtml } from './sessionDetailHtml';
+import { renderSessionDetailHtml, renderCombinedSessionDetailHtml } from './sessionDetailHtml';
+import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
 import {
   SessionDetail,
   SessionTreeStats,
@@ -135,6 +136,10 @@ describe('renderSessionDetailHtml — Main agent AIU & cost', () => {
     cachedTokens: 0,
     reasoningTokens: 0,
     aiuNano: 0,
+    linesOfCode: 0,
+    linesOfDoc: 0,
+    linesOfCodeRemoved: 0,
+    linesOfDocRemoved: 0,
     ...over,
   });
 
@@ -216,9 +221,9 @@ describe('renderSessionDetailHtml — spawned sub-agents', () => {
       { model: 'gpt-5.4', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0, aiuNano: 3_000_000_000 },
     ],
     agentUsage: [
-      { agentName: 'GitHub Copilot Chat', model: 'gpt-5.4', kind: 'main', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0, aiuNano: 3_000_000_000 },
-      { agentName: 'Testing', model: 'gpt-5.3-codex', kind: 'subagent', llmCalls: 2, inputTokens: 1300, outputTokens: 40, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0 },
-      { agentName: 'Frontend', model: 'gpt-5.4', kind: 'subagent', llmCalls: 1, inputTokens: 900, outputTokens: 10, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0 },
+      { agentName: 'GitHub Copilot Chat', model: 'gpt-5.4', kind: 'main', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0, aiuNano: 3_000_000_000, linesOfCode: 120, linesOfDoc: 18, linesOfCodeRemoved: 30, linesOfDocRemoved: 4 },
+      { agentName: 'Testing', model: 'gpt-5.3-codex', kind: 'subagent', llmCalls: 2, inputTokens: 1300, outputTokens: 40, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0, linesOfCode: 45, linesOfDoc: 0, linesOfCodeRemoved: 12, linesOfDocRemoved: 0 },
+      { agentName: 'Frontend', model: 'gpt-5.4', kind: 'subagent', llmCalls: 1, inputTokens: 900, outputTokens: 10, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0, linesOfCode: 60, linesOfDoc: 5, linesOfCodeRemoved: 8, linesOfDocRemoved: 1 },
     ],
     treeModelTurns: [],
   };
@@ -244,6 +249,28 @@ describe('renderSessionDetailHtml — spawned sub-agents', () => {
   it('omits the section entirely when there are no spawned sub-agents', () => {
     const html = renderSessionDetailHtml(detail, [], NONCE);
     expect(html).not.toContain('Spawned sub-agents');
+  });
+
+  it('renders LoC/LoD/nLoC/nLoD columns per (agent, model) in both tables', () => {
+    const html = renderSessionDetailHtml(agentDetail, [], NONCE);
+    // Column headers exist (LoC / LoD additions, nLoC / nLoD removals).
+    expect(html).toContain('>LoC</th>');
+    expect(html).toContain('>LoD</th>');
+    expect(html).toContain('>nLoC</th>');
+    expect(html).toContain('>nLoD</th>');
+    // Main-thread row carries its own line counts (120/18/30/4).
+    const mainRow = html.match(/<td>GitHub Copilot Chat<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
+    expect(mainRow).toMatch(/<td class="n">120<\/td>\s*<td class="n">18<\/td>\s*<td class="n">30<\/td>\s*<td class="n">4<\/td>/);
+    // A sub-agent row carries its own (45/0/12/0).
+    const subRow = html.match(/<td>Testing<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
+    expect(subRow).toMatch(/<td class="n">45<\/td>\s*<td class="n">0<\/td>\s*<td class="n">12<\/td>\s*<td class="n">0<\/td>/);
+  });
+
+  it('sub-agent subtotal sums the per-agent LoC/LoD columns', () => {
+    const html = renderSessionDetailHtml(agentDetail, [], NONCE);
+    const sub = html.match(/<td>Sub-agent total<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
+    // LoC 45 + 60 = 105, LoD 0 + 5 = 5, nLoC 12 + 8 = 20, nLoD 0 + 1 = 1.
+    expect(sub).toMatch(/<td class="n">105<\/td>\s*<td class="n">5<\/td>\s*<td class="n">20<\/td>\s*<td class="n">1<\/td>/);
   });
 
   it('does not let sub-agents inflate the main-agent totals', () => {
@@ -533,5 +560,60 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     );
     expect(onePoint).toContain('Not enough model turns to plot a token trend.');
     expect(onePoint).not.toContain('class="trend-line');
+  });
+
+  it('plots one point per model turn at or below the grouping threshold (25)', () => {
+    const turns = Array.from({ length: 25 }, (_v, i) => point(100 + i, 10, 0, {}, i));
+    const html = renderSessionDetailHtml({ ...treeDetail, treeModelTurns: turns }, [], NONCE);
+    // 25 turns ≤ threshold → one dot per turn, no grouping note.
+    expect(html.match(/class="trend-dot trend-output"/g)?.length).toBe(25);
+    expect(html).not.toContain('grouped by');
+  });
+
+  it('buckets into groups of 5 once there are more than 25 model turns', () => {
+    // 30 turns > threshold → 30 / 5 = 6 plotted points, each summing its group.
+    const turns = Array.from({ length: 30 }, (_v, i) =>
+      point(10, 1, 0, { linesOfCode: 2 }, i),
+    );
+    const html = renderSessionDetailHtml({ ...treeDetail, treeModelTurns: turns }, [], NONCE);
+    expect(html.match(/class="trend-dot trend-output"/g)?.length).toBe(6);
+    // The grouping is made explicit, and points read as turn RANGES that sum their
+    // group: the first bucket covers turns 1–5 with input 10×5 = 50 and LoC 2×5 = 10.
+    expect(html).toContain('grouped by 5 model turns');
+    expect(html).toContain('<title>Turns 1–5 · Input 50 ·');
+    expect(html).toContain('· LoC 10 ·');
+    // x-axis labels are the group's last turn number (5, 10, …, 30), never a time.
+    expect(html).toMatch(/class="trend-axis-label trend-axis-x"[^>]*>30</);
+    expect(html).not.toMatch(/class="trend-axis-label trend-axis-x"[^>]*>\d{2}:\d{2}</);
+  });
+
+  it('keeps buckets within session boundaries in the combined view', () => {
+    // Two sessions of 30 turns each → each buckets into 6 points (12 total), and the
+    // turn numbering runs continuously across the sessions (session b is turns 31–60).
+    const a: SessionDetail = {
+      ...treeDetail,
+      summary: { ...treeDetail.summary, sessionId: 'aaaa-1111' },
+      treeModelTurns: Array.from({ length: 30 }, (_v, i) => point(10, 1, 0, { linesOfCode: 1 }, i)),
+    };
+    const b: SessionDetail = {
+      ...treeDetail,
+      summary: { ...treeDetail.summary, sessionId: 'bbbb-2222' },
+      treeModelTurns: Array.from({ length: 30 }, (_v, i) => point(10, 1, 0, { linesOfCode: 1 }, i)),
+    };
+    const html = renderCombinedSessionDetailHtml(
+      {
+        combined: combineSessionDetails([a, b]),
+        sections: [
+          { detail: a, deviations: [] },
+          { detail: b, deviations: [] },
+        ],
+      },
+      NONCE,
+    );
+    expect(html.match(/class="trend-dot trend-output"/g)?.length).toBe(12);
+    // Session b's first bucket is turns 31–35 (continuous numbering, aligned to the
+    // session boundary rather than straddling it).
+    expect(html).toContain('<title>Turns 31–35 ·');
+    expect(html).toContain('class="trend-session-divider"');
   });
 });

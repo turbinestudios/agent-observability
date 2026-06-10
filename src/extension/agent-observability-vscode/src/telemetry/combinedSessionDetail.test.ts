@@ -42,6 +42,10 @@ function agentUsage(
     cachedTokens: 0,
     reasoningTokens: 0,
     aiuNano: 0,
+    linesOfCode: 0,
+    linesOfDoc: 0,
+    linesOfCodeRemoved: 0,
+    linesOfDocRemoved: 0,
     ...over,
   };
 }
@@ -210,13 +214,27 @@ describe('combineSessionDetails', () => {
   it('merges agent usage by (agent, model, kind) and keeps main rows first', () => {
     const a = session({ sessionId: 'a' }, {
       agentUsage: [
-        agentUsage('Copilot', 'gpt', 'main', { inputTokens: 100, llmCalls: 1 }),
+        agentUsage('Copilot', 'gpt', 'main', {
+          inputTokens: 100,
+          llmCalls: 1,
+          linesOfCode: 10,
+          linesOfDoc: 2,
+          linesOfCodeRemoved: 3,
+          linesOfDocRemoved: 1,
+        }),
         agentUsage('Testing', 'gpt', 'subagent', { inputTokens: 50, llmCalls: 1 }),
       ],
     });
     const b = session({ sessionId: 'b' }, {
       agentUsage: [
-        agentUsage('Copilot', 'gpt', 'main', { inputTokens: 200, llmCalls: 2 }),
+        agentUsage('Copilot', 'gpt', 'main', {
+          inputTokens: 200,
+          llmCalls: 2,
+          linesOfCode: 5,
+          linesOfDoc: 1,
+          linesOfCodeRemoved: 4,
+          linesOfDocRemoved: 0,
+        }),
       ],
     });
 
@@ -227,7 +245,15 @@ describe('combineSessionDetails', () => {
     expect(merged[merged.length - 1].kind).toBe('subagent');
 
     const main = merged.find((u) => agentUsageKey(u) === agentUsageKey({ agentName: 'Copilot', model: 'gpt', kind: 'main' }));
-    expect(main).toMatchObject({ inputTokens: 300, llmCalls: 3 });
+    // Tokens AND LoC/LoD sum across the merged sessions.
+    expect(main).toMatchObject({
+      inputTokens: 300,
+      llmCalls: 3,
+      linesOfCode: 15,
+      linesOfDoc: 3,
+      linesOfCodeRemoved: 7,
+      linesOfDocRemoved: 1,
+    });
   });
 
   it('does not mutate the input details', () => {

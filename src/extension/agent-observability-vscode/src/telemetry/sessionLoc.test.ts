@@ -127,6 +127,37 @@ describe('TelemetryDatabase LoC/LoD rollups', () => {
     }
   });
 
+  it('attributes per-(agent, model) LoC that reconciles with the tree total', () => {
+    const copy = copyFixtureToTemp();
+    try {
+      const counts = stampToolArgs(copy.dbPath, AGENT_RUN_SESSION);
+      expect(counts.tree).toBeGreaterThan(0);
+
+      const db = TelemetryDatabase.open(copy.dbPath);
+      try {
+        const detail = db.getSessionDetail(AGENT_RUN_SESSION, CODE_EXTS, DOC_EXTS);
+        if (detail === undefined) {
+          throw new Error('expected detail');
+        }
+
+        // Summing the per-agent rows reproduces the whole-tree LoC total — every
+        // file-write is attributed to exactly one (agent, model, kind).
+        const agentLoc = detail.agentUsage.reduce((a, u) => a + u.linesOfCode, 0);
+        expect(agentLoc).toBe(detail.treeStats.linesOfCode);
+        expect(agentLoc).toBe(counts.tree * LINES_PER_SPAN);
+        // No spurious removals/docs given the create_file stamp.
+        expect(detail.agentUsage.reduce((a, u) => a + u.linesOfDoc, 0)).toBe(0);
+        expect(detail.agentUsage.reduce((a, u) => a + u.linesOfCodeRemoved, 0)).toBe(0);
+        // At least one agent actually carries the lines (not all zero).
+        expect(detail.agentUsage.some((u) => u.linesOfCode > 0)).toBe(true);
+      } finally {
+        db.close();
+      }
+    } finally {
+      copy.cleanup();
+    }
+  });
+
   it('reports 0 line counts when no extension lists are configured', () => {
     const copy = copyFixtureToTemp();
     try {

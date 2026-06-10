@@ -296,7 +296,11 @@ interface TrendSession {
   pointCount: number;
 }
 
-/** Token + line-count totals for one plotted point (one model turn) of the trend. */
+/**
+ * Token + line-count totals for one plotted point of the trend, covering the model
+ * turns {@link firstTurn}…{@link lastTurn} (a single turn when the series is plotted
+ * one-per-turn, or a group of them when it is bucketed — see {@link GROUP_SIZE}).
+ */
 interface TrendPoint {
   input: number;
   cached: number;
@@ -305,58 +309,118 @@ interface TrendPoint {
   lod: number;
   nloc: number;
   nlod: number;
+  /** 1-based ordinal of the first model turn this point covers. */
+  firstTurn: number;
+  /** 1-based ordinal of the last model turn this point covers (=== firstTurn ungrouped). */
+  lastTurn: number;
 }
 
-/** Map one whole-tree model turn ({@link SessionModelTurnPoint}) to a plotted point. */
-function modelTurnToPoint(mt: SessionModelTurnPoint): TrendPoint {
-  return {
-    input: mt.inputTokens,
-    cached: mt.cachedTokens,
-    output: mt.outputTokens,
-    loc: mt.linesOfCode,
-    lod: mt.linesOfDoc,
-    nloc: mt.linesOfCodeRemoved,
-    nlod: mt.linesOfDocRemoved,
+/**
+ * Above this many model turns the trend buckets the series into groups of
+ * {@link GROUP_SIZE} so a long run does not turn into hundreds of cramped points.
+ */
+const GROUP_THRESHOLD = 25;
+/** Model turns per plotted point once {@link GROUP_THRESHOLD} is exceeded. */
+const GROUP_SIZE = 5;
+
+/** Sum a run of model turns into one plotted point spanning turns [first, last]. */
+function sumModelTurns(
+  group: readonly SessionModelTurnPoint[],
+  firstTurn: number,
+  lastTurn: number,
+): TrendPoint {
+  const p: TrendPoint = {
+    input: 0,
+    cached: 0,
+    output: 0,
+    loc: 0,
+    lod: 0,
+    nloc: 0,
+    nlod: 0,
+    firstTurn,
+    lastTurn,
   };
+  for (const mt of group) {
+    p.input += mt.inputTokens;
+    p.cached += mt.cachedTokens;
+    p.output += mt.outputTokens;
+    p.loc += mt.linesOfCode;
+    p.lod += mt.linesOfDoc;
+    p.nloc += mt.linesOfCodeRemoved;
+    p.nlod += mt.linesOfDocRemoved;
+  }
+  return p;
+}
+
+/** Tooltip / axis caption for a point: a single turn number, or a turn range. */
+function turnLabel(p: TrendPoint): string {
+  return p.firstTurn === p.lastTurn ? `Turn ${p.firstTurn}` : `Turns ${p.firstTurn}–${p.lastTurn}`;
 }
 
 /**
  * Inline-SVG multi-line trend of the WHOLE-TREE token usage across MODEL TURNS:
  * one polyline each for input, cached, and output tokens, plotted over the run's
- * individual model turns (one x-position per tree `chat` span — see
+ * model turns (one x-position per tree `chat` span — see
  * {@link ../telemetry/models.SessionModelTurnPoint}). The x-axis is ORDINAL and
- * evenly spaced — one tick per model turn, labelled with the turn's ORDINAL NUMBER
- * (1-based), NOT a clock time — so it stays dense and gap-free and never implies a
- * wall-clock scale. Fills the rest of the "Agent run totals" row beside the flat
- * totals list, and reconciles with it (the point count is the card's Model Turns).
+ * evenly spaced — labelled with the model-turn ORDINAL NUMBER (1-based), NOT a
+ * clock time — so it stays gap-free and never implies a wall-clock scale. Fills the
+ * rest of the "Agent run totals" row beside the flat totals list, and reconciles
+ * with it (the points cover every one of the card's Model Turns).
+ *
+ * Beyond {@link GROUP_THRESHOLD} model turns the series is bucketed into groups of
+ * {@link GROUP_SIZE} (token / line counts summed per group), so a long run stays
+ * legible rather than collapsing into hundreds of cramped points. Each point's
+ * tooltip and the x-axis then read as a turn RANGE (e.g. "Turns 1–5").
  *
  * When `sessions` is supplied (the COMBINED view, where `modelTurns` is the
  * sessions' point series concatenated), each session's scope is marked with a faint
- * vertical divider at its boundary and a centered short-id label. The single-session
- * view passes none.
+ * vertical divider at its boundary and a centered short-id label; bucketing is done
+ * WITHIN each session so a group never straddles a session boundary. The
+ * single-session view passes none.
  *
  * CSP-safe: pure SVG with numeric geometry as presentation attributes and colours
  * applied via classes in the nonce'd `<style>` block — no inline `style=` (blocked
  * by `style-src 'nonce-…'`), no script. All values are numeric and the only text
  * (session ids, turn numbers) is {@link escapeHtml}-escaped. With fewer than two
- * model turns there is nothing to plot, so a muted placeholder is shown instead.
+ * points there is nothing to plot, so a muted placeholder is shown instead.
  */
 function renderTokenTrend(
   modelTurns: readonly SessionModelTurnPoint[],
   sessions?: readonly TrendSession[],
 ): string {
-  // Map the tree model turns to plotted points. `ranges` records the point span
-  // each SESSION owns (combined view, for the session dividers + labels); the
-  // single-session view has no ranges. The series is already in chronological order.
-  const points: TrendPoint[] = modelTurns.map(modelTurnToPoint);
-  const ranges: Array<{ label: string; start: number; end: number }> = [];
+  // Session segments in model-turn-index space (combined view); the single-session
+  // view is one segment spanning everything. Bucketing happens WITHIN a segment so a
+  // group never crosses a session boundary and the dividers stay aligned.
+  const segments: Array<{ label?: string; start: number; end: number }> = [];
   if (sessions !== undefined && sessions.length > 0) {
     let cursor = 0;
     for (const s of sessions) {
       if (s.pointCount > 0) {
-        ranges.push({ label: s.label, start: cursor, end: cursor + s.pointCount - 1 });
+        segments.push({ label: s.label, start: cursor, end: cursor + s.pointCount - 1 });
       }
       cursor += s.pointCount;
+    }
+  } else if (modelTurns.length > 0) {
+    segments.push({ start: 0, end: modelTurns.length - 1 });
+  }
+
+  // One point per model turn normally; one per GROUP_SIZE once the run is long. The
+  // decision is on the whole run's turn count, not per session.
+  const bucketSize = modelTurns.length > GROUP_THRESHOLD ? GROUP_SIZE : 1;
+
+  const points: TrendPoint[] = [];
+  const ranges: Array<{ label: string; start: number; end: number }> = [];
+  let turnsSoFar = 0;
+  for (const seg of segments) {
+    const segStart = points.length;
+    for (let i = seg.start; i <= seg.end; i += bucketSize) {
+      const groupEnd = Math.min(i + bucketSize - 1, seg.end);
+      const group = modelTurns.slice(i, groupEnd + 1);
+      points.push(sumModelTurns(group, turnsSoFar + 1, turnsSoFar + group.length));
+      turnsSoFar += group.length;
+    }
+    if (seg.label !== undefined && points.length > segStart) {
+      ranges.push({ label: seg.label, start: segStart, end: points.length - 1 });
     }
   }
   if (points.length < 2) {
@@ -405,19 +469,20 @@ function renderTokenTrend(
     );
   }
 
-  // Vertical grid + x-axis labels: the 1-based MODEL-TURN NUMBER (not a clock time),
-  // thinned to at most ~8 columns so long runs stay legible. The last turn is always
-  // labelled. The axis is ordinal — position is turn order, not elapsed time.
+  // Vertical grid + x-axis labels: the 1-based MODEL-TURN NUMBER (not a clock time;
+  // the last turn of the point's group when bucketed), thinned to at most ~8 columns
+  // so long runs stay legible. The last point is always labelled. The axis is ordinal
+  // — position is turn order, not elapsed time.
   const step = Math.max(1, Math.ceil(points.length / 8));
   const xGrid: string[] = [];
-  points.forEach((_p, i) => {
+  points.forEach((p, i) => {
     if (i % step !== 0 && i !== points.length - 1) {
       return;
     }
     const gx = x(i).toFixed(1);
     xGrid.push(
       `<line class="trend-grid" x1="${gx}" y1="${m.top}" x2="${gx}" y2="${baseline.toFixed(1)}" vector-effect="non-scaling-stroke" />` +
-        `<text class="trend-axis-label trend-axis-x" x="${gx}" y="${(baseline + 16).toFixed(1)}">${i + 1}</text>`,
+        `<text class="trend-axis-label trend-axis-x" x="${gx}" y="${(baseline + 16).toFixed(1)}">${p.lastTurn}</text>`,
     );
   });
 
@@ -544,7 +609,7 @@ function renderTokenTrend(
       const cx = x(i);
       const addX = cx - barGap / 2 - barW;
       const remX = cx + barGap / 2;
-      const title = `Turn ${i + 1} · Input ${formatInt(p.input)} · Cached ${formatInt(
+      const title = `${turnLabel(p)} · Input ${formatInt(p.input)} · Cached ${formatInt(
         p.cached,
       )} · Output ${formatInt(p.output)} · LoC ${formatInt(p.loc)} · LoD ${formatInt(
         p.lod,
@@ -662,7 +727,12 @@ function renderTokenTrend(
         (s) =>
           `<span class="trend-key"><span class="trend-swatch trend-${s.key}"></span>${s.label}</span>`,
       )
-      .join('');
+      .join('') +
+    // When bucketed, make the grouping explicit so a point reading "Turns 1–5" is
+    // understood as a sum, not a single turn.
+    (bucketSize > 1
+      ? `<span class="trend-key trend-group-note">grouped by ${GROUP_SIZE} model turns</span>`
+      : '');
 
   return `<div class="tree-trend">
     <svg class="trend-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Whole-tree token usage and lines written per model turn">
@@ -740,9 +810,23 @@ function renderAgentUsage(
       acc.outputTokens += u.outputTokens;
       acc.cachedTokens += u.cachedTokens;
       acc.aiuNano += u.aiuNano;
+      acc.linesOfCode += u.linesOfCode;
+      acc.linesOfDoc += u.linesOfDoc;
+      acc.linesOfCodeRemoved += u.linesOfCodeRemoved;
+      acc.linesOfDocRemoved += u.linesOfDocRemoved;
       return acc;
     },
-    { llmCalls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, aiuNano: 0 },
+    {
+      llmCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      aiuNano: 0,
+      linesOfCode: 0,
+      linesOfDoc: 0,
+      linesOfCodeRemoved: 0,
+      linesOfDocRemoved: 0,
+    },
   );
 
   const bodyRows = rows
@@ -755,6 +839,10 @@ function renderAgentUsage(
         <td class="n">${num(u.outputTokens)}</td>
         <td class="n">${num(u.cachedTokens)}</td>
         <td class="n">${formatAiu(u.aiuNano)}</td>
+        <td class="n">${num(u.linesOfCode)}</td>
+        <td class="n">${num(u.linesOfDoc)}</td>
+        <td class="n">${num(u.linesOfCodeRemoved)}</td>
+        <td class="n">${num(u.linesOfDocRemoved)}</td>
       </tr>`,
     )
     .join('\n');
@@ -769,6 +857,10 @@ function renderAgentUsage(
           <th>Agent</th><th>Model</th><th class="n" title="${escapeHtml(opts.callsTitle)}">Calls</th><th class="n">Input</th>
           <th class="n">Output</th><th class="n">Cached</th>
           <th class="n" title="AIU (Copilot premium-request units) recorded on these spans — the actual billed usage — with the derived cost at $0.01/AIU">AIU</th>
+          <th class="n" title="Lines of Code added to source-code files by this agent/model's file-writing tool calls">LoC</th>
+          <th class="n" title="Lines of Documentation added to doc files by this agent/model's file-writing tool calls">LoD</th>
+          <th class="n" title="Lines of Code removed from source-code files by this agent/model's file-writing tool calls">nLoC</th>
+          <th class="n" title="Lines of Documentation removed from doc files by this agent/model's file-writing tool calls">nLoD</th>
         </tr>
       </thead>
       <tbody>
@@ -783,6 +875,10 @@ function renderAgentUsage(
           <td class="n">${num(totals.outputTokens)}</td>
           <td class="n">${num(totals.cachedTokens)}</td>
           <td class="n">${formatAiu(totals.aiuNano)}</td>
+          <td class="n">${num(totals.linesOfCode)}</td>
+          <td class="n">${num(totals.linesOfDoc)}</td>
+          <td class="n">${num(totals.linesOfCodeRemoved)}</td>
+          <td class="n">${num(totals.linesOfDocRemoved)}</td>
         </tr>
       </tfoot>
     </table>
@@ -1039,6 +1135,7 @@ const STYLE = `
   .trend-val-nlod { fill: #d6409a; }
   .trend-legend { display: flex; gap: .9rem; font-size: .75rem; color: var(--vscode-descriptionForeground); }
   .trend-key { display: inline-flex; align-items: center; gap: .3rem; }
+  .trend-group-note { margin-left: auto; font-style: italic; opacity: .8; }
   .trend-swatch { width: .7rem; height: .7rem; border-radius: 2px; display: inline-block; }
   .trend-swatch.trend-input { background: var(--vscode-charts-blue, #4e94ce); }
   .trend-swatch.trend-cached { background: var(--vscode-charts-yellow, #b89500); }

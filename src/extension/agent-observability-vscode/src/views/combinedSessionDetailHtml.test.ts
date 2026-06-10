@@ -143,12 +143,12 @@ describe('renderCombinedSessionDetailHtml', () => {
   it('renders a merged "Main agent" token table', () => {
     const a = session({ sessionId: 'a-1' }, {
       agentUsage: [
-        { agentName: 'Main agent', model: 'gpt', kind: 'main', llmCalls: 1, inputTokens: 10, outputTokens: 5, cachedTokens: 0, reasoningTokens: 0, aiuNano: 1_000_000_000 },
+        { agentName: 'Main agent', model: 'gpt', kind: 'main', llmCalls: 1, inputTokens: 10, outputTokens: 5, cachedTokens: 0, reasoningTokens: 0, aiuNano: 1_000_000_000, linesOfCode: 7, linesOfDoc: 1, linesOfCodeRemoved: 2, linesOfDocRemoved: 0 },
       ],
     });
     const b = session({ sessionId: 'b-2' }, {
       agentUsage: [
-        { agentName: 'Main agent', model: 'gpt', kind: 'main', llmCalls: 2, inputTokens: 20, outputTokens: 5, cachedTokens: 0, reasoningTokens: 0, aiuNano: 3_000_000_000 },
+        { agentName: 'Main agent', model: 'gpt', kind: 'main', llmCalls: 2, inputTokens: 20, outputTokens: 5, cachedTokens: 0, reasoningTokens: 0, aiuNano: 3_000_000_000, linesOfCode: 13, linesOfDoc: 2, linesOfCodeRemoved: 5, linesOfDocRemoved: 1 },
       ],
     });
 
@@ -159,6 +159,11 @@ describe('renderCombinedSessionDetailHtml', () => {
     expect(html).toContain('>30<');
     // Merged AIU 1 + 3 = 4 appears (formatted to 2 dp).
     expect(html).toContain('4.00');
+    // The LoC/LoD/nLoC/nLoD columns are present and sum across sessions
+    // (LoC 7+13 = 20, LoD 1+2 = 3, nLoC 2+5 = 7, nLoD 0+1 = 1).
+    expect(html).toContain('>LoC</th>');
+    expect(html).toContain('>nLoD</th>');
+    expect(html).toMatch(/<td class="n">20<\/td>\s*<td class="n">3<\/td>\s*<td class="n">7<\/td>\s*<td class="n">1<\/td>/);
   });
 
   it('renders each session\'s own deviations within its section', () => {
