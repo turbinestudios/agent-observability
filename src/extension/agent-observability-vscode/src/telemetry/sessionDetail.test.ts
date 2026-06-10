@@ -34,7 +34,13 @@ describe('TelemetryDatabase.getSessionDetail against the fixture', () => {
 
   it('uses a session key returned by listSessions', () => {
     const keys = db.listSessions().map((s) => s.sessionId);
-    expect(keys).toContain(KNOWN_SESSION);
+    // KNOWN_SESSION is a per-turn child conversation (its chat_session_id is a
+    // different, parent session that also qualifies as human-initiated). The
+    // session list deduplicates these to avoid showing the same agent tree twice,
+    // so the PARENT appears in the list instead.
+    expect(keys.length).toBeGreaterThan(0);
+    // The parent session (8319bef8) is listed; it contains the same agent tree.
+    expect(keys).toContain('8319bef8-8bca-40ce-9eb5-026215d785c0');
   });
 
   it('returns ordered turns that partition every span with consistent header counts', () => {

@@ -1,6 +1,7 @@
 import { Database } from 'node-sqlite3-wasm';
 import type { BindValues } from 'node-sqlite3-wasm';
 import { RepositoryResolver } from './repositoryResolver';
+import { UNKNOWN_REPOSITORY } from './repositoryUrl';
 import { AggregationRow } from '../aggregate/aggregator';
 import { mapToolName } from '../aggregate/builtinTools';
 import {
@@ -87,6 +88,7 @@ export class TelemetryDatabase {
   private readonly db: Database;
   private resolverCache: RepositoryResolver | undefined;
   private spansColumnsCache: ReadonlySet<string> | undefined;
+  private humanSessionsCache: ReadonlySet<string> | undefined;
 
   private constructor(db: Database) {
     this.db = db;
@@ -336,6 +338,8 @@ export class TelemetryDatabase {
     }
     const byRepo = new Map<string, Acc>();
 
+    const humanSessions = this.humanInitiatedSessionIds();
+
     const rows = this.allRows<{
       session_id: string;
       ended_at: number;
@@ -346,7 +350,15 @@ export class TelemetryDatabase {
     );
 
     for (const row of rows) {
+      // Only include human-initiated sessions (has at least one chat/invoke_agent span).
+      if (!humanSessions.has(row.session_id)) {
+        continue;
+      }
       const repository = resolver.resolve(row.session_id);
+      // Skip the 'unknown' bucket — those sessions are shown ungrouped at root.
+      if (repository === UNKNOWN_REPOSITORY) {
+        continue;
+      }
       let acc = byRepo.get(repository);
       if (acc === undefined) {
         acc = {
@@ -386,6 +398,7 @@ export class TelemetryDatabase {
    */
   listSessions(repository?: string, limit?: number): SessionSummary[] {
     const resolver = this.resolver();
+    const humanSessions = this.humanInitiatedSessionIds();
 
     const rows = this.allRows<{
       session_id: string;
@@ -413,6 +426,10 @@ export class TelemetryDatabase {
 
     const summaries: SessionSummary[] = [];
     for (const row of rows) {
+      // Only include human-initiated sessions (has at least one chat/invoke_agent span).
+      if (!humanSessions.has(row.session_id)) {
+        continue;
+      }
       const repo = resolver.resolve(row.session_id);
       if (repository !== undefined && repo !== repository) {
         continue;
@@ -1591,6 +1608,55 @@ export class TelemetryDatabase {
       result.set(session, [...set].sort());
     }
     return result;
+  }
+
+  /**
+   * Set of `chat_session_id` UUIDs that correspond to entries in Copilot's chat
+   * history — i.e. human-initiated chat sessions. Only UUID-shaped ids with at
+   * least one `copilot_chat.user_request` span qualify, excluding sessions that
+   * used only inline-suggestion models.
+   *
+   * Because the `sessions` view groups by `COALESCE(conversation_id,
+   * chat_session_id)`, only rows where that key equals the bare `chat_session_id`
+   * will match this set — per-turn `conversation_id` fragments are naturally
+   * excluded.
+   */
+  private humanInitiatedSessionIds(): ReadonlySet<string> {
+    if (this.humanSessionsCache !== undefined) {
+      return this.humanSessionsCache;
+    }
+    // Distinct UUID chat_session_ids with at least one user_request span.
+    const rows = this.allRows<{ csid: string }>(
+      `SELECT DISTINCT s.chat_session_id AS csid
+         FROM spans s
+         JOIN span_attributes a
+           ON a.span_id = s.span_id
+          AND a.key = 'copilot_chat.user_request'
+         WHERE s.chat_session_id IS NOT NULL
+           AND LENGTH(s.chat_session_id) = 36`,
+    );
+
+    // Keep only UUID-shaped ids (excludes tool-call ids like `toolu_bdrk_*`).
+    const uuidCandidates = rows
+      .filter((r) => UUID_RE.test(r.csid))
+      .map((r) => r.csid);
+
+    // Sessions whose spans use ONLY inline-suggestion models (no real chat model).
+    const suggestionOnlySessions = new Set(
+      this.allRows<{ sk: string }>(
+        `SELECT chat_session_id AS sk
+           FROM spans
+           WHERE chat_session_id IS NOT NULL
+             AND operation_name = 'chat'
+           GROUP BY chat_session_id
+           HAVING SUM(CASE WHEN COALESCE(response_model, request_model) NOT LIKE '%suggestions%' THEN 1 ELSE 0 END) = 0`,
+      ).map((r) => r.sk),
+    );
+
+    this.humanSessionsCache = new Set(
+      uuidCandidates.filter((id) => !suggestionOnlySessions.has(id)),
+    );
+    return this.humanSessionsCache;
   }
 }
 

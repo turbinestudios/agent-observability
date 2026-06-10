@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { TelemetryService } from '../telemetry/telemetryService';
 import { RepositorySummary, SessionSummary } from '../telemetry/models';
+import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 
 /** Stable view id; referenced by package.json and the refresh command wiring. */
 export const SESSIONS_VIEW_ID = 'agentObservability.sessions';
@@ -40,16 +41,23 @@ export class SessionsViewProvider implements vscode.TreeDataProvider<SessionTree
     return [];
   }
 
-  /** Top level: repository rows. */
+  /** Top level: repository groups + ungrouped sessions (no repo). */
   private getRepositories(): SessionTreeItem[] {
     const result = this.telemetry.listRepositories();
     if (!result.ok) {
       return [explanatoryItem(result.reason, result.message)];
     }
-    if (result.value.length === 0) {
+
+    // Ungrouped sessions: human-initiated but no repo identified.
+    const ungrouped = this.telemetry.listSessions(UNKNOWN_REPOSITORY);
+    const ungroupedItems = ungrouped.ok ? ungrouped.value.map(sessionItem) : [];
+
+    if (result.value.length === 0 && ungroupedItems.length === 0) {
       return [infoItem('No local sessions found', 'No Copilot telemetry has been recorded yet.')];
     }
-    return result.value.map(repositoryItem);
+
+    const repoItems = result.value.map(repositoryItem);
+    return [...repoItems, ...ungroupedItems];
   }
 
   /** Children: sessions for one repository. */

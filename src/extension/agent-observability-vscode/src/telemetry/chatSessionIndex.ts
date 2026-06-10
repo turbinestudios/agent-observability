@@ -103,10 +103,11 @@ export function parseChatSessionIndex(json: string): Map<string, string> {
  * directory, an unreadable/locked DB, or a malformed value is skipped, never
  * thrown — a partial map is always better than failing the Sessions view.
  *
- * Only workspaces that have a sibling `chatSessions/` directory are read: those
- * are the ones with Copilot chat history worth titling, which bounds how many
- * `state.vscdb` files we snapshot (the global telemetry DB spans all
- * workspaces, but most have no chat). When the same id appears in more than one
+ * Every workspace hash with a `state.vscdb` is read — earlier versions gated on
+ * a sibling `chatSessions/` directory, but that caused ungrouped (repo-less)
+ * sessions to miss their auto-generated titles when the JSONL store was absent.
+ * `readIndexValue` already returns `undefined` quickly for missing/unreadable
+ * files, so the broader scan is safe. When the same id appears in more than one
  * workspace, the first non-empty title wins.
  */
 export function readChatSessionIndexTitles(workspaceStorageDir: string): Map<string, string> {
@@ -120,11 +121,6 @@ export function readChatSessionIndexTitles(workspaceStorageDir: string): Map<str
   }
 
   for (const hash of hashes) {
-    // Gate on chatSessions/ so we never snapshot the state.vscdb of a workspace
-    // that has no Copilot chat (e.g. one used only for other extensions).
-    if (!isDirectory(path.join(workspaceStorageDir, hash, 'chatSessions'))) {
-      continue;
-    }
     const value = readIndexValue(path.join(workspaceStorageDir, hash, 'state.vscdb'));
     if (value === undefined) {
       continue;
@@ -137,15 +133,6 @@ export function readChatSessionIndexTitles(workspaceStorageDir: string): Map<str
   }
 
   return titles;
-}
-
-/** `true` only when `p` exists and is a directory; never throws. */
-function isDirectory(p: string): boolean {
-  try {
-    return fs.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 /**

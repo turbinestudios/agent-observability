@@ -89,8 +89,7 @@ describe('readChatSessionIndexTitles', () => {
 
   /**
    * Build a `workspaceStorage` tree. For each hash: optionally a `state.vscdb`
-   * holding the given index JSON, and (by default) an empty `chatSessions/` dir
-   * — the gate `readChatSessionIndexTitles` requires before reading a DB.
+   * holding the given index JSON, and optionally an empty `chatSessions/` dir.
    */
   function makeWorkspaceStorage(
     layout: Record<string, { index?: string; chatSessions?: boolean }>,
@@ -140,14 +139,16 @@ describe('readChatSessionIndexTitles', () => {
     expect(titles.get('cccccccc-1111-2222-3333-444444444444')).toBe('Refactor auth');
   });
 
-  it('skips a workspace that has no chatSessions directory', () => {
+  it('reads titles from a workspace without a chatSessions directory', () => {
     const root = makeWorkspaceStorage({
       noChat: {
         chatSessions: false,
-        index: indexJson({ 'aaaaaaaa-1111-2222-3333-444444444444': 'Should be ignored' }),
+        index: indexJson({ 'aaaaaaaa-1111-2222-3333-444444444444': 'Ungrouped session title' }),
       },
     });
-    expect(readChatSessionIndexTitles(root).size).toBe(0);
+    expect(readChatSessionIndexTitles(root).get('aaaaaaaa-1111-2222-3333-444444444444')).toBe(
+      'Ungrouped session title',
+    );
   });
 
   it('skips a workspace whose state.vscdb is absent or not a real DB', () => {
