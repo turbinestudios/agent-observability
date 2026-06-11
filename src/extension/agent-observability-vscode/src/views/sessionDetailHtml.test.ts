@@ -484,6 +484,9 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     expect(html).not.toMatch(/class="trend-axis-label trend-axis-x"[^>]*>\d{2}:\d{2}</);
     // Each line dot is a hover group: a marker, an on-hover value label, and a
     // transparent hit circle. The label carries that turn's token count for the series.
+    // All dot groups live inside one `.trend-dots` layer — the legend-filter script
+    // rebuilds that layer's contents whenever the filter changes.
+    expect(html).toContain('<g class="trend-dots">');
     expect(html).toContain('class="trend-dot-col"');
     expect(html).toContain('class="trend-dot-hit"');
     expect(html).toContain('class="trend-dot-value trend-dot-val-output"');
@@ -615,5 +618,21 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     // session boundary rather than straddling it).
     expect(html).toContain('<title>Turns 31–35 ·');
     expect(html).toContain('class="trend-session-divider"');
+  });
+
+  it('emits a syntactically valid legend-filter script', () => {
+    // The filter script is authored inside a TS template literal, where a stray
+    // escape (e.g. an unescaped backslash in a regex) silently corrupts the emitted
+    // JS. Parse every inline script to catch that class of mistake.
+    const html = renderSessionDetailHtml(
+      { ...treeDetail, treeModelTurns: [point(100, 20, 5, {}, 0), point(200, 40, 50, {}, 30)] },
+      [],
+      NONCE,
+    );
+    const scripts = [...html.matchAll(/<script nonce="[^"]*">([\s\S]*?)<\/script>/g)];
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const [, body] of scripts) {
+      expect(() => new Function(body)).not.toThrow();
+    }
   });
 });

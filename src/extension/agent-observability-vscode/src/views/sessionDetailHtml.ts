@@ -755,7 +755,7 @@ function renderTokenTrend(
       ${dividers}
       ${axis}
       ${lines}
-      ${dots}
+      <g class="trend-dots">${dots}</g>
       ${bars}
       ${sessionLabels}
     </svg>
@@ -1125,7 +1125,6 @@ const STYLE = `
   .trend-dot.trend-cached { fill: var(--vscode-charts-yellow, #b89500); }
   .trend-dot.trend-output { fill: var(--vscode-charts-green, #388a34); }
   .trend-dot { transition: r .08s ease; }
-  .trend-dot.trend-dot-hidden { opacity: 0; pointer-events: none; }
   .trend-dot-col { cursor: crosshair; }
   .trend-dot-hit { fill: transparent; pointer-events: all; }
   .trend-dot-col:hover .trend-dot { r: 3.6; }
@@ -1250,6 +1249,52 @@ const TREND_FILTER_SCRIPT = `
 
     function x(i) { return m.left + (innerW * i) / (n - 1); }
     function y(v, max) { return m.top + innerH - (innerH * v) / max; }
+    function fmt(v) { return String(v).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ','); }
+    function labelX(cx, text) {
+      var halfW = (text.length * 6) / 2;
+      var lo = m.left + halfW;
+      var hi = W - m.right - halfW;
+      return (lo > hi ? (m.left + (W - m.right)) / 2 : Math.min(hi, Math.max(lo, cx))).toFixed(1);
+    }
+    var LABEL_TOP = 10, DOT_CLUSTER_GAP = 11, DOT_LABEL_LINE = 11;
+
+    // Rebuild the dots layer from scratch for the VISIBLE series at the rescaled
+    // y positions — same clustering as the server render. Regenerating (instead of
+    // nudging the server-rendered nodes) keeps markers, hover hit circles and value
+    // labels consistent: hidden series leave no hoverable ghosts behind, and label
+    // stacks re-cluster around the new dot positions.
+    function renderDots(visibleTokens, tokenMax) {
+      var layer = svg.querySelector('.trend-dots');
+      if (!layer) return;
+      var out = [];
+      for (var i = 0; i < n; i++) {
+        var cxv = x(i);
+        var ds = visibleTokens.map(function(s) {
+          return { key: s, cy: y(points[i][s], tokenMax), value: points[i][s] };
+        }).sort(function(a, b) { return a.cy - b.cy; });
+        var clusters = [];
+        ds.forEach(function(d) {
+          var last = clusters[clusters.length - 1];
+          if (last && d.cy - last[last.length - 1].cy < DOT_CLUSTER_GAP) last.push(d);
+          else clusters.push([d]);
+        });
+        clusters.forEach(function(cluster) {
+          var labelBase = Math.max(cluster[0].cy - 7, LABEL_TOP + (cluster.length - 1) * DOT_LABEL_LINE);
+          var markers = cluster.map(function(d) {
+            return '<circle class="trend-dot trend-' + d.key + '" cx="' + cxv.toFixed(1) + '" cy="' + d.cy.toFixed(1) + '" r="2.2" />';
+          }).join('');
+          var labels = cluster.map(function(d, j) {
+            var text = fmt(d.value);
+            return '<text class="trend-dot-value trend-dot-val-' + d.key + '" x="' + labelX(cxv, text) + '" y="' + (labelBase - j * DOT_LABEL_LINE).toFixed(1) + '">' + text + '</text>';
+          }).join('');
+          var hits = cluster.map(function(d) {
+            return '<circle class="trend-dot-hit" cx="' + cxv.toFixed(1) + '" cy="' + d.cy.toFixed(1) + '" r="5" />';
+          }).join('');
+          out.push('<g class="trend-dot-col">' + markers + labels + hits + '</g>');
+        });
+      }
+      layer.innerHTML = out.join('');
+    }
 
     function applyFilter() {
       var hasFilter = activeFilters.size > 0;
@@ -1294,22 +1339,9 @@ const TREND_FILTER_SCRIPT = `
         }
       });
 
-      // Update dots.
-      var dotCols = svg.querySelectorAll('.trend-dot-col');
-      dotCols.forEach(function(col, idx) {
-        var dots = col.querySelectorAll('.trend-dot');
-        dots.forEach(function(dot) {
-          TOKEN_SERIES.forEach(function(s) {
-            if (dot.classList.contains('trend-' + s)) {
-              var visible = !hasFilter || activeFilters.has(s);
-              dot.classList.toggle('trend-dot-hidden', !visible);
-              if (visible && idx < points.length) {
-                dot.setAttribute('cy', y(points[idx][s], tokenMax).toFixed(1));
-              }
-            }
-          });
-        });
-      });
+      // Rebuild the dots (markers + hover hits + value labels) for the visible
+      // series only, re-clustered at the rescaled positions.
+      renderDots(visibleTokens, tokenMax);
 
       // Rescale bars.
       var barsMax = 1;
@@ -1325,72 +1357,73 @@ const TREND_FILTER_SCRIPT = `
         }
       }
 
-      // Update bar visibility (hide bars whose series is filtered out, rescale those visible).
+      // Update bars: hide filtered-out segments, restack and rescale the visible
+      // ones, and keep the hover hit rect and on-hover value labels in step (the
+      // hit rect must cover exactly the rendered stack so a hidden stapel leaves
+      // no hoverable ghost, and labels of hidden segments must not appear).
       var barH = function(v) { return (innerH * v) / barsMax; };
-      var pitch = innerW / n;
-      var barW = Math.min(8, Math.max(2, pitch * 0.3));
-      var barGap = Math.max(1, barW * 0.3);
       var cols = svg.querySelectorAll('.trend-col');
       // Bars are rendered as pairs of .trend-col per point (additions, removals).
       cols.forEach(function(col, colIdx) {
         var ptIdx = Math.floor(colIdx / 2);
-        var isRemoval = colIdx % 2 === 1;
         if (ptIdx >= points.length) return;
         var p = points[ptIdx];
+        var isRemoval = colIdx % 2 === 1;
+        var codeKey = isRemoval ? 'nloc' : 'loc';
+        var docKey = isRemoval ? 'nlod' : 'lod';
+        var showCode = !hasFilter || activeFilters.has(codeKey);
+        var showDoc = !hasFilter || activeFilters.has(docKey);
+        var codeVal = showCode ? p[codeKey] : 0;
+        var total = codeVal + (showDoc ? p[docKey] : 0);
+        col.classList.toggle('trend-col-hidden', !(showCode || showDoc));
 
-        if (isRemoval) {
-          var showNloc = !hasFilter || activeFilters.has('nloc');
-          var showNlod = !hasFilter || activeFilters.has('nlod');
-          var anyVisible = showNloc || showNlod;
-          col.classList.toggle('trend-col-hidden', !anyVisible);
-          if (anyVisible) {
-            var bars = col.querySelectorAll('.trend-bar');
-            bars.forEach(function(bar) {
-              if (bar.classList.contains('trend-bar-nloc')) {
-                bar.classList.toggle('trend-bar-hidden', !showNloc);
-                if (showNloc) {
-                  var h = barH(p.nloc);
-                  bar.setAttribute('y', (baseline - barH(p.nloc)).toFixed(1));
-                  bar.setAttribute('height', h.toFixed(1));
-                }
-              } else if (bar.classList.contains('trend-bar-nlod')) {
-                bar.classList.toggle('trend-bar-hidden', !showNlod);
-                if (showNlod) {
-                  var lower = showNloc ? p.nloc : 0;
-                  var upper = lower + p.nlod;
-                  var h = barH(upper) - barH(lower);
-                  bar.setAttribute('y', (baseline - barH(upper)).toFixed(1));
-                  bar.setAttribute('height', h.toFixed(1));
-                }
-              }
-            });
+        var codeBar = col.querySelector('.trend-bar-' + codeKey);
+        if (codeBar) {
+          codeBar.classList.toggle('trend-bar-hidden', !showCode);
+          if (showCode) {
+            codeBar.setAttribute('y', (baseline - barH(codeVal)).toFixed(1));
+            codeBar.setAttribute('height', barH(codeVal).toFixed(1));
           }
-        } else {
-          var showLoc = !hasFilter || activeFilters.has('loc');
-          var showLod = !hasFilter || activeFilters.has('lod');
-          var anyVisible = showLoc || showLod;
-          col.classList.toggle('trend-col-hidden', !anyVisible);
-          if (anyVisible) {
-            var bars = col.querySelectorAll('.trend-bar');
-            bars.forEach(function(bar) {
-              if (bar.classList.contains('trend-bar-loc')) {
-                bar.classList.toggle('trend-bar-hidden', !showLoc);
-                if (showLoc) {
-                  var h = barH(p.loc);
-                  bar.setAttribute('y', (baseline - barH(p.loc)).toFixed(1));
-                  bar.setAttribute('height', h.toFixed(1));
-                }
-              } else if (bar.classList.contains('trend-bar-lod')) {
-                bar.classList.toggle('trend-bar-hidden', !showLod);
-                if (showLod) {
-                  var lower = showLoc ? p.loc : 0;
-                  var upper = lower + p.lod;
-                  var h = barH(upper) - barH(lower);
-                  bar.setAttribute('y', (baseline - barH(upper)).toFixed(1));
-                  bar.setAttribute('height', h.toFixed(1));
-                }
-              }
-            });
+        }
+        var docBar = col.querySelector('.trend-bar-' + docKey);
+        if (docBar) {
+          docBar.classList.toggle('trend-bar-hidden', !showDoc);
+          if (showDoc) {
+            docBar.setAttribute('y', (baseline - barH(total)).toFixed(1));
+            docBar.setAttribute('height', (barH(total) - barH(codeVal)).toFixed(1));
+          }
+        }
+        // The hit rect tracks the visible stack; a zero-height rect has no
+        // geometry, so a fully filtered-out stapel stops responding to hover.
+        var hit = col.querySelector('.trend-col-hit');
+        if (hit) {
+          var hitH = barH(total);
+          hit.setAttribute('y', (baseline - hitH).toFixed(1));
+          hit.setAttribute('height', hitH.toFixed(1));
+        }
+        // Re-anchor the on-hover count labels above the visible stack top and
+        // hide the label of any filtered-out segment.
+        var label = col.querySelector('.trend-bar-value');
+        if (label) {
+          var docSpan = label.querySelector('.trend-val-' + docKey);
+          var codeSpan = label.querySelector('.trend-val-' + codeKey);
+          var docShown = !!docSpan && showDoc;
+          var lower = Math.max(LABEL_TOP + (docShown ? 11 : 0), baseline - barH(total) - 4);
+          if (docSpan) {
+            if (showDoc) {
+              docSpan.removeAttribute('display');
+              docSpan.setAttribute('y', (lower - 11).toFixed(1));
+            } else {
+              docSpan.setAttribute('display', 'none');
+            }
+          }
+          if (codeSpan) {
+            if (showCode) {
+              codeSpan.removeAttribute('display');
+              codeSpan.setAttribute('y', lower.toFixed(1));
+            } else {
+              codeSpan.setAttribute('display', 'none');
+            }
           }
         }
       });
