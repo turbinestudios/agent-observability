@@ -2,7 +2,7 @@
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
   "description": "Privacy-first local view of GitHub Copilot agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
-  "version": "0.1.7",
+  "version": "0.1.9",
   "publisher": "turbinestudios",
   "license": "UNLICENSED",
   "engines": {
@@ -203,6 +203,18 @@
           "default": 60,
           "minimum": 1,
           "markdownDescription": "Maximum expected duration of an agent session, in minutes, used by the local workflow-deviation detector to flag overlong sessions (TimeoutExceeded) when no explicit workflow is configured for the repository."
+        },
+        "agentObservability.context.acceptedMissingFiles": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" },
+          "markdownDescription": "Context file names that are accepted as missing. Files in this list will not appear in the \"Expected but missing\" section of the Context Analysis tab."
+        },
+        "agentObservability.context.acceptedMissingSources": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" },
+          "markdownDescription": "Source file names whose outgoing missing references should be suppressed. When a source file is listed here, any files referenced only by it will not appear in the \"Expected but missing\" section."
         },
         "agentObservability.workflows": {
           "type": "array",

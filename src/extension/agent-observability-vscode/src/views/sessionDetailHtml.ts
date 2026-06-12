@@ -107,6 +107,7 @@ export function renderSessionDetailHtml(
   ${hasContext ? `<div class="tab-panel tab-panel-hidden" id="tab-context">${renderContextAnalysis(contextAnalysis)}</div>` : ''}
   <script nonce="${nonce}">${TREND_FILTER_SCRIPT}</script>
   ${hasContext ? `<script nonce="${nonce}">${TAB_SWITCH_SCRIPT}</script>` : ''}
+  ${hasContext ? `<script nonce="${nonce}">${ACCEPT_MISSING_SCRIPT}</script>` : ''}
 </body>
 </html>`;
 }
@@ -1221,14 +1222,17 @@ function renderExpectedMissing(agent: AgentContextAnalysis): string {
 
   const rows = agent.expectedMissing.map((m) => {
     const referencedBy = m.referencedBy
-      .map((r) => escapeHtml(r.sourceFile))
+      .map((r) => `<span class="ctx-accept-source" data-source="${escapeHtml(r.sourceFile)}" title="Accept all missing references from this file">${escapeHtml(r.sourceFile)}</span>`)
       .join(', ');
     const refType = m.referencedBy[0]?.referenceType ?? 'unknown';
 
     return `<tr>
-      <td>${escapeHtml(m.name)}</td>
+      <td><span class="ctx-accept-file" data-file="${escapeHtml(m.name)}" title="Accept this file as missing">${escapeHtml(m.name)}</span></td>
       <td>${referencedBy}</td>
       <td><span class="ctx-ref-type">${escapeHtml(refType)}</span></td>
+      <td>
+        <button class="ctx-accept-btn" data-accept-file="${escapeHtml(m.name)}" title="Accept this file as missing">✓</button>
+      </td>
     </tr>`;
   }).join('\n');
 
@@ -1236,7 +1240,7 @@ function renderExpectedMissing(agent: AgentContextAnalysis): string {
   <h3>Expected but missing</h3>
   <p class="muted">These files are referenced by loaded context files but were not loaded into context.</p>
   <table class="ctx-table">
-    <thead><tr><th>Name</th><th>Referenced By</th><th>Ref. Type</th></tr></thead>
+    <thead><tr><th>Name</th><th>Referenced By</th><th>Ref. Type</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
 </div>`;
@@ -1441,6 +1445,11 @@ const STYLE = `
   .ctx-skip-reason { font-size: .75rem; }
   .ctx-ref-type { font-size: .72rem; font-family: var(--vscode-editor-font-family, monospace); }
   .ctx-missing-section p { font-size: .8rem; margin: .2rem 0 .4rem; }
+  .ctx-accept-btn { background: none; border: 1px solid var(--vscode-button-secondaryBackground, #555); color: var(--vscode-button-secondaryForeground, #ccc); border-radius: 3px; padding: .1rem .4rem; cursor: pointer; font-size: .75rem; }
+  .ctx-accept-btn:hover { background: var(--vscode-button-secondaryHoverBackground, #444); }
+  .ctx-accept-btn:disabled { opacity: .4; cursor: default; }
+  .ctx-accept-source, .ctx-accept-file { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+  .ctx-accept-source:hover, .ctx-accept-file:hover { color: var(--vscode-textLink-activeForeground, #4e94ce); }
   .ctx-oversized-section { display: flex; flex-direction: column; gap: .4rem; }
   .ctx-oversized-card { display: flex; align-items: flex-start; gap: .5rem; padding: .5rem .6rem; border-left: 3px solid var(--vscode-editorWarning-foreground, #c90); background: var(--vscode-inputValidation-warningBackground, transparent); border-radius: 0 4px 4px 0; }
   .ctx-oversized-icon { font-size: 1rem; }
@@ -1713,6 +1722,52 @@ const TAB_SWITCH_SCRIPT = `
           p.classList.add('tab-panel-hidden');
         }
       });
+    });
+  });
+})();
+`;
+
+/**
+ * Client-side script for "Accept missing context" interactions.
+ * Uses acquireVsCodeApi to post messages to the extension host.
+ */
+const ACCEPT_MISSING_SCRIPT = `
+(function() {
+  var vscode = acquireVsCodeApi();
+
+  // "Accept file" buttons (checkmark in the last column)
+  document.querySelectorAll('.ctx-accept-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var file = btn.getAttribute('data-accept-file');
+      if (file) {
+        vscode.postMessage({ type: 'accept-missing-file', file: file });
+        var row = btn.closest('tr');
+        if (row) row.style.opacity = '0.4';
+        btn.disabled = true;
+      }
+    });
+  });
+
+  // Clickable source file names
+  document.querySelectorAll('.ctx-accept-source').forEach(function(el) {
+    el.addEventListener('click', function() {
+      var source = el.getAttribute('data-source');
+      if (source) {
+        vscode.postMessage({ type: 'accept-missing-source', source: source });
+        el.style.opacity = '0.4';
+      }
+    });
+  });
+
+  // Clickable missing file names
+  document.querySelectorAll('.ctx-accept-file').forEach(function(el) {
+    el.addEventListener('click', function() {
+      var file = el.getAttribute('data-file');
+      if (file) {
+        vscode.postMessage({ type: 'accept-missing-file', file: file });
+        var row = el.closest('tr');
+        if (row) row.style.opacity = '0.4';
+      }
     });
   });
 })();

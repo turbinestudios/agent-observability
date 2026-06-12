@@ -69,6 +69,8 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.localTelemetry.enabled',
   'agentObservability.sqlitePath',
   'agentObservability.deviation.maxSessionMinutes',
+  'agentObservability.context.acceptedMissingFiles',
+  'agentObservability.context.acceptedMissingSources',
   'agentObservability.workflows',
   'agentObservability.analysis.codeFileExtensions',
   'agentObservability.analysis.docFileExtensions',

@@ -4,7 +4,7 @@ import { TelemetryService } from '../telemetry/telemetryService';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
 import { WorkflowDeviation } from '../deviation/models';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
-import { analyzeContext } from '../context/contextAnalyzer';
+import { analyzeContext, AcceptedMissingConfig } from '../context/contextAnalyzer';
 import {
   CombinedSessionSection,
   renderCombinedSessionDetailHtml,
@@ -72,6 +72,7 @@ export class SessionDetailPanelManager {
       this.panels.delete(sessionKey);
       this.forget(panel);
     });
+    this.registerMessageHandler(panel, sessionKey);
 
     this.render(panel, sessionKey);
   }
@@ -166,6 +167,42 @@ export class SessionDetailPanelManager {
     this.activePanel = undefined;
   }
 
+  /**
+   * Register a message handler for webview → extension messages (accept-missing actions).
+   * When a message arrives, the handler updates the workspace configuration and re-renders.
+   */
+  private registerMessageHandler(panel: vscode.WebviewPanel, sessionKey: string): void {
+    panel.webview.onDidReceiveMessage(async (msg: unknown) => {
+      if (typeof msg !== 'object' || msg === null) return;
+      const message = msg as { type?: string; file?: string; source?: string };
+
+      const config = vscode.workspace.getConfiguration('agentObservability.context');
+
+      if (message.type === 'accept-missing-file' && typeof message.file === 'string') {
+        const current: string[] = config.get('acceptedMissingFiles', []);
+        if (!current.includes(message.file)) {
+          await config.update('acceptedMissingFiles', [...current, message.file], vscode.ConfigurationTarget.Workspace);
+        }
+        this.render(panel, sessionKey);
+      } else if (message.type === 'accept-missing-source' && typeof message.source === 'string') {
+        const current: string[] = config.get('acceptedMissingSources', []);
+        if (!current.includes(message.source)) {
+          await config.update('acceptedMissingSources', [...current, message.source], vscode.ConfigurationTarget.Workspace);
+        }
+        this.render(panel, sessionKey);
+      }
+    });
+  }
+
+  /** Read the accepted-missing configuration from workspace settings. */
+  private readAcceptedMissing(): AcceptedMissingConfig {
+    const config = vscode.workspace.getConfiguration('agentObservability.context');
+    return {
+      files: config.get<string[]>('acceptedMissingFiles', []),
+      sources: config.get<string[]>('acceptedMissingSources', []),
+    };
+  }
+
   /** Load detail + deviations + context analysis and set the panel HTML. */
   private render(panel: vscode.WebviewPanel, sessionKey: string): void {
     const result = this.telemetry.getSessionDetail(sessionKey);
@@ -175,7 +212,8 @@ export class SessionDetailPanelManager {
     }
     const detail = result.value;
     const found = this.detectDeviations(sessionKey);
-    const contextAnalysis = analyzeContext(sessionKey, this.telemetry);
+    const acceptedMissing = this.readAcceptedMissing();
+    const contextAnalysis = analyzeContext(sessionKey, this.telemetry, acceptedMissing);
 
     const nonce = makeNonce();
     panel.webview.html = renderSessionDetailHtml(detail, found, nonce, contextAnalysis);

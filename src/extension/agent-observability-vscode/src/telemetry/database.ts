@@ -1821,6 +1821,49 @@ export class TelemetryDatabase {
   }
 
   /**
+   * Map from `chat_session_id` to the friendly agent name for each subagent in the
+   * session tree. Used by the context analysis tab to label subagent partitions
+   * with the same names shown in the overview tab (e.g. "Sub-agent: Explore").
+   *
+   * LOCAL-ONLY: no content is returned — only agent identity labels.
+   */
+  getSubagentNames(sessionKey: string): Map<string, string> {
+    const ids = this.sessionTreeIds(sessionKey);
+    if (ids.length === 0) {
+      return new Map();
+    }
+    const inList = ids.map(() => '?').join(', ');
+    const rows = this.allRows<{
+      chat_session_id: string | null;
+      agent_name: string | null;
+      debug_label: string | null;
+    }>(
+      `SELECT s.chat_session_id AS chat_session_id,
+              s.agent_name AS agent_name,
+              lbl.value AS debug_label
+         FROM spans s
+         LEFT JOIN span_attributes lbl
+           ON lbl.span_id = s.span_id AND lbl.key = 'copilot_chat.debug_log_label'
+        WHERE s.operation_name = 'chat'
+          AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))
+          AND (
+            (lbl.value IS NOT NULL AND lbl.value LIKE 'runSubagent-%')
+            OR (s.agent_name IS NOT NULL AND s.agent_name LIKE 'tool/runSubagent%')
+          )
+        GROUP BY s.chat_session_id, s.agent_name, lbl.value`,
+      [...ids, ...ids],
+    );
+
+    const map = new Map<string, string>();
+    for (const row of rows) {
+      if (row.chat_session_id !== null && !map.has(row.chat_session_id)) {
+        map.set(row.chat_session_id, friendlyAgentName('subagent', row.agent_name, row.debug_label));
+      }
+    }
+    return map;
+  }
+
+  /**
    * Set of `chat_session_id` UUIDs that correspond to entries in Copilot's chat
    * history — i.e. human-initiated chat sessions. Only UUID-shaped ids with at
    * least one `copilot_chat.user_request` span qualify, excluding sessions that

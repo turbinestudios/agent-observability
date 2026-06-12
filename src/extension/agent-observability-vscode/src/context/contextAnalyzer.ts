@@ -20,15 +20,28 @@ import { resolveReferences } from './referenceResolver';
 import { estimateContextSizes, findOversizedFiles } from './sizeEstimator';
 
 /**
+ * Configuration for files/sources accepted as missing (excluded from
+ * the "expected but missing" analysis). Read from workspace settings.
+ */
+export interface AcceptedMissingConfig {
+  /** File names that are accepted as missing. */
+  files: readonly string[];
+  /** Source file names whose outgoing references should be suppressed. */
+  sources: readonly string[];
+}
+
+/**
  * Run the full context analysis pipeline for a session.
  *
  * @param sessionKey - The session to analyze
  * @param telemetry - Telemetry service for database access
+ * @param acceptedMissing - Optional exclusion config to suppress expected-missing entries
  * @returns Complete context analysis, or undefined if no data available
  */
 export function analyzeContext(
   sessionKey: string,
   telemetry: TelemetryService,
+  acceptedMissing?: AcceptedMissingConfig,
 ): SessionContextAnalysis | undefined {
   // 1. Fetch raw data from telemetry
   const discoveryResult = telemetry.getContextDiscoveryEvents(sessionKey);
@@ -48,15 +61,19 @@ export function analyzeContext(
     return undefined;
   }
 
+  // Fetch subagent friendly names (chat_session_id → label like "Sub-agent: Explore")
+  const subagentNamesResult = telemetry.getSubagentNames(sessionKey);
+  const subagentNames: Map<string, string> = subagentNamesResult.ok ? subagentNamesResult.value : new Map();
+
   // 2. Partition events by agent (main vs subagents)
   // Main agent: conversation_id === chat_session_id, or the root session
   // Subagents: conversation_id !== chat_session_id (spawned under a different id)
-  const agentPartitions = partitionByAgent(discoveryEvents, toolReads, systemInstrMap);
+  const agentPartitions = partitionByAgent(discoveryEvents, toolReads, systemInstrMap, subagentNames);
 
   // 3. Build per-agent analyses
   const agents: AgentContextAnalysis[] = [];
   for (const partition of agentPartitions) {
-    const analysis = buildAgentAnalysis(partition);
+    const analysis = buildAgentAnalysis(partition, acceptedMissing);
     agents.push(analysis);
   }
 
@@ -84,6 +101,7 @@ function partitionByAgent(
   discoveryEvents: DiscoveryEventRow[],
   toolReads: Array<{ filePath: string; conversationId: string | null; chatSessionId: string | null }>,
   systemInstrMap: Map<string, { value: string; conversationId: string | null; chatSessionId: string | null; inputTokens: number }>,
+  subagentNames: Map<string, string>,
 ): AgentPartition[] {
   // Group by chat_session_id (each subagent gets its own chat_session_id)
   const sessionIdGroups = new Map<string, AgentPartition>();
@@ -101,7 +119,7 @@ function partitionByAgent(
     let partition = sessionIdGroups.get(key);
     if (!partition) {
       partition = {
-        agentName: isMain ? 'Main Agent' : `Subagent`,
+        agentName: isMain ? 'Main Agent' : (subagentNames.get(sessionId) ?? 'Sub-agent'),
         kind: isMain ? 'main' : 'subagent',
         discoveryEvents: [],
         toolReads: [],
@@ -122,7 +140,7 @@ function partitionByAgent(
     let partition = sessionIdGroups.get(key);
     if (!partition) {
       partition = {
-        agentName: isMain ? 'Main Agent' : `Subagent`,
+        agentName: isMain ? 'Main Agent' : (subagentNames.get(sessionId) ?? 'Sub-agent'),
         kind: isMain ? 'main' : 'subagent',
         discoveryEvents: [],
         toolReads: [],
@@ -143,7 +161,7 @@ function partitionByAgent(
     let partition = sessionIdGroups.get(key);
     if (!partition) {
       partition = {
-        agentName: isMain ? 'Main Agent' : `Subagent`,
+        agentName: isMain ? 'Main Agent' : (subagentNames.get(sessionId) ?? 'Sub-agent'),
         kind: isMain ? 'main' : 'subagent',
         discoveryEvents: [],
         toolReads: [],
@@ -231,7 +249,7 @@ function detectMainSessionId(
 /**
  * Build a single agent's context analysis from its partition of data.
  */
-function buildAgentAnalysis(partition: AgentPartition): AgentContextAnalysis {
+function buildAgentAnalysis(partition: AgentPartition, acceptedMissing?: AcceptedMissingConfig): AgentContextAnalysis {
   // Parse discovery events into file entries
   const discoveryFiles = parseDiscoveryEvents(partition.discoveryEvents);
 
@@ -248,7 +266,12 @@ function buildAgentAnalysis(partition: AgentPartition): AgentContextAnalysis {
 
   // Detect expected-but-missing files
   const loadedNames = new Set(allFiles.filter((f) => f.status !== 'skipped').map((f) => f.name));
-  const expectedMissing = detectExpectedMissing(references, loadedNames);
+  let expectedMissing = detectExpectedMissing(references, loadedNames);
+
+  // Apply accepted-missing exclusions
+  if (acceptedMissing) {
+    expectedMissing = filterAcceptedMissing(expectedMissing, acceptedMissing);
+  }
 
   // Estimate sizes
   const { entries, totalContextTokens, contextFileTokens, otherContextTokens } =
@@ -290,6 +313,42 @@ function detectExpectedMissing(
   }
 
   return [...missingMap.values()];
+}
+
+/**
+ * Remove entries that are accepted via workspace configuration.
+ * - `config.files`: specific file names accepted as missing
+ * - `config.sources`: source files whose outgoing references are suppressed
+ *
+ * @internal Exported for testing.
+ */
+export function filterAcceptedMissing(
+  entries: ExpectedMissingFile[],
+  config: AcceptedMissingConfig,
+): ExpectedMissingFile[] {
+  const acceptedFiles = new Set(config.files);
+  const acceptedSources = new Set(config.sources);
+
+  if (acceptedFiles.size === 0 && acceptedSources.size === 0) {
+    return entries;
+  }
+
+  const result: ExpectedMissingFile[] = [];
+  for (const entry of entries) {
+    // Skip if the missing file itself is accepted
+    if (acceptedFiles.has(entry.name)) continue;
+
+    // Remove references from accepted sources
+    const remainingRefs = entry.referencedBy.filter(
+      (ref) => !acceptedSources.has(ref.sourceFile),
+    );
+
+    // If all references are suppressed, the entry disappears
+    if (remainingRefs.length === 0) continue;
+
+    result.push({ ...entry, referencedBy: remainingRefs });
+  }
+  return result;
 }
 
 /**

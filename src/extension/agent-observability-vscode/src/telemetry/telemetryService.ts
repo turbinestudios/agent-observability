@@ -318,6 +318,22 @@ export class TelemetryService {
   }
 
   /**
+   * LOCAL-ONLY: map from `chat_session_id` to the friendly agent name for each
+   * subagent in the session tree. Used by context analysis to label partitions.
+   */
+  getSubagentNames(sessionKey: string): Result<Map<string, string>> {
+    return this.withDatabases((handles) => {
+      for (const handle of handles) {
+        const value = handle.db.getSubagentNames(sessionKey);
+        if (value.size > 0) {
+          return value;
+        }
+      }
+      return new Map<string, string>();
+    });
+  }
+
+  /**
    * Safe per-span aggregation rows for the Phase 5 cloud aggregate engine,
    * optionally bounded to `[sinceMs, untilMs)` on span start time, concatenated
    * across every source database (sessions are disjoint per environment, so
