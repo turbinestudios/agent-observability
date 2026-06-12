@@ -2,7 +2,7 @@
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
   "description": "Privacy-first local view of GitHub Copilot agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "turbinestudios",
   "license": "UNLICENSED",
   "engines": {
