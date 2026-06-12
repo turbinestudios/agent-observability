@@ -1,15 +1,12 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { findWslDatabases, WslDatabaseCandidate } from './wslPaths';
-import { findWindowsHostDatabases, WindowsHostDatabaseCandidate } from './windowsHostPaths';
 
 /**
  * Resolution of the Copilot `agent-traces.db` location(s).
  *
  * Honors an explicit `agentObservability.sqlitePath` override, else
- * auto-detects EVERY database the current machine can reach so the views can
- * merge agent activity across environments:
+ * auto-detects databases local to the current environment:
  *
  * - The platform default for the `github.copilot-chat` globalStorage
  *   directory, trying both the stable `Code` and the `Code - Insiders`
@@ -17,17 +14,10 @@ import { findWindowsHostDatabases, WindowsHostDatabaseCandidate } from './window
  * - When the extension itself runs inside WSL (or any Linux remote server),
  *   Copilot Chat writes under `~/.vscode-server/data` (or
  *   `~/.vscode-server-insiders/data`) instead of `~/.config/Code`, so those
- *   directories are additional Linux candidates (`server` / `serverInsiders`)
- *   — plus the WINDOWS HOST databases reachable through the `/mnt/c` drvfs
- *   mount (`windowsHost`), so a Remote-WSL window also shows host-side agent
- *   logs.
- * - When the extension runs on the Windows host, the installed WSL distros
- *   are scanned over the `\\wsl.localhost` UNC share (`wsl`), so a desktop
- *   window also shows distro-side agent logs.
+ *   directories are additional Linux candidates (`server` / `serverInsiders`).
  *
- * Cross-environment databases are ADDITIVE: a Windows-local database no
- * longer shadows the WSL ones (and vice versa); every readable database is
- * returned and the service layer merges them. Pure I/O checks; opens nothing.
+ * Every readable database local to this environment is returned and the
+ * service layer merges them. Pure I/O checks; opens nothing.
  */
 
 /** Which candidate matched, for diagnostics and view messaging. */
@@ -37,8 +27,6 @@ export type DatabaseSource =
   | 'insiders'
   | 'server'
   | 'serverInsiders'
-  | 'wsl'
-  | 'windowsHost'
   | 'none';
 
 /** One readable database the resolver found. */
@@ -98,18 +86,13 @@ export type PathKind = 'file' | 'absent' | 'denied';
 
 /**
  * Host seam so resolution is unit-testable on any platform: tests inject a
- * fake; production uses {@link defaultEnvironment} (real process/os/fs plus
- * cross-environment discovery).
+ * fake; production uses {@link defaultEnvironment} (real process/os/fs).
  */
 export interface PathEnvironment {
   platform: NodeJS.Platform;
   env: Record<string, string | undefined>;
   homedir(): string;
   statKind(candidate: string): PathKind;
-  /** WSL-distro databases reachable over UNC, newest first (win32 only). */
-  findWslDatabases(): WslDatabaseCandidate[];
-  /** Windows-host databases reachable via `/mnt/c`, newest first (Linux/WSL only). */
-  findWindowsHostDatabases(): WindowsHostDatabaseCandidate[];
 }
 
 const defaultEnvironment: PathEnvironment = {
@@ -117,19 +100,14 @@ const defaultEnvironment: PathEnvironment = {
   env: process.env,
   homedir: () => os.homedir(),
   statKind,
-  findWslDatabases: () => findWslDatabases(),
-  findWindowsHostDatabases: () => findWindowsHostDatabases(),
 };
 
 /**
- * Resolve every reachable database.
+ * Resolve every reachable database local to the current environment.
  *
- * Order: explicit override (sole result; an override pins ONE database and
- * disables cross-environment merging) → stable `Code` default → `Code -
+ * Order: explicit override (sole result) → stable `Code` default → `Code -
  * Insiders` default → (Linux) `~/.vscode-server` / `~/.vscode-server-insiders`
- * data dirs → cross-environment discoveries: on Windows every database found
- * inside a WSL distro, on Linux every database found on the Windows host via
- * `/mnt/c`. ALL readable candidates are returned (`databases`); `primary`
+ * data dirs. ALL readable candidates are returned (`databases`); `primary`
  * carries the messaging fallback when none exist.
  */
 export function resolveDatabasePaths(
@@ -160,24 +138,6 @@ export function resolveDatabasePaths(
       databases.push(candidate);
     } else if (kind === 'denied' && denied === undefined) {
       denied = candidate;
-    }
-  }
-
-  // Cross-environment databases, additive: a desktop window also shows the
-  // WSL distros' logs, a Remote-WSL window also shows the Windows host's.
-  if (environment.platform === 'win32') {
-    for (const wsl of environment.findWslDatabases()) {
-      if (!seen.has(wsl.path)) {
-        seen.add(wsl.path);
-        databases.push({ path: wsl.path, source: 'wsl' });
-      }
-    }
-  } else if (environment.platform !== 'darwin') {
-    for (const host of environment.findWindowsHostDatabases()) {
-      if (!seen.has(host.path)) {
-        seen.add(host.path);
-        databases.push({ path: host.path, source: 'windowsHost' });
-      }
     }
   }
 

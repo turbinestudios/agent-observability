@@ -22,20 +22,18 @@ import {
  *
  * Responsibilities:
  * - Honor the `agentObservability.localTelemetry.enabled` feature flag.
- * - Resolve EVERY reachable DB (the host-local one plus any cross-environment
- *   databases — WSL distros seen from Windows, the Windows host seen from
- *   inside WSL), snapshot each read-only, open + validate, and manage the
- *   snapshot + connection lifecycles (re-snapshot on refresh, skip when a
- *   source mtime is unchanged).
+ * - Resolve every reachable local DB (stable, insiders, server variants),
+ *   snapshot each read-only, open + validate, and manage the snapshot +
+ *   connection lifecycles (re-snapshot on refresh, skip when a source mtime
+ *   is unchanged).
  * - MERGE query results across the open databases so the views show one
- *   combined picture of agent activity regardless of which environment the
- *   window runs in. Sessions are disjoint across environments (a session runs
- *   in exactly one), so merging is concatenation + re-sort; repository
- *   rollups are summed by sanitized repository name.
+ *   combined picture of agent activity. Sessions are disjoint across
+ *   variants (a session runs in exactly one), so merging is concatenation +
+ *   re-sort; repository rollups are summed by sanitized repository name.
  * - Classify failures into a small typed {@link Result} the views render as a
  *   single explanatory row — never throwing into the tree UI. A source that
- *   fails to open (e.g. an unreachable UNC share) is skipped as long as at
- *   least one database opens; only a total failure surfaces as an error.
+ *   fails to open is skipped as long as at least one database opens; only a
+ *   total failure surfaces as an error.
  *
  * Phase 3 reuses {@link getSessionInteractions}; Phase 5 reuses the underlying
  * queries for aggregation.
