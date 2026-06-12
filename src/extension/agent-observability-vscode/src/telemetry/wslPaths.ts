@@ -11,10 +11,11 @@ import { execFileSync } from 'node:child_process';
  * which Windows can read over the `\\wsl.localhost\<distro>` UNC share
  * (`\\wsl$\<distro>` on older Windows builds).
  *
- * Used by {@link ./paths.resolveDatabasePath} as a FALLBACK only — consulted
- * when no Windows-local database exists — so ordinary non-WSL users never pay
- * for a `wsl.exe` spawn. Results are cached briefly because the resolver runs
- * on every query.
+ * Used by {@link ./paths.resolveDatabasePaths} ADDITIVELY on Windows hosts:
+ * distro databases are merged alongside any Windows-local one so a desktop
+ * window shows both environments' agent logs. On a machine without WSL the
+ * `wsl.exe` spawn fails fast (ENOENT / no distros) and yields `[]`. Results
+ * are cached briefly because the resolver runs on every query.
  *
  * All paths here are built with `path.win32` explicitly: UNC shares are a
  * Windows-host concept regardless of where unit tests run.

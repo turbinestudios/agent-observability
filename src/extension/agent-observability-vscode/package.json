@@ -2,7 +2,7 @@
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
   "description": "Privacy-first local view of GitHub Copilot agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "turbinestudios",
   "license": "UNLICENSED",
   "engines": {
@@ -196,7 +196,7 @@
         "agentObservability.sqlitePath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Override the path to the Copilot `agent-traces.db` SQLite database. Leave blank to auto-detect the platform default location. Auto-detection also covers WSL: inside a Remote-WSL window the `~/.vscode-server/data` location is checked, and on the Windows host the installed distros are scanned over `\\\\wsl.localhost\\<distro>\\...` when no local database exists. Set this explicitly (e.g. `\\\\wsl.localhost\\Ubuntu\\home\\me\\.vscode-server\\data\\User\\globalStorage\\github.copilot-chat\\agent-traces.db`) to pin a specific distro."
+          "markdownDescription": "Override the path to the Copilot `agent-traces.db` SQLite database. Leave blank to auto-detect — auto-detection finds and MERGES every reachable database, so agent logs from both Windows and WSL appear together regardless of which environment the window runs in: on the Windows host the installed distros are scanned over `\\\\wsl.localhost\\<distro>\\...` in addition to the local `%APPDATA%` database, and inside a Remote-WSL window the `~/.vscode-server/data` location is checked alongside the Windows host's databases via `/mnt/c/Users/...`. Set this explicitly (e.g. `\\\\wsl.localhost\\Ubuntu\\home\\me\\.vscode-server\\data\\User\\globalStorage\\github.copilot-chat\\agent-traces.db`) to pin a SINGLE database and disable merging."
         },
         "agentObservability.deviation.maxSessionMinutes": {
           "type": "number",

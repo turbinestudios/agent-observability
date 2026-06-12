@@ -283,6 +283,32 @@ export class TelemetryDatabase {
       params,
     )!;
 
+    const dimensions = this.getOverviewDimensions(sinceMs);
+
+    return {
+      totalInteractions: agg.total_interactions,
+      totalSessions: agg.total_sessions,
+      totalRepositories: dimensions.repositories.length,
+      totalModels: dimensions.models.length,
+      avgDurationMs: agg.avg_duration_ms === null ? 0 : Math.round(agg.avg_duration_ms),
+      inputTokens: agg.input_tokens ?? 0,
+      outputTokens: agg.output_tokens ?? 0,
+      cachedTokens: agg.cached_tokens ?? 0,
+      errorCount: agg.error_count ?? 0,
+    };
+  }
+
+  /**
+   * The distinct resolved model ids and sanitized repositories across all
+   * spans (optionally since `sinceMs`, inclusive on `start_time_ms`), as the
+   * NAMES rather than counts — so the service layer can union them across
+   * several merged databases without double-counting a model or repository
+   * active in more than one environment. Safe metadata only.
+   */
+  getOverviewDimensions(sinceMs?: number): { models: string[]; repositories: string[] } {
+    const where = sinceMs !== undefined ? 'WHERE start_time_ms >= ?' : '';
+    const params = sinceMs !== undefined ? [sinceMs] : [];
+
     // Distinct models from the typed columns (safe metadata).
     const modelRows = this.allRows<{ model: string | null }>(
       `SELECT DISTINCT COALESCE(response_model, request_model) AS model
@@ -308,17 +334,7 @@ export class TelemetryDatabase {
       repositories.add(resolver.resolve(r.sk));
     }
 
-    return {
-      totalInteractions: agg.total_interactions,
-      totalSessions: agg.total_sessions,
-      totalRepositories: repositories.size,
-      totalModels: models.size,
-      avgDurationMs: agg.avg_duration_ms === null ? 0 : Math.round(agg.avg_duration_ms),
-      inputTokens: agg.input_tokens ?? 0,
-      outputTokens: agg.output_tokens ?? 0,
-      cachedTokens: agg.cached_tokens ?? 0,
-      errorCount: agg.error_count ?? 0,
-    };
+    return { models: [...models], repositories: [...repositories] };
   }
 
   /**
