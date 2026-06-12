@@ -1649,6 +1649,26 @@ export class TelemetryDatabase {
       return [];
     }
     const inList = ids.map(() => '?').join(', ');
+    // The `name` column is optional (not in the required schema); fall back to
+    // empty string when absent so the parser infers the type from event_details.
+    const nameCol = this.spansColumns().has('name') ? 's.name' : "''";
+
+    // Discovery/customization spans may not carry conversation_id/chat_session_id
+    // (they are session-level core_events). To find them we also match spans that
+    // share a trace_id with the session's known spans.
+    const traceIds = this.allRows<{ trace_id: string }>(
+      `SELECT DISTINCT trace_id FROM spans
+         WHERE (conversation_id IN (${inList}) OR chat_session_id IN (${inList}))
+           AND trace_id IS NOT NULL`,
+      [...ids, ...ids],
+    ).map((r) => r.trace_id);
+
+    // Build a combined condition: conversation/session id match OR trace_id match
+    const traceInList = traceIds.length > 0 ? traceIds.map(() => '?').join(', ') : "''";
+    const traceCondition = traceIds.length > 0
+      ? `OR s.trace_id IN (${traceInList})`
+      : '';
+
     return this.allRows<{
       spanName: string;
       eventDetails: string;
@@ -1656,7 +1676,7 @@ export class TelemetryDatabase {
       conversationId: string | null;
       chatSessionId: string | null;
     }>(
-      `SELECT s.name AS spanName,
+      `SELECT ${nameCol} AS spanName,
               det.value AS eventDetails,
               cat.value AS eventCategory,
               s.conversation_id AS conversationId,
@@ -1666,10 +1686,10 @@ export class TelemetryDatabase {
            ON cat.span_id = s.span_id AND cat.key = 'copilot_chat.event_category'
          JOIN span_attributes det
            ON det.span_id = s.span_id AND det.key = 'copilot_chat.event_details'
-         WHERE (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))
+         WHERE (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}) ${traceCondition})
            AND cat.value IN ('discovery', 'customization')
          ORDER BY s.start_time_ms ASC`,
-      [...ids, ...ids],
+      [...ids, ...ids, ...traceIds],
     );
   }
 

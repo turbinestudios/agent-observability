@@ -43,16 +43,34 @@ export function parseDiscoveryEvents(
 }
 
 /**
- * Map a span name to a context file category.
+ * Map a span name (or event details text) to a context file category.
  * "Instructions Discovery" → instruction, "Skill Discovery" → skill, etc.
+ * When spanName is empty (column missing), infers from event details text
+ * (e.g. "Resolved 14 instructions..." → instruction).
  */
-function categoryFromSpanName(spanName: string): ContextFileCategory {
+function categoryFromSpanName(spanName: string, eventDetails?: string): ContextFileCategory {
   const lower = spanName.toLowerCase();
   if (lower.includes('instruction')) return 'instruction';
   if (lower.includes('skill')) return 'skill';
   if (lower.includes('agent')) return 'agent';
   if (lower.includes('hook')) return 'hook';
   if (lower.includes('slash') || lower.includes('command')) return 'prompt';
+
+  // Fallback: infer from event details when span name is unavailable
+  if (eventDetails) {
+    const detLower = eventDetails.toLowerCase();
+    const resolvedMatch = detLower.match(/^resolved\s+\d+\s+(\w+)/);
+    if (resolvedMatch) {
+      const type = resolvedMatch[1];
+      if (type.startsWith('instruction')) return 'instruction';
+      if (type.startsWith('skill')) return 'skill';
+      if (type.startsWith('agent')) return 'agent';
+      if (type.startsWith('hook')) return 'hook';
+      if (type.startsWith('slash') || type.startsWith('command')) return 'prompt';
+    }
+    if (detLower.includes('customization')) return 'instruction';
+  }
+
   return 'unknown';
 }
 
@@ -61,7 +79,7 @@ function categoryFromSpanName(spanName: string): ContextFileCategory {
  * "Resolved N <type> in X.Xms | loaded: [a, b, c] | skipped: [...] | folders: [...]"
  */
 function parseDiscoveryEvent(event: DiscoveryEventRow): ContextFileEntry[] {
-  const category = categoryFromSpanName(event.spanName);
+  const category = categoryFromSpanName(event.spanName, event.eventDetails);
   const entries: ContextFileEntry[] = [];
   const details = event.eventDetails;
 

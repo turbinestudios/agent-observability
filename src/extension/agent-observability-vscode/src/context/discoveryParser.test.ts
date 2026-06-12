@@ -167,5 +167,34 @@ describe('discoveryParser', () => {
       const result = parseDiscoveryEvents(events);
       expect(result).toEqual([]);
     });
+
+    it('infers category from eventDetails when spanName is empty', () => {
+      const events: DiscoveryEventRow[] = [
+        {
+          spanName: '',
+          eventDetails:
+            'Resolved 14 instructions in 126.3ms | loaded: [ai-reflection, monorepo-structure] | folders: [/c:/Users/.copilot/instructions]',
+          eventCategory: 'discovery',
+          conversationId: 'conv-1',
+          chatSessionId: 'chat-1',
+        },
+        {
+          spanName: '',
+          eventDetails:
+            'Resolved 3 skills in 10.0ms | loaded: [reflect, diagram-gen] | folders: [/c:/Users/.copilot/skills]',
+          eventCategory: 'discovery',
+          conversationId: 'conv-1',
+          chatSessionId: 'chat-1',
+        },
+      ];
+
+      const result = parseDiscoveryEvents(events);
+
+      expect(result).toHaveLength(4);
+      expect(result[0]).toEqual({ name: 'ai-reflection', category: 'instruction', status: 'applied' });
+      expect(result[1]).toEqual({ name: 'monorepo-structure', category: 'instruction', status: 'applied' });
+      expect(result[2]).toEqual({ name: 'reflect', category: 'skill', status: 'applied' });
+      expect(result[3]).toEqual({ name: 'diagram-gen', category: 'skill', status: 'applied' });
+    });
   });
 });
