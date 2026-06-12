@@ -1626,6 +1626,180 @@ export class TelemetryDatabase {
     return result;
   }
 
+  // ─── Context-analysis queries (LOCAL-ONLY) ───────────────────────────
+
+  /**
+   * Discovery and customization-resolution event details for the whole agent tree
+   * rooted at `sessionKey`. Returns the span name (e.g. "Instructions Discovery",
+   * "Resolve Customizations") and the event_details string that lists loaded/skipped
+   * files. Scoped to `core_event` spans carrying `copilot_chat.event_category` ∈
+   * {discovery, customization}.
+   *
+   * LOCAL-ONLY: for on-machine context analysis only — never logged or uploaded.
+   */
+  getContextDiscoveryEvents(sessionKey: string): Array<{
+    spanName: string;
+    eventDetails: string;
+    eventCategory: string;
+    conversationId: string | null;
+    chatSessionId: string | null;
+  }> {
+    const ids = this.sessionTreeIds(sessionKey);
+    if (ids.length === 0) {
+      return [];
+    }
+    const inList = ids.map(() => '?').join(', ');
+    return this.allRows<{
+      spanName: string;
+      eventDetails: string;
+      eventCategory: string;
+      conversationId: string | null;
+      chatSessionId: string | null;
+    }>(
+      `SELECT s.name AS spanName,
+              det.value AS eventDetails,
+              cat.value AS eventCategory,
+              s.conversation_id AS conversationId,
+              s.chat_session_id AS chatSessionId
+         FROM spans s
+         JOIN span_attributes cat
+           ON cat.span_id = s.span_id AND cat.key = 'copilot_chat.event_category'
+         JOIN span_attributes det
+           ON det.span_id = s.span_id AND det.key = 'copilot_chat.event_details'
+         WHERE (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))
+           AND cat.value IN ('discovery', 'customization')
+         ORDER BY s.start_time_ms ASC`,
+      [...ids, ...ids],
+    );
+  }
+
+  /**
+   * File-reading tool calls within the agent tree that target context-file paths
+   * (`.github/`, `.copilot/`, `.claude/`, `.agents/`, `AppData/Roaming/Code/User/prompts`).
+   * Returns the parsed filePath from the tool-call arguments JSON.
+   *
+   * LOCAL-ONLY: raw tool arguments are read and parsed here; only the file path
+   * string is returned. Never logged or uploaded.
+   */
+  getContextToolReads(sessionKey: string): Array<{
+    filePath: string;
+    conversationId: string | null;
+    chatSessionId: string | null;
+  }> {
+    const ids = this.sessionTreeIds(sessionKey);
+    if (ids.length === 0) {
+      return [];
+    }
+    const inList = ids.map(() => '?').join(', ');
+    const rows = this.allRows<{
+      value: string;
+      conversationId: string | null;
+      chatSessionId: string | null;
+    }>(
+      `SELECT a.value AS value,
+              s.conversation_id AS conversationId,
+              s.chat_session_id AS chatSessionId
+         FROM span_attributes a
+         JOIN spans s ON s.span_id = a.span_id
+         WHERE a.key = 'gen_ai.tool.call.arguments'
+           AND s.operation_name = 'execute_tool'
+           AND s.tool_name = 'read_file'
+           AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))`,
+      [...ids, ...ids],
+    );
+
+    const results: Array<{
+      filePath: string;
+      conversationId: string | null;
+      chatSessionId: string | null;
+    }> = [];
+
+    const contextPathPatterns = [
+      '.github/',
+      '.copilot/',
+      '.claude/',
+      '.agents/',
+      'AppData/Roaming/Code/User/prompts',
+      'AppData\\Roaming\\Code\\User\\prompts',
+    ];
+
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.value) as { filePath?: string };
+        if (parsed.filePath) {
+          const normalized = parsed.filePath.replace(/\\/g, '/');
+          if (contextPathPatterns.some((p) => normalized.includes(p))) {
+            results.push({
+              filePath: parsed.filePath,
+              conversationId: row.conversationId,
+              chatSessionId: row.chatSessionId,
+            });
+          }
+        }
+      } catch {
+        // Malformed JSON — skip silently.
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Raw `gen_ai.system_instructions` text per LLM span across the agent tree,
+   * keyed by span_id. Each chat/invoke_agent span may carry the full system prompt
+   * that was sent to the model for that turn. Used to estimate per-file token
+   * usage within the context window.
+   *
+   * LOCAL-ONLY: raw content for on-machine analysis — never logged or uploaded.
+   */
+  getSystemInstructionsBySpan(sessionKey: string): Map<string, {
+    value: string;
+    conversationId: string | null;
+    chatSessionId: string | null;
+    inputTokens: number;
+  }> {
+    const ids = this.sessionTreeIds(sessionKey);
+    if (ids.length === 0) {
+      return new Map();
+    }
+    const inList = ids.map(() => '?').join(', ');
+    const rows = this.allRows<{
+      span_id: string;
+      value: string | null;
+      conversation_id: string | null;
+      chat_session_id: string | null;
+      input_tokens: number | null;
+    }>(
+      `SELECT a.span_id AS span_id, a.value AS value,
+              s.conversation_id AS conversation_id, s.chat_session_id AS chat_session_id,
+              s.input_tokens AS input_tokens
+         FROM span_attributes a
+         JOIN spans s ON s.span_id = a.span_id
+         WHERE a.key = 'gen_ai.system_instructions'
+           AND s.operation_name IN ('chat', 'invoke_agent')
+           AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))
+         ORDER BY s.start_time_ms ASC`,
+      [...ids, ...ids],
+    );
+
+    const map = new Map<string, {
+      value: string;
+      conversationId: string | null;
+      chatSessionId: string | null;
+      inputTokens: number;
+    }>();
+    for (const row of rows) {
+      if (row.value !== null && row.value.length > 0) {
+        map.set(row.span_id, {
+          value: row.value,
+          conversationId: row.conversation_id,
+          chatSessionId: row.chat_session_id,
+          inputTokens: row.input_tokens ?? 0,
+        });
+      }
+    }
+    return map;
+  }
+
   /**
    * Set of `chat_session_id` UUIDs that correspond to entries in Copilot's chat
    * history — i.e. human-initiated chat sessions. Only UUID-shaped ids with at

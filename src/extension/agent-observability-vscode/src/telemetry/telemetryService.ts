@@ -255,6 +255,69 @@ export class TelemetryService {
   }
 
   /**
+   * LOCAL-ONLY discovery/customization events for context-file analysis. Returns
+   * the raw event_details strings from the agent tree's `core_event` spans.
+   */
+  getContextDiscoveryEvents(sessionKey: string): Result<Array<{
+    spanName: string;
+    eventDetails: string;
+    eventCategory: string;
+    conversationId: string | null;
+    chatSessionId: string | null;
+  }>> {
+    return this.withDatabases((handles) => {
+      for (const handle of handles) {
+        const value = handle.db.getContextDiscoveryEvents(sessionKey);
+        if (value.length > 0) {
+          return value;
+        }
+      }
+      return [];
+    });
+  }
+
+  /**
+   * LOCAL-ONLY tool-call file reads targeting context-file paths. Returns parsed
+   * file paths from read_file tool calls on context directories.
+   */
+  getContextToolReads(sessionKey: string): Result<Array<{
+    filePath: string;
+    conversationId: string | null;
+    chatSessionId: string | null;
+  }>> {
+    return this.withDatabases((handles) => {
+      for (const handle of handles) {
+        const value = handle.db.getContextToolReads(sessionKey);
+        if (value.length > 0) {
+          return value;
+        }
+      }
+      return [];
+    });
+  }
+
+  /**
+   * LOCAL-ONLY system_instructions content per LLM span for context-file size
+   * estimation. Returns raw system prompt text keyed by span_id.
+   */
+  getSystemInstructionsBySpan(sessionKey: string): Result<Map<string, {
+    value: string;
+    conversationId: string | null;
+    chatSessionId: string | null;
+    inputTokens: number;
+  }>> {
+    return this.withDatabases((handles) => {
+      for (const handle of handles) {
+        const value = handle.db.getSystemInstructionsBySpan(sessionKey);
+        if (value.size > 0) {
+          return value;
+        }
+      }
+      return new Map();
+    });
+  }
+
+  /**
    * Safe per-span aggregation rows for the Phase 5 cloud aggregate engine,
    * optionally bounded to `[sinceMs, untilMs)` on span start time, concatenated
    * across every source database (sessions are disjoint per environment, so

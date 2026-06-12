@@ -9,6 +9,7 @@ import {
   SessionModelTurnPoint,
 } from '../telemetry/models';
 import { WorkflowDeviation } from '../deviation/models';
+import { SessionContextAnalysis, AgentContextAnalysis } from '../context/models';
 import { aiuToUsd } from '../telemetry/pricing';
 import { escapeHtml } from './escapeHtml';
 
@@ -68,6 +69,7 @@ export function renderSessionDetailHtml(
   detail: SessionDetail,
   deviations: readonly WorkflowDeviation[],
   nonce: string,
+  contextAnalysis?: SessionContextAnalysis,
 ): string {
   const { summary } = detail;
   const csp = [
@@ -77,6 +79,8 @@ export function renderSessionDetailHtml(
     "img-src 'none'",
     "font-src 'none'",
   ].join('; ');
+
+  const hasContext = contextAnalysis !== undefined;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -88,13 +92,21 @@ export function renderSessionDetailHtml(
   <style nonce="${nonce}">${STYLE}</style>
 </head>
 <body>
+  ${hasContext ? `<nav class="tab-bar">
+    <button class="tab-btn tab-btn-active" data-tab="tab-overview">Overview</button>
+    <button class="tab-btn" data-tab="tab-context">Context Analysis</button>
+  </nav>` : ''}
+  <div class="tab-panel${hasContext ? '' : ' tab-panel-only'}" id="tab-overview">
   ${renderHeader(detail)}
   ${renderTreeSummary(detail.treeStats, detail.treeModelTurns)}
   ${renderMainAgentUsage(detail.agentUsage)}
   ${renderSubAgentUsage(detail.agentUsage)}
   ${renderDeviations(deviations)}
   ${renderTurns(detail.turns)}
+  </div>
+  ${hasContext ? `<div class="tab-panel tab-panel-hidden" id="tab-context">${renderContextAnalysis(contextAnalysis)}</div>` : ''}
   <script nonce="${nonce}">${TREND_FILTER_SCRIPT}</script>
+  ${hasContext ? `<script nonce="${nonce}">${TAB_SWITCH_SCRIPT}</script>` : ''}
 </body>
 </html>`;
 }
@@ -1085,6 +1097,176 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)} s`;
 }
 
+// ─── Context Analysis Rendering ────────────────────────────────────────────────
+
+/**
+ * Render the full context analysis tab content: a series of collapsible sections
+ * (Total Overview, Main Agent, Subagent A, B, ...).
+ */
+function renderContextAnalysis(analysis: SessionContextAnalysis): string {
+  const sections: string[] = [];
+
+  // Total Overview (open by default)
+  sections.push(renderAgentContextSection(analysis.total, true));
+
+  // Per-agent sections (collapsed by default)
+  for (const agent of analysis.agents) {
+    sections.push(renderAgentContextSection(agent, false));
+  }
+
+  return `<div class="context-analysis">${sections.join('\n')}</div>`;
+}
+
+/**
+ * Render one agent's context analysis as a collapsible `<details>` section.
+ */
+function renderAgentContextSection(agent: AgentContextAnalysis, open: boolean): string {
+  const kindBadge = agent.kind === 'total'
+    ? ''
+    : `<span class="ctx-badge ctx-badge-${agent.kind}">${escapeHtml(agent.kind)}</span>`;
+
+  const fileCount = agent.loadedFiles.filter((f) => f.status !== 'skipped').length;
+  const countLabel = `${num(fileCount)} file(s) in context`;
+
+  return `<details class="ctx-section"${open ? ' open' : ''}>
+  <summary class="ctx-section-summary">
+    <span class="ctx-section-title">${escapeHtml(agent.agentName)}</span>
+    ${kindBadge}
+    <span class="ctx-section-count">${countLabel}</span>
+  </summary>
+  <div class="ctx-section-body">
+    ${renderContextBudget(agent)}
+    ${renderLoadedFilesTable(agent)}
+    ${renderExpectedMissing(agent)}
+    ${renderOversizedCallouts(agent)}
+  </div>
+</details>`;
+}
+
+/**
+ * Render the context budget bar (context files vs other context).
+ */
+function renderContextBudget(agent: AgentContextAnalysis): string {
+  if (agent.totalContextTokens <= 0) {
+    return '';
+  }
+
+  const contextPct = Math.min(100, Math.round((agent.contextFileTokens / agent.totalContextTokens) * 100));
+  const otherPct = 100 - contextPct;
+
+  return `<div class="ctx-budget">
+  <div class="ctx-budget-heading">
+    <span class="eyebrow">Context window usage</span>
+    <span class="muted">${formatInt(agent.totalContextTokens)} est. input tokens</span>
+  </div>
+  <div class="ctx-budget-bar">
+    <div class="ctx-budget-fill ctx-budget-files" style="width: ${contextPct}%"></div>
+    <div class="ctx-budget-fill ctx-budget-other" style="width: ${otherPct}%"></div>
+  </div>
+  <div class="ctx-budget-legend">
+    <span class="ctx-budget-legend-item"><span class="ctx-swatch ctx-swatch-files"></span> Context files: ${num(contextPct)}% (${formatInt(agent.contextFileTokens)} tokens)</span>
+    <span class="ctx-budget-legend-item"><span class="ctx-swatch ctx-swatch-other"></span> Other (system prompt, tools, history): ${num(otherPct)}%</span>
+  </div>
+</div>`;
+}
+
+/**
+ * Render the loaded files table.
+ */
+function renderLoadedFilesTable(agent: AgentContextAnalysis): string {
+  const files = agent.loadedFiles;
+  if (files.length === 0) {
+    return '<p class="muted">No context files detected.</p>';
+  }
+
+  // Sort: applied/read first, then by estimated tokens descending
+  const sorted = [...files].sort((a, b) => {
+    const statusOrder = (s: string) => (s === 'applied' ? 0 : s === 'read' ? 1 : 2);
+    const sd = statusOrder(a.status) - statusOrder(b.status);
+    if (sd !== 0) return sd;
+    return (b.estimatedTokens ?? 0) - (a.estimatedTokens ?? 0);
+  });
+
+  const rows = sorted.map((f) => {
+    const isOversized = agent.oversizedFiles.some((o) => o.name === f.name);
+    const indicator = isOversized ? ' <span class="ctx-warn" title="Oversized — consider reducing">⚠️</span>' : '';
+    const statusClass = `ctx-status-${f.status}`;
+    const tokensStr = f.estimatedTokens !== undefined ? formatInt(f.estimatedTokens) : '—';
+    const skipInfo = f.skipReason ? ` <span class="muted ctx-skip-reason">(${escapeHtml(truncate(f.skipReason, 60))})</span>` : '';
+
+    return `<tr>
+      <td>${escapeHtml(f.name)}${indicator}${skipInfo}</td>
+      <td><span class="ctx-category">${escapeHtml(f.category)}</span></td>
+      <td class="n">${tokensStr}</td>
+      <td><span class="${statusClass}">${escapeHtml(f.status)}</span></td>
+    </tr>`;
+  }).join('\n');
+
+  return `<div class="ctx-files-section">
+  <h3>Loaded context files</h3>
+  <table class="ctx-table">
+    <thead><tr><th>Name</th><th>Category</th><th class="n">Est. Tokens</th><th>Status</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</div>`;
+}
+
+/**
+ * Render expected-but-missing files section.
+ */
+function renderExpectedMissing(agent: AgentContextAnalysis): string {
+  if (agent.expectedMissing.length === 0) {
+    return '';
+  }
+
+  const rows = agent.expectedMissing.map((m) => {
+    const referencedBy = m.referencedBy
+      .map((r) => escapeHtml(r.sourceFile))
+      .join(', ');
+    const refType = m.referencedBy[0]?.referenceType ?? 'unknown';
+
+    return `<tr>
+      <td>${escapeHtml(m.name)}</td>
+      <td>${referencedBy}</td>
+      <td><span class="ctx-ref-type">${escapeHtml(refType)}</span></td>
+    </tr>`;
+  }).join('\n');
+
+  return `<div class="ctx-missing-section">
+  <h3>Expected but missing</h3>
+  <p class="muted">These files are referenced by loaded context files but were not loaded into context.</p>
+  <table class="ctx-table">
+    <thead><tr><th>Name</th><th>Referenced By</th><th>Ref. Type</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</div>`;
+}
+
+/**
+ * Render oversized file callouts.
+ */
+function renderOversizedCallouts(agent: AgentContextAnalysis): string {
+  if (agent.oversizedFiles.length === 0) {
+    return '';
+  }
+
+  const cards = agent.oversizedFiles.map((f) => {
+    const tokens = f.estimatedTokens ?? 0;
+    return `<div class="ctx-oversized-card">
+      <span class="ctx-oversized-icon">⚠️</span>
+      <div class="ctx-oversized-info">
+        <strong>${escapeHtml(f.name)}</strong>
+        <span class="muted">~${formatInt(tokens)} tokens — consider splitting or trimming this file</span>
+      </div>
+    </div>`;
+  }).join('\n');
+
+  return `<div class="ctx-oversized-section">
+  <h3>Oversized context files</h3>
+  ${cards}
+</div>`;
+}
+
 /** Theme-aware styles (VS Code CSS variables). Injected under the CSP nonce. */
 const STYLE = `
   :root { color-scheme: light dark; }
@@ -1212,6 +1394,58 @@ const STYLE = `
   .dur { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground); }
   .status.ok { color: var(--vscode-testing-iconPassed, #3a3); }
   .status.fail { color: var(--vscode-testing-iconFailed, #d33); }
+
+  /* ─── Tab navigation ───────────────────────────────────── */
+  .tab-bar { display: flex; gap: 0; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); margin-bottom: 1rem; position: sticky; top: 0; z-index: 10; background: var(--vscode-editor-background); }
+  .tab-btn { background: none; border: none; border-bottom: 2px solid transparent; color: var(--vscode-descriptionForeground); font-family: var(--vscode-font-family); font-size: .85rem; font-weight: 500; padding: .6rem 1rem; cursor: pointer; transition: color .12s, border-color .12s; }
+  .tab-btn:hover { color: var(--vscode-foreground); }
+  .tab-btn-active { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground)); font-weight: 600; }
+  .tab-panel-hidden { display: none; }
+  .tab-panel-only { display: block; }
+
+  /* ─── Context Analysis ─────────────────────────────────── */
+  .context-analysis { display: flex; flex-direction: column; gap: .75rem; }
+  .ctx-section { border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); border-radius: 6px; overflow: hidden; }
+  .ctx-section-summary { cursor: pointer; display: flex; align-items: center; gap: .65rem; padding: .55rem .8rem; list-style: none; background: var(--vscode-editorWidget-background); }
+  .ctx-section-summary::-webkit-details-marker { display: none; }
+  .ctx-section-summary::before { content: '▸'; color: var(--vscode-descriptionForeground); font-size: .8rem; }
+  .ctx-section[open] > .ctx-section-summary::before { content: '▾'; }
+  .ctx-section-summary:hover { background: var(--vscode-list-hoverBackground, transparent); }
+  .ctx-section-title { font-weight: 600; }
+  .ctx-section-count { margin-left: auto; font-size: .78rem; color: var(--vscode-descriptionForeground); }
+  .ctx-section-body { padding: .6rem .8rem; display: flex; flex-direction: column; gap: .8rem; }
+  .ctx-section-body h3 { font-size: .9rem; margin: 0 0 .3rem; }
+  .ctx-badge { font-size: .65rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: .1rem .35rem; border-radius: 3px; }
+  .ctx-badge-main { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+  .ctx-badge-subagent { background: var(--vscode-inputValidation-infoBackground, transparent); color: var(--vscode-inputValidation-infoForeground, var(--vscode-foreground)); border: 1px solid var(--vscode-inputValidation-infoBorder, var(--vscode-panel-border)); }
+  .ctx-budget { margin-bottom: .4rem; }
+  .ctx-budget-heading { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: .35rem; }
+  .ctx-budget-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--vscode-input-background, #333); }
+  .ctx-budget-fill { height: 100%; transition: width .2s ease; }
+  .ctx-budget-files { background: var(--vscode-charts-blue, #4e94ce); }
+  .ctx-budget-other { background: var(--vscode-panel-border, var(--vscode-editorWidget-border)); opacity: .5; }
+  .ctx-budget-legend { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .3rem; font-size: .75rem; color: var(--vscode-descriptionForeground); }
+  .ctx-budget-legend-item { display: inline-flex; align-items: center; gap: .25rem; }
+  .ctx-swatch { width: .6rem; height: .6rem; border-radius: 2px; display: inline-block; }
+  .ctx-swatch-files { background: var(--vscode-charts-blue, #4e94ce); }
+  .ctx-swatch-other { background: var(--vscode-panel-border, var(--vscode-editorWidget-border)); opacity: .5; }
+  .ctx-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .ctx-table th, .ctx-table td { text-align: left; padding: .25rem .4rem; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
+  .ctx-table thead th { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); font-weight: 600; }
+  .ctx-table td.n, .ctx-table th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .ctx-status-applied { color: var(--vscode-testing-iconPassed, #3a3); font-weight: 500; }
+  .ctx-status-read { color: var(--vscode-charts-blue, #4e94ce); font-weight: 500; }
+  .ctx-status-skipped { color: var(--vscode-descriptionForeground); }
+  .ctx-category { font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; padding: .08rem .3rem; border-radius: 3px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+  .ctx-warn { cursor: help; }
+  .ctx-skip-reason { font-size: .75rem; }
+  .ctx-ref-type { font-size: .72rem; font-family: var(--vscode-editor-font-family, monospace); }
+  .ctx-missing-section p { font-size: .8rem; margin: .2rem 0 .4rem; }
+  .ctx-oversized-section { display: flex; flex-direction: column; gap: .4rem; }
+  .ctx-oversized-card { display: flex; align-items: flex-start; gap: .5rem; padding: .5rem .6rem; border-left: 3px solid var(--vscode-editorWarning-foreground, #c90); background: var(--vscode-inputValidation-warningBackground, transparent); border-radius: 0 4px 4px 0; }
+  .ctx-oversized-icon { font-size: 1rem; }
+  .ctx-oversized-info { display: flex; flex-direction: column; gap: .15rem; }
+  .ctx-oversized-info .muted { font-size: .78rem; }
 `;
 
 /**
@@ -1455,6 +1689,31 @@ const TREND_FILTER_SCRIPT = `
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); resetBtn.click(); }
       });
     }
+  });
+})();
+`;
+
+/**
+ * Client-side script for tab switching between "Overview" and "Context Analysis".
+ * Shows/hides tab panels and updates the active tab button state.
+ */
+const TAB_SWITCH_SCRIPT = `
+(function() {
+  var buttons = document.querySelectorAll('.tab-btn');
+  var panels = document.querySelectorAll('.tab-panel');
+  buttons.forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var target = btn.getAttribute('data-tab');
+      buttons.forEach(function(b) { b.classList.remove('tab-btn-active'); });
+      btn.classList.add('tab-btn-active');
+      panels.forEach(function(p) {
+        if (p.id === target) {
+          p.classList.remove('tab-panel-hidden');
+        } else {
+          p.classList.add('tab-panel-hidden');
+        }
+      });
+    });
   });
 })();
 `;

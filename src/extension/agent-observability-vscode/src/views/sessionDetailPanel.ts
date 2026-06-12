@@ -4,6 +4,7 @@ import { TelemetryService } from '../telemetry/telemetryService';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
 import { WorkflowDeviation } from '../deviation/models';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
+import { analyzeContext } from '../context/contextAnalyzer';
 import {
   CombinedSessionSection,
   renderCombinedSessionDetailHtml,
@@ -165,7 +166,7 @@ export class SessionDetailPanelManager {
     this.activePanel = undefined;
   }
 
-  /** Load detail + deviations and set the panel HTML. */
+  /** Load detail + deviations + context analysis and set the panel HTML. */
   private render(panel: vscode.WebviewPanel, sessionKey: string): void {
     const result = this.telemetry.getSessionDetail(sessionKey);
     if (!result.ok) {
@@ -174,9 +175,10 @@ export class SessionDetailPanelManager {
     }
     const detail = result.value;
     const found = this.detectDeviations(sessionKey);
+    const contextAnalysis = analyzeContext(sessionKey, this.telemetry);
 
     const nonce = makeNonce();
-    panel.webview.html = renderSessionDetailHtml(detail, found, nonce);
+    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, contextAnalysis);
   }
 
   /**
