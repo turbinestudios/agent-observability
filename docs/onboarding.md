@@ -1,100 +1,144 @@
-# Onboarding a Repository to Agent Observability
+# Onboarding to Agent Observability (Extension-First)
 
-This guide walks you through enabling OpenTelemetry telemetry export from VS Code Copilot to the Agent Observability platform.
+Agent Observability is **privacy-first** and **extension-first**. You install a
+local VS Code extension that reads your GitHub Copilot agent telemetry from an
+on-disk SQLite database. **Raw content (prompts, responses, tool I/O,
+source-file paths, file contents, identities) never leaves your machine.** Only
+**opt-in, aggregated, non-sensitive** statistics — plus, for context-engineering
+hotspots, the **repository-relative paths of customization files**
+(instructions/skills/prompts/agents/hooks) with counts only — are ever shared
+with your organization dashboard.
+
+There is **no OpenTelemetry collector, no OTLP endpoint, no
+`OTEL_EXPORTER_OTLP_*` environment variables, and no committed
+`.vscode/settings.json`** in this flow. The previous collector-based onboarding
+is archived (one release, rollback only) at
+[`docs/legacy/onboarding-otel-collector.md`](legacy/onboarding-otel-collector.md).
 
 ## Prerequisites
 
-- VS Code with GitHub Copilot extension installed
-- Access to the Agent Observability platform (ask your platform team for the collector FQDN and API key)
+- VS Code with the GitHub Copilot extension installed and used (so a local
+  Copilot agent telemetry database exists on your machine).
+- The **Agent Observability (Local)** VS Code extension (see Step 1).
+- *Only if you want to contribute org aggregates:* a **dashboard URL** and an
+  **organization API key** from your platform team (key format
+  `aoa_<keyId>_<secret>`).
 
-## Step 1: Set Up Authentication (User Environment Variable)
+## Step 1: Install the extension
 
-The OTLP endpoint requires HTTP Basic Authentication. Set this as a **user-level environment variable** on your machine so it persists across all repositories and VS Code sessions.
+Install **Agent Observability (Local)** from
+`src/extension/agent-observability-vscode`.
 
-### Windows
+- From a packaged build: `code --install-extension agent-observability-<version>.vsix`.
+- From source for development: open the folder in VS Code and press
+  <kbd>F5</kbd> to launch an Extension Development Host. See the extension
+  [`README.md`](../src/extension/agent-observability-vscode/README.md) for build
+  and native-module packaging notes.
 
-Set via System Properties > Environment Variables > User variables, or run in an elevated PowerShell:
+Once installed, open the **Agent Observability** container in the Activity Bar.
+You will see three views: **Local Overview**, **Sessions**, and **Sync**.
 
-```powershell
-[Environment]::SetEnvironmentVariable(
-  "OTEL_EXPORTER_OTLP_HEADERS",
-  "Authorization=Basic $([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('otlp:<YOUR_API_KEY>')))",
-  "User"
-)
-```
+## Step 2: View your local activity (no configuration needed)
 
-Restart VS Code after setting the variable.
+The extension **auto-detects** the local Copilot `agent-traces.db` SQLite
+database (override with `agentObservability.sqlitePath` only if auto-detect
+fails). It opens the file **read-only** and shows:
 
-### macOS / Linux
+- **Local Overview** — a summary of your local Copilot agent activity.
+- **Sessions** — your local agent sessions with prompt, tool, model, duration
+  and success detail. **This detail is local-only** and is never uploaded.
 
-Add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
+Nothing is uploaded at this stage. No OTLP settings, no env vars, and no
+workspace `.vscode/settings.json` are required. (Optional: configure expected
+per-repository workflows in the `agentObservability.workflows` setting to enable
+the on-machine deviation detector — this also runs entirely locally.)
 
-```bash
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic $(echo -n 'otlp:<YOUR_API_KEY>' | base64)"
-```
+## Step 3 (optional): Contribute org aggregates
 
-Then reload your shell or restart VS Code.
+Sharing is **opt-in and OFF by default**. To contribute aggregate analytics to
+your organization dashboard:
 
-> **Security note:** Do not commit API keys to version control. The auth header lives only in your local environment variable, never in repository files.
+1. **Set the dashboard URL.** In your VS Code **user** settings, set
+   `agentObservability.dashboardUrl` to the ingestion base URL provided by your
+   platform team (e.g. `https://dashboard.example.com`). Leaving it blank
+   disables uploads entirely.
+2. **Open the Sync view** in the Agent Observability container.
+3. **Enable Cloud Sharing.** Run **Agent Observability: Toggle Cloud Sharing**
+   (or use the Sync view). A consent dialog states exactly **what is shared**
+   vs **not shared** (see below). This flips `agentObservability.sync.enabled`
+   to `true`.
+4. **Set the Organization API key.** Run **Agent Observability: Set
+   Organization API Key** and paste the key (`aoa_<keyId>_<secret>`). It is
+   stored only in **VS Code SecretStorage** (OS keychain / Windows Credential
+   Manager / libsecret). It is **never** written to `settings.json`, any
+   committed file, or logs.
+5. **(Optional) Enable background sync.** With consent on and a key set,
+   background uploads run on `agentObservability.sync.intervalMinutes` (default
+   60, minimum 5). You can also push on demand with **Agent Observability: Sync
+   Now**.
 
-## Step 2: Configure VS Code OTLP Export
+> Sync is blocked unless **both** consent is on **and** an API key is present.
+> Turning consent off stops all uploads immediately.
 
-Add the following to your repository's `.vscode/settings.json`:
+### Preview exactly what would be uploaded
 
-```json
-{
-  "github.copilot.chat.otel.enabled": true,
-  "github.copilot.chat.otel.exporterType": "otlp-http",
-  "github.copilot.chat.otel.otlpEndpoint": "https://<COLLECTOR_FQDN>",
-  "github.copilot.chat.otel.captureContent": true
-}
-```
+Run **Agent Observability: Preview Aggregate Payload** to inspect the exact
+aggregate batch (the only thing ever sent) before any upload.
 
-Replace `<COLLECTOR_FQDN>` with the OTel Collector endpoint provided by your platform team.
+## Step 4: Verify aggregates arrive
 
-> **Note:** Setting `captureContent` to `true` means full prompt and response content will be captured. This may include sensitive information — ensure your team is comfortable with this and that appropriate data retention policies are in place.
-
-### Available Settings
-
-| Setting | Description | Default |
-|---------|-------------|---------|
-| `github.copilot.chat.otel.enabled` | Enable OpenTelemetry emission | `false` |
-| `github.copilot.chat.otel.exporterType` | `otlp-http`, `otlp-grpc`, `console`, or `file` | `"otlp-http"` |
-| `github.copilot.chat.otel.otlpEndpoint` | OTLP collector endpoint URL | `"http://localhost:4318"` |
-| `github.copilot.chat.otel.outfile` | File path for JSON-lines output (file exporter) | `""` |
-| `github.copilot.chat.otel.captureContent` | Capture full prompt/response content | `false` |
-
-## Step 3: Verify Telemetry Flow
-
-1. Open your repository in VS Code
-2. Start a Copilot chat session or use an agent
-3. Wait 2–5 minutes for data to flow through the collector to Log Analytics
-4. Open the Agent Observability dashboard and check the **Overview** page for your repository
+1. With sharing on and a key set, run **Agent Observability: Sync Now**.
+2. The **Sync** view shows the last sync status (success/failure, counts).
+3. In the org dashboard, confirm your org's aggregate analytics update (filtered
+   by repo / model / mode / tool). Your contribution appears under a
+   **pseudonymous developer id** — never your name or email.
 
 ### Troubleshooting
 
-| Symptom | Possible Cause | Fix |
-|---------|---------------|-----|
-| No data in dashboard | OTLP export not enabled | Verify `.vscode/settings.json` is committed and VS Code reloaded |
-| No data in dashboard | Incorrect endpoint | Verify `otlpEndpoint` matches the collector FQDN (include `https://`) |
-| 401 Unauthorized | Missing or invalid auth header | Verify `OTEL_EXPORTER_OTLP_HEADERS` env var is set and VS Code was restarted |
-| Partial data | Batch delay | Wait up to 5 minutes; the collector batches data before sending |
-| Connection errors in VS Code | Collector unreachable | Check that the Container App is running and ingress is configured |
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| Local views empty | No local telemetry DB found | Use Copilot agent features once; or set `agentObservability.sqlitePath`. Ensure `agentObservability.localTelemetry.enabled` is `true`. |
+| Sync never runs | Consent off or no key | Toggle Cloud Sharing on **and** set the Organization API key. |
+| Upload rejected (401) | Bad/expired API key | Re-run **Set Organization API Key** with a current `aoa_<keyId>_<secret>` from the platform team. |
+| Upload rejected (400) | Schema/validation failure | The server enforces the aggregate contract strictly; update the extension. See [`docs/privacy-validation.md`](privacy-validation.md). |
+| Upload rejected (503) | Ingestion disabled server-side | Platform team must set `Ingestion:Enabled=true` on the dashboard. |
+| No `dashboardUrl` | Uploads disabled | Set `agentObservability.dashboardUrl` in user settings. |
 
-## Step 4: Commit and Share
+## What is shared vs NOT shared
 
-Commit the settings file to your repository so all team members automatically export telemetry:
+**Shared** (aggregate, non-sensitive measures only):
 
-```bash
-git add .vscode/settings.json
-git commit -m "feat: enable agent observability telemetry export"
-git push
-```
+- **Usage aggregates:** aggregate **counts**, token totals
+  (input/output/cached/reasoning), and **latency buckets** per **30-minute
+  bin**, grouped by **repository**, **model**, **agent mode**, and **tool**,
+  under a **pseudonymous developer id**.
+- **Context-engineering hotspots:** for **customization files only**
+  (instructions, skills, prompts, agents, hooks) — their **repository-relative
+  path**, category, and per-30-minute-bin **counts** (applied / skipped, an
+  estimated token size derived from file **size** only, and how many sessions
+  saw an error or workflow deviation while the file was applied). Skip reasons
+  are reduced to a fixed taxonomy (`applyToNoMatch` / `other`) — never the raw
+  reason text.
 
-Each developer still needs to set the `OTEL_EXPORTER_OTLP_HEADERS` environment variable locally (Step 1).
+**NOT shared** (never leaves your machine): no prompts, no responses, no file
+contents, **no source- or document-file paths**, no commit hashes, no branch
+names, no machine name, no OS username, and no email or personal identity. Only
+customization-file paths (above) are shared — path plus counts, never contents.
 
-## Template Files
+Two strict contracts are the only payloads uploaded — the aggregate batch
+([`schemas/aggregate-batch.schema.json`](../schemas/aggregate-batch.schema.json))
+and the context-insights batch
+([`schemas/context-insights-batch.schema.json`](../schemas/context-insights-batch.schema.json))
+— both locked with `additionalProperties: false` at every level and re-validated
+server-side. The full privacy guarantee and how it is enforced/tested is
+documented in [`docs/privacy-validation.md`](privacy-validation.md).
 
-Pre-built templates are available in the `templates/` directory of the agent-observability repository:
+## Reference
 
-- `templates/.vscode/settings.json` — VS Code settings template with OTLP headers
+- Architecture & contracts: [`docs/architecture/`](architecture/) —
+  [aggregate payload schema](architecture/aggregate-payload-schema-v1.md),
+  [API auth lifecycle](architecture/api-auth.md),
+  [pseudonymization strategy](architecture/pseudonymization-strategy.md).
+- Migrating off the legacy collector flow: [`docs/migration.md`](migration.md).
+- Extension settings & commands: the extension
+  [`README.md`](../src/extension/agent-observability-vscode/README.md).

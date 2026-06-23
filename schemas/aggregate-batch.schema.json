@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://turbine.dev/schemas/aggregate-batch.schema.json",
+  "title": "Agent Observability Aggregate Batch (v1)",
+  "description": "Privacy-first aggregate telemetry batch POSTed by the VS Code extension to the dashboard ingestion API. Carries ONLY pre-aggregated, non-sensitive measures bucketed by a fixed dimension grain. additionalProperties is false at every object level so the API REJECTS any unexpected (potentially raw/sensitive) field. This is the single shared contract between the TypeScript producer (extension) and the C# consumer (dashboard API).",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "batchId",
+    "generatedAt",
+    "toolVersion",
+    "pseudonymousDeveloperId",
+    "window",
+    "buckets"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Contract version. The API rejects any value other than '1.0' for this schema."
+    },
+    "batchId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Deterministic idempotency hint for the whole batch. Computed by the extension as a hash of (pseudonymousDeveloperId + window.start + window.end + schemaVersion). It is at most an optimization for byte-identical retries: the API MAY skip re-processing an identical batchId, but correctness is guaranteed by per-row upsert on rowKey (latest-wins), NOT by batchId dedup. A repeated batchId carrying corrected/fuller buckets (e.g. late-arriving spans) MUST still re-apply row upserts; the API must never silently drop a batch solely because batchId was seen before."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 / ISO 8601 UTC timestamp of when the extension produced this batch. Informational only; not part of any idempotency key."
+    },
+    "toolVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$",
+      "description": "Semantic version of the VS Code extension that produced the batch (e.g. '1.4.2'). Used for compatibility diagnostics and schema-drift triage."
+    },
+    "pseudonymousDeveloperId": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^dev_[0-9a-f]{32}$",
+      "description": "Opaque, stable developer identifier: literal 'dev_' prefix + 32 lowercase hex chars (first 16 bytes of HMAC-SHA256(salt, normalized git email)). The strict pattern structurally excludes emails, usernames, and any free text — an email or PII value cannot satisfy ^dev_[0-9a-f]{32}$. MUST NOT be reversible without the org salt (which is never transmitted). See pseudonymization-strategy.md. Used server-side as the distinct-count dimension for 'active developers'."
+    },
+    "window": {
+      "type": "object",
+      "description": "The closed-open UTC time range [start, end) that all buckets in this batch fall within. Defines the slice of local telemetry the extension has aggregated and is uploading.",
+      "required": ["start", "end"],
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Inclusive UTC start of the covered range (ISO 8601)."
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Exclusive UTC end of the covered range (ISO 8601). MUST be greater than start."
+        }
+      },
+      "additionalProperties": false
+    },
+    "buckets": {
+      "type": "array",
+      "minItems": 0,
+      "description": "Pre-aggregated rows. Each element is one fully-summarized row at the dimension grain (bucketStart, bucketDurationSeconds, repository, model, agentMode, operation, toolName?). An empty array is a valid heartbeat batch indicating activity-free time.",
+      "items": { "$ref": "#/$defs/bucket" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "bucket": {
+      "type": "object",
+      "description": "One aggregate row at grain (bucketStart, bucketDurationSeconds, repository, model, agentMode, operation, toolName?) for a single pseudonymousDeveloperId. All measures are additive across rows EXCEPT distinctSessionCount and the dimension distinct-counts, which must be recomputed server-side (see doc).",
+      "required": [
+        "rowKey",
+        "bucketStart",
+        "bucketDurationSeconds",
+        "repository",
+        "model",
+        "agentMode",
+        "operation",
+        "interactionCount",
+        "successCount",
+        "errorCount",
+        "inputTokens",
+        "outputTokens",
+        "cachedTokens",
+        "durationMsSum",
+        "latencyHistogram",
+        "distinctSessionCount"
+      ],
+      "properties": {
+        "rowKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Stable per-row idempotency key. Hash of the full grain tuple (bucketStart, bucketDurationSeconds, repository, model, agentMode, operation, toolName) + pseudonymousDeveloperId. The API upserts by rowKey so re-uploaded or overlapping windows converge to the same row instead of double-counting."
+        },
+        "bucketStart": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Aligned UTC start of the time bin (ISO 8601). In v1 bins are ALWAYS aligned to 30-minute boundaries (minutes ∈ {00,30}, seconds=0, ms=0). All interactions in this row started within [bucketStart, bucketStart + bucketDurationSeconds)."
+        },
+        "bucketDurationSeconds": {
+          "type": "integer",
+          "const": 1800,
+          "description": "Width of the time bin in seconds. v1 GLOBAL INVARIANT: const 1800 (30 minutes), matching the existing overview RequestVolume query bin(TimeGenerated,30m) exactly so no resolution is lost. Because bin width AND alignment are globally fixed (not just per-batch), rowKeys for the same wall-clock window always collide and upserts converge — re-binning at a different width would be a breaking change requiring a schemaVersion bump, never a re-send."
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(unknown|https?://[A-Za-z0-9.\\-]+(:[0-9]+)?/[^\\s@?#]+)$",
+          "description": "SANITIZED git remote, resolved per session (COALESCE of copilot_chat.repo.remote_url across the session, else literal 'unknown'). CRITICAL PRIVACY RULE: the extension MUST normalize to 'https://{host}/{owner}/{repo}' form — stripping any userinfo (the 'user:token@' / 'x-access-token@' segment that git remotes can embed, which would leak PATs/credentials), any query string, and any fragment, and dropping a trailing '.git'. The pattern enforces this structurally by forbidding '@', whitespace, '?', and '#'; a credential-bearing URL cannot satisfy it. SSH remotes (git@host:owner/repo) MUST be converted to the https host/path form. May be replaced by a salted hash in a future schema version."
+        },
+        "repositoryBranch": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "OPTIONAL and OMITTED by default. Source: copilot_chat.repo.head_branch_name. Privacy tradeoff: branch names can leak feature/customer/ticket identifiers, so the extension omits this unless an org explicitly opts in. Never required by the API."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Resolved model identifier (COALESCE of gen_ai.response.model / gen_ai.request.model), or 'unknown'. Non-sensitive."
+        },
+        "agentMode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Copilot chat mode (copilot_chat.mode_name), defaulting to 'default' when absent. PRIVACY NOTE: custom chat mode names are user-defined and could embed project/customer identifiers, so the extension MUST map any mode not in the known set {default, ask, edit, agent} to the literal 'custom' before sending. Only the mapped value appears here."
+        },
+        "operation": {
+          "type": "string",
+          "enum": ["chat", "execute_tool", "execute_hook", "invoke_agent"],
+          "description": "OTEL operation_name / gen_ai.operation.name of the spans aggregated into this row."
+        },
+        "toolName": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "OPTIONAL. Present only when operation = 'execute_tool'. Source: gen_ai.tool.name (e.g. 'read_file', 'run_in_terminal'). PRIVACY NOTE: built-in Copilot tool names are passed through verbatim, but third-party/MCP tool names are vendor-defined and could embed identifiers, so the extension maps any tool name outside the known built-in allowlist to 'custom'. Tool arguments/results are NEVER included."
+        },
+        "interactionCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total spans aggregated into this row (additive across rows). Maps to LogAnalytics 'Requests' / TotalRequests."
+        },
+        "successCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of spans with OTEL status_code in {0=unset, 1=ok} (additive). Used to derive success rate."
+        },
+        "errorCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of spans with OTEL status_code = 2 (error) (additive)."
+        },
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sum of input_tokens over chat spans in this row (additive). Feeds model usage InputTokens."
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sum of output_tokens over chat spans in this row (additive). Feeds model usage OutputTokens."
+        },
+        "cachedTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sum of cached_tokens (gen_ai.usage.cache_read.input_tokens) over chat spans (additive)."
+        },
+        "reasoningTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "OPTIONAL. Sum of reasoning_tokens over chat spans (additive). Omitted when the model/provider does not report reasoning tokens."
+        },
+        "durationMsSum": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Sum of span durations in milliseconds (end_time_ms - start_time_ms) (additive). Average latency = durationMsSum / interactionCount, computed server-side after merging rows. A raw average is intentionally NOT shipped because averages are not additive."
+        },
+        "latencyHistogram": {
+          "$ref": "#/$defs/latencyHistogram",
+          "description": "Fixed-bound duration histogram enabling mergeable approximate percentiles (e.g. p95) server-side. Counts are additive bound-for-bound."
+        },
+        "distinctSessionCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct sessions (COALESCE(conversation_id, chat_session_id)) observed within THIS row only. WARNING: NOT additive across rows; the server uses it only for per-row context. True distinct session totals over a range require server-side distinct counting (see doc)."
+        },
+        "lastActivityAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "OPTIONAL. Unix epoch milliseconds of the latest span start_time_ms aggregated into this row (max over the row). Lets the server recover DeveloperActivitySummary.LastSeen at true event resolution (taking the max across a developer's rows) rather than degrading it to the 30-minute bucketStart. Non-sensitive (a timestamp)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "latencyHistogram": {
+      "type": "object",
+      "description": "Fixed-bound latency histogram. boundsMs are the upper bounds (exclusive of the next bucket) in milliseconds and MUST equal the shared canonical bounds so histograms from different rows/developers can be merged element-wise. counts has length boundsMs.length + 1: the final element is the '+Inf' overflow bucket for durations greater than the largest bound.",
+      "required": ["boundsMs", "counts"],
+      "properties": {
+        "boundsMs": {
+          "type": "array",
+          "description": "Canonical shared upper bounds in milliseconds. MUST be exactly [100, 250, 500, 1000, 2000, 5000, 10000, 30000] in v1 so all rows are mergeable.",
+          "items": { "type": "number", "minimum": 0 },
+          "minItems": 8,
+          "maxItems": 8,
+          "const": [100, 250, 500, 1000, 2000, 5000, 10000, 30000]
+        },
+        "counts": {
+          "type": "array",
+          "description": "Per-bucket counts, additive across rows. Length is boundsMs.length + 1 (= 9). counts[i] for i < boundsMs.length is the number of spans with duration <= boundsMs[i] and > boundsMs[i-1]; counts[last] is the +Inf overflow (duration > 30000ms).",
+          "items": { "type": "integer", "minimum": 0 },
+          "minItems": 9,
+          "maxItems": 9
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

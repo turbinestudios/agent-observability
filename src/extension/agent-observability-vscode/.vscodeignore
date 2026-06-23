@@ -1,0 +1,26 @@
+# Source and tooling — only dist/ + the node-sqlite3-wasm runtime dep ship.
+.vscode/**
+.vscode-test/**
+src/**
+out/**
+coverage/**
+
+# Exclude node_modules wholesale, then re-include the one runtime dependency.
+# node-sqlite3-wasm is marked external in esbuild (it loads its .wasm sidecar
+# via __dirname, so it is NOT bundled into dist/extension.js) and must be
+# shipped from node_modules. Being WebAssembly, it has no native binary and no
+# Node/Electron ABI to mismatch — one .vsix works across all VS Code versions.
+node_modules/**
+!node_modules/node-sqlite3-wasm/**
+
+**/*.map
+**/*.ts
+**/tsconfig.json
+**/vitest.config.ts
+**/esbuild.js
+**/.eslintrc.json
+**/eslint.config.js
+**/.gitignore
+**/.editorconfig
+
+# Keep README, CHANGELOG, LICENSE, package.json, media/ and dist/ in the package

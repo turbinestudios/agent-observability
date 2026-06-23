@@ -5,8 +5,8 @@ param location string
 param keyVaultName string
 
 @secure()
-@description('Value of the OTEL API key secret')
-param otelApiKey string
+@description('Server-side pepper for ingestion API-key HMAC, stored as a Key Vault secret')
+param ingestionKeyPepper string
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName
@@ -23,11 +23,11 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
-resource otelApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+resource ingestionKeyPepperSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: keyVault
-  name: 'otel-api-key'
+  name: 'ingestion-key-pepper'
   properties: {
-    value: otelApiKey
+    value: ingestionKeyPepper
   }
 }
 

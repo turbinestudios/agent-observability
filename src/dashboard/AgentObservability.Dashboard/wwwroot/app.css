@@ -87,6 +87,26 @@ code {
     letter-spacing: -0.01em;
 }
 
+.header-subtitle {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    border: 1px solid var(--panel-border);
+    border-radius: 999px;
+    padding: 0.15rem 0.55rem;
+    cursor: default;
+}
+
+.nav-footnote {
+    margin: 0.85rem 0.25rem 0;
+    font-size: 0.7rem;
+    line-height: 1.4;
+    color: var(--muted);
+    cursor: default;
+}
+
 .shell-sidebar {
     grid-area: sidebar;
     width: 260px;
@@ -312,6 +332,11 @@ code {
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--muted);
+}
+
+.muted-inline {
+    color: var(--muted);
+    font-size: 0.85em;
 }
 
 .workflow-list {

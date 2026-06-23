@@ -1,0 +1,468 @@
+{
+  "name": "agent-observability",
+  "displayName": "Agent Observability (Local)",
+  "description": "Privacy-first local view of GitHub Copilot agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
+  "version": "0.1.19",
+  "publisher": "turbinestudios",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "workspace",
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentObservability",
+          "title": "Agent Observability",
+          "icon": "media/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentObservability": [
+        {
+          "id": "agentObservability.overview",
+          "name": "Local Overview"
+        },
+        {
+          "id": "agentObservability.sessions",
+          "name": "Sessions"
+        },
+        {
+          "id": "agentObservability.sync",
+          "name": "Sync"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "agentObservability.overview",
+        "contents": "Local Overview will summarize your GitHub Copilot agent activity from the on-disk telemetry database.\n\nLocal telemetry reading arrives in a later phase. Nothing is read or uploaded yet.\n\n[Open Settings](command:agentObservability.openSettings)"
+      },
+      {
+        "view": "agentObservability.sessions",
+        "contents": "Sessions will list your local Copilot agent sessions with prompt, tool, model, duration and success detail.\n\nSession browsing arrives in a later phase. All session detail stays on this machine.\n\n[Refresh](command:agentObservability.refresh)"
+      },
+      {
+        "view": "agentObservability.sync",
+        "contents": "Sync uploads only opt-in, aggregated, non-sensitive statistics to your organization dashboard. Raw prompts, completions, tool I/O, source-file paths and file contents never leave your machine.\n\nWhen enabled, the only paths shared are repository-relative paths of customization files (instructions, skills, prompts, agents, hooks) — with counts, never contents — so your team can review context-engineering hotspots.\n\nCloud sharing is OFF by default.\n\n[Set Organization API Key](command:agentObservability.setApiKey)\n[Open Settings](command:agentObservability.openSettings)"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "agentObservability.chat",
+        "name": "obs",
+        "fullName": "Agent Observability",
+        "description": "Open a local agent session-detail view (@obs, or @obs <id or title>)",
+        "isSticky": true
+      }
+    ],
+    "commands": [
+      {
+        "command": "agentObservability.refresh",
+        "title": "Refresh",
+        "category": "Agent Observability",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "agentObservability.syncNow",
+        "title": "Sync Now",
+        "category": "Agent Observability",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "agentObservability.openSettings",
+        "title": "Open Settings",
+        "category": "Agent Observability",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "agentObservability.setApiKey",
+        "title": "Set Organization API Key",
+        "category": "Agent Observability",
+        "icon": "$(key)"
+      },
+      {
+        "command": "agentObservability.toggleConsent",
+        "title": "Toggle Cloud Sharing",
+        "category": "Agent Observability"
+      },
+      {
+        "command": "agentObservability.previewPayload",
+        "title": "Preview Aggregate Payload",
+        "category": "Agent Observability",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "agentObservability.openSession",
+        "title": "Open Session Detail",
+        "category": "Agent Observability"
+      },
+      {
+        "command": "agentObservability.openCombinedSession",
+        "title": "Open Combined Detail",
+        "category": "Agent Observability",
+        "icon": "$(layers)"
+      },
+      {
+        "command": "agentObservability.refreshSessionDetail",
+        "title": "Refresh Session Detail",
+        "category": "Agent Observability",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "agentObservability.openSession",
+          "when": "false"
+        },
+        {
+          "command": "agentObservability.openCombinedSession",
+          "when": "false"
+        },
+        {
+          "command": "agentObservability.refreshSessionDetail",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "agentObservability.openCombinedSession",
+          "when": "view == agentObservability.sessions && viewItem == agentObservability.sessionItem",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "agentObservability.refresh",
+          "when": "view == agentObservability.overview",
+          "group": "navigation"
+        },
+        {
+          "command": "agentObservability.refresh",
+          "when": "view == agentObservability.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "agentObservability.syncNow",
+          "when": "view == agentObservability.sync",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "agentObservability.refreshSessionDetail",
+          "when": "activeWebviewPanelId == agentObservability.sessionDetail",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Agent Observability",
+      "properties": {
+        "agentObservability.dashboardUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Base URL of the cloud ingestion API that receives opt-in aggregate batches (e.g. `https://dashboard.example.com`). Leave blank to disable uploads."
+        },
+        "agentObservability.sync.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Opt in to share aggregated, non-sensitive statistics with your organization dashboard. Disabled by default (opt-out). Raw prompts, completions, and tool input/output are never uploaded, and neither are source- or document-file paths or any file contents. The only paths shared are repository-relative paths of customization files (instructions, skills, prompts, agents, hooks), sent with counts so your team can review context-engineering hotspots during sprint retrospectives."
+        },
+        "agentObservability.sync.intervalMinutes": {
+          "type": "number",
+          "default": 60,
+          "minimum": 5,
+          "markdownDescription": "How often background sync uploads aggregate batches, in minutes. Minimum 5."
+        },
+        "agentObservability.localTelemetry.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Feature flag to enable the local telemetry view. When disabled, the extension does not read the local Copilot telemetry database."
+        },
+        "agentObservability.sqlitePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Override the path to the Copilot `agent-traces.db` SQLite database. Leave blank to auto-detect — auto-detection finds and MERGES every reachable database, so agent logs from both Windows and WSL appear together regardless of which environment the window runs in: on the Windows host the installed distros are scanned over `\\\\wsl.localhost\\<distro>\\...` in addition to the local `%APPDATA%` database, and inside a Remote-WSL window the `~/.vscode-server/data` location is checked alongside the Windows host's databases via `/mnt/c/Users/...`. Set this explicitly (e.g. `\\\\wsl.localhost\\Ubuntu\\home\\me\\.vscode-server\\data\\User\\globalStorage\\github.copilot-chat\\agent-traces.db`) to pin a SINGLE database and disable merging."
+        },
+        "agentObservability.deviation.maxSessionMinutes": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "markdownDescription": "Maximum expected duration of an agent session, in minutes, used by the local workflow-deviation detector to flag overlong sessions (TimeoutExceeded) when no explicit workflow is configured for the repository."
+        },
+        "agentObservability.context.acceptedMissingFiles": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" },
+          "markdownDescription": "Context file names that are accepted as missing. Files in this list will not appear in the \"Expected but missing\" section of the Context Analysis tab."
+        },
+        "agentObservability.context.acceptedMissingSources": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" },
+          "markdownDescription": "Source file names whose outgoing missing references should be suppressed. When a source file is listed here, any files referenced only by it will not appear in the \"Expected but missing\" section."
+        },
+        "agentObservability.workflows": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Optional per-repository expected agent workflows for the local deviation detector. When a repository has an explicit entry here, sequence and missing-step checks are enabled in addition to the always-on timeout and failure-rate checks. All detection runs locally; nothing is uploaded.",
+          "items": {
+            "type": "object",
+            "required": [
+              "repository",
+              "workflows"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "repository": {
+                "type": "string",
+                "markdownDescription": "Sanitized repository this configuration applies to (e.g. `https://github.com/org/repo`)."
+              },
+              "workflows": {
+                "type": "array",
+                "markdownDescription": "Expected workflows to check this repository's sessions against.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "markdownDescription": "Human-readable workflow name (e.g. `feature-development`)."
+                    },
+                    "expectedSequence": {
+                      "type": "array",
+                      "default": [],
+                      "items": {
+                        "type": "string"
+                      },
+                      "markdownDescription": "Expected ordered agent names. When present, enables sequence and missing-step checks."
+                    },
+                    "maxDurationMinutes": {
+                      "type": "number",
+                      "minimum": 1,
+                      "markdownDescription": "Maximum expected workflow duration, in minutes. Defaults to `agentObservability.deviation.maxSessionMinutes` when omitted."
+                    },
+                    "sequenceDeviationAlert": {
+                      "type": "boolean",
+                      "default": true,
+                      "markdownDescription": "Flag sequence and missing-step deviations. Requires `expectedSequence`."
+                    },
+                    "timeoutExceededAlert": {
+                      "type": "boolean",
+                      "default": true,
+                      "markdownDescription": "Flag sessions that exceed the maximum duration."
+                    },
+                    "toolUsageAnomalyAlert": {
+                      "type": "boolean",
+                      "default": true,
+                      "markdownDescription": "Flag sessions with a high (>50% over >=3 interactions) failure rate."
+                    },
+                    "triggerPredicate": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "markdownDescription": "Optional metadata filter scoping which interactions belong to this workflow (the local equivalent of the cloud `TriggerKqlQuery`). When set, every check runs over only the matching interactions. All fields are optional; an absent field matches any value; string fields compare case-insensitively.",
+                      "properties": {
+                        "operation": {
+                          "type": "string",
+                          "markdownDescription": "Match the interaction operation, e.g. `chat`, `execute_tool`, `execute_hook`, `invoke_agent`."
+                        },
+                        "agentName": {
+                          "type": "string",
+                          "markdownDescription": "Match the agent name."
+                        },
+                        "agentMode": {
+                          "type": "string",
+                          "markdownDescription": "Match the agent mode, e.g. `agent`, `ask`, `edit`, `default`."
+                        },
+                        "model": {
+                          "type": "string",
+                          "markdownDescription": "Match the resolved model id."
+                        },
+                        "toolName": {
+                          "type": "string",
+                          "markdownDescription": "Match the tool name; interactions without a tool never match."
+                        },
+                        "success": {
+                          "type": "boolean",
+                          "markdownDescription": "Match the success flag exactly."
+                        }
+                      }
+                    },
+                    "steps": {
+                      "type": "array",
+                      "markdownDescription": "Optional ordered, structured workflow steps. When present, predicate-based matching supersedes `expectedSequence` for the sequence and missing-step checks: each step must match at least one in-scope interaction, in order. All matching runs locally.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "markdownDescription": "Step name, shown in deviation descriptions."
+                          },
+                          "predicate": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "markdownDescription": "Metadata filter the step must match. All fields optional; an absent field matches any value; string fields compare case-insensitively.",
+                            "properties": {
+                              "operation": {
+                                "type": "string",
+                                "markdownDescription": "Match the interaction operation, e.g. `chat`, `execute_tool`, `execute_hook`, `invoke_agent`."
+                              },
+                              "agentName": {
+                                "type": "string",
+                                "markdownDescription": "Match the agent name."
+                              },
+                              "agentMode": {
+                                "type": "string",
+                                "markdownDescription": "Match the agent mode, e.g. `agent`, `ask`, `edit`, `default`."
+                              },
+                              "model": {
+                                "type": "string",
+                                "markdownDescription": "Match the resolved model id."
+                              },
+                              "toolName": {
+                                "type": "string",
+                                "markdownDescription": "Match the tool name; interactions without a tool never match."
+                              },
+                              "success": {
+                                "type": "boolean",
+                                "markdownDescription": "Match the success flag exactly."
+                              }
+                            }
+                          },
+                          "contentPredicate": {
+                            "type": "object",
+                            "required": [
+                              "attribute"
+                            ],
+                            "anyOf": [
+                              {
+                                "required": [
+                                  "contains"
+                                ]
+                              },
+                              {
+                                "required": [
+                                  "matches"
+                                ]
+                              }
+                            ],
+                            "additionalProperties": false,
+                            "markdownDescription": "**Local-only** content condition over a raw span attribute. Evaluated entirely on this machine; the matched text NEVER leaves it and any deviation it produces is marked local-only and excluded from sync by construction. Requires one of `contains` or `matches`. An unsupported `attribute`, a missing condition, or an unsafe regex causes the whole step to be skipped.",
+                            "properties": {
+                              "attribute": {
+                                "type": "string",
+                                "enum": [
+                                  "copilot_chat.user_request",
+                                  "gen_ai.input.messages",
+                                  "gen_ai.output.messages",
+                                  "gen_ai.system_instructions",
+                                  "gen_ai.tool.call.arguments",
+                                  "gen_ai.tool.call.result",
+                                  "gen_ai.tool.definitions",
+                                  "gen_ai.tool.description",
+                                  "copilot_chat.reasoning_content",
+                                  "copilot_chat.hook_input",
+                                  "copilot_chat.hook_output",
+                                  "copilot_chat.hook_command",
+                                  "copilot_chat.request.options",
+                                  "copilot_chat.repo.head_branch_name",
+                                  "copilot_chat.repo.head_commit_hash",
+                                  "copilot_chat.mode_name"
+                                ],
+                                "markdownDescription": "Raw `span_attributes` key to inspect. Restricted to the forbidden-to-sync local-only content set (plus `copilot_chat.mode_name`). Any other key is rejected and the step is skipped."
+                              },
+                              "contains": {
+                                "type": "string",
+                                "markdownDescription": "Case-insensitive substring to look for. Preferred over `matches` for simple checks."
+                              },
+                              "matches": {
+                                "type": "string",
+                                "markdownDescription": "Regex pattern to test against the attribute value. A conservative ReDoS-safe subset is enforced: regex alternation `|` under a repetition (e.g. `(a|b)+`) and other catastrophic-backtracking shapes are rejected and the step is skipped — use a character class such as `[ab]+` instead. Regex matching runs only over the first 1,000 characters of the value (vs 10,000 for `contains`) to bound backtracking cost. Prefer `contains` for simple checks."
+                              },
+                              "negate": {
+                                "type": "boolean",
+                                "markdownDescription": "Invert the match (e.g. assert the content does NOT contain the value)."
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "agentObservability.analysis.codeFileExtensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java", ".c",
+            ".cc", ".cpp", ".h", ".hpp", ".cs", ".go", ".rs", ".rb", ".php",
+            ".swift", ".kt", ".kts", ".scala", ".sh", ".bash", ".ps1", ".sql",
+            ".css", ".scss", ".sass", ".less", ".html", ".vue", ".svelte",
+            ".json", ".yaml", ".yml", ".toml", ".xml", ".gradle", ".dart", ".lua", ".r"
+          ],
+          "markdownDescription": "File extensions counted as **source code** (LoC / nLoC) on the local session-detail panel. Lines the agent writes to / removes from files with these extensions are tallied by reading each file-writing tool call's arguments. Classification is by extension only; files matching neither this nor `#agentObservability.analysis.docFileExtensions#` are ignored. Leading dots are optional and case is ignored. Computed entirely locally from raw tool arguments — nothing is ever uploaded."
+        },
+        "agentObservability.analysis.docFileExtensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".md", ".mdx", ".markdown", ".rst", ".txt", ".adoc", ".asciidoc"
+          ],
+          "markdownDescription": "File extensions counted as **documentation** (LoD / nLoD) on the local session-detail panel. Lines the agent writes to / removes from files with these extensions are tallied by reading each file-writing tool call's arguments. Classification is by extension only; files matching neither this nor `#agentObservability.analysis.codeFileExtensions#` are ignored. Leading dots are optional and case is ignored. Computed entirely locally from raw tool arguments — nothing is ever uploaded."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext ts",
+    "test": "vitest run",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vscode/vsce": "^3.0.0",
+    "ajv": "^8.20.0",
+    "esbuild": "^0.23.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "node-sqlite3-wasm": "^0.8.57"
+  }
+}

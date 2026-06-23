@@ -12,12 +12,17 @@ public sealed partial class WidgetQueryService
     private readonly LogsQueryClient _client;
     private readonly string _workspaceId;
     private readonly ILogger<WidgetQueryService> _logger;
+    private readonly bool _exposeRawSessionDetail;
 
-    public WidgetQueryService(IOptions<LogAnalyticsOptions> options, ILogger<WidgetQueryService> logger)
+    public WidgetQueryService(
+        IOptions<LogAnalyticsOptions> options,
+        IOptions<WebUxOptions> webUxOptions,
+        ILogger<WidgetQueryService> logger)
     {
         _logger = logger;
         _workspaceId = options.Value.WorkspaceId
             ?? throw new InvalidOperationException("LogAnalytics:WorkspaceId must be configured.");
+        _exposeRawSessionDetail = webUxOptions.Value.ExposeRawSessionDetail;
         _client = new LogsQueryClient(new DefaultAzureCredential());
     }
 
@@ -30,6 +35,21 @@ public sealed partial class WidgetQueryService
         if (string.IsNullOrWhiteSpace(kqlQuery))
         {
             return new WidgetQueryResult { Error = "No query specified." };
+        }
+
+        // Phase 10 guardrail: reject any query that references raw telemetry tables, raw-content
+        // fields, or the raw property/measurement bags BEFORE touching Log Analytics. This enforces
+        // the aggregate-only contract at execution time, not just via the AI prompt.
+        //
+        // WebUxOptions.ExposeRawSessionDetail is the single master switch for the raw-vs-aggregate
+        // world: default false = aggregate-only, so the guardrail is enforced and every executed
+        // query is checked. When true (one-release rollback) raw queries are allowed and the
+        // guardrail is bypassed so Workflows / raw widgets keep working with prior behavior.
+        var guardrailError = GetGuardrailError(kqlQuery, _exposeRawSessionDetail);
+        if (guardrailError is not null)
+        {
+            _logger.LogWarning("Blocked widget query referencing forbidden raw telemetry: {Reason}", guardrailError);
+            return new WidgetQueryResult { Error = guardrailError };
         }
 
         try
@@ -66,6 +86,109 @@ public sealed partial class WidgetQueryService
             _logger.LogError(ex, "Failed to execute widget query");
             return new WidgetQueryResult { Error = ex.Message };
         }
+    }
+
+    /// <summary>
+    /// Forbidden raw telemetry table names. Matched case-insensitively on whole-word boundaries so
+    /// casing variants (e.g. <c>appdependencies</c>) cannot evade the check.
+    /// </summary>
+    private static readonly string[] ForbiddenTables =
+    [
+        "AppDependencies",
+        "AppTraces",
+        "AppRequests",
+        "traces",
+        "dependencies",
+    ];
+
+    /// <summary>
+    /// Forbidden raw property-bag accessors. Reading raw prompt/tool/reasoning content out of the
+    /// retired telemetry is only possible by indexing the dynamic <c>Properties[...]</c> /
+    /// <c>Measurements[...]</c> bags, so blocking these accessors (case-insensitive) closes the
+    /// practical evasion path even for field names not in <see cref="ForbiddenRawContentFields"/>.
+    /// Matched as literal substrings because the bracket makes them unambiguous.
+    /// </summary>
+    private static readonly string[] ForbiddenRawAccessors =
+    [
+        "Properties[",
+        "Measurements[",
+    ];
+
+    /// <summary>
+    /// Forbidden raw-content fields. These may contain dots/underscores so they are matched as
+    /// boundary-delimited literal phrases (case-insensitive).
+    /// </summary>
+    private static readonly string[] ForbiddenRawContentFields =
+    [
+        "user_request",
+        "gen_ai.input.messages",
+        "gen_ai.output.messages",
+        "system_instructions",
+        "tool.call.arguments",
+        "tool.call.result",
+        "reasoning_content",
+        "hook_",
+    ];
+
+    /// <summary>
+    /// Pure guardrail check. Returns <c>null</c> when the query is allowed (aggregate-only), or an
+    /// error message describing the first forbidden reference found. Rejects any reference to raw
+    /// telemetry tables (AppDependencies, AppTraces, AppRequests, traces, dependencies), the raw
+    /// property/measurement bag accessors (Properties[, Measurements[), or raw-content fields
+    /// (user_request, gen_ai.input/output.messages, system_instructions, tool.call.arguments/result,
+    /// reasoning_content, hook_*). Matching is case-insensitive and boundary-aware so it cannot be
+    /// evaded by casing.
+    /// </summary>
+    /// <summary>
+    /// The flag-gated guardrail decision (the seam invoked by <see cref="ExecuteWidgetQueryAsync"/>).
+    /// In aggregate-only mode (<paramref name="exposeRawSessionDetail"/> == false, the default) it
+    /// returns <see cref="ValidateQueryAllowed"/>'s verdict so raw queries are rejected before any
+    /// Log Analytics access. In rollback mode (true) the guardrail is bypassed (returns null) so the
+    /// raw Workflows/widget paths keep working for one release.
+    /// </summary>
+    internal static string? GetGuardrailError(string kql, bool exposeRawSessionDetail)
+    {
+        return exposeRawSessionDetail ? null : ValidateQueryAllowed(kql);
+    }
+
+    public static string? ValidateQueryAllowed(string kql)
+    {
+        if (string.IsNullOrWhiteSpace(kql))
+            return null;
+
+        foreach (var accessor in ForbiddenRawAccessors)
+        {
+            // Indexing the dynamic property/measurement bags is the only way to read raw content;
+            // a literal case-insensitive match on the accessor token closes that evasion path.
+            if (kql.Contains(accessor, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"This query uses the raw '{accessor}...]' property bag, which is not exposed by the aggregate store. Reference aggregate columns directly (e.g. repository, developerId, interactionCount); raw prompt/tool/reasoning content is only available locally in the VS Code extension.";
+            }
+        }
+
+        foreach (var table in ForbiddenTables)
+        {
+            // \b word boundaries handle identifiers; Regex.Escape keeps it literal.
+            var pattern = $@"\b{Regex.Escape(table)}\b";
+            if (Regex.IsMatch(kql, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                return $"This query references the raw telemetry table '{table}', which is no longer available. Use aggregate fields only (e.g. interactionCount, inputTokens, durationMsSum) over the aggregate store.";
+            }
+        }
+
+        foreach (var field in ForbiddenRawContentFields)
+        {
+            // Dots/underscores in these field names are matched literally. A boundary on the left
+            // and a non-(word|dot) boundary on the right prevents partial-token false negatives
+            // while still catching the field wherever it appears (in brackets, quotes, etc.).
+            var pattern = $@"(?<![A-Za-z0-9_]){Regex.Escape(field)}";
+            if (Regex.IsMatch(kql, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                return $"This query references the raw-content field '{field}', which is not exposed by the aggregate store. Raw prompt/tool/reasoning content is only available locally in the VS Code extension.";
+            }
+        }
+
+        return null;
     }
 
     private static string BuildQueryWithFilters(string kqlQuery, List<DashboardFilter> filters)

@@ -31,6 +31,13 @@ param aiEndpoint string
 @description('Azure AI model deployment name')
 param aiDeploymentName string
 
+@secure()
+@description('Server-side pepper for ingestion API-key HMAC (Ingestion:KeyPepper), wired as a Container App secret')
+param ingestionKeyPepper string
+
+@description('Organization id filter for aggregate analytics (Analytics:OrgId). Empty = all orgs.')
+param analyticsOrgId string = ''
+
 resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
@@ -53,6 +60,12 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           server: acrLoginServer
           identity: dashboardIdentityId
+        }
+      ]
+      secrets: [
+        {
+          name: 'ingestion-key-pepper'
+          value: ingestionKeyPepper
         }
       ]
     }
@@ -85,6 +98,30 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AzureAI__DeploymentName'
               value: aiDeploymentName
+            }
+            {
+              name: 'Ingestion__Enabled'
+              value: 'true'
+            }
+            {
+              name: 'Ingestion__KeyPepper'
+              secretRef: 'ingestion-key-pepper'
+            }
+            {
+              name: 'Analytics__Source'
+              value: 'Aggregate'
+            }
+            {
+              name: 'Analytics__OrgId'
+              value: analyticsOrgId
+            }
+            {
+              name: 'WebUx__ExposeRawSessionDetail'
+              value: 'false'
+            }
+            {
+              name: 'AiQuery__Enabled'
+              value: 'true'
             }
           ]
         }

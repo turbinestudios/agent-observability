@@ -3,13 +3,10 @@ using './main.bicep'
 param location = 'swedencentral'
 param baseName = 'ao'
 param logRetentionInDays = 30
-param otelCollectorImage = 'otel/opentelemetry-collector-contrib:0.102.0'
 param dashboardImage = 'acrao.azurecr.io/dashboard:latest'
-param otelCollectorConfig = loadTextContent('../src/collector/otel-collector-config.yaml')
 
-// Phase 6 — Security: basicauth htpasswd for OTel Collector
-// Generate with: htpasswd -nbBC 10 otlp <your-api-key>
-param otelBasicAuthHtpasswd = readEnvironmentVariable('OTEL_BASICAUTH_HTPASSWD', '')
+// Aggregate analytics org filter (empty = all orgs)
+param analyticsOrgId = ''
 
-// OTEL API key — sourced from GitHub secret OTEL_API_KEY
-param otelApiKey = readEnvironmentVariable('OTEL_API_KEY', '')
+// Server-side pepper for ingestion API-key HMAC — sourced from GitHub secret INGESTION_KEY_PEPPER
+param ingestionKeyPepper = readEnvironmentVariable('INGESTION_KEY_PEPPER', '')

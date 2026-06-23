@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://turbine.dev/schemas/context-insights-batch.schema.json",
+  "title": "Agent Observability Context-Insights Batch (v1)",
+  "description": "Privacy-scoped aggregate batch POSTed by the VS Code extension to the dashboard's context-insights ingestion API. It carries pre-aggregated hotspot signals about CUSTOMIZATION FILES ONLY (instructions/skills/prompts/agents/hooks) so a team can review, per repository and per sprint, which context-engineering artifacts to refine. This is the FIRST contract to convey repo-relative file PATHS to the cloud; it is therefore tightly scoped: paths are repo-relative POSIX form, restricted to an allowlist of customization-file suffixes, repo-scoped only (files that resolve inside the developer's open workspace), and NEVER carry file contents, raw skip-reason text, branches, or identities. additionalProperties is false at every object level so the API REJECTS any unexpected (potentially raw/sensitive) field. It is the single shared contract between the TypeScript producer (extension) and the C# consumer (dashboard API).",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "batchId",
+    "generatedAt",
+    "toolVersion",
+    "pseudonymousDeveloperId",
+    "window",
+    "rows"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Contract version. The API rejects any value other than '1.0' for this schema. Independent of the aggregate-batch schemaVersion."
+    },
+    "batchId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Deterministic idempotency hint for the whole batch. Computed by the extension as a hash of (pseudonymousDeveloperId + window.start + window.end + schemaVersion). At most an optimization for byte-identical retries: correctness is guaranteed by per-row upsert on rowKey (latest-wins), NOT by batchId dedup."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 / ISO 8601 UTC timestamp of when the extension produced this batch. Informational only; not part of any idempotency key."
+    },
+    "toolVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$",
+      "description": "Semantic version of the VS Code extension that produced the batch (e.g. '1.4.2'). Used for compatibility diagnostics and schema-drift triage."
+    },
+    "pseudonymousDeveloperId": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^dev_[0-9a-f]{32}$",
+      "description": "Opaque, stable developer identifier: literal 'dev_' prefix + 32 lowercase hex chars (first 16 bytes of HMAC-SHA256(salt, normalized git email)). The strict pattern structurally excludes emails, usernames, and any free text. MUST NOT be reversible without the org salt (which is never transmitted). Identical derivation to the aggregate-batch contract, so a developer's context insights and interaction aggregates share the same pseudonymous id. Used server-side as the distinct-developer dimension for hotspot review."
+    },
+    "window": {
+      "type": "object",
+      "description": "The closed-open UTC time range [start, end) that all rows in this batch fall within. Defines the slice of local telemetry the extension has aggregated and is uploading.",
+      "required": ["start", "end"],
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Inclusive UTC start of the covered range (ISO 8601)."
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Exclusive UTC end of the covered range (ISO 8601). MUST be greater than start."
+        }
+      },
+      "additionalProperties": false
+    },
+    "rows": {
+      "type": "array",
+      "minItems": 0,
+      "description": "Pre-aggregated context-file rows. Each element is one fully-summarized row at the grain (bucketStart, repository, contextFile, category). An empty array is a valid heartbeat batch indicating no customization-file activity in the window.",
+      "items": { "$ref": "#/$defs/contextFileRow" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "contextFileRow": {
+      "type": "object",
+      "description": "One aggregate row at the grain (bucketStart, bucketDurationSeconds, repository, contextFile, category) for a single pseudonymousDeveloperId. All measures are additive across rows EXCEPT distinctSessionCount and estTokensMax (a max, not a sum), which must be recombined server-side accordingly.",
+      "required": [
+        "rowKey",
+        "bucketStart",
+        "bucketDurationSeconds",
+        "repository",
+        "contextFile",
+        "category",
+        "appliedCount",
+        "skippedCount",
+        "estTokensSum",
+        "estTokensMax",
+        "sessionsWithErrorCount",
+        "sessionsWithDeviationCount",
+        "distinctSessionCount"
+      ],
+      "properties": {
+        "rowKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Stable per-row idempotency key. Hash of the full grain tuple (bucketStart, bucketDurationSeconds, repository, contextFile, category) + pseudonymousDeveloperId. The API upserts by rowKey so re-uploaded or overlapping windows converge to the same row instead of double-counting."
+        },
+        "bucketStart": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Aligned UTC start of the time bin (ISO 8601). In v1 bins are ALWAYS aligned to 30-minute boundaries (minutes \u2208 {00,30}, seconds=0, ms=0), matching the aggregate-batch contract so the dashboard can window context insights and interaction metrics over the same sprint range."
+        },
+        "bucketDurationSeconds": {
+          "type": "integer",
+          "const": 1800,
+          "description": "Width of the time bin in seconds. v1 GLOBAL INVARIANT: const 1800 (30 minutes). Because bin width AND alignment are globally fixed, rowKeys for the same wall-clock window always collide and upserts converge."
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(unknown|https?://[A-Za-z0-9.\\-]+(:[0-9]+)?/[^\\s@?#]+)$",
+          "description": "SANITIZED git remote, resolved per session (COALESCE of copilot_chat.repo.remote_url across the session, else literal 'unknown'). Same sanitization rule as the aggregate-batch contract: normalized to 'https://{host}/{owner}/{repo}', stripping userinfo/query/fragment and a trailing '.git'. The pattern structurally forbids '@', whitespace, '?', and '#' so a credential-bearing URL cannot satisfy it."
+        },
+        "contextFile": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))(?:[A-Za-z0-9_.-]+/)*(?:[A-Za-z0-9_.-]+\\.(?:instructions|prompt|agent|skill)\\.md|copilot-instructions\\.md|AGENTS\\.md|CLAUDE\\.md|SKILL\\.md)$",
+          "description": "Repo-relative POSIX path of a CUSTOMIZATION file, resolved by the extension against the developer's open workspace (repo-scoped only \u2014 user/global-scope files are excluded). CRITICAL PRIVACY RULES enforced structurally by the pattern: (1) relative only \u2014 no leading '/', no drive letter, no backslashes; (2) no '..' path segments (no directory traversal / escaping the repo); (3) safe segment charset [A-Za-z0-9_.-] only (no whitespace, '@', '?', '#', ':'); (4) the filename MUST match the customization allowlist suffixes (*.instructions.md, *.prompt.md, *.agent.md, *.skill.md) or be a known root/skill file (copilot-instructions.md, AGENTS.md, CLAUDE.md, SKILL.md). File CONTENTS are NEVER included \u2014 only this path plus aggregate counts. Source/doc files pulled into context are explicitly OUT of scope and cannot satisfy this pattern."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["instruction", "skill", "agent", "hook", "prompt"],
+          "description": "Customization-file category derived locally from the discovery source / file type. Closed set; 'unknown' is never emitted (unclassifiable files are dropped client-side)."
+        },
+        "appliedCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of times this customization file was APPLIED (loaded into the context window) across sessions in this row (additive). High values mark high-impact files worth investing in."
+        },
+        "skippedCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of times this customization file was discovered but SKIPPED (e.g. its applyTo glob matched no attached file) across sessions in this row (additive). High values mark misconfigured / wasted context-engineering artifacts."
+        },
+        "skipReasonCounts": {
+          "$ref": "#/$defs/skipReasonCounts",
+          "description": "OPTIONAL closed-set breakdown of WHY this file was skipped. Free-text skip reasons are bucketed locally into a fixed taxonomy so no raw reason text leaves the machine. Omitted when skippedCount is 0."
+        },
+        "estTokensSum": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sum of the file's estimated token weight (\u2248 charCount / 4) over the sessions where it was applied in this row (additive). Combined with appliedCount server-side to derive an average token cost; signals context-budget pressure."
+        },
+        "estTokensMax": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum single-session estimated token weight observed for this file in this row. NOT additive across rows; the server takes the max when merging. Surfaces oversized files."
+        },
+        "sessionsWithErrorCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct sessions in this row where this file was applied AND the session contained at least one errored span (status_code = 2) (additive). A CO-OCCURRENCE signal only \u2014 it does NOT imply the file caused the error."
+        },
+        "sessionsWithDeviationCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct sessions in this row where this file was applied AND the local workflow-deviation detector flagged a deviation (sequence/timeout/missing-step/tool-usage anomaly) (additive). Populated only when the developer has workflow configs; otherwise 0. A CO-OCCURRENCE signal only \u2014 not a causal claim."
+        },
+        "distinctSessionCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct sessions (COALESCE(conversation_id, chat_session_id)) in which this file appeared within THIS row only. WARNING: NOT additive across rows; true distinct totals over a range require server-side distinct counting."
+        },
+        "lastActivityAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "OPTIONAL. Unix epoch milliseconds of the latest session start in which this file appeared in this row (max over the row). Lets the server recover last-seen at true event resolution rather than the 30-minute bucketStart. Non-sensitive (a timestamp)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "skipReasonCounts": {
+      "type": "object",
+      "description": "Closed-set taxonomy of skip reasons. Property names are a fixed vocabulary; raw reason strings are mapped into these buckets locally and never transmitted. additionalProperties:false rejects any unexpected (potentially raw-text) key.",
+      "properties": {
+        "applyToNoMatch": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Skipped because the file's applyTo glob did not match any attached/open file."
+        },
+        "other": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Skipped for any reason outside the recognized taxonomy. The raw reason is NOT included."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

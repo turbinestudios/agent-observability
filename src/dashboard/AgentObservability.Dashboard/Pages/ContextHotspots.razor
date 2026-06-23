@@ -1,0 +1,196 @@
+@page "/context-hotspots"
+@inject IContextHotspotAnalyticsService Hotspots
+
+<PageTitle>Context Hotspots</PageTitle>
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Context Engineering</p>
+        <h1>Context file hotspots</h1>
+        <p class="page-copy">
+            Review, per repository and per sprint, which customization files (instructions, skills,
+            prompts, agents, hooks) most deserve attention. Files are ranked by a composite of four
+            signals: how often they are <strong>skipped</strong> (often a misconfigured
+            <code>applyTo</code>), how <strong>token-heavy</strong> they are, how often errors or
+            workflow deviations <strong>co-occur</strong> when they are applied, and how
+            <strong>frequently</strong> they are used. Use it during retrospective to decide where to
+            refine your context engineering.
+        </p>
+    </div>
+</section>
+
+<section class="panel-card" style="margin-bottom: 1.5rem;">
+    <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-end;">
+        <div class="form-group">
+            <label for="repo-filter">Repository</label>
+            <select id="repo-filter" @bind="selectedRepository" @bind:after="ReloadAsync">
+                <option value="">All repositories</option>
+                @foreach (var repo in repositories)
+                {
+                    <option value="@repo">@ShortRepo(repo)</option>
+                }
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="sprint-filter">Sprint length</label>
+            <select id="sprint-filter" @bind="sprintWeeks" @bind:after="ReloadAsync">
+                <option value="1">Last 1 week</option>
+                <option value="2">Last 2 weeks</option>
+                <option value="3">Last 3 weeks</option>
+                <option value="4">Last 4 weeks</option>
+            </select>
+        </div>
+    </div>
+</section>
+
+@if (loading)
+{
+    <p class="loading-state">Loading context hotspots...</p>
+}
+else if (hotspots.Count == 0)
+{
+    <section class="panel-card">
+        <div class="panel-heading">
+            <h2>No context data yet</h2>
+        </div>
+        <p class="page-copy">
+            No customization-file activity was reported for this selection. Hotspots appear once team
+            members opt in to aggregate sync in the VS Code <em>Agent Observability (Local)</em>
+            extension and their context files are discovered or applied within the window. Only
+            repository-relative customization-file paths and counts are shared — never file contents.
+        </p>
+    </section>
+}
+else
+{
+    <section class="panel-card" style="margin-bottom: 1.5rem;">
+        <div class="panel-heading">
+            <h2>Top hotspots by score</h2>
+            <span>@RangeLabel</span>
+        </div>
+        <RadzenChart>
+            <RadzenBarSeries Data="@TopBars" CategoryProperty="Label" ValueProperty="Score" Title="Hotspot score" />
+            <RadzenCategoryAxis />
+            <RadzenValueAxis Max="100" />
+        </RadzenChart>
+    </section>
+
+    <section class="panel-card">
+        <div class="panel-heading">
+            <h2>Ranked context files</h2>
+            <span>@hotspots.Count file(s) · @RangeLabel</span>
+        </div>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Context file</th>
+                    <th>Category</th>
+                    <th>Score</th>
+                    <th>Applied</th>
+                    <th>Skipped</th>
+                    <th>Avg / Max tokens</th>
+                    <th title="Sessions where the file was applied and an error also occurred. Co-occurrence, not cause.">Errors co-occur</th>
+                    <th title="Sessions where the file was applied and a workflow deviation also occurred. Co-occurrence, not cause.">Deviations co-occur</th>
+                    <th>Developers</th>
+                    <th>Last seen</th>
+                </tr>
+            </thead>
+            <tbody>
+                @{
+                    var rank = 1;
+                }
+                @foreach (var item in hotspots)
+                {
+                    <tr>
+                        <td>@rank</td>
+                        <td title="@item.Repository">@item.ContextFile</td>
+                        <td>@Capitalize(item.Category)</td>
+                        <td><strong>@item.HotspotScore.ToString("N0", CultureInfo.InvariantCulture)</strong></td>
+                        <td>@item.AppliedCount.ToString("N0", CultureInfo.InvariantCulture)</td>
+                        <td>
+                            @item.SkippedCount.ToString("N0", CultureInfo.InvariantCulture)
+                            @if (item.SkippedCount > 0)
+                            {
+                                <span class="muted-inline"> (@item.SkipRate.ToString("P0", CultureInfo.InvariantCulture))</span>
+                            }
+                        </td>
+                        <td>
+                            @item.AverageEstTokens.ToString("N0", CultureInfo.InvariantCulture)
+                            <span class="muted-inline"> / @item.MaxEstTokens.ToString("N0", CultureInfo.InvariantCulture)</span>
+                        </td>
+                        <td>@item.SessionsWithErrorCount.ToString("N0", CultureInfo.InvariantCulture)</td>
+                        <td>@item.SessionsWithDeviationCount.ToString("N0", CultureInfo.InvariantCulture)</td>
+                        <td>@item.DistinctDeveloperCount.ToString("N0", CultureInfo.InvariantCulture)</td>
+                        <td>@item.LastSeen.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)</td>
+                    </tr>
+                    rank++;
+                }
+            </tbody>
+        </table>
+
+        <details style="margin-top: 1rem;">
+            <summary>How the score works</summary>
+            <p class="page-copy" style="margin-top: 0.5rem;">
+                Each file gets four sub-scores normalized to 0–1 and combined into a 0–100 score:
+                <strong>Skip</strong> = skipped ÷ (applied + skipped) ·
+                <strong>Friction</strong> = (error + deviation sessions) ÷ applied ·
+                <strong>Token</strong> = max tokens ÷ @ContextHotspotAnalyticsService.TokenBudgetTokens ·
+                <strong>Frequency</strong> = applied ÷ highest applied in view. Weights: skip 30%,
+                friction 30%, token 20%, frequency 20%. Error and deviation columns reflect
+                <em>co-occurrence</em> in the same session — they are a prompt to investigate, not a
+                claim that the file caused the issue.
+            </p>
+        </details>
+    </section>
+}
+
+@code {
+    private IReadOnlyList<string> repositories = [];
+    private IReadOnlyList<ContextHotspot> hotspots = [];
+    private string selectedRepository = string.Empty;
+    private int sprintWeeks = 2;
+    private bool loading = true;
+
+    private TimeSpan Lookback => TimeSpan.FromDays(sprintWeeks * 7);
+
+    private string RangeLabel => sprintWeeks == 1 ? "Last 1 week" : $"Last {sprintWeeks} weeks";
+
+    private IReadOnlyList<HotspotBar> TopBars => hotspots
+        .Take(10)
+        .Select(h => new HotspotBar { Label = ShortFile(h.ContextFile), Score = Math.Round(h.HotspotScore, 1) })
+        .ToList();
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        loading = true;
+        repositories = await Hotspots.GetRepositoriesAsync(Lookback);
+        var repo = string.IsNullOrWhiteSpace(selectedRepository) ? null : selectedRepository;
+        hotspots = await Hotspots.GetHotspotsAsync(repo, Lookback);
+        loading = false;
+    }
+
+    private static string Capitalize(string value) =>
+        string.IsNullOrEmpty(value) ? value : char.ToUpperInvariant(value[0]) + value[1..];
+
+    private static string ShortFile(string path)
+    {
+        var slash = path.LastIndexOf('/');
+        return slash >= 0 && slash < path.Length - 1 ? path[(slash + 1)..] : path;
+    }
+
+    private static string ShortRepo(string repo)
+    {
+        var idx = repo.IndexOf("://", StringComparison.Ordinal);
+        return idx >= 0 ? repo[(idx + 3)..] : repo;
+    }
+
+    private sealed record HotspotBar
+    {
+        public required string Label { get; init; }
+        public double Score { get; init; }
+    }
+}
