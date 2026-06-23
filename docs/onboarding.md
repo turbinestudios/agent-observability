@@ -2,9 +2,12 @@
 
 Agent Observability is **privacy-first** and **extension-first**. You install a
 local VS Code extension that reads your GitHub Copilot agent telemetry from an
-on-disk SQLite database. **Raw content (prompts, responses, tool I/O, file
-paths, identities) never leaves your machine.** Only **opt-in, aggregated,
-non-sensitive** statistics are ever shared with your organization dashboard.
+on-disk SQLite database. **Raw content (prompts, responses, tool I/O,
+source-file paths, file contents, identities) never leaves your machine.** Only
+**opt-in, aggregated, non-sensitive** statistics — plus, for context-engineering
+hotspots, the **repository-relative paths of customization files**
+(instructions/skills/prompts/agents/hooks) with counts only — are ever shared
+with your organization dashboard.
 
 There is **no OpenTelemetry collector, no OTLP endpoint, no
 `OTEL_EXPORTER_OTLP_*` environment variables, and no committed
@@ -103,20 +106,32 @@ aggregate batch (the only thing ever sent) before any upload.
 
 ## What is shared vs NOT shared
 
-**Shared** (aggregate, non-sensitive measures only): aggregate **counts**, token
-totals (input/output/cached/reasoning), and **latency buckets** per **30-minute
-bin**, grouped by **repository**, **model**, **agent mode**, and **tool**, under
-a **pseudonymous developer id**.
+**Shared** (aggregate, non-sensitive measures only):
+
+- **Usage aggregates:** aggregate **counts**, token totals
+  (input/output/cached/reasoning), and **latency buckets** per **30-minute
+  bin**, grouped by **repository**, **model**, **agent mode**, and **tool**,
+  under a **pseudonymous developer id**.
+- **Context-engineering hotspots:** for **customization files only**
+  (instructions, skills, prompts, agents, hooks) — their **repository-relative
+  path**, category, and per-30-minute-bin **counts** (applied / skipped, an
+  estimated token size derived from file **size** only, and how many sessions
+  saw an error or workflow deviation while the file was applied). Skip reasons
+  are reduced to a fixed taxonomy (`applyToNoMatch` / `other`) — never the raw
+  reason text.
 
 **NOT shared** (never leaves your machine): no prompts, no responses, no file
-contents, no file paths, no commit hashes, no branch names, no machine name, no
-OS username, and no email or personal identity.
+contents, **no source- or document-file paths**, no commit hashes, no branch
+names, no machine name, no OS username, and no email or personal identity. Only
+customization-file paths (above) are shared — path plus counts, never contents.
 
-The aggregate contract is the only payload uploaded and is locked by
-[`schemas/aggregate-batch.schema.json`](../schemas/aggregate-batch.schema.json)
-(`additionalProperties: false` at every level). The full privacy guarantee and
-how it is enforced/tested is documented in
-[`docs/privacy-validation.md`](privacy-validation.md).
+Two strict contracts are the only payloads uploaded — the aggregate batch
+([`schemas/aggregate-batch.schema.json`](../schemas/aggregate-batch.schema.json))
+and the context-insights batch
+([`schemas/context-insights-batch.schema.json`](../schemas/context-insights-batch.schema.json))
+— both locked with `additionalProperties: false` at every level and re-validated
+server-side. The full privacy guarantee and how it is enforced/tested is
+documented in [`docs/privacy-validation.md`](privacy-validation.md).
 
 ## Reference
 

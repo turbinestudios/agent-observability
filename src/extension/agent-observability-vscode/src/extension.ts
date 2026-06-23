@@ -14,7 +14,7 @@ import { getIdentityInput, computeDeveloperId } from './aggregate/pseudonymizer'
 import { FetchHttpPoster } from './sync/httpPoster';
 import { SyncClient } from './sync/syncClient';
 import { GlobalStateSyncStateStore } from './sync/syncState';
-import { SyncEngine, systemClock } from './sync/syncEngine';
+import { SyncEngine, SyncContextInsightsSource, systemClock } from './sync/syncEngine';
 import { SyncScheduler } from './sync/scheduler';
 import { registerObservabilityChatParticipant } from './chat/observabilityChat';
 
@@ -66,11 +66,56 @@ export function activate(context: vscode.ExtensionContext): void {
     () => config.getDashboardUrl(),
     () => secrets.getApiKey(),
   );
-  const syncEngine = new SyncEngine(config, consent, secrets, telemetry, syncClient, syncState, systemClock, {
-    toolVersion,
-    workspaceCwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-    machineId: vscode.env.machineId,
-  });
+  // LOCAL-ONLY source for the secondary context-insights upload. Supplies the
+  // engine with per-session discovery events and the subset of sessions the
+  // on-machine deviation detector flagged. Both read local telemetry only; raw
+  // content never leaves the machine (only counts/categories are aggregated).
+  const contextInsightsSource: SyncContextInsightsSource = {
+    getDiscoveryEvents: (sessionKey) => {
+      const result = telemetry.getContextDiscoveryEvents(sessionKey);
+      return result.ok ? result.value : [];
+    },
+    getDeviationSessionKeys: (sessionKeys) => {
+      const flagged = new Set<string>();
+      for (const sessionKey of sessionKeys) {
+        const interactions = telemetry.getSessionInteractions(sessionKey);
+        if (!interactions.ok) {
+          continue;
+        }
+        // Memoized LOCAL-ONLY content lookup for content-predicate workflows;
+        // the raw text is evaluated on-machine only and never transmitted.
+        const attributeCache = new Map<string, ReadonlyMap<string, string>>();
+        const contentLookup = (attribute: string): ReadonlyMap<string, string> => {
+          let values = attributeCache.get(attribute);
+          if (values === undefined) {
+            const lookup = telemetry.getSpanAttributes(sessionKey, attribute);
+            values = lookup.ok ? lookup.value : new Map<string, string>();
+            attributeCache.set(attribute, values);
+          }
+          return values;
+        };
+        if (deviations.detectForSession(interactions.value, contentLookup).length > 0) {
+          flagged.add(sessionKey);
+        }
+      }
+      return flagged;
+    },
+  };
+  const syncEngine = new SyncEngine(
+    config,
+    consent,
+    secrets,
+    telemetry,
+    syncClient,
+    syncState,
+    systemClock,
+    {
+      toolVersion,
+      workspaceCwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+      machineId: vscode.env.machineId,
+    },
+    contextInsightsSource,
+  );
 
   // Construct the view providers, backed by the telemetry service.
   const overview = new OverviewViewProvider(telemetry);

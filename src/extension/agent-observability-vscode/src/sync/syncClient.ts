@@ -1,4 +1,5 @@
 import { AggregateBatch } from '../aggregate/models';
+import { ContextInsightsBatch } from '../aggregate/contextInsightsModels';
 import { HttpPoster, HttpResponse } from './httpPoster';
 
 /**
@@ -10,6 +11,9 @@ import { HttpPoster, HttpResponse } from './httpPoster';
  * `docs/architecture/api-auth.md`:
  *  - `POST {dashboardUrl}/api/ingest/aggregate` — body = the {@link AggregateBatch}
  *    JSON, `Authorization: Bearer <orgApiKey>`.
+ *  - `POST {dashboardUrl}/api/ingest/context-insights` — body = the
+ *    {@link ContextInsightsBatch} JSON, same Bearer auth. A SEPARATE, additive
+ *    contract from the aggregate batch (the frozen aggregate schema is untouched).
  *  - `POST {dashboardUrl}/api/ingest/status` — a tiny best-effort status report.
  *  - `GET  {dashboardUrl}/api/ingest/health` — anonymous.
  *
@@ -110,6 +114,33 @@ export class SyncClient {
 
     // Defensively scrub the key from any human-readable detail before returning,
     // so even a server that echoes the Authorization header can never leak it.
+    return scrubOutcome(this.mapStatus(res), apiKey);
+  }
+
+  /**
+   * POST a context-insights batch to `/api/ingest/context-insights`. Mirrors
+   * {@link sendBatch} byte-for-byte in transport/auth/scrubbing — only the path
+   * and body type differ. Returns a typed {@link SyncOutcome}; never throws.
+   */
+  async sendContextInsights(batch: ContextInsightsBatch): Promise<SyncOutcome> {
+    const config = await this.resolveConfig();
+    if (config === undefined) {
+      return { kind: 'misconfigured' };
+    }
+    const { baseUrl, apiKey } = config;
+
+    const url = joinUrl(baseUrl, '/api/ingest/context-insights');
+    // The body is the batch JSON; never logged or echoed anywhere.
+    const body = JSON.stringify(batch);
+    const headers = { Authorization: `Bearer ${apiKey}` };
+
+    let res: HttpResponse;
+    try {
+      res = await this.poster.post(url, headers, body);
+    } catch (err) {
+      return { kind: 'network', message: scrubKey(networkMessage(err), apiKey) };
+    }
+
     return scrubOutcome(this.mapStatus(res), apiKey);
   }
 

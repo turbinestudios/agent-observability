@@ -169,10 +169,15 @@ deliberate operation, not part of normal flow.
 | Full length | 36 characters (`dev_` + 32 hex) |
 | Example | `dev_9f2c1ab47e0d3f5a8b6c2d1e4f70a9c3` |
 
-This single string is the only identity-derived value placed in outgoing aggregate
-batches. It maps onto the `Developer` dimension currently produced by
+This single string is the only identity-derived value placed in outgoing batches.
+It maps onto the `Developer` dimension currently produced by
 `LogAnalyticsService.GetDeveloperActivityAsync` and the `ActiveDevelopers` count in
-`DashboardMetrics`.
+`DashboardMetrics`. The same pseudonymous id (and nothing more identity-derived) is
+also carried by the additive **context-insights batch**
+(`schemas/context-insights-batch.schema.json`), which conveys repository-relative
+**customization-file paths** (instructions/skills/prompts/agents/hooks) with counts
+only so teams can review context-engineering hotspots; it reuses this id derivation
+unchanged and ships no other identity input.
 
 ### Identity tier marker (LOCAL-ONLY diagnostic — NOT shipped in v1)
 

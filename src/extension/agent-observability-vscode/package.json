@@ -56,7 +56,7 @@
       },
       {
         "view": "agentObservability.sync",
-        "contents": "Sync uploads only opt-in, aggregated, non-sensitive statistics to your organization dashboard. Raw prompts, completions, tool I/O and file paths never leave your machine.\n\nCloud sharing is OFF by default and arrives in a later phase.\n\n[Set Organization API Key](command:agentObservability.setApiKey)\n[Open Settings](command:agentObservability.openSettings)"
+        "contents": "Sync uploads only opt-in, aggregated, non-sensitive statistics to your organization dashboard. Raw prompts, completions, tool I/O, source-file paths and file contents never leave your machine.\n\nWhen enabled, the only paths shared are repository-relative paths of customization files (instructions, skills, prompts, agents, hooks) — with counts, never contents — so your team can review context-engineering hotspots.\n\nCloud sharing is OFF by default.\n\n[Set Organization API Key](command:agentObservability.setApiKey)\n[Open Settings](command:agentObservability.openSettings)"
       }
     ],
     "chatParticipants": [
@@ -180,7 +180,7 @@
         "agentObservability.sync.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Opt in to share aggregated, non-sensitive statistics with your organization dashboard. Disabled by default (opt-out). Raw prompts, completions, tool I/O and file paths are never uploaded."
+          "markdownDescription": "Opt in to share aggregated, non-sensitive statistics with your organization dashboard. Disabled by default (opt-out). Raw prompts, completions, and tool input/output are never uploaded, and neither are source- or document-file paths or any file contents. The only paths shared are repository-relative paths of customization files (instructions, skills, prompts, agents, hooks), sent with counts so your team can review context-engineering hotspots during sprint retrospectives."
         },
         "agentObservability.sync.intervalMinutes": {
           "type": "number",

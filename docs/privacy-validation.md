@@ -7,10 +7,15 @@ reference for auditing the privacy-first refactor.
 ## End-to-end guarantee
 
 > **No raw prompt, response, tool I/O, reasoning, hook, or session content — and
-> no file paths, commit hashes, branch names, machine name, OS username, or
-> developer email — ever reaches the cloud.** Raw content is readable **only
-> locally** inside the VS Code extension. The cloud receives **only** the
-> aggregate batch contract, and **only** after explicit, per-developer opt-in.
+> no source-file paths, file contents, commit hashes, branch names, machine
+> name, OS username, or developer email — ever reaches the cloud.** Raw content
+> is readable **only locally** inside the VS Code extension. The cloud receives
+> **only** two strict batch contracts — the **aggregate batch** and the
+> **context-insights batch** — and **only** after explicit, per-developer
+> opt-in. The single exception to "no paths" is deliberate and narrow: the
+> context-insights batch carries the **repository-relative paths of
+> customization files only** (instructions/skills/prompts/agents/hooks), with
+> counts and never contents, so teams can review context-engineering hotspots.
 
 The guarantee is enforced by **defense in depth**: the client never emits raw
 fields, the shared schema rejects unexpected fields, and the server re-validates
@@ -33,6 +38,9 @@ and rejects raw/free-text fields even though it does not trust the client.
 | 11 | `orgId` derived from the **key record**, never the payload | `Services/Ingestion/IngestionAuthenticator.cs` | `IngestionPipelineTests.cs` |
 | 12 | Dashboard query guardrail rejects raw-table/raw-field KQL in aggregate-only mode | `Services/WidgetQueryService.cs` (`GetGuardrailError`) | `WidgetQueryGuardrailTests.cs` |
 | 13 | Cloud-side raw deviation polling is **gated off by default** | `Services/AlertEngine.cs` (gated on `WebUx:ExposeRawSessionDetail`, default false) | `Services/AlertEngine.cs` gate + `WebUxOptions` default |
+| 14 | **Context-insights** batch carries customization-file paths **only** (allowlisted, repo-relative, no `..`/drive/`@`), never source/doc paths or contents | extension `aggregate/customizationFilter.ts` (`SAFE_CONTEXT_FILE_PATTERN`, repo-scoped resolver) + `schemas/context-insights-batch.schema.json` | `aggregate/contextInsightsPrivacy.test.ts` (adversarial inputs; scans every string) |
+| 15 | Skip reasons reduced to a **closed taxonomy** (`applyToNoMatch`/`other`) — raw reason text never transmitted | `aggregate/contextInsightsExtractor.ts` (`classifySkipReason`) | `aggregate/contextInsightsPrivacy.test.ts` (raw reason absent) |
+| 16 | Server re-validates the context-insights batch and **rejects absolute/traversal/non-allowlisted paths** and unknown fields | `Services/Ingestion/ContextInsightsBatchValidator.cs` | `ContextInsightsValidatorTests.cs`, `ContextInsightsIngestionTests.cs` |
 
 ## Client-side enforcement (VS Code extension)
 
@@ -68,6 +76,27 @@ read path the extension uses) and proves the contract end-to-end:
 5. `operation` is one of the four enum values.
 6. Re-building from the same rows is idempotent (identical `batchId`/`rowKeys`).
 
+### The context-insights regression test: `aggregate/contextInsightsPrivacy.test.ts`
+
+This test drives the **real producer pipeline** (build repo customization index →
+extract observations → aggregate batch) with a deliberately **adversarial** mix
+of inputs — absolute/global-scope prompt paths, `..` traversal, ambiguous names,
+non-allowlisted files, and a skip event whose raw reason embeds a username and
+absolute path — and proves end-to-end that:
+
+1. The batch validates against `schemas/context-insights-batch.schema.json` via
+   **ajv 2020** (`strict:true`) — `additionalProperties:false` holds.
+2. **Only** safe, in-repo, allowlisted customization paths survive; every
+   adversarial input is dropped.
+3. No string in the batch contains an absolute path, drive letter, `..`, `@`,
+   backslash, email shape, the workspace/home directory, a username, or the raw
+   skip-reason text.
+4. Every `contextFile` matches the allowlisted repo-relative path pattern, every
+   repository the repository pattern; the developer id is pseudonymous,
+   categories are enum-only, and skip-reason keys are the closed set.
+5. Re-building from the same observations is idempotent (identical
+   `batchId`/`rowKeys`).
+
 ## Shared contract: `schemas/aggregate-batch.schema.json`
 
 The single shared contract between the TypeScript producer (extension) and the
@@ -76,6 +105,21 @@ object level**, so the API rejects any unexpected (potentially raw/sensitive)
 field. It constrains the dimension grain (30-minute buckets, fixed latency
 bounds `[100,250,500,1000,2000,5000,10000,30000]`), the repository pattern, the
 `dev_[0-9a-f]{32}` developer id, and the operation enum.
+
+## Second shared contract: `schemas/context-insights-batch.schema.json`
+
+An **additive, separate** contract (not a version bump of the aggregate batch)
+carrying per-(repository, customization-file, category) hotspot rows at the same
+30-minute grain. It is the **only** contract that conveys file paths, so it
+constrains `contextFile` to a repo-relative POSIX path with **no `..`, drive
+letter, leading `/`, backslash, `@`, `?`, `#`, or whitespace** that **must** end
+in an allowlisted customization suffix (`*.instructions.md`, `*.prompt.md`,
+`*.agent.md`, `*.skill.md`) or a known root/skill file (`copilot-instructions.md`,
+`AGENTS.md`, `CLAUDE.md`, `SKILL.md`). It sets `additionalProperties:false` at
+every level, reuses the repository and `dev_[0-9a-f]{32}` patterns, fixes the
+category enum (`instruction|skill|agent|hook|prompt`), and restricts skip
+reasons to the closed `{applyToNoMatch, other}` set. File **contents** are never
+read — token size is estimated from file **size** only.
 
 ## Server-side enforcement (dashboard)
 
@@ -103,6 +147,21 @@ Re-validates a deserialized batch and rejects (400) on any problem. Key guards:
 - Schema version, bucket duration (`1800`s), pseudonymous-id pattern, fixed
   histogram bounds/length, and non-negative / partition (`success+error <=
   interaction`) measure invariants.
+
+### `ContextInsightsBatchValidator`
+
+Located at
+`src/dashboard/AgentObservability.Dashboard/Services/Ingestion/ContextInsightsBatchValidator.cs`.
+Re-validates the context-insights batch and rejects (400) on any problem. Its
+most important guard is `ValidateContextFile`, which **independently** rejects
+any `contextFile` that is not a repo-relative, allowlisted customization path —
+running explicit pre-checks for `\`, `:`, leading `/`, `..`, `@`, `?`, `#`, and
+whitespace **before** the allowlist regex — so an absolute path, home directory,
+drive letter, traversal, or non-customization (source/doc) file can never reach
+storage. It also re-checks the repository, developer-id, category, and bucket
+duration, and that `skipReasonCounts` are non-negative and sum to `<=
+skippedCount`. Tested by `ContextInsightsValidatorTests.cs` and
+`ContextInsightsIngestionTests.cs`.
 
 ### `IngestionAuthenticator`
 

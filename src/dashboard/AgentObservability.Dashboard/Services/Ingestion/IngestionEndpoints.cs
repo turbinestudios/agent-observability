@@ -47,6 +47,27 @@ public static class IngestionEndpoints
             return await HandleAggregateAsync(auth, body, validator, store, cancellationToken).ConfigureAwait(false);
         });
 
+        app.MapPost("/api/ingest/context-insights", async (
+            HttpRequest request,
+            IngestionAuthenticator authenticator,
+            ContextInsightsBatchValidator validator,
+            IContextInsightStore store,
+            IOptions<IngestionOptions> options,
+            CancellationToken cancellationToken) =>
+        {
+            if (!options.Value.Enabled)
+            {
+                return ServiceDisabled();
+            }
+
+            var auth = await authenticator.AuthenticateAsync(request.Headers.Authorization, cancellationToken)
+                .ConfigureAwait(false);
+
+            var body = await ReadBodyAsync(request, cancellationToken).ConfigureAwait(false);
+
+            return await HandleContextInsightsAsync(auth, body, validator, store, cancellationToken).ConfigureAwait(false);
+        });
+
         app.MapPost("/api/ingest/status", async (
             HttpRequest request,
             IngestionAuthenticator authenticator,
@@ -125,6 +146,61 @@ public static class IngestionEndpoints
         await store.UpsertBucketsAsync(auth.OrgId!, batch, cancellationToken).ConfigureAwait(false);
 
         return Results.Ok(new { accepted = batch.Buckets.Count, batchId = batch.BatchId });
+    }
+
+    /// <summary>
+    /// Host-independent core for <c>POST /api/ingest/context-insights</c>. Mirrors
+    /// <see cref="HandleAggregateAsync"/>: authenticate, strictly deserialize (unknown fields are
+    /// rejected), re-validate the privacy rules server-side, then upsert by the validated org
+    /// (never the payload). Directly callable in tests.
+    /// </summary>
+    public static async Task<IResult> HandleContextInsightsAsync(
+        AuthResult auth,
+        string body,
+        ContextInsightsBatchValidator validator,
+        IContextInsightStore store,
+        CancellationToken cancellationToken = default)
+    {
+        if (!auth.IsAuthenticated)
+        {
+            return Unauthorized();
+        }
+
+        ContextInsightsBatch? batch;
+        try
+        {
+            batch = JsonSerializer.Deserialize<ContextInsightsBatch>(body, DisallowOptions);
+        }
+        catch (JsonException ex)
+        {
+            // Unknown/unexpected field (additionalProperties:false) or otherwise malformed JSON.
+            return Results.Problem(
+                title: "Invalid context-insights batch",
+                detail: $"Request body could not be parsed (possible unexpected field): {ex.Message}",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (batch is null)
+        {
+            return Results.Problem(
+                title: "Invalid context-insights batch",
+                detail: "Request body was empty or null.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var errors = validator.Validate(batch);
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(
+                new Dictionary<string, string[]> { ["batch"] = errors.ToArray() },
+                title: "Context-insights batch failed validation",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        // orgId is from the validated key record, NEVER from the payload.
+        await store.UpsertRowsAsync(auth.OrgId!, batch, cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(new { accepted = batch.Rows.Count, batchId = batch.BatchId });
     }
 
     /// <summary>Host-independent core for <c>POST /api/ingest/status</c>.</summary>

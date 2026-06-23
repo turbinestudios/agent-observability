@@ -1,7 +1,14 @@
 import { AggregateBatch } from '../aggregate/models';
 import { AggregationRow, buildBatch } from '../aggregate/aggregator';
 import { computeDeveloperId, getIdentityInput } from '../aggregate/pseudonymizer';
+import { buildRepoCustomizationIndex } from '../aggregate/customizationFilter';
+import {
+  extractContextObservations,
+  sessionsFromAggregationRows,
+} from '../aggregate/contextInsightsExtractor';
+import { buildContextInsightsBatch } from '../aggregate/contextInsightsAggregator';
 import { computeCanSync, describeSyncBlock } from '../consent/syncGate';
+import { DiscoveryEventRow } from '../context/discoveryParser';
 import { SyncClient, SyncOutcome, isTransient } from './syncClient';
 import { SyncRun, SyncRunOutcome, SyncStateStore } from './syncState';
 
@@ -55,6 +62,24 @@ export interface SyncTelemetry {
     sinceMs?: number,
     untilMs?: number,
   ): { ok: true; value: AggregationRow[] } | { ok: false; reason: string; message: string };
+}
+
+/**
+ * Optional LOCAL-ONLY source for the context-insights upload (Phase: context
+ * hotspots). When injected, the engine builds and sends a SEPARATE, additive
+ * context-insights batch for the same window as the aggregate batch; when
+ * absent, the engine behaves exactly as before (aggregate-only). Both methods
+ * read on-machine data only and never emit raw content.
+ */
+export interface SyncContextInsightsSource {
+  /** Discovery/customization events for one session (empty when none/unavailable). */
+  getDiscoveryEvents(sessionKey: string): readonly DiscoveryEventRow[];
+  /**
+   * The subset of `sessionKeys` the LOCAL workflow-deviation detector flagged.
+   * Returns an empty set when no workflows are configured. Used ONLY to count
+   * deviation co-occurrence per file (never to transmit deviation details).
+   */
+  getDeviationSessionKeys(sessionKeys: readonly string[]): ReadonlySet<string>;
 }
 
 /** Tuning knobs for the retry/backoff loop. Defaults are sensible for prod. */
@@ -130,6 +155,11 @@ export class SyncEngine {
     private readonly state: SyncStateStore,
     private readonly clock: Clock,
     private readonly options: SyncEngineOptions,
+    /**
+     * Optional context-insights source. When omitted (e.g. in aggregate-only
+     * tests), the secondary context-insights upload is skipped entirely.
+     */
+    private readonly contextInsights?: SyncContextInsightsSource,
   ) {
     this.maxAttempts = Math.max(1, options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
     this.baseBackoffMs = options.baseBackoffMs ?? DEFAULT_BASE_BACKOFF_MS;
@@ -239,7 +269,7 @@ export class SyncEngine {
     });
 
     // d. SEND with retry/backoff on transient outcomes only.
-    const outcome = await this.sendWithRetry(batch);
+    const outcome = await this.sendWithRetry(() => this.client.sendBatch(batch));
     const bucketsSent = batch.buckets.length;
 
     if (outcome.kind === 'success') {
@@ -260,6 +290,9 @@ export class SyncEngine {
         windowStartMs: start,
         windowEndMs: end,
       });
+      // f. SECONDARY, best-effort context-insights upload for the same window.
+      // Never affects the aggregate result: failures are swallowed internally.
+      await this.trySendContextInsights(rows, start, end, developerId);
       return { status: 'success', bucketsSent, windowStartMs: start, windowEndMs: end, batchId: batch.batchId };
     }
 
@@ -281,12 +314,13 @@ export class SyncEngine {
    * Send the batch, retrying ONLY transient outcomes (network/serverError/
    * rateLimited) up to {@link maxAttempts} with exponential backoff + jitter.
    * 429 honors `retryAfterMs`. Permanent outcomes (unauthorized/rejected/disabled/
-   * misconfigured) return immediately.
+   * misconfigured) return immediately. The actual transport is injected via
+   * `send` so the same loop drives both the aggregate and context-insights POSTs.
    */
-  private async sendWithRetry(batch: AggregateBatch): Promise<SyncOutcome> {
+  private async sendWithRetry(send: () => Promise<SyncOutcome>): Promise<SyncOutcome> {
     let lastOutcome: SyncOutcome = { kind: 'network', message: 'No attempt made.' };
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
-      lastOutcome = await this.client.sendBatch(batch);
+      lastOutcome = await send();
       if (!isTransient(lastOutcome)) {
         return lastOutcome; // success OR a permanent failure — stop now.
       }
@@ -296,6 +330,53 @@ export class SyncEngine {
       await this.sleep(this.backoffMs(attempt, lastOutcome));
     }
     return lastOutcome;
+  }
+
+  /**
+   * Build and send the SEPARATE context-insights batch for `[start, end)` using
+   * the same already-passed gate, window, and developer id as the aggregate
+   * batch. Best-effort and fully isolated: any failure (including a throw from
+   * the local filesystem index walk or detector) is swallowed so the aggregate
+   * sync result is never affected. No-op when no context-insights source was
+   * injected, when there are no rows, or when nothing resolves to a repo-scoped
+   * customization file.
+   */
+  private async trySendContextInsights(
+    rows: AggregationRow[],
+    start: number,
+    end: number,
+    developerId: string,
+  ): Promise<void> {
+    const source = this.contextInsights;
+    if (source === undefined || rows.length === 0) {
+      return;
+    }
+    try {
+      const sessionKeys = distinctSessionKeys(rows);
+      const deviationSessions = source.getDeviationSessionKeys(sessionKeys);
+      const sessions = sessionsFromAggregationRows(rows, deviationSessions);
+      const index = buildRepoCustomizationIndex(this.options.workspaceCwd);
+      const observations = extractContextObservations(
+        sessions,
+        (key) => source.getDiscoveryEvents(key),
+        this.options.workspaceCwd,
+        index,
+      );
+      if (observations.length === 0) {
+        return; // nothing repo-scoped to report — skip an empty upload.
+      }
+      const batch = buildContextInsightsBatch({
+        observations,
+        pseudonymousDeveloperId: developerId,
+        toolVersion: this.options.toolVersion,
+        windowStartMs: start,
+        windowEndMs: end,
+        generatedAtMs: this.clock.nowMs(),
+      });
+      await this.sendWithRetry(() => this.client.sendContextInsights(batch));
+    } catch {
+      // Best-effort: a context-insights failure must never break aggregate sync.
+    }
   }
 
   /** Compute the backoff delay (ms) before the next attempt. */
@@ -344,6 +425,19 @@ function earliestRowStartMs(rows: AggregationRow[], end: number): number {
     }
   }
   return min === undefined ? end : floorToBinMs(min);
+}
+
+/** The distinct, non-empty session keys present in `rows`, order-preserving. */
+function distinctSessionKeys(rows: readonly AggregationRow[]): string[] {
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const r of rows) {
+    if (r.sessionKey.length > 0 && !seen.has(r.sessionKey)) {
+      seen.add(r.sessionKey);
+      keys.push(r.sessionKey);
+    }
+  }
+  return keys;
 }
 
 /** A short, key-free message describing a failure outcome for the history/UI. */

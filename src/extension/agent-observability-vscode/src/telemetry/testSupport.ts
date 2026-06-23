@@ -22,6 +22,12 @@ export const AGGREGATE_SCHEMA = path.resolve(
   '../../../../../schemas/aggregate-batch.schema.json',
 );
 
+/** Absolute path to the shared context-insights-batch schema. */
+export const CONTEXT_INSIGHTS_SCHEMA = path.resolve(
+  __dirname,
+  '../../../../../schemas/context-insights-batch.schema.json',
+);
+
 /**
  * Copy the fixture DB (and any sidecars) to a fresh temp dir and return both the
  * copy path and a cleanup function. Tests open the COPY, never the original.

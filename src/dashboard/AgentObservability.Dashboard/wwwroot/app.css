@@ -334,6 +334,11 @@ code {
     color: var(--muted);
 }
 
+.muted-inline {
+    color: var(--muted);
+    font-size: 0.85em;
+}
+
 .workflow-list {
     display: grid;
     gap: 1rem;

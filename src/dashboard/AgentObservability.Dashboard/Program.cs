@@ -97,6 +97,9 @@ builder.Services.AddSingleton<IngestionAuthenticator>();
 builder.Services.AddSingleton<AggregateBatchValidator>();
 builder.Services.AddSingleton<TableAggregateStore>();
 builder.Services.AddSingleton<IAggregateStore>(sp => sp.GetRequiredService<TableAggregateStore>());
+builder.Services.AddSingleton<ContextInsightsBatchValidator>();
+builder.Services.AddSingleton<TableContextInsightStore>();
+builder.Services.AddSingleton<IContextInsightStore>(sp => sp.GetRequiredService<TableContextInsightStore>());
 builder.Services.AddSingleton<TableSyncStatusStore>();
 builder.Services.AddSingleton<ISyncStatusStore>(sp => sp.GetRequiredService<TableSyncStatusStore>());
 
@@ -128,6 +131,10 @@ else
     builder.Services.AddSingleton<IAnalyticsService>(sp => sp.GetRequiredService<AggregateAnalyticsService>());
 }
 
+// Context-engineering hotspots (Context Hotspots page): ranks customization files from the
+// privacy-scoped context-insights store. Always aggregate-backed; no legacy equivalent.
+builder.Services.AddSingleton<IContextHotspotAnalyticsService, ContextHotspotAnalyticsService>();
+
 var app = builder.Build();
 
 // Make the silent legacy->aggregate downgrade observable: if an operator flips Source=Legacy for
@@ -154,6 +161,7 @@ await learningService.BackfillEmbeddingsAsync();
 try
 {
     await app.Services.GetRequiredService<TableAggregateStore>().EnsureTablesExistAsync();
+    await app.Services.GetRequiredService<TableContextInsightStore>().EnsureTablesExistAsync();
     await app.Services.GetRequiredService<TableSyncStatusStore>().EnsureTablesExistAsync();
 
     if (app.Services.GetService<TableApiKeyStore>() is { } tableApiKeyStore)
