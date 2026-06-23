@@ -13,6 +13,8 @@ describe('discoveryParser', () => {
           eventCategory: 'discovery',
           conversationId: 'conv-1',
           chatSessionId: 'chat-1',
+          agentName: null,
+          debugLabel: null,
         },
       ];
 
@@ -40,6 +42,8 @@ describe('discoveryParser', () => {
           eventCategory: 'discovery',
           conversationId: 'conv-1',
           chatSessionId: 'chat-1',
+          agentName: null,
+          debugLabel: null,
         },
       ];
 
@@ -73,6 +77,8 @@ describe('discoveryParser', () => {
           eventCategory: 'customization',
           conversationId: 'conv-1',
           chatSessionId: 'chat-1',
+          agentName: null,
+          debugLabel: null,
         },
       ];
 
@@ -108,6 +114,8 @@ describe('discoveryParser', () => {
           eventCategory: 'discovery',
           conversationId: 'conv-1',
           chatSessionId: 'chat-1',
+          agentName: null,
+          debugLabel: null,
         },
       ];
 
@@ -128,6 +136,8 @@ describe('discoveryParser', () => {
           eventCategory: 'discovery',
           conversationId: 'conv-1',
           chatSessionId: 'chat-1',
+          agentName: null,
+          debugLabel: null,
         },
       ];
 
@@ -161,6 +171,8 @@ describe('discoveryParser', () => {
           eventCategory: 'discovery',
           conversationId: 'conv-1',
           chatSessionId: 'chat-1',
+          agentName: null,
+          debugLabel: null,
         },
       ];
 
@@ -177,6 +189,8 @@ describe('discoveryParser', () => {
           eventCategory: 'discovery',
           conversationId: 'conv-1',
           chatSessionId: 'chat-1',
+          agentName: null,
+          debugLabel: null,
         },
         {
           spanName: '',
@@ -185,6 +199,8 @@ describe('discoveryParser', () => {
           eventCategory: 'discovery',
           conversationId: 'conv-1',
           chatSessionId: 'chat-1',
+          agentName: null,
+          debugLabel: null,
         },
       ];
 

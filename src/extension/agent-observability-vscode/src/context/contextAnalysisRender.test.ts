@@ -137,6 +137,12 @@ describe('sessionDetailHtml — context analysis tab', () => {
     const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', minimalContextAnalysis());
     expect(html).toContain('ctx-budget-bar');
     expect(html).toContain('Context window usage');
+    // Widths must be applied via utility classes (CSP `style-src 'nonce-…'` blocks
+    // inline `style="…"` attributes, so style attrs would render the bar invisible).
+    // mainAgent: contextFileTokens=1700 / totalContextTokens=10000 → 17% / 83%.
+    expect(html).toContain('ctx-budget-fill ctx-budget-files ctx-w-17');
+    expect(html).toContain('ctx-budget-fill ctx-budget-other ctx-w-83');
+    expect(html).not.toMatch(/ctx-budget-fill[^>]*\sstyle=/);
   });
 
   it('renders status badges correctly', () => {

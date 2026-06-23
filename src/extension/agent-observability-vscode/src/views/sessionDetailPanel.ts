@@ -213,7 +213,17 @@ export class SessionDetailPanelManager {
     const detail = result.value;
     const found = this.detectDeviations(sessionKey);
     const acceptedMissing = this.readAcceptedMissing();
-    const contextAnalysis = analyzeContext(sessionKey, this.telemetry, acceptedMissing);
+
+    // Extract distinct subagent friendly names from the already-resolved
+    // agentUsage (same data the Overview tab uses). These are passed to the
+    // context analyzer as a fallback name list so collapsibles show the same
+    // friendly names even when discovery event IDs can't be matched by DB query.
+    const subagentNamesList = [...new Set(
+      detail.agentUsage
+        .filter((u) => u.kind === 'subagent')
+        .map((u) => u.agentName),
+    )];
+    const contextAnalysis = analyzeContext(sessionKey, this.telemetry, acceptedMissing, undefined, subagentNamesList);
 
     const nonce = makeNonce();
     panel.webview.html = renderSessionDetailHtml(detail, found, nonce, contextAnalysis);

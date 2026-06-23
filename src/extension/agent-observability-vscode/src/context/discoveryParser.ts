@@ -19,6 +19,8 @@ export interface DiscoveryEventRow {
   eventCategory: string;
   conversationId: string | null;
   chatSessionId: string | null;
+  agentName: string | null;
+  debugLabel: string | null;
 }
 
 /**

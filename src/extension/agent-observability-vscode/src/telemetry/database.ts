@@ -1643,6 +1643,8 @@ export class TelemetryDatabase {
     eventCategory: string;
     conversationId: string | null;
     chatSessionId: string | null;
+    agentName: string | null;
+    debugLabel: string | null;
   }> {
     const ids = this.sessionTreeIds(sessionKey);
     if (ids.length === 0) {
@@ -1675,17 +1677,23 @@ export class TelemetryDatabase {
       eventCategory: string;
       conversationId: string | null;
       chatSessionId: string | null;
+      agentName: string | null;
+      debugLabel: string | null;
     }>(
       `SELECT ${nameCol} AS spanName,
               det.value AS eventDetails,
               cat.value AS eventCategory,
               s.conversation_id AS conversationId,
-              s.chat_session_id AS chatSessionId
+              s.chat_session_id AS chatSessionId,
+              s.agent_name AS agentName,
+              lbl.value AS debugLabel
          FROM spans s
          JOIN span_attributes cat
            ON cat.span_id = s.span_id AND cat.key = 'copilot_chat.event_category'
          JOIN span_attributes det
            ON det.span_id = s.span_id AND det.key = 'copilot_chat.event_details'
+         LEFT JOIN span_attributes lbl
+           ON lbl.span_id = s.span_id AND lbl.key = 'copilot_chat.debug_log_label'
          WHERE (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}) ${traceCondition})
            AND cat.value IN ('discovery', 'customization')
          ORDER BY s.start_time_ms ASC`,
@@ -1705,6 +1713,8 @@ export class TelemetryDatabase {
     filePath: string;
     conversationId: string | null;
     chatSessionId: string | null;
+    agentName: string | null;
+    debugLabel: string | null;
   }> {
     const ids = this.sessionTreeIds(sessionKey);
     if (ids.length === 0) {
@@ -1715,12 +1725,18 @@ export class TelemetryDatabase {
       value: string;
       conversationId: string | null;
       chatSessionId: string | null;
+      agentName: string | null;
+      debugLabel: string | null;
     }>(
       `SELECT a.value AS value,
               s.conversation_id AS conversationId,
-              s.chat_session_id AS chatSessionId
+              s.chat_session_id AS chatSessionId,
+              s.agent_name AS agentName,
+              lbl.value AS debugLabel
          FROM span_attributes a
          JOIN spans s ON s.span_id = a.span_id
+         LEFT JOIN span_attributes lbl
+           ON lbl.span_id = s.span_id AND lbl.key = 'copilot_chat.debug_log_label'
          WHERE a.key = 'gen_ai.tool.call.arguments'
            AND s.operation_name = 'execute_tool'
            AND s.tool_name = 'read_file'
@@ -1732,6 +1748,8 @@ export class TelemetryDatabase {
       filePath: string;
       conversationId: string | null;
       chatSessionId: string | null;
+      agentName: string | null;
+      debugLabel: string | null;
     }> = [];
 
     const contextPathPatterns = [
@@ -1753,6 +1771,8 @@ export class TelemetryDatabase {
               filePath: parsed.filePath,
               conversationId: row.conversationId,
               chatSessionId: row.chatSessionId,
+              agentName: row.agentName,
+              debugLabel: row.debugLabel,
             });
           }
         }
@@ -1776,6 +1796,8 @@ export class TelemetryDatabase {
     conversationId: string | null;
     chatSessionId: string | null;
     inputTokens: number;
+    agentName: string | null;
+    debugLabel: string | null;
   }> {
     const ids = this.sessionTreeIds(sessionKey);
     if (ids.length === 0) {
@@ -1788,12 +1810,18 @@ export class TelemetryDatabase {
       conversation_id: string | null;
       chat_session_id: string | null;
       input_tokens: number | null;
+      agent_name: string | null;
+      debug_label: string | null;
     }>(
       `SELECT a.span_id AS span_id, a.value AS value,
               s.conversation_id AS conversation_id, s.chat_session_id AS chat_session_id,
-              s.input_tokens AS input_tokens
+              s.input_tokens AS input_tokens,
+              s.agent_name AS agent_name,
+              lbl.value AS debug_label
          FROM span_attributes a
          JOIN spans s ON s.span_id = a.span_id
+         LEFT JOIN span_attributes lbl
+           ON lbl.span_id = s.span_id AND lbl.key = 'copilot_chat.debug_log_label'
          WHERE a.key = 'gen_ai.system_instructions'
            AND s.operation_name IN ('chat', 'invoke_agent')
            AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))
@@ -1806,6 +1834,8 @@ export class TelemetryDatabase {
       conversationId: string | null;
       chatSessionId: string | null;
       inputTokens: number;
+      agentName: string | null;
+      debugLabel: string | null;
     }>();
     for (const row of rows) {
       if (row.value !== null && row.value.length > 0) {
@@ -1814,6 +1844,8 @@ export class TelemetryDatabase {
           conversationId: row.conversation_id,
           chatSessionId: row.chat_session_id,
           inputTokens: row.input_tokens ?? 0,
+          agentName: row.agent_name,
+          debugLabel: row.debug_label,
         });
       }
     }
@@ -1821,9 +1853,13 @@ export class TelemetryDatabase {
   }
 
   /**
-   * Map from `chat_session_id` to the friendly agent name for each subagent in the
-   * session tree. Used by the context analysis tab to label subagent partitions
-   * with the same names shown in the overview tab (e.g. "Sub-agent: Explore").
+   * Map from session identifiers to the friendly agent name for each subagent in
+   * the session tree. Uses the exact same classification logic as
+   * {@link treeUsageRollups} (Overview tab) — a chat span is a subagent turn when
+   * it has `copilot_chat.debug_log_label` starting with `runSubagent-` or
+   * `agent_name` starting with `tool/runSubagent`. For each subagent, maps BOTH
+   * `conversation_id` and `chat_session_id` from its spans so the context analyzer
+   * can look up by whichever id its discovery events carry.
    *
    * LOCAL-ONLY: no content is returned — only agent identity labels.
    */
@@ -1833,33 +1869,90 @@ export class TelemetryDatabase {
       return new Map();
     }
     const inList = ids.map(() => '?').join(', ');
+
+    // Select ALL chat spans in the tree (no subagent filter in WHERE — same as
+    // treeUsageRollups). Classify each in JS to avoid filter mismatch.
     const rows = this.allRows<{
+      conversation_id: string | null;
       chat_session_id: string | null;
       agent_name: string | null;
       debug_label: string | null;
     }>(
-      `SELECT s.chat_session_id AS chat_session_id,
+      `SELECT s.conversation_id AS conversation_id,
+              s.chat_session_id AS chat_session_id,
               s.agent_name AS agent_name,
               lbl.value AS debug_label
          FROM spans s
          LEFT JOIN span_attributes lbl
            ON lbl.span_id = s.span_id AND lbl.key = 'copilot_chat.debug_log_label'
         WHERE s.operation_name = 'chat'
-          AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))
-          AND (
-            (lbl.value IS NOT NULL AND lbl.value LIKE 'runSubagent-%')
-            OR (s.agent_name IS NOT NULL AND s.agent_name LIKE 'tool/runSubagent%')
-          )
-        GROUP BY s.chat_session_id, s.agent_name, lbl.value`,
+          AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))`,
       [...ids, ...ids],
     );
 
     const map = new Map<string, string>();
     for (const row of rows) {
+      // Same classification as treeUsageRollups:
+      const isSubagent =
+        (row.debug_label !== null && row.debug_label.startsWith('runSubagent-')) ||
+        (row.agent_name !== null && row.agent_name.startsWith('tool/runSubagent'));
+      if (!isSubagent) {
+        continue;
+      }
+      const name = friendlyAgentName('subagent', row.agent_name, row.debug_label);
+      if (row.conversation_id !== null && !map.has(row.conversation_id)) {
+        map.set(row.conversation_id, name);
+      }
       if (row.chat_session_id !== null && !map.has(row.chat_session_id)) {
-        map.set(row.chat_session_id, friendlyAgentName('subagent', row.agent_name, row.debug_label));
+        map.set(row.chat_session_id, name);
       }
     }
+
+    // Propagate: discovery events within a subagent scope may use different ids
+    // than the chat spans. Walk all spans reachable from known subagent ids
+    // (bounded BFS, same approach as sessionTreeIds) and map their co-occurring
+    // ids. This bridges the gap between chat span ids and core_event/discovery
+    // span ids within the same subagent's scope.
+    if (map.size > 0) {
+      let frontier = [...map.keys()];
+      const visited = new Set(frontier);
+      for (let hop = 0; hop < 3 && frontier.length > 0; hop++) {
+        const frontierInList = frontier.map(() => '?').join(', ');
+        const linkedRows = this.allRows<{
+          conversation_id: string | null;
+          chat_session_id: string | null;
+        }>(
+          `SELECT DISTINCT conversation_id, chat_session_id
+             FROM spans
+             WHERE conversation_id IN (${frontierInList})
+                OR chat_session_id IN (${frontierInList})`,
+          [...frontier, ...frontier],
+        );
+        const nextFrontier: string[] = [];
+        for (const row of linkedRows) {
+          const nameFromConv = row.conversation_id !== null ? map.get(row.conversation_id) : undefined;
+          const nameFromCsid = row.chat_session_id !== null ? map.get(row.chat_session_id) : undefined;
+          const name = nameFromConv ?? nameFromCsid;
+          if (name !== undefined) {
+            if (row.conversation_id !== null && !visited.has(row.conversation_id)) {
+              map.set(row.conversation_id, name);
+              visited.add(row.conversation_id);
+              nextFrontier.push(row.conversation_id);
+            }
+            if (row.chat_session_id !== null && !visited.has(row.chat_session_id)) {
+              map.set(row.chat_session_id, name);
+              visited.add(row.chat_session_id);
+              nextFrontier.push(row.chat_session_id);
+            }
+          }
+        }
+        frontier = nextFrontier;
+      }
+    }
+
+    // Remove the root session key to avoid labelling the main partition.
+    map.delete(sessionKey);
+
     return map;
   }
 
@@ -1949,4 +2042,24 @@ function friendlyAgentName(
     return agentName;
   }
   return 'Sub-agent';
+}
+
+/**
+ * Classify a chat span as main or subagent using the same rule the Overview tab
+ * uses: subagent if `debug_log_label` starts with `runSubagent-` or `agent_name`
+ * starts with `tool/runSubagent`; otherwise main. Returns the friendly agent
+ * name (e.g. "Sub-agent: Backend" or "Main agent"). Exported so the context
+ * analyzer can classify identically.
+ */
+export function classifyAgentSpan(
+  agentName: string | null,
+  debugLabel: string | null,
+): { kind: 'main' | 'subagent'; friendlyName: string } {
+  const safeAgent = agentName ?? null;
+  const safeLabel = debugLabel ?? null;
+  const isSubagent =
+    (safeLabel !== null && safeLabel.startsWith('runSubagent-')) ||
+    (safeAgent !== null && safeAgent.startsWith('tool/runSubagent'));
+  const kind: 'main' | 'subagent' = isSubagent ? 'subagent' : 'main';
+  return { kind, friendlyName: friendlyAgentName(kind, safeAgent, safeLabel) };
 }

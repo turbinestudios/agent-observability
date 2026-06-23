@@ -8,6 +8,7 @@
  */
 
 import type { TelemetryService } from '../telemetry/telemetryService';
+import { classifyAgentSpan } from '../telemetry/database';
 import type {
   AgentContextAnalysis,
   ContextFileEntry,
@@ -36,12 +37,16 @@ export interface AcceptedMissingConfig {
  * @param sessionKey - The session to analyze
  * @param telemetry - Telemetry service for database access
  * @param acceptedMissing - Optional exclusion config to suppress expected-missing entries
+ * @param subagentNames - Optional pre-resolved map from session id to friendly agent name
+ * @param subagentNamesList - Optional ordered list of known subagent friendly names (from Overview tab)
  * @returns Complete context analysis, or undefined if no data available
  */
 export function analyzeContext(
   sessionKey: string,
   telemetry: TelemetryService,
   acceptedMissing?: AcceptedMissingConfig,
+  subagentNames?: Map<string, string>,
+  subagentNamesList?: readonly string[],
 ): SessionContextAnalysis | undefined {
   // 1. Fetch raw data from telemetry
   const discoveryResult = telemetry.getContextDiscoveryEvents(sessionKey);
@@ -61,14 +66,19 @@ export function analyzeContext(
     return undefined;
   }
 
-  // Fetch subagent friendly names (chat_session_id → label like "Sub-agent: Explore")
-  const subagentNamesResult = telemetry.getSubagentNames(sessionKey);
-  const subagentNames: Map<string, string> = subagentNamesResult.ok ? subagentNamesResult.value : new Map();
+  // Resolve subagent names: use pre-resolved map if provided, else fetch from DB.
+  let resolvedNames: Map<string, string>;
+  if (subagentNames !== undefined && subagentNames.size > 0) {
+    resolvedNames = subagentNames;
+  } else {
+    const subagentNamesResult = telemetry.getSubagentNames(sessionKey);
+    resolvedNames = subagentNamesResult.ok ? subagentNamesResult.value : new Map();
+  }
 
   // 2. Partition events by agent (main vs subagents)
   // Main agent: conversation_id === chat_session_id, or the root session
   // Subagents: conversation_id !== chat_session_id (spawned under a different id)
-  const agentPartitions = partitionByAgent(discoveryEvents, toolReads, systemInstrMap, subagentNames);
+  const agentPartitions = partitionByAgent(discoveryEvents, toolReads, systemInstrMap, resolvedNames, subagentNamesList);
 
   // 3. Build per-agent analyses
   const agents: AgentContextAnalysis[] = [];
@@ -88,98 +98,147 @@ interface AgentPartition {
   agentName: string;
   kind: 'main' | 'subagent';
   discoveryEvents: DiscoveryEventRow[];
-  toolReads: Array<{ filePath: string; conversationId: string | null; chatSessionId: string | null }>;
+  toolReads: Array<{ filePath: string; conversationId: string | null; chatSessionId: string | null; agentName: string | null; debugLabel: string | null }>;
   systemInstructionsText: string | undefined;
   inputTokens: number;
 }
 
 /**
- * Partition raw data by agent. Events in the root conversation are "main";
- * events in spawned sub-conversations are per-subagent.
+ * Partition raw data by agent using the same classification rule as the
+ * Overview tab: a span is a subagent turn when its `debug_log_label` starts
+ * with `runSubagent-` or its `agent_name` starts with `tool/runSubagent`;
+ * otherwise it's main. The friendly name is derived from those same fields,
+ * so the Context Analysis tab matches the Overview tab 1:1.
+ *
+ * Discovery events and tool reads on non-chat spans (which lack the
+ * classification attributes) fall back to a conversation-id lookup against
+ * the chat-span classifications computed above.
  */
 function partitionByAgent(
   discoveryEvents: DiscoveryEventRow[],
-  toolReads: Array<{ filePath: string; conversationId: string | null; chatSessionId: string | null }>,
-  systemInstrMap: Map<string, { value: string; conversationId: string | null; chatSessionId: string | null; inputTokens: number }>,
+  toolReads: Array<{ filePath: string; conversationId: string | null; chatSessionId: string | null; agentName: string | null; debugLabel: string | null }>,
+  systemInstrMap: Map<string, { value: string; conversationId: string | null; chatSessionId: string | null; inputTokens: number; agentName: string | null; debugLabel: string | null }>,
   subagentNames: Map<string, string>,
+  subagentNamesList?: readonly string[],
 ): AgentPartition[] {
-  // Group by chat_session_id (each subagent gets its own chat_session_id)
-  const sessionIdGroups = new Map<string, AgentPartition>();
+  // partitionKey: '__main__' for the main agent, friendly name for subagents.
+  const partitions = new Map<string, AgentPartition>();
 
-  // Determine the "main" session: the one where conversation_id === chat_session_id,
-  // or the first/most common chat_session_id.
-  const mainSessionId = detectMainSessionId(discoveryEvents, toolReads, systemInstrMap);
+  // Build a fallback map from conversation_id → partition key, derived from
+  // chat spans (system_instructions). For non-chat events (discovery, tool
+  // reads) that lack agent_name/debug_label, we look up by conversation_id.
+  const convToPartitionKey = new Map<string, string>();
 
-  // Process discovery events
-  for (const event of discoveryEvents) {
-    const sessionId = event.chatSessionId ?? event.conversationId ?? 'unknown';
-    const isMain = sessionId === mainSessionId || event.conversationId === event.chatSessionId;
-    const key = isMain ? '__main__' : sessionId;
+  function partitionKeyFor(agentName: string | null, debugLabel: string | null): { key: string; friendlyName: string; kind: 'main' | 'subagent' } {
+    const { kind, friendlyName } = classifyAgentSpan(agentName, debugLabel);
+    return {
+      key: kind === 'main' ? '__main__' : friendlyName,
+      friendlyName: kind === 'main' ? 'Main Agent' : friendlyName,
+      kind,
+    };
+  }
 
-    let partition = sessionIdGroups.get(key);
-    if (!partition) {
-      partition = {
-        agentName: isMain ? 'Main Agent' : (subagentNames.get(sessionId) ?? 'Sub-agent'),
-        kind: isMain ? 'main' : 'subagent',
+  function getOrCreatePartition(key: string, friendlyName: string, kind: 'main' | 'subagent'): AgentPartition {
+    let p = partitions.get(key);
+    if (!p) {
+      p = {
+        agentName: friendlyName,
+        kind,
         discoveryEvents: [],
         toolReads: [],
         systemInstructionsText: undefined,
         inputTokens: 0,
       };
-      sessionIdGroups.set(key, partition);
+      partitions.set(key, p);
     }
-    partition.discoveryEvents.push(event);
+    return p;
   }
 
-  // Process tool reads
-  for (const read of toolReads) {
-    const sessionId = read.chatSessionId ?? read.conversationId ?? 'unknown';
-    const isMain = sessionId === mainSessionId || read.conversationId === read.chatSessionId;
-    const key = isMain ? '__main__' : sessionId;
-
-    let partition = sessionIdGroups.get(key);
-    if (!partition) {
-      partition = {
-        agentName: isMain ? 'Main Agent' : (subagentNames.get(sessionId) ?? 'Sub-agent'),
-        kind: isMain ? 'main' : 'subagent',
-        discoveryEvents: [],
-        toolReads: [],
-        systemInstructionsText: undefined,
-        inputTokens: 0,
-      };
-      sessionIdGroups.set(key, partition);
-    }
-    partition.toolReads.push(read);
-  }
-
-  // Process system instructions (take the first per agent — they're consistent within a conversation)
+  // 1. Process system instructions first — they carry the authoritative
+  //    agent_name/debug_label and the inputTokens that drive the context bar.
+  //    Also build convToPartitionKey for the fallback lookup below.
   for (const [, entry] of systemInstrMap) {
-    const sessionId = entry.chatSessionId ?? entry.conversationId ?? 'unknown';
-    const isMain = sessionId === mainSessionId || entry.conversationId === entry.chatSessionId;
-    const key = isMain ? '__main__' : sessionId;
-
-    let partition = sessionIdGroups.get(key);
-    if (!partition) {
-      partition = {
-        agentName: isMain ? 'Main Agent' : (subagentNames.get(sessionId) ?? 'Sub-agent'),
-        kind: isMain ? 'main' : 'subagent',
-        discoveryEvents: [],
-        toolReads: [],
-        systemInstructionsText: undefined,
-        inputTokens: 0,
-      };
-      sessionIdGroups.set(key, partition);
-    }
-    // Use first system_instructions for this agent (they're typically consistent)
-    if (!partition.systemInstructionsText) {
+    const { key, friendlyName, kind } = partitionKeyFor(entry.agentName, entry.debugLabel);
+    const partition = getOrCreatePartition(key, friendlyName, kind);
+    // Use the LARGEST input_tokens span as the representative — captures the
+    // most complete context window snapshot for this agent.
+    if (entry.inputTokens > partition.inputTokens) {
       partition.systemInstructionsText = entry.value;
       partition.inputTokens = entry.inputTokens;
     }
+    // Map this conversation id to its partition for fallback classification.
+    if (entry.conversationId !== null && !convToPartitionKey.has(entry.conversationId)) {
+      convToPartitionKey.set(entry.conversationId, key);
+    }
+    if (entry.chatSessionId !== null && !convToPartitionKey.has(entry.chatSessionId)) {
+      // Only map chat_session_id when no conversation_id mapping exists yet —
+      // chat_session_id is often shared across main and subagent spans, so we
+      // don't want to overwrite a more specific mapping.
+      if (!convToPartitionKey.has(entry.chatSessionId)) {
+        convToPartitionKey.set(entry.chatSessionId, key);
+      }
+    }
   }
 
-  // Ensure main partition exists
-  if (!sessionIdGroups.has('__main__')) {
-    sessionIdGroups.set('__main__', {
+  // 2. Process discovery events — these are core_event spans that may or may
+  //    not carry agent_name/debug_label. If present, classify directly;
+  //    otherwise fall back to conv/chat-session-id lookup.
+  for (const event of discoveryEvents) {
+    let key: string;
+    let friendlyName: string;
+    let kind: 'main' | 'subagent';
+    if (event.agentName !== null || event.debugLabel !== null) {
+      const r = partitionKeyFor(event.agentName, event.debugLabel);
+      key = r.key; friendlyName = r.friendlyName; kind = r.kind;
+    } else {
+      // Fallback: look up by conversation_id, then chat_session_id.
+      const found = (event.conversationId !== null ? convToPartitionKey.get(event.conversationId) : undefined)
+        ?? (event.chatSessionId !== null ? convToPartitionKey.get(event.chatSessionId) : undefined);
+      if (found !== undefined) {
+        key = found;
+        const existing = partitions.get(found);
+        friendlyName = existing?.agentName ?? 'Main Agent';
+        kind = existing?.kind ?? 'main';
+      } else {
+        // No classification possible — default to main.
+        key = '__main__';
+        friendlyName = 'Main Agent';
+        kind = 'main';
+      }
+    }
+    const partition = getOrCreatePartition(key, friendlyName, kind);
+    partition.discoveryEvents.push(event);
+  }
+
+  // 3. Process tool reads — same fallback pattern.
+  for (const read of toolReads) {
+    let key: string;
+    let friendlyName: string;
+    let kind: 'main' | 'subagent';
+    if (read.agentName !== null || read.debugLabel !== null) {
+      const r = partitionKeyFor(read.agentName, read.debugLabel);
+      key = r.key; friendlyName = r.friendlyName; kind = r.kind;
+    } else {
+      const found = (read.conversationId !== null ? convToPartitionKey.get(read.conversationId) : undefined)
+        ?? (read.chatSessionId !== null ? convToPartitionKey.get(read.chatSessionId) : undefined);
+      if (found !== undefined) {
+        key = found;
+        const existing = partitions.get(found);
+        friendlyName = existing?.agentName ?? 'Main Agent';
+        kind = existing?.kind ?? 'main';
+      } else {
+        key = '__main__';
+        friendlyName = 'Main Agent';
+        kind = 'main';
+      }
+    }
+    const partition = getOrCreatePartition(key, friendlyName, kind);
+    partition.toolReads.push(read);
+  }
+
+  // 4. Ensure main partition exists.
+  if (!partitions.has('__main__')) {
+    partitions.set('__main__', {
       agentName: 'Main Agent',
       kind: 'main',
       discoveryEvents: [],
@@ -189,61 +248,39 @@ function partitionByAgent(
     });
   }
 
-  // Sort: main first, then subagents
-  const partitions = [...sessionIdGroups.values()];
-  partitions.sort((a, b) => {
+  // 5. Post-process: if any subagent partition still has the generic name
+  //    "Sub-agent" (no debug label was present), try to assign a name from
+  //    the pre-resolved list or the DB-resolved map.
+  const unnamedSubagents = [...partitions.entries()].filter(
+    ([key, p]) => p.kind === 'subagent' && key === 'Sub-agent' && p.agentName === 'Sub-agent',
+  );
+  if (unnamedSubagents.length > 0) {
+    const usedNames = new Set(
+      [...partitions.values()]
+        .filter((p) => p.kind === 'subagent' && p.agentName !== 'Sub-agent')
+        .map((p) => p.agentName),
+    );
+    const sourceNames = (subagentNamesList && subagentNamesList.length > 0)
+      ? subagentNamesList
+      : [...new Set(subagentNames.values())];
+    const availableNames = sourceNames.filter((n) => !usedNames.has(n));
+    if (unnamedSubagents.length === 1 && availableNames.length === 1) {
+      const [oldKey, p] = unnamedSubagents[0];
+      p.agentName = availableNames[0];
+      partitions.delete(oldKey);
+      partitions.set(availableNames[0], p);
+    }
+  }
+
+  // 6. Sort: main first, then subagents alphabetically.
+  const result = [...partitions.values()];
+  result.sort((a, b) => {
     if (a.kind === 'main' && b.kind !== 'main') return -1;
     if (a.kind !== 'main' && b.kind === 'main') return 1;
     return a.agentName.localeCompare(b.agentName);
   });
 
-  return partitions;
-}
-
-/**
- * Detect the main session ID (the root conversation).
- * Heuristic: first event where conversation_id === chat_session_id, or the most
- * common chat_session_id.
- */
-function detectMainSessionId(
-  discoveryEvents: DiscoveryEventRow[],
-  toolReads: Array<{ filePath: string; conversationId: string | null; chatSessionId: string | null }>,
-  systemInstrMap: Map<string, { value: string; conversationId: string | null; chatSessionId: string | null; inputTokens: number }>,
-): string | null {
-  // Check discovery events first
-  for (const event of discoveryEvents) {
-    if (event.conversationId && event.conversationId === event.chatSessionId) {
-      return event.chatSessionId;
-    }
-  }
-
-  // Check system_instructions
-  for (const [, entry] of systemInstrMap) {
-    if (entry.conversationId && entry.conversationId === entry.chatSessionId) {
-      return entry.chatSessionId;
-    }
-  }
-
-  // Fallback: most common chat_session_id
-  const counts = new Map<string, number>();
-  for (const event of discoveryEvents) {
-    const id = event.chatSessionId;
-    if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
-  }
-  for (const read of toolReads) {
-    const id = read.chatSessionId;
-    if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
-  }
-
-  let maxId: string | null = null;
-  let maxCount = 0;
-  for (const [id, count] of counts) {
-    if (count > maxCount) {
-      maxCount = count;
-      maxId = id;
-    }
-  }
-  return maxId;
+  return result;
 }
 
 /**

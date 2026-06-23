@@ -264,6 +264,8 @@ export class TelemetryService {
     eventCategory: string;
     conversationId: string | null;
     chatSessionId: string | null;
+    agentName: string | null;
+    debugLabel: string | null;
   }>> {
     return this.withDatabases((handles) => {
       for (const handle of handles) {
@@ -284,6 +286,8 @@ export class TelemetryService {
     filePath: string;
     conversationId: string | null;
     chatSessionId: string | null;
+    agentName: string | null;
+    debugLabel: string | null;
   }>> {
     return this.withDatabases((handles) => {
       for (const handle of handles) {
@@ -305,6 +309,8 @@ export class TelemetryService {
     conversationId: string | null;
     chatSessionId: string | null;
     inputTokens: number;
+    agentName: string | null;
+    debugLabel: string | null;
   }>> {
     return this.withDatabases((handles) => {
       for (const handle of handles) {

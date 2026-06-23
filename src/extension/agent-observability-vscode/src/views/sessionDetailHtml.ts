@@ -1161,8 +1161,8 @@ function renderContextBudget(agent: AgentContextAnalysis): string {
     <span class="muted">${formatInt(agent.totalContextTokens)} est. input tokens</span>
   </div>
   <div class="ctx-budget-bar">
-    <div class="ctx-budget-fill ctx-budget-files" style="width: ${contextPct}%"></div>
-    <div class="ctx-budget-fill ctx-budget-other" style="width: ${otherPct}%"></div>
+    <div class="ctx-budget-fill ctx-budget-files ctx-w-${contextPct}"></div>
+    <div class="ctx-budget-fill ctx-budget-other ctx-w-${otherPct}"></div>
   </div>
   <div class="ctx-budget-legend">
     <span class="ctx-budget-legend-item"><span class="ctx-swatch ctx-swatch-files"></span> Context files: ${num(contextPct)}% (${formatInt(agent.contextFileTokens)} tokens)</span>
@@ -1455,7 +1455,7 @@ const STYLE = `
   .ctx-oversized-icon { font-size: 1rem; }
   .ctx-oversized-info { display: flex; flex-direction: column; gap: .15rem; }
   .ctx-oversized-info .muted { font-size: .78rem; }
-`;
+` + Array.from({ length: 101 }, (_, i) => `.ctx-w-${i}{width:${i}%}`).join('');
 
 /**
  * Client-side script for interactive legend filtering on the token trend chart.
