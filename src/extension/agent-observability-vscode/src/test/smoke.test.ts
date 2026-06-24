@@ -63,7 +63,6 @@ const EXPECTED_VIEWS = [
 ] as const;
 
 const EXPECTED_CONFIG_KEYS = [
-  'agentObservability.dashboardUrl',
   'agentObservability.sync.enabled',
   'agentObservability.sync.intervalMinutes',
   'agentObservability.localTelemetry.enabled',
@@ -106,7 +105,6 @@ describe('manifest contract is stable', () => {
     const props = manifest.contributes.configuration.properties;
     expect(Object.keys(props).sort()).toEqual([...EXPECTED_CONFIG_KEYS].sort());
 
-    expect(props['agentObservability.dashboardUrl'].default).toBe('');
     expect(props['agentObservability.sync.enabled'].default).toBe(false);
     expect(props['agentObservability.sync.intervalMinutes'].default).toBe(60);
     expect(props['agentObservability.sync.intervalMinutes'].minimum).toBe(5);

@@ -97,8 +97,8 @@ export class SyncViewProvider implements vscode.TreeDataProvider<SyncItem> {
         new vscode.ThemeIcon(backgroundOn ? 'sync' : 'sync-ignored'),
       ),
       new SyncItem(
-        `Dashboard URL: ${dashboardUrl || 'not configured'}`,
-        'Controlled by agentObservability.dashboardUrl. Uploads are disabled when this is blank.',
+        `Dashboard URL: ${dashboardUrl}`,
+        'Built-in cloud ingestion endpoint. Aggregates are delivered here when cloud sharing is on and an API key is set.',
         new vscode.ThemeIcon('link'),
       ),
       // Last sync row.

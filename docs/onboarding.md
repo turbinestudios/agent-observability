@@ -20,9 +20,9 @@ is archived (one release, rollback only) at
 - VS Code with the GitHub Copilot extension installed and used (so a local
   Copilot agent telemetry database exists on your machine).
 - The **Agent Observability (Local)** VS Code extension (see Step 1).
-- *Only if you want to contribute org aggregates:* a **dashboard URL** and an
-  **organization API key** from your platform team (key format
-  `aoa_<keyId>_<secret>`).
+- *Only if you want to contribute org aggregates:* an **organization API key**
+  from your platform team (key format `aoa_<keyId>_<secret>`). The dashboard URL
+  is built into the extension — there is nothing to configure.
 
 ## Step 1: Install the extension
 
@@ -55,24 +55,21 @@ the on-machine deviation detector — this also runs entirely locally.)
 
 ## Step 3 (optional): Contribute org aggregates
 
-Sharing is **opt-in and OFF by default**. To contribute aggregate analytics to
-your organization dashboard:
+Sharing is **opt-in and OFF by default**. The dashboard URL is **built into the
+extension**, so there is no endpoint to configure. To contribute aggregate
+analytics to your organization dashboard:
 
-1. **Set the dashboard URL.** In your VS Code **user** settings, set
-   `agentObservability.dashboardUrl` to the ingestion base URL provided by your
-   platform team (e.g. `https://dashboard.example.com`). Leaving it blank
-   disables uploads entirely.
-2. **Open the Sync view** in the Agent Observability container.
-3. **Enable Cloud Sharing.** Run **Agent Observability: Toggle Cloud Sharing**
+1. **Open the Sync view** in the Agent Observability container.
+2. **Enable Cloud Sharing.** Run **Agent Observability: Toggle Cloud Sharing**
    (or use the Sync view). A consent dialog states exactly **what is shared**
    vs **not shared** (see below). This flips `agentObservability.sync.enabled`
    to `true`.
-4. **Set the Organization API key.** Run **Agent Observability: Set
+3. **Set the Organization API key.** Run **Agent Observability: Set
    Organization API Key** and paste the key (`aoa_<keyId>_<secret>`). It is
    stored only in **VS Code SecretStorage** (OS keychain / Windows Credential
    Manager / libsecret). It is **never** written to `settings.json`, any
    committed file, or logs.
-5. **(Optional) Enable background sync.** With consent on and a key set,
+4. **(Optional) Enable background sync.** With consent on and a key set,
    background uploads run on `agentObservability.sync.intervalMinutes` (default
    60, minimum 5). You can also push on demand with **Agent Observability: Sync
    Now**.
@@ -102,7 +99,6 @@ aggregate batch (the only thing ever sent) before any upload.
 | Upload rejected (401) | Bad/expired API key | Re-run **Set Organization API Key** with a current `aoa_<keyId>_<secret>` from the platform team. |
 | Upload rejected (400) | Schema/validation failure | The server enforces the aggregate contract strictly; update the extension. See [`docs/privacy-validation.md`](privacy-validation.md). |
 | Upload rejected (503) | Ingestion disabled server-side | Platform team must set `Ingestion:Enabled=true` on the dashboard. |
-| No `dashboardUrl` | Uploads disabled | Set `agentObservability.dashboardUrl` in user settings. |
 
 ## What is shared vs NOT shared
 

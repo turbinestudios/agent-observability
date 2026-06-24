@@ -12,6 +12,17 @@ export { MIN_SESSION_MINUTES } from './workflowParsing';
 export const CONFIG_SECTION = 'agentObservability';
 
 /**
+ * Built-in cloud ingestion base URL — the dashboard deployed to Azure.
+ *
+ * This is intentionally NOT a user setting: hard-coding it means aggregate
+ * uploads always target the org dashboard and a workspace can never redirect the
+ * bearer API key to an arbitrary host. Uploads remain gated on consent + a stored
+ * API key, so baking in the URL only removes the endpoint-configuration step.
+ */
+export const DASHBOARD_INGESTION_URL =
+  'https://ca-ao-dashboard.example.swedencentral.azurecontainerapps.io';
+
+/**
  * Stable, fully-qualified configuration key constants.
  *
  * These are the single source of truth for setting ids and are referenced by
@@ -19,7 +30,6 @@ export const CONFIG_SECTION = 'agentObservability';
  * these exact keys — e.g. the sync engine reads `sync.enabled`).
  */
 export const ConfigKeys = {
-  dashboardUrl: 'dashboardUrl',
   syncEnabled: 'sync.enabled',
   syncIntervalMinutes: 'sync.intervalMinutes',
   localTelemetryEnabled: 'localTelemetry.enabled',
@@ -32,7 +42,6 @@ export const ConfigKeys = {
 
 /** Default values mirroring the package.json contribution defaults. */
 export const ConfigDefaults = {
-  dashboardUrl: '',
   syncEnabled: false,
   syncIntervalMinutes: 60,
   localTelemetryEnabled: true,
@@ -68,9 +77,9 @@ export class Configuration {
     return vscode.workspace.getConfiguration(CONFIG_SECTION);
   }
 
-  /** Cloud ingestion base URL. Blank means uploads are disabled. */
+  /** Built-in cloud ingestion base URL (the deployed Azure dashboard). */
   getDashboardUrl(): string {
-    return this.config().get<string>(ConfigKeys.dashboardUrl, ConfigDefaults.dashboardUrl).trim();
+    return DASHBOARD_INGESTION_URL;
   }
 
   /** Whether the user has opted in to cloud aggregate sharing (opt-out default). */

@@ -4,6 +4,22 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-06-24
+
+### Changed
+
+- The cloud ingestion endpoint is now a built-in constant pointing at the
+  organization dashboard, so aggregate uploads always target that dashboard and a
+  workspace can no longer redirect the API key to an arbitrary host. Uploads
+  remain gated on explicit consent and a stored organization API key.
+- The **Sync** view now shows the built-in dashboard endpoint instead of a
+  "not configured" placeholder.
+
+### Removed
+
+- The `agentObservability.dashboardUrl` setting — the ingestion endpoint is no
+  longer user-configurable.
+
 ## [0.1.0] - 2026-06-02
 
 ### Added

@@ -39,7 +39,6 @@ All under the **Agent Observability** category:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `agentObservability.dashboardUrl` | `""` | Cloud ingestion base URL (blank disables uploads). |
 | `agentObservability.sync.enabled` | `false` | Opt in to cloud aggregate sharing (opt-out by default). |
 | `agentObservability.sync.intervalMinutes` | `60` | Background sync interval (minimum 5). |
 | `agentObservability.localTelemetry.enabled` | `true` | Feature flag for the local telemetry view. |
