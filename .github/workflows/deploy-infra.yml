@@ -19,6 +19,8 @@ env:
 jobs:
   validate:
     name: Validate Bicep
+    env:
+      INGESTION_KEY_PEPPER: ${{ secrets.INGESTION_KEY_PEPPER }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
