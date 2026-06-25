@@ -19,12 +19,6 @@ param ingestionKeyPepper string
 @description('Organization id filter for aggregate analytics (Analytics:OrgId). Empty = all orgs.')
 param analyticsOrgId string = ''
 
-@description('AI model name for KQL generation')
-param aiModelName string = 'gpt-4o'
-
-@description('AI model version for KQL generation')
-param aiModelVersion string = '2024-11-20'
-
 // Azure Container Registry
 module acr 'modules/acr.bicep' = {
   params: {
@@ -73,15 +67,6 @@ module logAnalytics 'modules/log-analytics.bicep' = {
   }
 }
 
-// Application Insights (dashboard's own telemetry + optional legacy analytics fallback)
-module appInsights 'modules/app-insights.bicep' = {
-  params: {
-    location: location
-    appInsightsName: 'appi-${baseName}'
-    logAnalyticsWorkspaceId: logAnalytics.outputs.workspaceId
-  }
-}
-
 // Step 1.2 — Container Apps Environment
 module containerAppsEnv 'modules/container-apps-env.bicep' = {
   params: {
@@ -100,16 +85,6 @@ module storageAccount 'modules/storage-account.bicep' = {
   }
 }
 
-// Azure AI Foundry for KQL generation
-module aiFoundry 'modules/ai-foundry.bicep' = {
-  params: {
-    location: location
-    projectName: 'ai-${baseName}'
-    modelName: aiModelName
-    modelVersion: aiModelVersion
-  }
-}
-
 // Step 1.4 — Container App: Blazor Dashboard
 module dashboard 'modules/dashboard-app.bicep' = {
   params: {
@@ -117,13 +92,9 @@ module dashboard 'modules/dashboard-app.bicep' = {
     appName: 'ca-${baseName}-dashboard'
     environmentId: containerAppsEnv.outputs.environmentId
     containerImage: dashboardImage
-    logAnalyticsWorkspaceId: logAnalytics.outputs.workspaceCustomerId
     acrLoginServer: acr.outputs.loginServer
     dashboardIdentityId: dashboardIdentity.id
     storageTableEndpoint: storageAccount.outputs.tableEndpoint
-    storageBlobEndpoint: storageAccount.outputs.blobEndpoint
-    aiEndpoint: aiFoundry.outputs.endpoint
-    aiDeploymentName: aiFoundry.outputs.deploymentName
     ingestionKeyPepper: ingestionKeyPepper
     analyticsOrgId: analyticsOrgId
   }
@@ -131,22 +102,6 @@ module dashboard 'modules/dashboard-app.bicep' = {
 }
 
 // Step 1.5 — Role Assignments
-
-resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
-  name: 'log-${baseName}'
-  dependsOn: [logAnalytics]
-}
-
-// Log Analytics Reader role for Dashboard
-resource dashboardReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', '73c42c96-874c-492b-b04d-ab87d138a893')
-  scope: logAnalyticsWorkspace
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')
-    principalId: dashboard.outputs.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
 
 // Storage Table Data Contributor role for Dashboard identity
 resource storageAccountResource 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
@@ -164,55 +119,9 @@ resource dashboardTableDataRole 'Microsoft.Authorization/roleAssignments@2022-04
   }
 }
 
-// Storage Blob Data Contributor role for Dashboard identity (AI Learnings)
-resource dashboardBlobDataRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-  scope: storageAccountResource
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-    principalId: dashboard.outputs.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// Azure AI Developer role for Dashboard (KQL generation via AI Foundry)
-resource aiProjectResource 'Microsoft.MachineLearningServices/workspaces@2024-10-01' existing = {
-  name: 'ai-${baseName}'
-  dependsOn: [aiFoundry]
-}
-
-resource dashboardAiDeveloperRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', '64702f94-c441-49e6-a78b-ef80e0188fee')
-  scope: aiProjectResource
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '64702f94-c441-49e6-a78b-ef80e0188fee')
-    principalId: dashboard.outputs.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// Cognitive Services User role for Dashboard (chat completions via AI Services)
-resource aiServicesAccount 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = {
-  name: 'ai-${baseName}-aiservices'
-  dependsOn: [aiFoundry]
-}
-
-resource dashboardOpenAiUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', 'a97b65f3-24c7-4388-baec-2e87135dc908')
-  scope: aiServicesAccount
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a97b65f3-24c7-4388-baec-2e87135dc908')
-    principalId: dashboard.outputs.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 // Outputs
 @description('FQDN of the Dashboard')
 output dashboardFqdn string = dashboard.outputs.fqdn
-
-@description('Log Analytics Workspace ID')
-output logAnalyticsWorkspaceId string = logAnalytics.outputs.workspaceId
 
 @description('ACR Login Server')
 output acrLoginServer string = acr.outputs.loginServer

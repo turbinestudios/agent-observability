@@ -3,8 +3,7 @@ using Azure.Data.Tables;
 namespace AgentObservability.Dashboard.Services.Ingestion;
 
 /// <summary>
-/// Azure Table Storage backed <see cref="IApiKeyStore"/>. Mirrors the
-/// <see cref="WorkflowManagementService"/> table pattern. Records live in table 'IngestionApiKeys'
+/// Azure Table Storage backed <see cref="IApiKeyStore"/>. Records live in table 'IngestionApiKeys'
 /// with PartitionKey 'apikey' and RowKey = keyId, and carry only the public lookup handle plus the
 /// salted/peppered secret hash (never the plaintext key).
 /// </summary>

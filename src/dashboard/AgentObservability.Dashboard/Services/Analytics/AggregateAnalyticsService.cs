@@ -64,7 +64,7 @@ public sealed class AggregateAnalyticsService : IAnalyticsService
             .Count();
 
         // Request volume: sum interaction count per 30-min BucketStart across all dimensions,
-        // ordered ascending. Label format matches LogAnalyticsService.MapTimeSeries ("MM-dd HH:mm" local).
+        // ordered ascending. Label format: "MM-dd HH:mm" (local).
         var requestVolume = buckets
             .GroupBy(b => b.BucketStart)
             .OrderBy(g => g.Key)
@@ -164,7 +164,7 @@ public sealed class AggregateAnalyticsService : IAnalyticsService
             {
                 Label = g.Key,
                 Value = g.Sum(b => b.InteractionCount),
-                // Matches LogAnalyticsService.GetModelUsageAsync: input + output summed into SecondaryValue.
+                // Input + output tokens summed into SecondaryValue.
                 SecondaryValue = g.Sum(b => (double)b.InputTokens) + g.Sum(b => (double)b.OutputTokens),
             })
             .OrderByDescending(v => v.Value)

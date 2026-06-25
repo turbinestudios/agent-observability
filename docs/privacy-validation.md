@@ -36,11 +36,10 @@ and rejects raw/free-text fields even though it does not trust the client.
 | 9 | API key stored **only** in SecretStorage; never in settings/files/logs | `secrets/secretManager.ts` | `secrets/*` tests; see `docs/architecture/api-auth.md` §2 |
 | 10 | Server re-validates the batch and **rejects raw/free-text fields** (defense in depth) | `Services/Ingestion/AggregateBatchValidator.cs` | `ValidatorTests.cs`, `IngestionPipelineTests.cs` |
 | 11 | `orgId` derived from the **key record**, never the payload | `Services/Ingestion/IngestionAuthenticator.cs` | `IngestionPipelineTests.cs` |
-| 12 | Dashboard query guardrail rejects raw-table/raw-field KQL in aggregate-only mode | `Services/WidgetQueryService.cs` (`GetGuardrailError`) | `WidgetQueryGuardrailTests.cs` |
-| 13 | Cloud-side raw deviation polling is **gated off by default** | `Services/AlertEngine.cs` (gated on `WebUx:ExposeRawSessionDetail`, default false) | `Services/AlertEngine.cs` gate + `WebUxOptions` default |
-| 14 | **Context-insights** batch carries customization-file paths **only** (allowlisted, repo-relative, no `..`/drive/`@`), never source/doc paths or contents | extension `aggregate/customizationFilter.ts` (`SAFE_CONTEXT_FILE_PATTERN`, repo-scoped resolver) + `schemas/context-insights-batch.schema.json` | `aggregate/contextInsightsPrivacy.test.ts` (adversarial inputs; scans every string) |
-| 15 | Skip reasons reduced to a **closed taxonomy** (`applyToNoMatch`/`other`) — raw reason text never transmitted | `aggregate/contextInsightsExtractor.ts` (`classifySkipReason`) | `aggregate/contextInsightsPrivacy.test.ts` (raw reason absent) |
-| 16 | Server re-validates the context-insights batch and **rejects absolute/traversal/non-allowlisted paths** and unknown fields | `Services/Ingestion/ContextInsightsBatchValidator.cs` | `ContextInsightsValidatorTests.cs`, `ContextInsightsIngestionTests.cs` |
+| 12 | Dashboard exposes **no raw-telemetry query or polling surface** — AI/KQL widget queries and cloud-side deviation polling were removed; it renders only aggregate analytics from Table Storage | `Services/Analytics/AggregateAnalyticsService.cs` (sole analytics path) | `AggregateAnalyticsServiceTests.cs` |
+| 13 | **Context-insights** batch carries customization-file paths **only** (allowlisted, repo-relative, no `..`/drive/`@`), never source/doc paths or contents | extension `aggregate/customizationFilter.ts` (`SAFE_CONTEXT_FILE_PATTERN`, repo-scoped resolver) + `schemas/context-insights-batch.schema.json` | `aggregate/contextInsightsPrivacy.test.ts` (adversarial inputs; scans every string) |
+| 14 | Skip reasons reduced to a **closed taxonomy** (`applyToNoMatch`/`other`) — raw reason text never transmitted | `aggregate/contextInsightsExtractor.ts` (`classifySkipReason`) | `aggregate/contextInsightsPrivacy.test.ts` (raw reason absent) |
+| 15 | Server re-validates the context-insights batch and **rejects absolute/traversal/non-allowlisted paths** and unknown fields | `Services/Ingestion/ContextInsightsBatchValidator.cs` | `ContextInsightsValidatorTests.cs`, `ContextInsightsIngestionTests.cs` |
 
 ## Client-side enforcement (VS Code extension)
 
@@ -171,29 +170,24 @@ uses `HMAC-SHA256(pepper, secret)` with a constant-time compare and an
 indistinguishable-failure (dummy-HMAC) path. See
 [`docs/architecture/api-auth.md`](architecture/api-auth.md).
 
-### `WidgetQueryService` guardrail
+### Aggregate-only dashboard (no raw-query surface)
 
-`GetGuardrailError` rejects any dashboard query that references raw telemetry
-tables, raw-content fields, or the raw property/measurement bags **before**
-touching Log Analytics, enforcing the aggregate-only contract at execution time.
-It is active whenever `WebUx:ExposeRawSessionDetail` is `false` (the default);
-when `true` (one-release rollback) the guardrail is bypassed so legacy raw
-widgets keep working. Tested by `WidgetQueryGuardrailTests.cs`.
-
-### `AlertEngine` gated off by default
-
-The cloud-side `AlertEngine` ran raw `AppDependencies/Properties[...]` KQL — part
-of the retired raw-telemetry world. It is **gated on
-`WebUx:ExposeRawSessionDetail`**, which defaults to `false`, so it stays idle and
-logs that workflow-deviation detection now runs **locally** in the extension.
-Setting `ExposeRawSessionDetail=true` re-enables cloud-side polling for the
-one-release rollback window only.
+The dashboard has **no raw-telemetry query path at all**. The legacy
+`WidgetQueryService` (custom KQL widgets), `KqlGenerationService` /
+`AiAssistantPanel` (AI-assisted query), and the cloud-side `AlertEngine`
+(raw `AppDependencies/Properties[...]` deviation polling) were **deleted** in the
+aggregate-only cleanup, along with the `WebUx:ExposeRawSessionDetail`,
+`Analytics:Source`, `Analytics:FallbackToLegacyWhenEmpty`, and `AiQuery:Enabled`
+flags that gated them. Analytics are served **exclusively** by
+`AggregateAnalyticsService` reading the Azure Table Storage aggregate store, so
+there is no execution surface that could touch raw telemetry. Workflow-deviation
+detection runs **locally** in the extension.
 
 ## Rollback note
 
-The single master switch for the raw-vs-aggregate world is
-`WebUx:ExposeRawSessionDetail` (default `false`). Flipping it to `true` (plus
-`Analytics:Source=Legacy` if needed) re-exposes the legacy raw behavior for one
-release. See [`docs/migration.md`](migration.md) §(f). Under the default
-configuration, the end-to-end guarantee above holds: no raw prompt/response/
-session content reaches the cloud.
+There is no runtime rollback to raw behavior: the raw-query/alert code paths and
+their config flags no longer exist. Restoring legacy raw analytics requires
+redeploying a pre-cleanup `infra/` + dashboard image tag. See
+[`docs/migration.md`](migration.md) §(f). Under the current configuration the
+end-to-end guarantee above holds by construction: no raw prompt/response/session
+content reaches the cloud.

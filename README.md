@@ -20,14 +20,14 @@ upload **aggregate-only** batches to the dashboard's ingestion API.
 - **Cloud dashboard** (`src/dashboard/AgentObservability.Dashboard`) — Blazor
   Server app that ingests aggregate batches (`POST /api/ingest/*`, authenticated
   by an org API key) and serves org-level aggregate analytics from Azure Table
-  Storage. Raw session detail and raw KQL are not exposed by default.
+  Storage. It has no raw session detail or raw KQL surface.
 - **Shared contract** — [`schemas/aggregate-batch.schema.json`](schemas/aggregate-batch.schema.json),
   `additionalProperties:false`, is the single contract between the extension
   (producer) and the dashboard (consumer).
 - **Infrastructure** (`infra/`) — Bicep (`main.bicep` + `modules/*`,
-  `parameters.bicepparam`): Log Analytics + App Insights (dashboard telemetry +
-  optional legacy fallback), the dashboard Container App, ACR, Key Vault,
-  Storage, and AI Foundry. The OTel collector is removed.
+  `parameters.bicepparam`): Log Analytics (Container App logs), the dashboard
+  Container App, ACR, Key Vault, and Storage. The OTel collector, App Insights,
+  and AI Foundry are removed.
 
 ## Getting started
 
@@ -47,13 +47,10 @@ The Blazor Server dashboard lives at `src/dashboard/AgentObservability.Dashboard
 dotnet run --project src/dashboard/AgentObservability.Dashboard/AgentObservability.Dashboard.csproj
 ```
 
-Key configuration (appsettings-style; env via `__`): `Analytics` (`Source`,
-`OrgId`, `FallbackToLegacyWhenEmpty`), `WebUx` (`ExposeRawSessionDetail`),
-`AiQuery` (`Enabled`), `Ingestion` (`Enabled`, `KeyPepper`, `ApiKeys[]`),
-`Storage` (`TableEndpoint`, `BlobEndpoint`), `LogAnalytics` (`WorkspaceId`),
-`AzureAI` (`Endpoint`, `DeploymentName`). With no aggregate store configured the
-dashboard can fall back to legacy Log Analytics when
-`Analytics:FallbackToLegacyWhenEmpty` is true.
+Key configuration (appsettings-style; env via `__`): `Analytics` (`OrgId`),
+`Ingestion` (`Enabled`, `KeyPepper`, `ApiKeys[]`), `Storage` (`TableEndpoint`).
+The dashboard is aggregate-only — it serves analytics exclusively from the Azure
+Table Storage aggregate store.
 
 ### Container build
 

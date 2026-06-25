@@ -3,9 +3,8 @@ using AgentObservability.Dashboard.Models;
 namespace AgentObservability.Dashboard.Services.Analytics;
 
 /// <summary>
-/// Org-level analytics for the four migrated dashboard pages (Overview, Repository, Developer
-/// Activity, LLM Analytics). Mirrors the equivalent <c>LogAnalyticsService</c> signatures so the
-/// pages can switch source via DI without changing output shapes.
+/// Org-level analytics for the four dashboard pages (Overview, Repository, Developer
+/// Activity, LLM Analytics), served from the Azure Table Storage aggregate store.
 /// </summary>
 public interface IAnalyticsService
 {

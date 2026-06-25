@@ -23,29 +23,6 @@ resource tableService 'Microsoft.Storage/storageAccounts/tableServices@2023-05-0
   name: 'default'
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
-  parent: storageAccount
-  name: 'default'
-}
-
-resource aiLearningsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: 'ai-learnings'
-  properties: {
-    publicAccess: 'None'
-  }
-}
-
-resource repositoriesTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
-  parent: tableService
-  name: 'Repositories'
-}
-
-resource workflowsTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
-  parent: tableService
-  name: 'Workflows'
-}
-
 // Aggregate ingestion tables (also created at runtime via EnsureTablesExistAsync; declared here for explicit IaC)
 resource ingestionAggregatesTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
   parent: tableService
@@ -70,6 +47,3 @@ output storageAccountName string = storageAccount.name
 
 @description('Table service endpoint')
 output tableEndpoint string = storageAccount.properties.primaryEndpoints.table
-
-@description('Blob service endpoint')
-output blobEndpoint string = storageAccount.properties.primaryEndpoints.blob

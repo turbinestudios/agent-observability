@@ -10,9 +10,6 @@ param environmentId string
 @description('Container image for the Blazor Dashboard')
 param containerImage string
 
-@description('Resource ID of the Log Analytics workspace for query access')
-param logAnalyticsWorkspaceId string
-
 @description('ACR login server for managed identity pull')
 param acrLoginServer string
 
@@ -21,15 +18,6 @@ param dashboardIdentityId string
 
 @description('Table service endpoint for Azure Table Storage')
 param storageTableEndpoint string
-
-@description('Blob service endpoint for Azure Blob Storage')
-param storageBlobEndpoint string
-
-@description('Azure AI Foundry endpoint for KQL generation')
-param aiEndpoint string
-
-@description('Azure AI model deployment name')
-param aiDeploymentName string
 
 @secure()
 @description('Server-side pepper for ingestion API-key HMAC (Ingestion:KeyPepper), wired as a Container App secret')
@@ -80,24 +68,8 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
           }
           env: [
             {
-              name: 'LogAnalytics__WorkspaceId'
-              value: logAnalyticsWorkspaceId
-            }
-            {
               name: 'Storage__TableEndpoint'
               value: storageTableEndpoint
-            }
-            {
-              name: 'Storage__BlobEndpoint'
-              value: storageBlobEndpoint
-            }
-            {
-              name: 'AzureAI__Endpoint'
-              value: aiEndpoint
-            }
-            {
-              name: 'AzureAI__DeploymentName'
-              value: aiDeploymentName
             }
             {
               name: 'Ingestion__Enabled'
@@ -108,20 +80,8 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
               secretRef: 'ingestion-key-pepper'
             }
             {
-              name: 'Analytics__Source'
-              value: 'Aggregate'
-            }
-            {
               name: 'Analytics__OrgId'
               value: analyticsOrgId
-            }
-            {
-              name: 'WebUx__ExposeRawSessionDetail'
-              value: 'false'
-            }
-            {
-              name: 'AiQuery__Enabled'
-              value: 'true'
             }
           ]
         }
