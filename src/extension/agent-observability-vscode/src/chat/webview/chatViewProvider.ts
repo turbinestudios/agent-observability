@@ -12,12 +12,15 @@ import { renderChatHtml } from './chatViewHtml';
 import { markdownToHtml } from './markdownToHtml';
 import { HostToWebview, WebviewToHost } from './protocol';
 import {
-  RepoWorkflowFacts,
-  buildWorkflowDigest,
   buildWorkflowGenPreamble,
   mergeWorkflowsByRepository,
   validateWorkflowsJson,
 } from '../tasks/workflowGen';
+import {
+  buildContextFilesDigest,
+  gatherProjectContextFiles,
+  resolveWorkspaceRepository,
+} from '../tasks/projectContext';
 import { buildMinimalConfigPreamble, parseConfigObject } from '../tasks/minimalConfig';
 import { SummaryInput, buildLogSummaryPreamble, buildSummaryDigest, toSafeSessionRow } from '../tasks/logSummary';
 
@@ -27,9 +30,7 @@ export const ASSISTANT_VIEW_ID = 'agentObservability.assistant';
 /** globalState key recording that the one-time AI Helper disclosure was accepted. */
 const DISCLOSURE_KEY = 'agentObservability.aiHelper.disclosed';
 
-/** How many repositories / sessions to ground each task on (token budget). */
-const MAX_WORKFLOW_REPOS = 3;
-const WORKFLOW_SESSION_SAMPLE = 5;
+/** How many sessions to ground the log-summary task on (token budget). */
 const SUMMARY_SESSION_LIMIT = 50;
 
 /** Throttle for re-rendering the streaming assistant bubble. */
@@ -201,7 +202,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const contextText = await this.contextLoader.loadMany(names);
 
     if (commandId === 'generate-workflows') {
-      return buildWorkflowGenPreamble(contextText, buildWorkflowDigest(this.gatherWorkflowFacts()));
+      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const repository = resolveWorkspaceRepository(cwd);
+      const files = gatherProjectContextFiles(cwd);
+      return buildWorkflowGenPreamble(contextText, buildContextFilesDigest(repository, files));
     }
     if (commandId === 'minimal-config') {
       return buildMinimalConfigPreamble(contextText);
@@ -215,55 +219,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       'telemetry using only the context above. If they ask for configuration, emit a single fenced ' +
       '`ao-config` (settings object) or `ao-workflows` (workflows array) block.'
     );
-  }
-
-  /** Gather safe per-repository workflow facts from local telemetry. */
-  private gatherWorkflowFacts(): RepoWorkflowFacts[] {
-    const repos = this.telemetry.listRepositories();
-    if (!repos.ok) {
-      return [];
-    }
-    const facts: RepoWorkflowFacts[] = [];
-    for (const repo of repos.value.filter((r) => r.repository !== 'unknown').slice(0, MAX_WORKFLOW_REPOS)) {
-      const sessionsResult = this.telemetry.listSessions(repo.repository);
-      const sessions = sessionsResult.ok ? sessionsResult.value : [];
-      const agents = new Set<string>();
-      const tools = new Set<string>();
-      const operations = new Set<string>();
-      const models = new Set<string>(repo.models);
-      for (const s of sessions.slice(0, WORKFLOW_SESSION_SAMPLE)) {
-        const interactions = this.telemetry.getSessionInteractions(s.sessionId);
-        if (!interactions.ok) {
-          continue;
-        }
-        for (const it of interactions.value) {
-          if (it.agentName) {
-            agents.add(it.agentName);
-          }
-          if (it.toolName) {
-            tools.add(it.toolName);
-          }
-          if (it.operation) {
-            operations.add(String(it.operation));
-          }
-          if (it.model) {
-            models.add(it.model);
-          }
-        }
-      }
-      const durations = sessions.map((s) => s.durationMs);
-      facts.push({
-        repository: repo.repository,
-        sessionCount: repo.sessionCount,
-        agents: [...agents].sort(),
-        tools: [...tools].sort(),
-        operations: [...operations].sort(),
-        models: [...models].sort(),
-        typicalDurationMs: median(durations),
-        maxDurationMs: durations.length > 0 ? Math.max(...durations) : 0,
-      });
-    }
-    return facts;
   }
 
   /** Gather safe overview + recent sessions + repositories for the summary task. */
@@ -339,8 +294,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         detail:
           'The AI Helper sends your message and a summary of your local telemetry — repository names, ' +
           'agent/model/tool names, durations, and token counts — to GitHub Copilot under your own ' +
-          'license. Raw prompts, completions, tool input/output, file contents, and session titles are ' +
-          'never sent. This is separate from cloud sync, which stays off.',
+          'license. The “Generate workflows” command additionally reads your project’s Copilot ' +
+          'customization files (instructions, agents, prompts, skills) and sends their contents. Raw ' +
+          'prompts, completions, tool input/output, and session titles are never sent, and nothing here ' +
+          'uses the cloud-sync path, which stays off.',
       },
       'Continue',
     );
@@ -369,16 +326,6 @@ async function confirmApply(message: string): Promise<boolean> {
     'Apply',
   );
   return choice === 'Apply';
-}
-
-/** Median of a numeric list (0 for empty). */
-function median(values: number[]): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? Math.round((sorted[mid - 1] + sorted[mid]) / 2) : sorted[mid];
 }
 
 /** Per-render CSP nonce, CSPRNG-backed (matches the session-detail panel). */

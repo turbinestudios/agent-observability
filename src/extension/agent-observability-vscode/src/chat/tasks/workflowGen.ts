@@ -4,49 +4,16 @@ import { extractFencedBlock } from './fenced';
 /**
  * Pure prompt construction + output validation for the "Generate workflows" task.
  *
- * The provider gathers the telemetry facts (an IO concern) and passes them here;
- * everything in this module — digest text, preamble, fenced-block extraction,
- * validation, and the merge applied before writing settings — is pure and
- * unit-tested. Validation reuses the PRODUCTION parser
+ * The provider gathers the project's context files (an IO concern, in
+ * `projectContext.ts`) and passes the digest here; the preamble, fenced-block
+ * extraction, validation, and the merge applied before writing settings are all
+ * pure and unit-tested. Validation reuses the PRODUCTION parser
  * ({@link parseWorkflowConfigs}) so "valid" means exactly what the local
  * deviation detector accepts.
  */
 
 /** The fence tag the assistant is asked to use for generated workflows. */
 export const WORKFLOWS_FENCE_LANG = 'ao-workflows';
-
-/** Distilled, safe facts about one repository's activity, for grounding the model. */
-export interface RepoWorkflowFacts {
-  repository: string;
-  sessionCount: number;
-  agents: string[];
-  tools: string[];
-  operations: string[];
-  models: string[];
-  /** Typical session duration in ms (e.g. median). */
-  typicalDurationMs: number;
-  /** Longest session duration in ms. */
-  maxDurationMs: number;
-}
-
-/** Build a compact, safe-metadata digest of the observed repositories. */
-export function buildWorkflowDigest(facts: readonly RepoWorkflowFacts[]): string {
-  if (facts.length === 0) {
-    return 'No repository activity was found in the local telemetry.';
-  }
-  const lines = facts.map((f) => {
-    const parts = [
-      `- **${f.repository}** — ${f.sessionCount} session(s)`,
-      `agents: ${list(f.agents)}`,
-      `tools: ${list(f.tools)}`,
-      `operations: ${list(f.operations)}`,
-      `models: ${list(f.models)}`,
-      `typical duration ~${seconds(f.typicalDurationMs)} (max ${seconds(f.maxDurationMs)})`,
-    ];
-    return parts.join('; ');
-  });
-  return `## Observed repositories\n${lines.join('\n')}`;
-}
 
 /** Assemble the grounding preamble for the workflow-generation request. */
 export function buildWorkflowGenPreamble(contextText: string, digest: string): string {
@@ -56,11 +23,14 @@ export function buildWorkflowGenPreamble(contextText: string, digest: string): s
     digest,
     '',
     '## Task',
-    'Propose expected workflow definitions for `agentObservability.workflows` based ONLY on the',
-    'observed repositories above. Use the exact repository strings and the observed agent/tool names —',
-    'do not invent any. Emit EXACTLY ONE fenced code block tagged `' + WORKFLOWS_FENCE_LANG + '`',
-    'containing a JSON array (the value of `agentObservability.workflows`) and nothing the user must',
-    'fix by hand. Keep predicates metadata-only. A short sentence before the block is fine.',
+    'Propose expected workflow definitions for `agentObservability.workflows` for the repository above,',
+    'derived from the project context files shown above — the agents they declare, the order those',
+    'agents run in, and the tools they use. Use the exact `repository` string provided and the agent/',
+    'tool names that appear in the context files; do not invent repositories, agents, or tools. If NO',
+    'context files were provided, say so plainly and do NOT fabricate a workflow. Otherwise emit EXACTLY',
+    'ONE fenced code block tagged `' + WORKFLOWS_FENCE_LANG + '` containing a JSON array (the value of',
+    '`agentObservability.workflows`) and nothing the user must fix by hand. Keep predicates',
+    'metadata-only. A short sentence before the block is fine.',
   ].join('\n');
 }
 
@@ -134,19 +104,4 @@ function repositoryOf(entry: unknown): string | undefined {
   }
   const repo = (entry as { repository?: unknown }).repository;
   return typeof repo === 'string' && repo.trim().length > 0 ? repo.trim() : undefined;
-}
-
-/** Join a distinct list for the digest, capping the count. */
-function list(values: readonly string[]): string {
-  if (values.length === 0) {
-    return 'none';
-  }
-  const capped = values.slice(0, 12);
-  const suffix = values.length > capped.length ? `, …(+${values.length - capped.length})` : '';
-  return capped.join(', ') + suffix;
-}
-
-/** Human-readable seconds for a millisecond duration. */
-function seconds(ms: number): string {
-  return `${Math.round(ms / 1000)}s`;
 }

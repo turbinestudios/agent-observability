@@ -35,11 +35,13 @@ own GitHub Copilot license** (`vscode.lm`). It is grounded in concise context fi
 baked into the extension, so it knows this extension's settings, the workflow DSL,
 and the telemetry model. An empty chat offers three quick-command buttons:
 
-- **Generate workflows** — drafts an `agentObservability.workflows` array from the
-  agents, tools and durations observed in your local telemetry. The result can be
-  applied to `.vscode/settings.json` behind a confirmation; it is validated against
-  the same parser the deviation detector uses and **merged** by repository (your
-  other repositories' entries are kept).
+- **Generate workflows** — drafts an `agentObservability.workflows` array from your
+  project's **Copilot customization files** (instructions, agents, prompts, skills),
+  using the agents they declare, the order they run in, and the tools they use. The
+  repository is taken from the workspace's git remote. The result can be applied to
+  `.vscode/settings.json` behind a confirmation; it is validated against the same
+  parser the deviation detector uses and **merged** by repository (your other
+  repositories' entries are kept).
 - **Set up new project** — produces the bare-minimum `.vscode/settings.json` to get
   the extension working. Only known `agentObservability.*` keys are applied; the
   organization API key is never written to settings (use the command instead).
@@ -53,11 +55,14 @@ button, and a settings-bound one has an **Apply** button.
 says so. On first use it shows a one-time disclosure (below) and VS Code's own
 Copilot-access prompt.
 
-**Privacy.** The AI Helper sends only **safe metadata** — sanitized repository
-names, agent/model/tool names, durations, and token/AIU counts — plus your typed
-prompt, to your own Copilot model. It never sends raw prompts/responses, tool
-input/output, file contents, or session titles, and it never touches the cloud-sync
-path. This is a distinct gate from cloud sharing (which stays off by default).
+**Privacy.** The AI Helper sends **safe metadata** — sanitized repository names,
+agent/model/tool names, durations, and token/AIU counts — plus your typed prompt, to
+your own Copilot model. The **Generate workflows** command additionally reads your
+project's Copilot customization files (instructions, agents, prompts, skills) and
+sends their **contents** so it can infer the intended workflow — these are your own
+files going to your own Copilot license. It never sends raw prompts/responses, tool
+input/output, or session titles, and it never touches the cloud-sync path. This is a
+distinct gate from cloud sharing (which stays off by default).
 
 ## Commands
 

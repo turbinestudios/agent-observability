@@ -1,38 +1,25 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildWorkflowDigest,
+  buildWorkflowGenPreamble,
   mergeWorkflowsByRepository,
   validateWorkflowResponse,
-  type RepoWorkflowFacts,
 } from './workflowGen';
 
 const DEFAULT_MAX_MS = 60 * 60_000;
-
-const facts: RepoWorkflowFacts = {
-  repository: 'https://github.com/org/repo',
-  sessionCount: 4,
-  agents: ['planner', 'coder'],
-  tools: ['read_file', 'apply_patch'],
-  operations: ['chat', 'execute_tool'],
-  models: ['gpt-4o'],
-  typicalDurationMs: 120_000,
-  maxDurationMs: 300_000,
-};
 
 function workflowsBlock(json: string): string {
   return 'Here you go:\n\n```ao-workflows\n' + json + '\n```\n';
 }
 
-describe('buildWorkflowDigest', () => {
-  it('lists each repository with its observed agents/tools', () => {
-    const digest = buildWorkflowDigest([facts]);
-    expect(digest).toContain('https://github.com/org/repo');
-    expect(digest).toContain('planner');
-    expect(digest).toContain('read_file');
-  });
-
-  it('handles the empty case', () => {
-    expect(buildWorkflowDigest([])).toMatch(/no repository activity/i);
+describe('buildWorkflowGenPreamble', () => {
+  it('grounds the task on the project context files and the ao-workflows fence', () => {
+    const preamble = buildWorkflowGenPreamble('CONTEXT', 'DIGEST');
+    expect(preamble).toContain('CONTEXT');
+    expect(preamble).toContain('DIGEST');
+    expect(preamble).toContain('ao-workflows');
+    expect(preamble).toMatch(/project context files/i);
+    // It must instruct the model NOT to invent things absent context files.
+    expect(preamble).toMatch(/do not (fabricate|invent)/i);
   });
 });
 

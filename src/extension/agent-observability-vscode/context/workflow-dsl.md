@@ -4,8 +4,8 @@ The local deviation detector checks each repository's agent sessions against exp
 The setting value is a JSON **array** of per-repository entries.
 
 When generating workflows, emit ONE fenced ` ```ao-workflows ` block containing that array (the value
-of `agentObservability.workflows`). Use the exact `repository` strings and observed agent/tool names
-from the telemetry digest in the request — never invent them.
+of `agentObservability.workflows`). Use the exact `repository` string and the agent/tool names that
+appear in the project context files digest in the request — never invent them.
 
 ## Shape
 ```ao-workflows

@@ -40,9 +40,10 @@ export const QUICK_COMMANDS: readonly QuickCommand[] = [
   {
     id: 'generate-workflows',
     label: 'Generate workflows',
-    description: 'Draft agentObservability.workflows from this project’s telemetry',
+    description: 'Draft agentObservability.workflows from this project’s context files',
     prompt:
-      'Generate expected workflow definitions for agentObservability.workflows based on my collected telemetry.',
+      'Generate expected workflow definitions for agentObservability.workflows based on my project’s ' +
+      'Copilot context files (instructions, agents, prompts, skills).',
     contextFiles: [ContextFiles.overview, ContextFiles.workflowDsl],
   },
   {

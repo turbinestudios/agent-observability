@@ -11,17 +11,21 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 - **AI Helper** — a chat webview in the Agent Observability activity-bar container,
   backed by the user's own GitHub Copilot license (`vscode.lm`) and grounded in
   baked-in context files. An empty chat offers quick-command buttons to **generate
-  workflow definitions** from local telemetry, **produce the minimal
-  `.vscode/settings.json`** for a new project, and **summarize the collected logs**,
-  plus free-text questions. Generated config can be copied or applied to workspace
-  settings behind a confirmation (workflows are validated against the production
-  parser and merged by repository).
+  workflow definitions** from the project's Copilot customization files (instructions,
+  agents, prompts, skills) — deriving the expected agents, their order, and tools from
+  what the project declares, with the repository taken from the workspace git remote —
+  **produce the minimal `.vscode/settings.json`** for a new project, and **summarize
+  the collected logs**, plus free-text questions. Generated config can be copied or
+  applied to workspace settings behind a confirmation (workflows are validated against
+  the production parser and merged by repository).
 - Commands `Agent Observability: Open AI Helper` and
   `Agent Observability: New AI Helper Chat`.
 - A one-time disclosure gates the first AI Helper use; only safe metadata
   (sanitized repositories, agent/model/tool names, durations, token/AIU counts) and
-  the user's prompt are sent to Copilot — never raw content, file contents, or
-  session titles, and never via the cloud-sync path.
+  the user's prompt are sent to Copilot — never raw prompts/responses, tool I/O, or
+  session titles, and never via the cloud-sync path. The **Generate workflows**
+  command additionally sends the contents of the project's customization files (the
+  user's own files, to the user's own Copilot license).
 - **Near-real-time live updates** for the session-detail panel. When enabled, the
   extension tails the OpenTelemetry JSON-lines file written by GitHub Copilot
   Chat's `file` exporter and overlays a live status banner — current activity,
