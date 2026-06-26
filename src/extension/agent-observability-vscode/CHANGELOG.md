@@ -4,6 +4,30 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Workflow deviation detection is now per user-request turn**, not per session.
+  Each user request (and everything the agent spawned for it) is checked
+  independently; `triggerPredicate` is now a pure applicability **gate** (it no
+  longer filters the analyzed interactions), and a workflow's `steps` are verified
+  as an ordered, not-necessarily-adjacent subsequence over the whole turn. The
+  session-level "Workflow Deviations" overview is removed from the session-detail
+  page; divergences now render inline on the offending request in the timeline.
+
+### Added
+
+- **Proactive divergence notifications** — `agentObservability.deviation.notifyOnDivergence`
+  (off by default) raises a VS Code notification when a configured workflow diverges
+  within a settled user-request turn, with an **Open session** action. Scans run on
+  refresh; a silent baseline avoids notifying for pre-existing history.
+- **`triggerContentPredicate`** — an optional LOCAL-ONLY content gate on a workflow,
+  so relevance can key on the request's intent (e.g. `copilot_chat.user_request`
+  contains a phrase) when no metadata signal distinguishes the task. Evaluated only
+  on the local per-turn path; its deviations are flagged `contentDerived` and never
+  participate in sync.
+
 ## [0.3.0] - 2026-06-26
 
 ### Added

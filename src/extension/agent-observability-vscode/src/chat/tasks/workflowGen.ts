@@ -114,6 +114,10 @@ export function validateWorkflowsJson(jsonText: string, defaultMaxMs: number): W
 function findTooBroadTrigger(configs: readonly WorkflowConfig[]): string | undefined {
   for (const config of configs) {
     for (const workflow of config.workflows) {
+      // A content trigger (intent-based relevance) is itself a real discriminator.
+      if (workflow.triggerContentPredicate !== undefined) {
+        continue;
+      }
       const trigger = workflow.triggerPredicate;
       if (trigger === undefined) {
         continue;

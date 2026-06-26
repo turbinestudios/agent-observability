@@ -35,6 +35,7 @@ export const ConfigKeys = {
   localTelemetryEnabled: 'localTelemetry.enabled',
   sqlitePath: 'sqlitePath',
   maxSessionMinutes: 'deviation.maxSessionMinutes',
+  notifyOnDivergence: 'deviation.notifyOnDivergence',
   workflows: 'workflows',
   analysisCodeFileExtensions: 'analysis.codeFileExtensions',
   analysisDocFileExtensions: 'analysis.docFileExtensions',
@@ -50,6 +51,7 @@ export const ConfigDefaults = {
   localTelemetryEnabled: true,
   sqlitePath: '',
   maxSessionMinutes: 60,
+  notifyOnDivergence: false,
   analysisCodeFileExtensions: [
     '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.java', '.c',
     '.cc', '.cpp', '.h', '.hpp', '.cs', '.go', '.rs', '.rb', '.php',
@@ -144,6 +146,19 @@ export class Configuration {
       return ConfigDefaults.maxSessionMinutes;
     }
     return Math.max(MIN_SESSION_MINUTES, Math.floor(raw));
+  }
+
+  /**
+   * Whether to raise a VS Code notification when a configured workflow diverges
+   * within a user-request turn (a step skipped or out of order). Off by default;
+   * the per-turn divergences are always shown inline in the session-detail
+   * timeline regardless of this flag.
+   */
+  isNotifyOnDivergenceEnabled(): boolean {
+    return this.config().get<boolean>(
+      ConfigKeys.notifyOnDivergence,
+      ConfigDefaults.notifyOnDivergence,
+    );
   }
 
   /**

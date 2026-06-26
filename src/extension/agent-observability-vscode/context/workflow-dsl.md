@@ -71,8 +71,18 @@ Pick a discriminator present in this workflow's sessions and absent from the res
 
 The custom mode/agent NAME is not metadata — it lives only in the local-only `copilot_chat.mode_name`
 content attribute. To assert "this ran in mode X", use a step `contentPredicate` on `copilot_chat.mode_name`,
-never the trigger. If the context files expose no real discriminator, emit ONE repo-wide workflow rather
-than a vague trigger.
+never the metadata trigger. If the context files expose no real discriminator, emit ONE repo-wide workflow
+rather than a vague trigger.
+
+When relevance is about what the request is ABOUT (intent) rather than metadata, add a
+`triggerContentPredicate` — a LOCAL-ONLY content gate on the turn's user request. The workflow then applies
+to a turn only when the request content matches (in addition to any metadata `triggerPredicate`):
+```json
+"triggerContentPredicate": { "attribute": "copilot_chat.user_request", "contains": "migrate the database" }
+```
+`attribute` must be from the allowed content set (commonly `copilot_chat.user_request`); prefer `contains`.
+A content-triggered workflow is evaluated only locally per user-request and never participates in cloud
+sync — use it when no metadata signal distinguishes the task.
 
 ## Notes
 - Prefer metadata `predicate` fields. A step `contentPredicate` inspects raw local-only span text; its

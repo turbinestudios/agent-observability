@@ -232,6 +232,11 @@
           "minimum": 1,
           "markdownDescription": "Maximum expected duration of an agent session, in minutes, used by the local workflow-deviation detector to flag overlong sessions (TimeoutExceeded) when no explicit workflow is configured for the repository."
         },
+        "agentObservability.deviation.notifyOnDivergence": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Show a VS Code notification when a configured workflow diverges within a user-request turn (a step is skipped or runs out of order). Off by default; per-turn divergences are always shown inline in the session-detail timeline regardless."
+        },
         "agentObservability.context.acceptedMissingFiles": {
           "type": "array",
           "default": [],

@@ -16,8 +16,11 @@ import { escapeHtml } from './escapeHtml';
 /** One combined session, paired with the data the panel resolves per session. */
 export interface CombinedSessionSection {
   detail: SessionDetail;
-  /** Workflow deviations detected for THIS session (rendered in its section). */
-  deviations: readonly WorkflowDeviation[];
+  /**
+   * Per-turn workflow deviations for THIS session, aligned by index to
+   * `detail.turns` and rendered as chips inside the timeline (no overview section).
+   */
+  turnDeviations: readonly (readonly WorkflowDeviation[])[];
 }
 
 /**
@@ -67,7 +70,7 @@ function formatInt(value: number): string {
  */
 export function renderSessionDetailHtml(
   detail: SessionDetail,
-  deviations: readonly WorkflowDeviation[],
+  turnDeviations: readonly (readonly WorkflowDeviation[])[],
   nonce: string,
   contextAnalysis?: SessionContextAnalysis,
 ): string {
@@ -103,8 +106,7 @@ export function renderSessionDetailHtml(
   ${renderTreeSummary(detail.treeStats, detail.treeModelTurns)}
   ${renderMainAgentUsage(detail.agentUsage)}
   ${renderSubAgentUsage(detail.agentUsage)}
-  ${renderDeviations(deviations)}
-  ${renderTurns(detail.turns)}
+  ${renderTurns(detail.turns, turnDeviations)}
   </div>
   ${hasContext ? `<div class="tab-panel tab-panel-hidden" id="tab-context">${renderContextAnalysis(contextAnalysis)}</div>` : ''}
   <script nonce="${nonce}">${TREND_FILTER_SCRIPT}</script>
@@ -277,7 +279,7 @@ function renderCombinedHeader(summary: CombinedSummary): string {
  * deviation/turn section helpers as the single-session renderer.
  */
 function renderSessionSection(section: CombinedSessionSection, open: boolean): string {
-  const { detail, deviations } = section;
+  const { detail, turnDeviations } = section;
   const s = detail.summary;
   const id = escapeHtml(shortId(s.sessionId));
   const titleLabel =
@@ -303,8 +305,7 @@ function renderSessionSection(section: CombinedSessionSection, open: boolean): s
     <summary>${summaryRow}</summary>
     <div class="section-body">
       ${meta}
-      ${renderDeviations(deviations)}
-      ${renderTurns(detail.turns)}
+      ${renderTurns(detail.turns, turnDeviations)}
     </div>
   </details>`;
 }
@@ -992,15 +993,17 @@ function renderAgentUsage(
   </section>`;
 }
 
-/** Workflow-deviations section (parity with the cloud SessionDetail page). */
-function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
+/**
+ * Per-turn workflow-divergence chips, rendered at the TOP of a turn so a relevant
+ * workflow whose steps were skipped or ran out of order is visible without
+ * expanding the request. Returns '' when the turn has no divergences (the common
+ * case — the timeline stays quiet). Reuses the `.deviation`/`.badge` styling. A
+ * content-derived divergence is flagged "Local only" (never eligible for sync).
+ */
+function renderTurnDeviations(deviations: readonly WorkflowDeviation[]): string {
   if (deviations.length === 0) {
-    return `<section class="panel">
-      <div class="panel-heading"><h2>Workflow Deviations</h2><span>No deviations detected</span></div>
-      <p class="muted">This session's workflow matches expected patterns.</p>
-    </section>`;
+    return '';
   }
-
   const cards = deviations
     .map((d) => {
       const actual =
@@ -1011,8 +1014,6 @@ function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
         d.expectedSequence !== undefined && d.expectedSequence.length > 0
           ? `<div class="seq"><strong>Expected:</strong> ${d.expectedSequence.map(escapeHtml).join(' → ')}</div>`
           : '';
-      // Content-derived deviations are computed from raw local-only content and
-      // can never be synced; flag them so the distinction is visible.
       const localOnly = d.contentDerived
         ? '<span class="badge badge-local" title="Derived from local-only content (e.g. a prompt or tool argument). Never eligible for sync.">Local only</span>'
         : '';
@@ -1029,10 +1030,7 @@ function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
     })
     .join('\n');
 
-  return `<section class="panel">
-    <div class="panel-heading"><h2>Workflow Deviations</h2><span>${num(deviations.length)} issue(s) detected</span></div>
-    <div class="deviation-list">${cards}</div>
-  </section>`;
+  return `<div class="turn-deviations" role="alert">${cards}</div>`;
 }
 
 /**
@@ -1040,10 +1038,18 @@ function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
  * with two collapsed `<details>`: the User Request (which itself nests the
  * collapsible event timeline) and the Final LLM Response.
  */
-function renderTurns(turns: readonly SessionTurn[]): string {
-  const blocks = turns.map(renderTurn).join('\n');
+function renderTurns(
+  turns: readonly SessionTurn[],
+  turnDeviations: readonly (readonly WorkflowDeviation[])[] = [],
+): string {
+  const blocks = turns.map((turn, i) => renderTurn(turn, turnDeviations[i] ?? [])).join('\n');
+  const issues = turnDeviations.reduce((total, list) => total + list.length, 0);
+  const heading =
+    issues > 0
+      ? `${num(turns.length)} turn(s) · ${num(issues)} workflow divergence(s)`
+      : `${num(turns.length)} turn(s)`;
   return `<section class="panel">
-    <div class="panel-heading"><h2>Timeline</h2><span>${num(turns.length)} turn(s)</span></div>
+    <div class="panel-heading"><h2>Timeline</h2><span>${heading}</span></div>
     <div class="turns">${blocks}</div>
   </section>`;
 }
@@ -1058,7 +1064,10 @@ function renderTurns(turns: readonly SessionTurn[]): string {
  * "Activity" disclosure holding just the nested timeline. Exported so the
  * webview's XSS-safety is unit-tested against crafted request/response content.
  */
-export function renderTurn(turn: SessionTurn): string {
+export function renderTurn(
+  turn: SessionTurn,
+  deviations: readonly WorkflowDeviation[] = [],
+): string {
   const time = escapeHtml(formatTime(turn.timestampMs));
   const events = turn.events.map(renderTimelineRow).join('\n');
   const timeline = `<details class="timeline-disclosure"><summary>Timeline (${num(
@@ -1083,6 +1092,7 @@ export function renderTurn(turn: SessionTurn): string {
       : '';
 
   return `<div class="turn">
+    ${renderTurnDeviations(deviations)}
     ${request}
     ${response}
   </div>`;
@@ -1445,6 +1455,7 @@ const STYLE = `
   .badge { display: inline-block; font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: .1rem .4rem; border-radius: 3px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
   .badge-local { background: var(--vscode-inputValidation-warningBackground, transparent); color: var(--vscode-editorWarning-foreground, #c90); border: 1px solid var(--vscode-editorWarning-foreground, #c90); }
   .seq { font-size: .82rem; color: var(--vscode-descriptionForeground); }
+  .turn-deviations { display: flex; flex-direction: column; gap: .4rem; padding: .5rem .6rem; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   table { width: 100%; border-collapse: collapse; font-size: .85rem; }
   th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); font-weight: 600; }

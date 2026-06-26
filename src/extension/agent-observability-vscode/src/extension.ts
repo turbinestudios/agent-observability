@@ -19,6 +19,7 @@ import { SyncEngine, SyncContextInsightsSource, systemClock } from './sync/syncE
 import { SyncScheduler } from './sync/scheduler';
 import { registerObservabilityChatParticipant } from './chat/observabilityChat';
 import { ChatViewProvider, ASSISTANT_VIEW_ID } from './chat/webview/chatViewProvider';
+import { WorkflowDivergenceNotifier } from './notify/workflowDivergenceNotifier';
 import { LiveUpdateService, defaultOtelFilePath } from './otel/liveUpdateService';
 
 /**
@@ -60,6 +61,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const deviations = new LocalDeviationDetector(config);
   const detailPanels = new SessionDetailPanelManager(telemetry, deviations);
   sessionDetailPanels = detailPanels;
+
+  // Proactive per-turn workflow-divergence notifications (off by default). After a
+  // refresh it scans settled turns of recently-active sessions in repositories
+  // with configured workflows and toasts NEW divergences, opening the
+  // session-detail panel on click. Local-only — nothing is uploaded.
+  const divergenceNotifier = new WorkflowDivergenceNotifier(
+    config,
+    telemetry,
+    deviations,
+    (sessionKey) => detailPanels.open(sessionKey),
+  );
 
   // Near-real-time bridge: tails Copilot's OTel file-exporter output and overlays
   // a live status banner on the session-detail panel. Off unless the user runs
@@ -158,7 +170,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Refresh re-snapshots local telemetry, then fans out to every view.
   const telemetryRefresh: Refreshable = { refresh: () => telemetry.refresh() };
-  const refreshables: Refreshable[] = [telemetryRefresh, overview, sessions, sync];
+  const refreshables: Refreshable[] = [telemetryRefresh, overview, sessions, sync, divergenceNotifier];
   registerCommands(context, refreshables, {
     consent,
     secrets,
@@ -197,6 +209,10 @@ export function activate(context: vscode.ExtensionContext): void {
   syncScheduler = scheduler;
   scheduler.start();
 
+  // Prime the divergence-notifier baseline so a freshly-opened window does not
+  // toast for pre-existing history; subsequent refreshes notify only NEW ones.
+  divergenceNotifier.scan();
+
   // Keep the Sync view live when consent flips (set-key already refreshes via
   // the command path, but consent can also change programmatically).
   context.subscriptions.push(consent.onDidChange(() => sync.refresh()));
@@ -219,6 +235,10 @@ export function activate(context: vscode.ExtensionContext): void {
       overview.refresh();
       sessions.refresh();
       sync.refresh();
+      // Workflows or the notify flag may have changed — re-baseline so we never
+      // retroactively toast for historical divergences the new config now matches.
+      divergenceNotifier.resetBaseline();
+      divergenceNotifier.scan();
     }),
   );
 }

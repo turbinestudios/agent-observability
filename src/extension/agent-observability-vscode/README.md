@@ -11,7 +11,7 @@ shared with an organization dashboard.
 | --- | --- |
 | Activity Bar container, three views, commands, settings | Shipped |
 | Read-only local SQLite (`agent-traces.db`) ingestion (snapshot + read-only connection) | Shipped |
-| Local session detail timeline + local workflow deviation detection | Shipped |
+| Local session detail timeline + per-request workflow deviation detection (with optional notifications) | Shipped |
 | Workflow predicate DSL (metadata + local-only content predicates) | Shipped |
 | Consent toggle + organization API key in SecretStorage (opt-in, off by default) | Shipped |
 | Aggregate engine (30-min time bins, pseudonymous developer id, idempotent batch/row ids) | Shipped |
@@ -84,24 +84,32 @@ All under the **Agent Observability** category:
 | `agentObservability.sync.intervalMinutes` | `60` | Background sync interval (minimum 5). |
 | `agentObservability.localTelemetry.enabled` | `true` | Feature flag for the local telemetry view. |
 | `agentObservability.sqlitePath` | `""` | Override path to `agent-traces.db` (blank = auto-detect). |
-| `agentObservability.deviation.maxSessionMinutes` | `60` | Local deviation detector: max expected session duration. |
+| `agentObservability.deviation.maxSessionMinutes` | `60` | Local deviation detector: max expected session/turn duration. |
+| `agentObservability.deviation.notifyOnDivergence` | `false` | Raise a VS Code notification when a configured workflow diverges within a user-request turn. Per-turn divergences always show inline in the timeline regardless. |
 | `agentObservability.workflows` | `[]` | Optional per-repository expected workflows for the local deviation detector. Evaluated on-machine; never uploaded. |
 
 ## Workflow predicate DSL
 
 `agentObservability.workflows` lets you describe the agent workflows you expect
 per repository so the **local** deviation detector can flag sequence, missing,
-timeout, and failure-rate anomalies. There are two tiers of matching, and both
-run entirely on your machine.
+timeout, and failure-rate anomalies. Detection is **per user-request turn** (one
+request plus everything the agent spawned for it): each turn is checked
+independently, any divergence is shown inline on that request in the
+session-detail timeline, and — when `deviation.notifyOnDivergence` is on — also
+raised as a VS Code notification. There are two tiers of matching, and both run
+entirely on your machine.
 
 **Tier 1 — metadata predicates (safe).** A `StepPredicate` filters the safe
 interaction metadata: `operation`, `agentName`, `agentMode`, `model`,
 `toolName`, `success`. Every field is optional (absent = match any); strings
 compare case-insensitively. Use them in `steps[].predicate` and in an optional
-`triggerPredicate` that scopes *which* interactions belong to the workflow (the
-local analog of the cloud dashboard's `TriggerKqlQuery`). The legacy
+`triggerPredicate`, which acts as a pure **applicability gate**: the workflow
+applies to a turn when an interaction matches it, then its steps are verified as
+an ordered (not necessarily adjacent) subsequence over the whole turn. The legacy
 `expectedSequence` (an ordered list of agent names) still works and is the
-degenerate case of `steps`.
+degenerate case of `steps`. Scope by a real discriminator (`operation`,
+`toolName`, `model`, or a sub-agent `agentName`) — never `agentMode` alone, since
+every custom chat mode collapses to `agentMode: "custom"`.
 
 **Tier 2 — content predicates (local-only).** A step may add a
 `contentPredicate` that inspects a raw `span_attributes` value (e.g. the user
@@ -113,7 +121,11 @@ ReDoS-safe regex subset: catastrophic-backtracking shapes — including any rege
 alternation `|` under a repetition such as `(a|b)+` — are rejected (use a
 character class like `[ab]+` instead), and regex matching runs only over the
 first 1,000 characters of the value (vs 10,000 for `contains`) to bound
-backtracking cost. Prefer `contains` for simple checks.
+backtracking cost. Prefer `contains` for simple checks. A `triggerContentPredicate`
+(same shape, on the workflow itself) can additionally gate *applicability* on the
+request's intent — e.g. `copilot_chat.user_request` contains a phrase — for
+workflows no metadata signal can distinguish; such a workflow is evaluated only
+locally per turn and never participates in sync.
 
 ```jsonc
 "agentObservability.workflows": [
@@ -122,7 +134,7 @@ backtracking cost. Prefer `contains` for simple checks.
     "workflows": [
       {
         "name": "feature-development",
-        "triggerPredicate": { "agentMode": "agent" },
+        "triggerPredicate": { "operation": "invoke_agent" },
         "steps": [
           { "name": "plan",   "predicate": { "agentName": "planner", "operation": "chat" } },
           { "name": "code",   "predicate": { "agentName": "coder", "toolName": "edit_file" } },
