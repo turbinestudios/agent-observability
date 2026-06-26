@@ -2,7 +2,7 @@
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
   "description": "Privacy-first local view of GitHub Copilot agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "turbinestudios",
   "license": "UNLICENSED",
   "engines": {
@@ -42,6 +42,11 @@
         {
           "id": "agentObservability.sync",
           "name": "Sync"
+        },
+        {
+          "id": "agentObservability.assistant",
+          "name": "AI Helper",
+          "type": "webview"
         }
       ]
     },
@@ -120,6 +125,18 @@
         "title": "Refresh Session Detail",
         "category": "Agent Observability",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "agentObservability.openAssistant",
+        "title": "Open AI Helper",
+        "category": "Agent Observability",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "agentObservability.newChat",
+        "title": "New AI Helper Chat",
+        "category": "Agent Observability",
+        "icon": "$(add)"
       }
     ],
     "menus": {
@@ -158,6 +175,11 @@
         {
           "command": "agentObservability.syncNow",
           "when": "view == agentObservability.sync",
+          "group": "navigation"
+        },
+        {
+          "command": "agentObservability.newChat",
+          "when": "view == agentObservability.assistant",
           "group": "navigation"
         }
       ],

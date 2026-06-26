@@ -4,6 +4,25 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-06-26
+
+### Added
+
+- **AI Helper** — a chat webview in the Agent Observability activity-bar container,
+  backed by the user's own GitHub Copilot license (`vscode.lm`) and grounded in
+  baked-in context files. An empty chat offers quick-command buttons to **generate
+  workflow definitions** from local telemetry, **produce the minimal
+  `.vscode/settings.json`** for a new project, and **summarize the collected logs**,
+  plus free-text questions. Generated config can be copied or applied to workspace
+  settings behind a confirmation (workflows are validated against the production
+  parser and merged by repository).
+- Commands `Agent Observability: Open AI Helper` and
+  `Agent Observability: New AI Helper Chat`.
+- A one-time disclosure gates the first AI Helper use; only safe metadata
+  (sanitized repositories, agent/model/tool names, durations, token/AIU counts) and
+  the user's prompt are sent to Copilot — never raw content, file contents, or
+  session titles, and never via the cloud-sync path.
+
 ## [0.2.0] - 2026-06-24
 
 ### Changed

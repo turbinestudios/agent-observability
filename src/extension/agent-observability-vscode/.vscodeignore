@@ -23,4 +23,8 @@ node_modules/**
 **/.gitignore
 **/.editorconfig
 
-# Keep README, CHANGELOG, LICENSE, package.json, media/ and dist/ in the package
+# Keep README, CHANGELOG, LICENSE, package.json, media/ and dist/ in the package.
+# The AI Helper's baked-in grounding files (context/*.md) are NOT matched by any
+# rule above (they live outside src/ and are not .ts), so they ship by default.
+# Made explicit here so the assistant's context is always present in the .vsix.
+!context/**

@@ -17,6 +17,7 @@ import { GlobalStateSyncStateStore } from './sync/syncState';
 import { SyncEngine, SyncContextInsightsSource, systemClock } from './sync/syncEngine';
 import { SyncScheduler } from './sync/scheduler';
 import { registerObservabilityChatParticipant } from './chat/observabilityChat';
+import { ChatViewProvider, ASSISTANT_VIEW_ID } from './chat/webview/chatViewProvider';
 
 /**
  * Extension entrypoint.
@@ -122,6 +123,16 @@ export function activate(context: vscode.ExtensionContext): void {
   const sessions = new SessionsViewProvider(telemetry);
   const sync = new SyncViewProvider(config, telemetry, consent, secrets, syncState);
 
+  // AI Helper — a Copilot-backed chat webview grounded in baked-in context files
+  // and the user's LOCAL telemetry. Sends only safe metadata to the user's own
+  // Copilot model (gated by a one-time disclosure); never raw content or the key.
+  const assistant = new ChatViewProvider(context, telemetry, config);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(ASSISTANT_VIEW_ID, assistant, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
+
   // Register each provider against its contributed view id. The Sessions view
   // uses createTreeView with canSelectMany so multiple sessions can be selected
   // and combined into one detail view; the other two are simple data providers.
@@ -151,6 +162,11 @@ export function activate(context: vscode.ExtensionContext): void {
     previewPayload: () => {
       void runPreviewPayload(telemetry, secrets, toolVersion);
     },
+    // Focus the AI Helper view; `<viewId>.focus` is auto-registered by VS Code.
+    openAssistant: () => {
+      void vscode.commands.executeCommand(`${ASSISTANT_VIEW_ID}.focus`);
+    },
+    newChat: () => assistant.newChat(),
   });
 
   // `@obs` chat participant — lives in the GitHub Copilot chat window and renders

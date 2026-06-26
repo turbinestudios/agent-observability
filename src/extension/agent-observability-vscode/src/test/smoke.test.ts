@@ -54,12 +54,15 @@ const EXPECTED_COMMANDS = [
   'agentObservability.openSession',
   'agentObservability.openCombinedSession',
   'agentObservability.refreshSessionDetail',
+  'agentObservability.openAssistant',
+  'agentObservability.newChat',
 ] as const;
 
 const EXPECTED_VIEWS = [
   'agentObservability.overview',
   'agentObservability.sessions',
   'agentObservability.sync',
+  'agentObservability.assistant',
 ] as const;
 
 const EXPECTED_CONFIG_KEYS = [

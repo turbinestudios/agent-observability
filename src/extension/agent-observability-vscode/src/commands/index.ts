@@ -19,6 +19,8 @@ export const Commands = {
   openSession: 'agentObservability.openSession',
   openCombinedSession: 'agentObservability.openCombinedSession',
   refreshSessionDetail: 'agentObservability.refreshSessionDetail',
+  openAssistant: 'agentObservability.openAssistant',
+  newChat: 'agentObservability.newChat',
 } as const;
 
 /** The required prefix of an organization API key (`aoa_<keyId>_<secret>`). */
@@ -51,6 +53,10 @@ export interface CommandDeps {
   refreshSessionDetail: () => void;
   /** Open the LOCAL aggregate-payload preview (Phase 5 surfaces real content). */
   previewPayload: () => void;
+  /** Reveal/focus the AI Helper webview view. */
+  openAssistant: () => void;
+  /** Clear the AI Helper conversation (start a new chat). */
+  newChat: () => void;
 }
 
 /** Fan out a refresh to every registered view provider. */
@@ -71,8 +77,17 @@ export function registerCommands(
   refreshables: Refreshable[],
   deps: CommandDeps,
 ): void {
-  const { consent, secrets, syncEngine, openSession, openCombinedSession, refreshSessionDetail, previewPayload } =
-    deps;
+  const {
+    consent,
+    secrets,
+    syncEngine,
+    openSession,
+    openCombinedSession,
+    refreshSessionDetail,
+    previewPayload,
+    openAssistant,
+    newChat,
+  } = deps;
 
   const register = (id: string, handler: (...args: unknown[]) => unknown): void => {
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
@@ -139,6 +154,16 @@ export function registerCommands(
   // panel, the same fresh data a navigation click would load after a refresh.
   register(Commands.refreshSessionDetail, () => {
     refreshSessionDetail();
+  });
+
+  // Reveal the AI Helper webview view in the activity-bar container.
+  register(Commands.openAssistant, () => {
+    openAssistant();
+  });
+
+  // Start a fresh AI Helper conversation (title-bar "+" on the AI Helper view).
+  register(Commands.newChat, () => {
+    newChat();
   });
 }
 

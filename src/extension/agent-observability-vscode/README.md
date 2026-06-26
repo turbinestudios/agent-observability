@@ -16,6 +16,7 @@ shared with an organization dashboard.
 | Consent toggle + organization API key in SecretStorage (opt-in, off by default) | Shipped |
 | Aggregate engine (30-min time bins, pseudonymous developer id, idempotent batch/row ids) | Shipped |
 | Upload to the dashboard ingestion API with retry/backoff | Shipped |
+| AI Helper — Copilot-backed chat for config & log summaries | Shipped |
 
 All raw content stays on the machine; only opt-in aggregate batches are uploaded.
 
@@ -24,6 +25,39 @@ All raw content stays on the machine; only opt-in aggregate batches are uploaded
 - **Local Overview** — summary of local Copilot agent activity.
 - **Sessions** — list and drill into local agent sessions (local-only detail).
 - **Sync** — consent status and upload of opt-in aggregate batches.
+- **AI Helper** — a chat assistant backed by your own GitHub Copilot license (see below).
+
+## AI Helper
+
+The **AI Helper** is a chat view (in the Agent Observability activity-bar container)
+that answers questions about this extension and your local telemetry using **your
+own GitHub Copilot license** (`vscode.lm`). It is grounded in concise context files
+baked into the extension, so it knows this extension's settings, the workflow DSL,
+and the telemetry model. An empty chat offers three quick-command buttons:
+
+- **Generate workflows** — drafts an `agentObservability.workflows` array from the
+  agents, tools and durations observed in your local telemetry. The result can be
+  applied to `.vscode/settings.json` behind a confirmation; it is validated against
+  the same parser the deviation detector uses and **merged** by repository (your
+  other repositories' entries are kept).
+- **Set up new project** — produces the bare-minimum `.vscode/settings.json` to get
+  the extension working. Only known `agentObservability.*` keys are applied; the
+  organization API key is never written to settings (use the command instead).
+- **Summarize my logs** — a detailed natural-language summary of your collected
+  telemetry.
+
+You can also type free-text questions. Generated configuration always has a **Copy**
+button, and a settings-bound one has an **Apply** button.
+
+**Requires GitHub Copilot.** If Copilot isn't installed or signed in, the AI Helper
+says so. On first use it shows a one-time disclosure (below) and VS Code's own
+Copilot-access prompt.
+
+**Privacy.** The AI Helper sends only **safe metadata** — sanitized repository
+names, agent/model/tool names, durations, and token/AIU counts — plus your typed
+prompt, to your own Copilot model. It never sends raw prompts/responses, tool
+input/output, file contents, or session titles, and it never touches the cloud-sync
+path. This is a distinct gate from cloud sharing (which stays off by default).
 
 ## Commands
 
@@ -34,6 +68,8 @@ All under the **Agent Observability** category:
 - `Agent Observability: Open Settings`
 - `Agent Observability: Set Organization API Key`
 - `Agent Observability: Toggle Cloud Sharing`
+- `Agent Observability: Open AI Helper`
+- `Agent Observability: New AI Helper Chat`
 
 ## Settings
 

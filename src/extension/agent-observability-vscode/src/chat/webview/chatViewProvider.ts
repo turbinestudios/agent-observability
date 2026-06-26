@@ -1,0 +1,400 @@
+import * as vscode from 'vscode';
+import * as crypto from 'node:crypto';
+import { Configuration } from '../../config/configuration';
+import { TelemetryService } from '../../telemetry/telemetryService';
+import { OverviewMetrics } from '../../telemetry/models';
+import { Conversation, assembleMessages } from '../conversation';
+import { ContextLoader } from '../contextLoader';
+import { getQuickCommand, selectContextForFreeText } from '../quickCommands';
+import { describeLmError, isCancellation, noModelsError } from '../lmErrors';
+import { selectCopilotModel, streamRequest } from '../languageModelClient';
+import { renderChatHtml } from './chatViewHtml';
+import { markdownToHtml } from './markdownToHtml';
+import { HostToWebview, WebviewToHost } from './protocol';
+import {
+  RepoWorkflowFacts,
+  buildWorkflowDigest,
+  buildWorkflowGenPreamble,
+  mergeWorkflowsByRepository,
+  validateWorkflowsJson,
+} from '../tasks/workflowGen';
+import { buildMinimalConfigPreamble, parseConfigObject } from '../tasks/minimalConfig';
+import { SummaryInput, buildLogSummaryPreamble, buildSummaryDigest, toSafeSessionRow } from '../tasks/logSummary';
+
+/** Contributed view id for the AI Helper webview (matches package.json). */
+export const ASSISTANT_VIEW_ID = 'agentObservability.assistant';
+
+/** globalState key recording that the one-time AI Helper disclosure was accepted. */
+const DISCLOSURE_KEY = 'agentObservability.aiHelper.disclosed';
+
+/** How many repositories / sessions to ground each task on (token budget). */
+const MAX_WORKFLOW_REPOS = 3;
+const WORKFLOW_SESSION_SAMPLE = 5;
+const SUMMARY_SESSION_LIMIT = 50;
+
+/** Throttle for re-rendering the streaming assistant bubble. */
+const RENDER_THROTTLE_MS = 60;
+
+/**
+ * The AI Helper webview view.
+ *
+ * Bridges the webview UI to the user's GitHub Copilot model (`vscode.lm`),
+ * grounded in baked-in context files and the user's LOCAL telemetry. All testable
+ * logic lives in the pure seams (`conversation`, `quickCommands`, `tasks/*`,
+ * `markdownToHtml`, `lmErrors`); this class is the `vscode`-bound orchestrator,
+ * exercised manually in the Extension Host.
+ *
+ * Privacy: only SAFE metadata leaves the machine (sanitized repositories,
+ * agent/model/tool names, durations, token counts) plus the user's prompt — never
+ * raw prompt/response content, tool I/O, file contents, or session titles. A
+ * one-time disclosure gates the first use, distinct from the cloud-sync consent.
+ */
+export class ChatViewProvider implements vscode.WebviewViewProvider {
+  private view: vscode.WebviewView | undefined;
+  private readonly conversation = new Conversation();
+  private readonly contextLoader: ContextLoader;
+  private cts: vscode.CancellationTokenSource | undefined;
+  private busy = false;
+  private messageCounter = 0;
+
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly telemetry: TelemetryService,
+    private readonly config: Configuration,
+  ) {
+    this.contextLoader = new ContextLoader(context.extensionUri);
+  }
+
+  resolveWebviewView(view: vscode.WebviewView): void {
+    this.view = view;
+    view.webview.options = { enableScripts: true, localResourceRoots: [] };
+    view.webview.html = renderChatHtml(makeNonce());
+    view.webview.onDidReceiveMessage((raw: unknown) => {
+      void this.onMessage(raw);
+    });
+    view.onDidDispose(() => {
+      this.cancel();
+      this.view = undefined;
+    });
+  }
+
+  /** "New chat" — cancel any in-flight request and clear the transcript. */
+  newChat(): void {
+    this.cancel();
+    this.conversation.clear();
+    this.busy = false;
+    this.post({ type: 'reset' });
+    this.post({ type: 'busy', busy: false });
+  }
+
+  /** Cancel an in-flight model request, if any. */
+  private cancel(): void {
+    this.cts?.cancel();
+  }
+
+  private async onMessage(raw: unknown): Promise<void> {
+    const msg = raw as WebviewToHost | undefined;
+    if (typeof msg?.type !== 'string') {
+      return;
+    }
+    switch (msg.type) {
+      case 'send':
+        await this.handleTurn(msg.text, undefined);
+        return;
+      case 'runQuickCommand': {
+        const qc = getQuickCommand(msg.id);
+        if (qc) {
+          await this.handleTurn(qc.prompt, qc.id);
+        }
+        return;
+      }
+      case 'stop':
+        this.cancel();
+        return;
+      case 'copy':
+        await vscode.env.clipboard.writeText(msg.text);
+        vscode.window.setStatusBarMessage('Agent Observability: copied to clipboard.', 2000);
+        return;
+      case 'applyConfig':
+        await this.handleApply(msg.kind, msg.code);
+        return;
+      case 'ready':
+        return;
+    }
+  }
+
+  /** Run one user turn: gather context + telemetry, stream the model response. */
+  private async handleTurn(userText: string, commandId: string | undefined): Promise<void> {
+    if (this.busy || userText.trim().length === 0) {
+      return;
+    }
+    if (!(await this.ensureDisclosed())) {
+      return;
+    }
+
+    this.setBusy(true);
+    this.post({ type: 'userEcho', text: userText });
+
+    const id = `m${this.messageCounter++}`;
+    let acc = '';
+    let started = false;
+    try {
+      const model = await selectCopilotModel();
+      if (!model) {
+        this.post({ type: 'error', message: noModelsError().message });
+        return;
+      }
+
+      this.telemetry.refresh();
+      const preamble = await this.buildPreamble(userText, commandId);
+      this.conversation.append('user', userText);
+      const messages = assembleMessages(preamble, this.conversation.history);
+
+      this.post({ type: 'assistantStart', id });
+      started = true;
+      this.cts = new vscode.CancellationTokenSource();
+
+      let lastRender = 0;
+      const render = (): void => {
+        this.post({ type: 'assistantHtml', id, html: markdownToHtml(acc) });
+      };
+      await streamRequest(
+        model,
+        messages,
+        (delta) => {
+          acc += delta;
+          const now = Date.now();
+          if (now - lastRender > RENDER_THROTTLE_MS) {
+            lastRender = now;
+            render();
+          }
+        },
+        this.cts.token,
+      );
+
+      render();
+      this.conversation.append('assistant', acc);
+      this.post({ type: 'assistantDone', id });
+    } catch (err) {
+      if (isCancellation(err)) {
+        // Keep whatever streamed before the stop; finalize the bubble.
+        if (started) {
+          this.post({ type: 'assistantHtml', id, html: markdownToHtml(acc) });
+          this.conversation.append('assistant', acc);
+          this.post({ type: 'assistantDone', id });
+        }
+      } else {
+        this.post({ type: 'error', message: describeLmError(err).message });
+      }
+    } finally {
+      this.cts?.dispose();
+      this.cts = undefined;
+      this.setBusy(false);
+    }
+  }
+
+  /** Build the grounding preamble for a turn (quick command or free text). */
+  private async buildPreamble(userText: string, commandId: string | undefined): Promise<string> {
+    const names = commandId
+      ? getQuickCommand(commandId)?.contextFiles ?? []
+      : selectContextForFreeText(userText);
+    const contextText = await this.contextLoader.loadMany(names);
+
+    if (commandId === 'generate-workflows') {
+      return buildWorkflowGenPreamble(contextText, buildWorkflowDigest(this.gatherWorkflowFacts()));
+    }
+    if (commandId === 'minimal-config') {
+      return buildMinimalConfigPreamble(contextText);
+    }
+    if (commandId === 'summarize-logs') {
+      return buildLogSummaryPreamble(contextText, buildSummaryDigest(this.gatherSummaryInput()));
+    }
+    return (
+      contextText +
+      '\n\n## Task\nAnswer the user’s question about the Agent Observability extension and their local ' +
+      'telemetry using only the context above. If they ask for configuration, emit a single fenced ' +
+      '`ao-config` (settings object) or `ao-workflows` (workflows array) block.'
+    );
+  }
+
+  /** Gather safe per-repository workflow facts from local telemetry. */
+  private gatherWorkflowFacts(): RepoWorkflowFacts[] {
+    const repos = this.telemetry.listRepositories();
+    if (!repos.ok) {
+      return [];
+    }
+    const facts: RepoWorkflowFacts[] = [];
+    for (const repo of repos.value.filter((r) => r.repository !== 'unknown').slice(0, MAX_WORKFLOW_REPOS)) {
+      const sessionsResult = this.telemetry.listSessions(repo.repository);
+      const sessions = sessionsResult.ok ? sessionsResult.value : [];
+      const agents = new Set<string>();
+      const tools = new Set<string>();
+      const operations = new Set<string>();
+      const models = new Set<string>(repo.models);
+      for (const s of sessions.slice(0, WORKFLOW_SESSION_SAMPLE)) {
+        const interactions = this.telemetry.getSessionInteractions(s.sessionId);
+        if (!interactions.ok) {
+          continue;
+        }
+        for (const it of interactions.value) {
+          if (it.agentName) {
+            agents.add(it.agentName);
+          }
+          if (it.toolName) {
+            tools.add(it.toolName);
+          }
+          if (it.operation) {
+            operations.add(String(it.operation));
+          }
+          if (it.model) {
+            models.add(it.model);
+          }
+        }
+      }
+      const durations = sessions.map((s) => s.durationMs);
+      facts.push({
+        repository: repo.repository,
+        sessionCount: repo.sessionCount,
+        agents: [...agents].sort(),
+        tools: [...tools].sort(),
+        operations: [...operations].sort(),
+        models: [...models].sort(),
+        typicalDurationMs: median(durations),
+        maxDurationMs: durations.length > 0 ? Math.max(...durations) : 0,
+      });
+    }
+    return facts;
+  }
+
+  /** Gather safe overview + recent sessions + repositories for the summary task. */
+  private gatherSummaryInput(): SummaryInput {
+    const overviewResult = this.telemetry.getOverview();
+    const overview = overviewResult.ok ? overviewResult.value : EMPTY_OVERVIEW;
+    const sessionsResult = this.telemetry.listSessions(undefined, SUMMARY_SESSION_LIMIT);
+    const sessions = (sessionsResult.ok ? sessionsResult.value : []).map(toSafeSessionRow);
+    const reposResult = this.telemetry.listRepositories();
+    const repositories = reposResult.ok ? reposResult.value : [];
+    return { overview, sessions, repositories };
+  }
+
+  /** Validate + confirm + merge a generated config into workspace settings. */
+  private async handleApply(kind: 'workflows' | 'config', code: string): Promise<void> {
+    if (vscode.workspace.workspaceFolders === undefined) {
+      this.post({ type: 'applied', ok: false, message: 'Open a folder or workspace to apply settings.' });
+      return;
+    }
+
+    if (kind === 'workflows') {
+      const validation = validateWorkflowsJson(code, this.config.getMaxSessionMinutes() * 60_000);
+      if (!validation.ok) {
+        this.post({ type: 'applied', ok: false, message: `Could not apply — ${validation.reason}` });
+        return;
+      }
+      if (!(await confirmApply('Apply the generated workflows to this workspace’s .vscode/settings.json?'))) {
+        return;
+      }
+      const cfg = vscode.workspace.getConfiguration('agentObservability');
+      const merged = mergeWorkflowsByRepository(cfg.get('workflows'), validation.value);
+      await cfg.update('workflows', merged, vscode.ConfigurationTarget.Workspace);
+      this.post({ type: 'applied', ok: true, message: 'Applied workflows to workspace settings.' });
+      return;
+    }
+
+    const extraction = parseConfigObject(code);
+    if (!extraction.ok) {
+      this.post({ type: 'applied', ok: false, message: `Could not apply — ${extraction.reason}` });
+      return;
+    }
+    const keys = Object.keys(extraction.settings);
+    if (keys.length === 0) {
+      this.post({ type: 'applied', ok: false, message: 'No applicable agentObservability settings were found.' });
+      return;
+    }
+    if (!(await confirmApply('Apply these settings to this workspace’s .vscode/settings.json?'))) {
+      return;
+    }
+    const cfg = vscode.workspace.getConfiguration();
+    for (const key of keys) {
+      await cfg.update(key, extraction.settings[key], vscode.ConfigurationTarget.Workspace);
+    }
+    let message = `Applied ${keys.length} setting(s) to workspace settings.`;
+    if (extraction.dropped.length > 0) {
+      message += ` Ignored unknown key(s): ${extraction.dropped.join(', ')}.`;
+    }
+    this.post({ type: 'applied', ok: true, message });
+  }
+
+  /**
+   * One-time disclosure before the first AI Helper request. A distinct gate from
+   * the cloud-sync consent and from VS Code's own per-extension LM consent prompt.
+   */
+  private async ensureDisclosed(): Promise<boolean> {
+    if (this.context.globalState.get<boolean>(DISCLOSURE_KEY, false)) {
+      return true;
+    }
+    const choice = await vscode.window.showInformationMessage(
+      'Use the AI Helper?',
+      {
+        modal: true,
+        detail:
+          'The AI Helper sends your message and a summary of your local telemetry — repository names, ' +
+          'agent/model/tool names, durations, and token counts — to GitHub Copilot under your own ' +
+          'license. Raw prompts, completions, tool input/output, file contents, and session titles are ' +
+          'never sent. This is separate from cloud sync, which stays off.',
+      },
+      'Continue',
+    );
+    if (choice === 'Continue') {
+      await this.context.globalState.update(DISCLOSURE_KEY, true);
+      return true;
+    }
+    return false;
+  }
+
+  private setBusy(busy: boolean): void {
+    this.busy = busy;
+    this.post({ type: 'busy', busy });
+  }
+
+  private post(message: HostToWebview): void {
+    void this.view?.webview.postMessage(message);
+  }
+}
+
+/** Confirm a settings write behind a modal. */
+async function confirmApply(message: string): Promise<boolean> {
+  const choice = await vscode.window.showWarningMessage(
+    message,
+    { modal: true, detail: 'This updates your workspace .vscode/settings.json.' },
+    'Apply',
+  );
+  return choice === 'Apply';
+}
+
+/** Median of a numeric list (0 for empty). */
+function median(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? Math.round((sorted[mid - 1] + sorted[mid]) / 2) : sorted[mid];
+}
+
+/** Per-render CSP nonce, CSPRNG-backed (matches the session-detail panel). */
+function makeNonce(): string {
+  return crypto.randomBytes(16).toString('base64url');
+}
+
+/** Zeroed overview used when telemetry can't be read. */
+const EMPTY_OVERVIEW: OverviewMetrics = {
+  totalInteractions: 0,
+  totalSessions: 0,
+  totalRepositories: 0,
+  totalModels: 0,
+  avgDurationMs: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedTokens: 0,
+  errorCount: 0,
+};
