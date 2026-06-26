@@ -3,6 +3,7 @@ import {
   buildWorkflowGenPreamble,
   mergeWorkflowsByRepository,
   validateWorkflowResponse,
+  validateWorkflowsJson,
 } from './workflowGen';
 
 const DEFAULT_MAX_MS = 60 * 60_000;
@@ -64,6 +65,50 @@ describe('validateWorkflowResponse', () => {
     const json = JSON.stringify([{ repository: 'https://github.com/org/repo', workflows: [{}] }]);
     const r = validateWorkflowResponse(workflowsBlock(json), DEFAULT_MAX_MS);
     expect(r.ok).toBe(false);
+  });
+});
+
+describe('validateWorkflowsJson — trigger breadth guard', () => {
+  const withTrigger = (trigger: unknown): string =>
+    JSON.stringify([
+      {
+        repository: 'https://github.com/org/repo',
+        workflows: [{ name: 'feature', triggerPredicate: trigger }],
+      },
+    ]);
+
+  it('rejects a trigger scoped only by agentMode', () => {
+    const r = validateWorkflowsJson(withTrigger({ agentMode: 'agent' }), DEFAULT_MAX_MS);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toMatch(/agentMode/);
+      expect(r.reason).toContain('feature');
+    }
+  });
+
+  it('rejects a trigger scoped only by agentMode + success (no real discriminator)', () => {
+    const r = validateWorkflowsJson(withTrigger({ agentMode: 'agent', success: true }), DEFAULT_MAX_MS);
+    expect(r.ok).toBe(false);
+  });
+
+  it('accepts a trigger with a real discriminator (operation: invoke_agent)', () => {
+    const r = validateWorkflowsJson(withTrigger({ operation: 'invoke_agent' }), DEFAULT_MAX_MS);
+    expect(r.ok).toBe(true);
+  });
+
+  it('accepts a trigger combining agentMode with a toolName discriminator', () => {
+    const r = validateWorkflowsJson(
+      withTrigger({ agentMode: 'agent', toolName: 'runSubagent' }),
+      DEFAULT_MAX_MS,
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it('allows a workflow with no trigger predicate at all', () => {
+    const json = JSON.stringify([
+      { repository: 'https://github.com/org/repo', workflows: [{ name: 'feature' }] },
+    ]);
+    expect(validateWorkflowsJson(json, DEFAULT_MAX_MS).ok).toBe(true);
   });
 });
 
