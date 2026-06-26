@@ -19,6 +19,8 @@ export const Commands = {
   openSession: 'agentObservability.openSession',
   openCombinedSession: 'agentObservability.openCombinedSession',
   refreshSessionDetail: 'agentObservability.refreshSessionDetail',
+  enableLiveUpdates: 'agentObservability.enableLiveUpdates',
+  disableLiveUpdates: 'agentObservability.disableLiveUpdates',
 } as const;
 
 /** The required prefix of an organization API key (`aoa_<keyId>_<secret>`). */
@@ -51,6 +53,10 @@ export interface CommandDeps {
   refreshSessionDetail: () => void;
   /** Open the LOCAL aggregate-payload preview (Phase 5 surfaces real content). */
   previewPayload: () => void;
+  /** Turn on near-real-time live updates (configures Copilot's OTel file exporter). */
+  enableLiveUpdates: () => void;
+  /** Turn off near-real-time live updates. */
+  disableLiveUpdates: () => void;
 }
 
 /** Fan out a refresh to every registered view provider. */
@@ -71,8 +77,17 @@ export function registerCommands(
   refreshables: Refreshable[],
   deps: CommandDeps,
 ): void {
-  const { consent, secrets, syncEngine, openSession, openCombinedSession, refreshSessionDetail, previewPayload } =
-    deps;
+  const {
+    consent,
+    secrets,
+    syncEngine,
+    openSession,
+    openCombinedSession,
+    refreshSessionDetail,
+    previewPayload,
+    enableLiveUpdates,
+    disableLiveUpdates,
+  } = deps;
 
   const register = (id: string, handler: (...args: unknown[]) => unknown): void => {
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
@@ -139,6 +154,16 @@ export function registerCommands(
   // panel, the same fresh data a navigation click would load after a refresh.
   register(Commands.refreshSessionDetail, () => {
     refreshSessionDetail();
+  });
+
+  // Enable/Disable near-real-time live updates. The handlers (in extension.ts)
+  // write Copilot's `github.copilot.chat.otel.*` settings + the extension's
+  // `liveUpdates.*` settings and (re)start the file tailer. All local; no upload.
+  register(Commands.enableLiveUpdates, () => {
+    enableLiveUpdates();
+  });
+  register(Commands.disableLiveUpdates, () => {
+    disableLiveUpdates();
   });
 }
 
