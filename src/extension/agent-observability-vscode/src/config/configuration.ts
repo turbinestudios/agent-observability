@@ -38,6 +38,9 @@ export const ConfigKeys = {
   workflows: 'workflows',
   analysisCodeFileExtensions: 'analysis.codeFileExtensions',
   analysisDocFileExtensions: 'analysis.docFileExtensions',
+  liveUpdatesEnabled: 'liveUpdates.enabled',
+  liveOtelFilePath: 'liveUpdates.otelFilePath',
+  liveDebounceMs: 'liveUpdates.debounceMs',
 } as const;
 
 /** Default values mirroring the package.json contribution defaults. */
@@ -57,10 +60,16 @@ export const ConfigDefaults = {
   analysisDocFileExtensions: [
     '.md', '.mdx', '.markdown', '.rst', '.txt', '.adoc', '.asciidoc',
   ] as readonly string[],
+  liveUpdatesEnabled: false,
+  liveOtelFilePath: '',
+  liveDebounceMs: 400,
 } as const;
 
 /** Minimum allowed sync interval, mirroring the package.json `minimum`. */
 export const MIN_SYNC_INTERVAL_MINUTES = 5;
+
+/** Minimum live-update debounce, mirroring the package.json `minimum`. */
+export const MIN_LIVE_DEBOUNCE_MS = 100;
 
 /**
  * Typed accessor over the `agentObservability` workspace configuration.
@@ -178,6 +187,48 @@ export class Configuration {
       ConfigDefaults.analysisDocFileExtensions as unknown as string[],
     );
     return normalizeExtensions(raw);
+  }
+
+  /**
+   * Whether near-real-time live updates are enabled: tail Copilot's OTel
+   * file-exporter output and overlay a live status banner on the session-detail
+   * panel. Off by default; the **Enable Live Updates** command flips this and
+   * configures Copilot's `github.copilot.chat.otel.*` settings.
+   */
+  isLiveUpdatesEnabled(): boolean {
+    return this.config().get<boolean>(
+      ConfigKeys.liveUpdatesEnabled,
+      ConfigDefaults.liveUpdatesEnabled,
+    );
+  }
+
+  /**
+   * Path to the OTel JSON-lines file written by Copilot's `file` exporter.
+   * Returns `undefined` (not '') when blank so callers fall back to the default
+   * under the extension's global storage.
+   */
+  getLiveOtelFilePath(): string | undefined {
+    const value = this.config().get<string>(
+      ConfigKeys.liveOtelFilePath,
+      ConfigDefaults.liveOtelFilePath,
+    ).trim();
+    return value.length > 0 ? value : undefined;
+  }
+
+  /**
+   * Debounce (ms) between a file-change signal and the incremental tail read,
+   * clamped to the documented minimum so a hand-edited settings.json can't drive
+   * a pathological busy-loop.
+   */
+  getLiveDebounceMs(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.liveDebounceMs,
+      ConfigDefaults.liveDebounceMs,
+    );
+    if (!Number.isFinite(raw)) {
+      return ConfigDefaults.liveDebounceMs;
+    }
+    return Math.max(MIN_LIVE_DEBOUNCE_MS, Math.floor(raw));
   }
 
   /**

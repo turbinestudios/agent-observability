@@ -90,6 +90,7 @@ export function renderSessionDetailHtml(
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Session ${escapeHtml(shortId(summary.sessionId))}</title>
   <style nonce="${nonce}">${STYLE}</style>
+  <style nonce="${nonce}">${LIVE_STATUS_STYLE}</style>
 </head>
 <body>
   ${hasContext ? `<nav class="tab-bar">
@@ -97,6 +98,7 @@ export function renderSessionDetailHtml(
     <button class="tab-btn" data-tab="tab-context">Context Analysis</button>
   </nav>` : ''}
   <div class="tab-panel${hasContext ? '' : ' tab-panel-only'}" id="tab-overview">
+  ${LIVE_STATUS_BANNER}
   ${renderHeader(detail)}
   ${renderTreeSummary(detail.treeStats, detail.treeModelTurns)}
   ${renderMainAgentUsage(detail.agentUsage)}
@@ -108,9 +110,87 @@ export function renderSessionDetailHtml(
   <script nonce="${nonce}">${TREND_FILTER_SCRIPT}</script>
   ${hasContext ? `<script nonce="${nonce}">${TAB_SWITCH_SCRIPT}</script>` : ''}
   ${hasContext ? `<script nonce="${nonce}">${ACCEPT_MISSING_SCRIPT}</script>` : ''}
+  <script nonce="${nonce}">${LIVE_UPDATE_SCRIPT}</script>
 </body>
 </html>`;
 }
+
+/**
+ * Static markup for the near-real-time live-status banner. Hidden until the
+ * panel's client script receives the first `liveUpdate` message; the element ids
+ * are patched in place via `textContent` (never innerHTML), so streamed values
+ * such as model and tool names can never inject markup.
+ */
+const LIVE_STATUS_BANNER = `<section id="ao-live" class="ao-live" hidden>
+  <div class="ao-live-head">
+    <span class="ao-live-dot"></span>
+    <span class="ao-live-title">Live</span>
+    <span id="ao-live-activity" class="ao-live-activity"></span>
+    <span id="ao-live-elapsed" class="ao-live-elapsed"></span>
+  </div>
+  <div class="ao-live-stats">
+    <span class="ao-live-stat">turn <b id="ao-live-turn">–</b></span>
+    <span class="ao-live-stat"><b id="ao-live-llm">0</b> LLM calls</span>
+    <span class="ao-live-stat"><b id="ao-live-tools">0</b> tools</span>
+    <span class="ao-live-stat"><b id="ao-live-tokens">0</b> tokens</span>
+    <span class="ao-live-stat" id="ao-live-subagents-wrap" hidden><b id="ao-live-subagents">0</b> sub-agents</span>
+  </div>
+</section>`;
+
+/** Styles for the live-status banner, using VS Code theme variables only. */
+const LIVE_STATUS_STYLE = `
+.ao-live { margin: 0 0 1rem; padding: 0.6rem 0.8rem; border: 1px solid var(--vscode-focusBorder); border-radius: 6px; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); }
+.ao-live-head { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
+.ao-live-title { text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.72rem; color: var(--vscode-charts-green, var(--vscode-foreground)); }
+.ao-live-activity { font-weight: 400; opacity: 0.9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ao-live-elapsed { margin-left: auto; font-variant-numeric: tabular-nums; opacity: 0.8; }
+.ao-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-charts-green, #3fb950); animation: ao-live-pulse 1.4s ease-in-out infinite; flex: none; }
+.ao-live-stats { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; margin-top: 0.4rem; font-size: 0.85rem; opacity: 0.95; }
+.ao-live-stat b { font-variant-numeric: tabular-nums; }
+@keyframes ao-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`;
+
+/**
+ * Client script for the live banner. Listens for `{ type: 'liveUpdate', live }`
+ * messages posted by {@link ../otel/liveUpdateService.LiveUpdateService} and
+ * patches the banner in place. All values are written via `textContent`. Regex
+ * backslashes are DOUBLED here because this string is itself a template literal:
+ * the emitted script must contain single backslashes.
+ */
+const LIVE_UPDATE_SCRIPT = `(function () {
+  var byId = function (id) { return document.getElementById(id); };
+  var group = function (n) { return String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ','); };
+  var startedAtMs = 0;
+  function setText(id, text) { var el = byId(id); if (el) { el.textContent = text; } }
+  function tickElapsed() {
+    if (!startedAtMs) { return; }
+    var secs = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
+    var m = Math.floor(secs / 60); var s = secs % 60;
+    setText('ao-live-elapsed', m + ':' + (s < 10 ? '0' : '') + s);
+  }
+  function paint(live) {
+    var root = byId('ao-live'); if (!root) { return; }
+    root.hidden = false;
+    if (live.startedAtMs) { startedAtMs = live.startedAtMs; }
+    setText('ao-live-activity', live.currentActivity || '');
+    setText('ao-live-turn', (live.turn === null || live.turn === undefined) ? '–' : String(live.turn));
+    setText('ao-live-llm', group(live.llmCalls || 0));
+    setText('ao-live-tools', group(live.toolCalls || 0));
+    setText('ao-live-tokens', group(live.totalTokens || 0));
+    var subs = live.subagents || [];
+    var wrap = byId('ao-live-subagents-wrap');
+    if (wrap) {
+      if (subs.length > 0) { wrap.hidden = false; setText('ao-live-subagents', String(subs.length)); }
+      else { wrap.hidden = true; }
+    }
+    tickElapsed();
+  }
+  window.addEventListener('message', function (ev) {
+    var msg = ev.data;
+    if (!msg || msg.type !== 'liveUpdate' || !msg.live) { return; }
+    paint(msg.live);
+  });
+  setInterval(tickElapsed, 1000);
+})();`;
 
 /**
  * Pure HTML renderer for the LOCAL combined-sessions webview.

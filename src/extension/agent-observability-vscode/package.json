@@ -137,6 +137,17 @@
         "title": "New AI Helper Chat",
         "category": "Agent Observability",
         "icon": "$(add)"
+      },
+      {
+        "command": "agentObservability.enableLiveUpdates",
+        "title": "Enable Live Updates (Copilot OTel)",
+        "category": "Agent Observability",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "agentObservability.disableLiveUpdates",
+        "title": "Disable Live Updates",
+        "category": "Agent Observability"
       }
     ],
     "menus": {
@@ -455,6 +466,22 @@
             ".md", ".mdx", ".markdown", ".rst", ".txt", ".adoc", ".asciidoc"
           ],
           "markdownDescription": "File extensions counted as **documentation** (LoD / nLoD) on the local session-detail panel. Lines the agent writes to / removes from files with these extensions are tallied by reading each file-writing tool call's arguments. Classification is by extension only; files matching neither this nor `#agentObservability.analysis.codeFileExtensions#` are ignored. Leading dots are optional and case is ignored. Computed entirely locally from raw tool arguments — nothing is ever uploaded."
+        },
+        "agentObservability.liveUpdates.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable near-real-time live updates: tail the OpenTelemetry JSON-lines file written by GitHub Copilot Chat's `file` exporter and overlay a live status banner on the session-detail panel as an agent runs. Off by default. Use the **Agent Observability: Enable Live Updates (Copilot OTel)** command to turn this on — it also configures Copilot's `#github.copilot.chat.otel.enabled#` / `exporterType` / `outfile` settings. The file is read locally only; nothing is uploaded. The durable history view continues to read the SQLite database regardless of this setting."
+        },
+        "agentObservability.liveUpdates.otelFilePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the OpenTelemetry JSON-lines file Copilot's `file` exporter writes (must match `#github.copilot.chat.otel.outfile#`). Leave blank to use the extension-managed default under its global storage. Set explicitly only if you point Copilot's exporter at a custom location."
+        },
+        "agentObservability.liveUpdates.debounceMs": {
+          "type": "number",
+          "default": 400,
+          "minimum": 100,
+          "markdownDescription": "Coalescing window, in milliseconds, between detecting new spans in the OTel file and reading them. Lower feels more live but costs more frequent reads; minimum 100."
         }
       }
     }

@@ -21,6 +21,8 @@ export const Commands = {
   refreshSessionDetail: 'agentObservability.refreshSessionDetail',
   openAssistant: 'agentObservability.openAssistant',
   newChat: 'agentObservability.newChat',
+  enableLiveUpdates: 'agentObservability.enableLiveUpdates',
+  disableLiveUpdates: 'agentObservability.disableLiveUpdates',
 } as const;
 
 /** The required prefix of an organization API key (`aoa_<keyId>_<secret>`). */
@@ -57,6 +59,10 @@ export interface CommandDeps {
   openAssistant: () => void;
   /** Clear the AI Helper conversation (start a new chat). */
   newChat: () => void;
+  /** Turn on near-real-time live updates (configures Copilot's OTel file exporter). */
+  enableLiveUpdates: () => void;
+  /** Turn off near-real-time live updates. */
+  disableLiveUpdates: () => void;
 }
 
 /** Fan out a refresh to every registered view provider. */
@@ -87,6 +93,8 @@ export function registerCommands(
     previewPayload,
     openAssistant,
     newChat,
+    enableLiveUpdates,
+    disableLiveUpdates,
   } = deps;
 
   const register = (id: string, handler: (...args: unknown[]) => unknown): void => {
@@ -164,6 +172,16 @@ export function registerCommands(
   // Start a fresh AI Helper conversation (title-bar "+" on the AI Helper view).
   register(Commands.newChat, () => {
     newChat();
+  });
+
+  // Enable/Disable near-real-time live updates. The handlers (in extension.ts)
+  // write Copilot's `github.copilot.chat.otel.*` settings + the extension's
+  // `liveUpdates.*` settings and (re)start the file tailer. All local; no upload.
+  register(Commands.enableLiveUpdates, () => {
+    enableLiveUpdates();
+  });
+  register(Commands.disableLiveUpdates, () => {
+    disableLiveUpdates();
   });
 }
 

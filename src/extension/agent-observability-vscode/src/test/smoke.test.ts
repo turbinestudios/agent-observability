@@ -56,6 +56,8 @@ const EXPECTED_COMMANDS = [
   'agentObservability.refreshSessionDetail',
   'agentObservability.openAssistant',
   'agentObservability.newChat',
+  'agentObservability.enableLiveUpdates',
+  'agentObservability.disableLiveUpdates',
 ] as const;
 
 const EXPECTED_VIEWS = [
@@ -76,6 +78,9 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.workflows',
   'agentObservability.analysis.codeFileExtensions',
   'agentObservability.analysis.docFileExtensions',
+  'agentObservability.liveUpdates.enabled',
+  'agentObservability.liveUpdates.otelFilePath',
+  'agentObservability.liveUpdates.debounceMs',
 ] as const;
 
 describe('manifest contract is stable', () => {

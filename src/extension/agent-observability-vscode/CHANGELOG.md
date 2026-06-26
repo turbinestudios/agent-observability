@@ -22,6 +22,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   (sanitized repositories, agent/model/tool names, durations, token/AIU counts) and
   the user's prompt are sent to Copilot — never raw content, file contents, or
   session titles, and never via the cloud-sync path.
+- **Near-real-time live updates** for the session-detail panel. When enabled, the
+  extension tails the OpenTelemetry JSON-lines file written by GitHub Copilot
+  Chat's `file` exporter and overlays a live status banner — current activity,
+  turn, LLM calls, tool calls, tokens, sub-agents, and elapsed time — that
+  refreshes within a fraction of a second as an agent runs. The file is read
+  locally only; nothing is uploaded, and the durable session history continues to
+  read the local SQLite database regardless of this feature.
+- Commands (category "Agent Observability"): **Enable Live Updates (Copilot
+  OTel)** and **Disable Live Updates**. Enabling configures Copilot's
+  `github.copilot.chat.otel.enabled` / `exporterType` (`file`) / `outfile`
+  settings to stream spans to a local file under the extension's global storage,
+  flips the extension's own live-update settings on, and offers a window reload so
+  Copilot picks up the exporter.
+- Configuration: `agentObservability.liveUpdates.enabled` (OFF by default),
+  `agentObservability.liveUpdates.otelFilePath` (blank = extension-managed
+  default), and `agentObservability.liveUpdates.debounceMs` (min 100). Live
+  updates add no overhead unless explicitly enabled.
 
 ## [0.2.0] - 2026-06-24
 

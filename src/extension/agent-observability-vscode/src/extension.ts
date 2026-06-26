@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'node:fs';
 import { Configuration } from './config/configuration';
 import { registerCommands, Refreshable } from './commands';
 import { OverviewViewProvider, OVERVIEW_VIEW_ID } from './views/overviewView';
@@ -18,6 +19,7 @@ import { SyncEngine, SyncContextInsightsSource, systemClock } from './sync/syncE
 import { SyncScheduler } from './sync/scheduler';
 import { registerObservabilityChatParticipant } from './chat/observabilityChat';
 import { ChatViewProvider, ASSISTANT_VIEW_ID } from './chat/webview/chatViewProvider';
+import { LiveUpdateService, defaultOtelFilePath } from './otel/liveUpdateService';
 
 /**
  * Extension entrypoint.
@@ -41,6 +43,7 @@ let telemetryService: TelemetryService | undefined;
 let sessionDetailPanels: SessionDetailPanelManager | undefined;
 let consentManager: ConsentManager | undefined;
 let syncScheduler: SyncScheduler | undefined;
+let liveUpdates: LiveUpdateService | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const config = new Configuration();
@@ -57,6 +60,14 @@ export function activate(context: vscode.ExtensionContext): void {
   const deviations = new LocalDeviationDetector(config);
   const detailPanels = new SessionDetailPanelManager(telemetry, deviations);
   sessionDetailPanels = detailPanels;
+
+  // Near-real-time bridge: tails Copilot's OTel file-exporter output and overlays
+  // a live status banner on the session-detail panel. Off unless the user runs
+  // "Enable Live Updates" (which also configures Copilot's exporter). Reads a
+  // local file only; nothing is uploaded.
+  const live = new LiveUpdateService(config, detailPanels, context.globalStorageUri.fsPath);
+  liveUpdates = live;
+  live.start();
 
   // Phase 7 sync wiring. The state store persists the watermark + run history;
   // the client transports batches via globalThis.fetch (vscode extension host).
@@ -167,6 +178,12 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.commands.executeCommand(`${ASSISTANT_VIEW_ID}.focus`);
     },
     newChat: () => assistant.newChat(),
+    enableLiveUpdates: () => {
+      void runEnableLiveUpdates(config, context, live);
+    },
+    disableLiveUpdates: () => {
+      void runDisableLiveUpdates(live);
+    },
   });
 
   // `@obs` chat participant — lives in the GitHub Copilot chat window and renders
@@ -189,6 +206,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({ dispose: () => detailPanels.dispose() });
   context.subscriptions.push({ dispose: () => consent.dispose() });
   context.subscriptions.push({ dispose: () => scheduler.dispose() });
+  context.subscriptions.push({ dispose: () => live.dispose() });
 
   // On configuration change (e.g. toggling the feature flag, sqlitePath, or the
   // sync.enabled/intervalMinutes settings), drop the cached snapshot, re-arm the
@@ -197,10 +215,80 @@ export function activate(context: vscode.ExtensionContext): void {
     config.onDidChange(() => {
       telemetry.refresh();
       scheduler.reschedule();
+      live.restart();
       overview.refresh();
       sessions.refresh();
       sync.refresh();
     }),
+  );
+}
+
+/**
+ * `enableLiveUpdates` handler. Configures GitHub Copilot Chat's OpenTelemetry
+ * `file` exporter (in USER settings) to stream spans to a local JSON-lines file
+ * under the extension's global storage, flips the extension's own
+ * `liveUpdates.*` settings on, (re)starts the tailer, and offers a window reload
+ * (Copilot reads the OTel settings at startup). All local; nothing is uploaded.
+ */
+async function runEnableLiveUpdates(
+  config: Configuration,
+  context: vscode.ExtensionContext,
+  live: LiveUpdateService,
+): Promise<void> {
+  const storageDir = context.globalStorageUri.fsPath;
+  try {
+    await fs.promises.mkdir(storageDir, { recursive: true });
+  } catch {
+    // Best-effort: Copilot creates the file on first flush regardless.
+  }
+  const filePath = config.getLiveOtelFilePath() ?? defaultOtelFilePath(storageDir);
+
+  try {
+    // Section 'github.copilot.chat' + key 'otel.*' resolves to the full
+    // 'github.copilot.chat.otel.*' setting ids (registered by Copilot Chat).
+    const otel = vscode.workspace.getConfiguration('github.copilot.chat');
+    await otel.update('otel.enabled', true, vscode.ConfigurationTarget.Global);
+    await otel.update('otel.exporterType', 'file', vscode.ConfigurationTarget.Global);
+    await otel.update('otel.outfile', filePath, vscode.ConfigurationTarget.Global);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    void vscode.window.showErrorMessage(
+      `Agent Observability: could not configure Copilot's OpenTelemetry exporter (${message}). Ensure the GitHub Copilot Chat extension is installed.`,
+    );
+    return;
+  }
+
+  const ao = vscode.workspace.getConfiguration('agentObservability');
+  await ao.update('liveUpdates.enabled', true, vscode.ConfigurationTarget.Global);
+  await ao.update('liveUpdates.otelFilePath', filePath, vscode.ConfigurationTarget.Global);
+
+  live.restart();
+
+  const choice = await vscode.window.showInformationMessage(
+    `Agent Observability: live updates enabled. Copilot will stream OpenTelemetry spans to ${filePath}. Reload the window so Copilot picks up the exporter, then open a session detail while an agent runs.`,
+    'Reload Window',
+  );
+  if (choice === 'Reload Window') {
+    void vscode.commands.executeCommand('workbench.action.reloadWindow');
+  }
+}
+
+/**
+ * `disableLiveUpdates` handler. Turns the extension's live updates off, stops the
+ * tailer, and best-effort disables Copilot's OTel exporter again.
+ */
+async function runDisableLiveUpdates(live: LiveUpdateService): Promise<void> {
+  const ao = vscode.workspace.getConfiguration('agentObservability');
+  await ao.update('liveUpdates.enabled', false, vscode.ConfigurationTarget.Global);
+  try {
+    const otel = vscode.workspace.getConfiguration('github.copilot.chat');
+    await otel.update('otel.enabled', false, vscode.ConfigurationTarget.Global);
+  } catch {
+    // Copilot Chat may be absent; nothing to turn off.
+  }
+  live.stop();
+  void vscode.window.showInformationMessage(
+    'Agent Observability: live updates disabled. Reload the window to fully stop Copilot’s exporter.',
   );
 }
 
@@ -289,4 +377,6 @@ export function deactivate(): void {
   consentManager = undefined;
   syncScheduler?.dispose();
   syncScheduler = undefined;
+  liveUpdates?.dispose();
+  liveUpdates = undefined;
 }
