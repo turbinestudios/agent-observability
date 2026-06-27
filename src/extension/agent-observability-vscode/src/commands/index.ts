@@ -48,10 +48,10 @@ export interface CommandDeps {
   secrets: SecretManager;
   /** Phase 7 sync engine — drives the real upload behind the consent+key gate. */
   syncEngine: SyncEngine;
-  /** Open the LOCAL session-detail webview for a session key. */
-  openSession: (sessionKey: string) => void;
-  /** Open a single LOCAL combined-detail webview over several session keys. */
-  openCombinedSession: (sessionKeys: string[]) => void;
+  /** Open the LOCAL session-detail webview for a source's session key. */
+  openSession: (sourceId: string, sessionKey: string) => void;
+  /** Open a single LOCAL combined-detail webview over several sessions. */
+  openCombinedSession: (sessions: Array<{ sourceId: string; sessionKey: string }>) => void;
   /** Re-fetch local telemetry and redraw the focused session-detail webview. */
   refreshSessionDetail: () => void;
   /** Open the LOCAL aggregate-payload preview (Phase 5 surfaces real content). */
@@ -149,11 +149,13 @@ export function registerCommands(
     configureSyncRepositories();
   });
 
-  // Open Session Detail — invoked programmatically by a session TreeItem.
-  // Opens the LOCAL drill-down webview; all session detail stays on-machine.
-  register(Commands.openSession, (sessionKey?: unknown) => {
-    if (typeof sessionKey === 'string' && sessionKey.length > 0) {
-      openSession(sessionKey);
+  // Open Session Detail — invoked by a session TreeItem with (sourceId, key),
+  // or (legacy, e.g. the @obs chat participant) with a bare key → Copilot.
+  register(Commands.openSession, (a?: unknown, b?: unknown) => {
+    if (typeof a === 'string' && typeof b === 'string' && b.length > 0) {
+      openSession(a, b);
+    } else if (typeof a === 'string' && a.length > 0) {
+      openSession('copilot', a);
     }
   });
 
@@ -162,9 +164,9 @@ export function registerCommands(
   // first and the full multi-selection second; we combine the selected sessions
   // into a single LOCAL webview. All detail stays on-machine.
   register(Commands.openCombinedSession, (...args: unknown[]) => {
-    const keys = sessionKeysFromCommandArgs(args);
-    if (keys.length > 0) {
-      openCombinedSession(keys);
+    const sessions = sourceSessionsFromCommandArgs(args);
+    if (sessions.length > 0) {
+      openCombinedSession(sessions);
     }
   });
 
@@ -197,21 +199,22 @@ export function registerCommands(
 }
 
 /**
- * Extract session keys from a tree context-menu command invocation. VS Code
- * passes `(focusedNode, selectedNodes[])`; we prefer the multi-selection array
- * and fall back to the single focused node. Each node carries a `sessionKey`
- * string set by the Sessions view; anything without one is ignored.
+ * Extract (sourceId, sessionKey) pairs from a tree context-menu invocation. VS
+ * Code passes `(focusedNode, selectedNodes[])`; we prefer the multi-selection and
+ * fall back to the focused node. Each session node carries `sourceId` +
+ * `sessionKey`; nodes missing either are ignored.
  */
-function sessionKeysFromCommandArgs(args: unknown[]): string[] {
+function sourceSessionsFromCommandArgs(args: unknown[]): Array<{ sourceId: string; sessionKey: string }> {
   const selection = Array.isArray(args[1]) ? (args[1] as unknown[]) : [args[0]];
-  const keys: string[] = [];
+  const out: Array<{ sourceId: string; sessionKey: string }> = [];
   for (const node of selection) {
-    const key = (node as { sessionKey?: unknown } | undefined)?.sessionKey;
-    if (typeof key === 'string' && key.length > 0) {
-      keys.push(key);
+    const n = node as { sourceId?: unknown; sessionKey?: unknown } | undefined;
+    if (typeof n?.sessionKey === 'string' && n.sessionKey.length > 0) {
+      const sourceId = typeof n.sourceId === 'string' && n.sourceId.length > 0 ? n.sourceId : 'copilot';
+      out.push({ sourceId, sessionKey: n.sessionKey });
     }
   }
-  return keys;
+  return out;
 }
 
 /**

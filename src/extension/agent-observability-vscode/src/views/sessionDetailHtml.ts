@@ -13,6 +13,23 @@ import { SessionContextAnalysis, AgentContextAnalysis } from '../context/models'
 import { aiuToUsd } from '../telemetry/pricing';
 import { escapeHtml } from './escapeHtml';
 
+/**
+ * How a session's cost is expressed. Copilot bills in AIU (`aiu`); Claude Code is
+ * priced by tokens and carries `costUsdMicros` on its rollups (`usd`). The detail
+ * panel passes the cost mode matching the session's source so the "Agent run
+ * totals" card and usage tables show the right unit.
+ */
+export type CostMode = 'aiu' | 'usd';
+
+/** Format integer micro-USD (1 USD = 1e6) as `$X.XX`. Safe to inject (digits/$.). */
+function formatUsdMicros(micros: number | undefined): string {
+  const usd = (micros ?? 0) / 1_000_000;
+  if (!(usd > 0)) {
+    return '$0.00';
+  }
+  return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
+}
+
 /** One combined session, paired with the data the panel resolves per session. */
 export interface CombinedSessionSection {
   detail: SessionDetail;
@@ -73,6 +90,7 @@ export function renderSessionDetailHtml(
   turnDeviations: readonly (readonly WorkflowDeviation[])[],
   nonce: string,
   contextAnalysis?: SessionContextAnalysis,
+  costMode: CostMode = 'aiu',
 ): string {
   const { summary } = detail;
   const csp = [
@@ -101,9 +119,9 @@ export function renderSessionDetailHtml(
   </nav>` : ''}
   <div class="tab-panel${hasContext ? '' : ' tab-panel-only'}" id="tab-overview">
   ${renderHeader(detail)}
-  ${renderTreeSummary(detail.treeStats, detail.treeModelTurns)}
-  ${renderMainAgentUsage(detail.agentUsage)}
-  ${renderSubAgentUsage(detail.agentUsage)}
+  ${renderTreeSummary(detail.treeStats, detail.treeModelTurns, undefined, costMode)}
+  ${renderMainAgentUsage(detail.agentUsage, costMode)}
+  ${renderSubAgentUsage(detail.agentUsage, costMode)}
   ${renderTurns(detail.turns, turnDeviations)}
   </div>
   ${hasContext ? `<div class="tab-panel tab-panel-hidden" id="tab-context">${renderContextAnalysis(contextAnalysis)}</div>` : ''}
@@ -125,7 +143,11 @@ export function renderSessionDetailHtml(
  * first section is open). All section helpers are shared with the single-session
  * renderer.
  */
-export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce: string): string {
+export function renderCombinedSessionDetailHtml(
+  view: CombinedSessionView,
+  nonce: string,
+  costMode: CostMode = 'aiu',
+): string {
   const { combined, sections } = view;
   const csp = [
     "default-src 'none'",
@@ -136,7 +158,7 @@ export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce
   ].join('; ');
 
   const sectionsHtml = sections
-    .map((section, index) => renderSessionSection(section, index === 0))
+    .map((section, index) => renderSessionSection(section, index === 0, costMode))
     .join('\n');
 
   // The combined "Agent run totals" card mirrors the single-session one, over the
@@ -161,9 +183,9 @@ export function renderCombinedSessionDetailHtml(view: CombinedSessionView, nonce
 </head>
 <body>
   ${renderCombinedHeader(combined.summary)}
-  ${renderTreeSummary(combined.treeStats, mergedModelTurns, trendSessions)}
-  ${renderMainAgentUsage(combined.agentUsage)}
-  ${renderSubAgentUsage(combined.agentUsage)}
+  ${renderTreeSummary(combined.treeStats, mergedModelTurns, trendSessions, costMode)}
+  ${renderMainAgentUsage(combined.agentUsage, costMode)}
+  ${renderSubAgentUsage(combined.agentUsage, costMode)}
   <section class="panel">
     <div class="panel-heading"><h2>Sessions</h2><span>${num(sections.length)} session(s)</span></div>
     <div class="turns">${sectionsHtml}</div>
@@ -198,7 +220,11 @@ function renderCombinedHeader(summary: CombinedSummary): string {
  * a compact meta line, the session's deviations, and its turns. Reuses the same
  * deviation/turn section helpers as the single-session renderer.
  */
-function renderSessionSection(section: CombinedSessionSection, open: boolean): string {
+function renderSessionSection(
+  section: CombinedSessionSection,
+  open: boolean,
+  costMode: CostMode,
+): string {
   const { detail, turnDeviations } = section;
   const s = detail.summary;
   const id = escapeHtml(shortId(s.sessionId));
@@ -206,11 +232,18 @@ function renderSessionSection(section: CombinedSessionSection, open: boolean): s
     s.title !== undefined && s.title.length > 0
       ? `<span class="turn-label">${escapeHtml(truncate(s.title, 60))}</span>`
       : `<span class="turn-label">Session ${id}</span>`;
-  // This session's cost = its whole-tree AIU at the fixed rate (no estimate).
+  // This session's cost: Copilot = whole-tree AIU at the fixed rate; Claude =
+  // token-priced estimate carried on the tree stats.
+  const costUsd =
+    costMode === 'usd' ? formatUsdMicros(detail.treeStats.costUsdMicros) : null;
   const costLabel =
-    detail.treeStats.aiuNano > 0
-      ? `<span class="turn-tokens">$${aiuToUsd(detail.treeStats.aiuNano).toFixed(2)}</span>`
-      : '';
+    costUsd !== null
+      ? costUsd !== '$0.00'
+        ? `<span class="turn-tokens">${costUsd}</span>`
+        : ''
+      : detail.treeStats.aiuNano > 0
+        ? `<span class="turn-tokens">$${aiuToUsd(detail.treeStats.aiuNano).toFixed(2)}</span>`
+        : '';
   const summaryRow =
     `<span class="time">${escapeHtml(formatTime(s.startedAtMs))}</span>${titleLabel}` +
     `<span class="mode">${id} · ${num(detail.turns.length)} turn(s) · ${num(s.llmCalls)} LLM · ${num(s.toolCalls)} tool</span>${costLabel}`;
@@ -262,7 +295,14 @@ function renderTreeSummary(
   stats: SessionTreeStats,
   modelTurns: readonly SessionModelTurnPoint[],
   trendSessions?: readonly TrendSession[],
+  costMode: CostMode = 'aiu',
 ): string {
+  // Cost basis differs by source: Copilot shows AIU (with derived $); Claude
+  // shows the token-priced USD estimate. Exactly one tile is rendered.
+  const costTile =
+    costMode === 'usd'
+      ? { acr: 'COST', label: 'Estimated Cost (USD)', value: formatUsdMicros(stats.costUsdMicros) }
+      : { acr: 'AIU', label: 'Copilot Usage (AIU)', value: formatAiu(stats.aiuNano) };
   // Flat right-aligned totals, each labelled by a short acronym (full name kept in
   // the `title` so the shorthand stays discoverable). TIN/TOUT/TCI = total
   // input/output/cached-input tokens; TT = total tokens; MT = model turns.
@@ -274,7 +314,7 @@ function renderTreeSummary(
     { acr: 'TCI', label: 'Total Cached Input Tokens', value: formatInt(stats.cachedTokens) },
     { acr: 'TT', label: 'Total Tokens', value: formatInt(stats.totalTokens) },
     { acr: 'ERR', label: 'Errors', value: formatInt(stats.errorCount) },
-    { acr: 'AIU', label: 'Copilot Usage (AIU)', value: formatAiu(stats.aiuNano) },
+    costTile,
     { acr: 'LOC', label: 'Lines of Code (added)', value: formatInt(stats.linesOfCode) },
     { acr: 'LOD', label: 'Lines of Documentation (added)', value: formatInt(stats.linesOfDoc) },
     { acr: 'nLOC', label: 'Lines of Code (removed)', value: formatInt(stats.linesOfCodeRemoved) },
@@ -784,7 +824,7 @@ function renderTokenTrend(
  * total (incl. sub-agents) lives in the "Agent run totals" card, so this table
  * carries only its own subtotal.
  */
-function renderMainAgentUsage(usage: readonly SessionAgentUsage[]): string {
+function renderMainAgentUsage(usage: readonly SessionAgentUsage[], costMode: CostMode): string {
   return renderAgentUsage(
     usage.filter((u) => u.kind === 'main'),
     {
@@ -793,6 +833,7 @@ function renderMainAgentUsage(usage: readonly SessionAgentUsage[]): string {
       footerLabel: 'Total',
       callsTitle: 'Main-thread model turns (chat spans) for this model',
     },
+    costMode,
   );
 }
 
@@ -802,7 +843,7 @@ function renderMainAgentUsage(usage: readonly SessionAgentUsage[]): string {
  * `subagent`). Rendered only when the session spawned at least one sub-agent. Each
  * row shows the sub-agent's real tokens AND AIU, read from its own `chat` spans.
  */
-function renderSubAgentUsage(usage: readonly SessionAgentUsage[]): string {
+function renderSubAgentUsage(usage: readonly SessionAgentUsage[], costMode: CostMode): string {
   return renderAgentUsage(
     usage.filter((u) => u.kind === 'subagent'),
     {
@@ -811,8 +852,9 @@ function renderSubAgentUsage(usage: readonly SessionAgentUsage[]): string {
       footerLabel: 'Sub-agent total',
       callsTitle: 'Model turns (chat spans) for this sub-agent',
       note:
-        'Sub-agents launched by this session via <code>runSubagent</code>, with the real tokens and AIU recorded on their own <code>chat</code> spans. The whole-run rollup is in the "Agent run totals" card above.',
+        'Sub-agents this session spawned, with the real tokens and cost recorded on their own model turns. The whole-run rollup is in the "Agent run totals" card above.',
     },
+    costMode,
   );
 }
 
@@ -826,6 +868,7 @@ function renderSubAgentUsage(usage: readonly SessionAgentUsage[]): string {
 function renderAgentUsage(
   rows: readonly SessionAgentUsage[],
   opts: { heading: string; countNoun: string; footerLabel: string; callsTitle: string; note?: string },
+  costMode: CostMode,
 ): string {
   if (rows.length === 0) {
     return '';
@@ -838,6 +881,7 @@ function renderAgentUsage(
       acc.outputTokens += u.outputTokens;
       acc.cachedTokens += u.cachedTokens;
       acc.aiuNano += u.aiuNano;
+      acc.costUsdMicros += u.costUsdMicros ?? 0;
       acc.linesOfCode += u.linesOfCode;
       acc.linesOfDoc += u.linesOfDoc;
       acc.linesOfCodeRemoved += u.linesOfCodeRemoved;
@@ -850,12 +894,23 @@ function renderAgentUsage(
       outputTokens: 0,
       cachedTokens: 0,
       aiuNano: 0,
+      costUsdMicros: 0,
       linesOfCode: 0,
       linesOfDoc: 0,
       linesOfCodeRemoved: 0,
       linesOfDocRemoved: 0,
     },
   );
+
+  // One cost column: AIU (Copilot) or estimated USD (Claude).
+  const costCell = (u: SessionAgentUsage): string =>
+    costMode === 'usd' ? formatUsdMicros(u.costUsdMicros) : formatAiu(u.aiuNano);
+  const costFooter =
+    costMode === 'usd' ? formatUsdMicros(totals.costUsdMicros) : formatAiu(totals.aiuNano);
+  const costHeader =
+    costMode === 'usd'
+      ? '<th class="n" title="Estimated USD cost for these model turns (token×rate)">Cost</th>'
+      : '<th class="n" title="AIU (Copilot premium-request units) recorded on these spans — the actual billed usage — with the derived cost at $0.01/AIU">AIU</th>';
 
   const bodyRows = rows
     .map(
@@ -866,7 +921,7 @@ function renderAgentUsage(
         <td class="n">${num(u.inputTokens)}</td>
         <td class="n">${num(u.outputTokens)}</td>
         <td class="n">${num(u.cachedTokens)}</td>
-        <td class="n">${formatAiu(u.aiuNano)}</td>
+        <td class="n">${costCell(u)}</td>
         <td class="n">${num(u.linesOfCode)}</td>
         <td class="n">${num(u.linesOfDoc)}</td>
         <td class="n">${num(u.linesOfCodeRemoved)}</td>
@@ -884,7 +939,7 @@ function renderAgentUsage(
         <tr>
           <th>Agent</th><th>Model</th><th class="n" title="${escapeHtml(opts.callsTitle)}">Calls</th><th class="n">Input</th>
           <th class="n">Output</th><th class="n">Cached</th>
-          <th class="n" title="AIU (Copilot premium-request units) recorded on these spans — the actual billed usage — with the derived cost at $0.01/AIU">AIU</th>
+          ${costHeader}
           <th class="n" title="Lines of Code added to source-code files by this agent/model's file-writing tool calls">LoC</th>
           <th class="n" title="Lines of Documentation added to doc files by this agent/model's file-writing tool calls">LoD</th>
           <th class="n" title="Lines of Code removed from source-code files by this agent/model's file-writing tool calls">nLoC</th>
@@ -902,7 +957,7 @@ function renderAgentUsage(
           <td class="n">${num(totals.inputTokens)}</td>
           <td class="n">${num(totals.outputTokens)}</td>
           <td class="n">${num(totals.cachedTokens)}</td>
-          <td class="n">${formatAiu(totals.aiuNano)}</td>
+          <td class="n">${costFooter}</td>
           <td class="n">${num(totals.linesOfCode)}</td>
           <td class="n">${num(totals.linesOfDoc)}</td>
           <td class="n">${num(totals.linesOfCodeRemoved)}</td>

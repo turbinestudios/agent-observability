@@ -153,6 +153,7 @@ describe('combineSessionDetails', () => {
       treeStats: {
         modelTurns: 2, toolCalls: 3, inputTokens: 100, outputTokens: 40,
         cachedTokens: 10, totalTokens: 999, errorCount: 1, aiuNano: 1_000_000_000,
+        costUsdMicros: 5_000,
         linesOfCode: 30, linesOfDoc: 10, linesOfCodeRemoved: 5, linesOfDocRemoved: 2,
       },
     });
@@ -160,6 +161,7 @@ describe('combineSessionDetails', () => {
       treeStats: {
         modelTurns: 5, toolCalls: 7, inputTokens: 200, outputTokens: 60,
         cachedTokens: 20, totalTokens: 999, errorCount: 2, aiuNano: 3_000_000_000,
+        costUsdMicros: 7_000,
         linesOfCode: 70, linesOfDoc: 25, linesOfCodeRemoved: 9, linesOfDocRemoved: 1,
       },
     });
@@ -176,6 +178,8 @@ describe('combineSessionDetails', () => {
       totalTokens: 400,
       errorCount: 3,
       aiuNano: 4_000_000_000,
+      // Claude token-priced cost is summed across sessions (was dropped before).
+      costUsdMicros: 12_000,
       linesOfCode: 100,
       linesOfDoc: 35,
       linesOfCodeRemoved: 14,

@@ -16,6 +16,16 @@
 export type Operation = 'chat' | 'execute_tool' | 'execute_hook' | 'invoke_agent';
 
 /**
+ * Which agent tool produced a session. `copilot` reads the local SQLite
+ * `agent-traces.db`; `claude` reads Claude Code's JSONL transcripts under
+ * `~/.claude/projects`. Defaults to `copilot` when absent (the Copilot producer
+ * predates this field). Used to group the Sessions tree by source and to switch
+ * the detail panel's cost basis (Copilot bills in AIU; Claude is priced by
+ * tokens — see {@link SessionTreeStats.costUsdMicros}).
+ */
+export type AgentSourceId = 'copilot' | 'claude';
+
+/**
  * The fixed set of agent modes the cloud aggregate schema permits. Any
  * user-defined / custom chat mode name collapses to `custom` so project or
  * customer identifiers in a custom mode name never leak (privacy-critical;
@@ -101,6 +111,12 @@ export interface SessionSummary {
   title?: string;
   /** `true` when {@link title} was derived from the first request's text. */
   titleDerived?: boolean;
+  /**
+   * Which agent tool produced this session ({@link AgentSourceId}). Absent for
+   * Copilot sessions (treated as `copilot`); set to `claude` by the Claude Code
+   * source so the unified Sessions tree can group by source.
+   */
+  source?: AgentSourceId;
 }
 
 /**
@@ -269,6 +285,14 @@ export interface SessionModelUsage {
    * captured here (it is not lost to the sub-agent's own session as before).
    */
   aiuNano: number;
+  /**
+   * LOCAL-ONLY estimated USD cost for this model, in INTEGER micro-USD (1 USD =
+   * 1e6). Set ONLY by the Claude Code source (token×rate — see
+   * `../claude/pricing.ts`), where AIU does not apply; absent for Copilot, whose
+   * cost derives from {@link aiuNano}. The detail panel shows a "Cost" column
+   * instead of "AIU" when this is present.
+   */
+  costUsdMicros?: number;
 }
 
 /**
@@ -310,6 +334,12 @@ export interface SessionAgentUsage {
    * under their own conversation id), rather than reading `0` as before.
    */
   aiuNano: number;
+  /**
+   * LOCAL-ONLY estimated USD cost for this (agent, model, kind), in INTEGER
+   * micro-USD. Set ONLY by the Claude Code source; absent for Copilot (which uses
+   * {@link aiuNano}). See {@link SessionModelUsage.costUsdMicros}.
+   */
+  costUsdMicros?: number;
   /**
    * LOCAL-ONLY lines this (agent, model, kind)'s file-writing tool calls added to /
    * removed from source-code vs documentation files (LoC / LoD / nLoC / nLoD). Each
@@ -377,6 +407,14 @@ export interface SessionTreeStats {
    * are taken over the same tree `chat` spans and so sum to this value.
    */
   aiuNano: number;
+  /**
+   * LOCAL-ONLY estimated whole-tree USD cost in INTEGER micro-USD (1 USD = 1e6).
+   * Set ONLY by the Claude Code source (token×rate; AIU is `0` there); absent for
+   * Copilot, whose cost is derived from {@link aiuNano}. The "Agent run totals"
+   * card shows a "Cost (USD)" tile in place of "AIU" when this is present. Equals
+   * the sum of the per-model / per-agent `costUsdMicros` rollups.
+   */
+  costUsdMicros?: number;
   /**
    * LOCAL-ONLY lines the whole agent tree's file-writing tool calls added to /
    * removed from source-code vs documentation files, classified by file

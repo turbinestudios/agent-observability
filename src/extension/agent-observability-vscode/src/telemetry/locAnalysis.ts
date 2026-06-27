@@ -286,6 +286,87 @@ export function countWrittenLines(
   }
 }
 
+/**
+ * Claude Code variant of {@link countWrittenLines}. Claude's file-writing tools
+ * (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`) use snake_case argument keys and
+ * an already-PARSED input object (the transcript's `tool_use.input`), so this
+ * accepts the object directly rather than a JSON string. Reuses the same
+ * extension classification and line-counting as the Copilot path. Unknown tools,
+ * non-object input, and missing fields all yield an all-zero delta.
+ *
+ * `replace_all` on `Edit` is intentionally NOT multiplied (we don't have the file
+ * to know the occurrence count) — the single old/new delta is counted once.
+ */
+export function countClaudeWrittenLines(
+  toolName: string,
+  input: unknown,
+  codeExts: readonly string[],
+  docExts: readonly string[],
+): WriteLineDelta {
+  const delta = emptyDelta();
+  if (input === null || typeof input !== 'object') {
+    return delta;
+  }
+  const args = input as Record<string, unknown>;
+  switch (toolName) {
+    case 'Write': {
+      const cls = pathClass(args.file_path, codeExts, docExts);
+      if (typeof args.content === 'string') {
+        add(delta, cls, 'added', countLines(args.content));
+      }
+      return delta;
+    }
+    case 'Edit': {
+      const cls = pathClass(args.file_path, codeExts, docExts);
+      if (typeof args.new_string === 'string') {
+        add(delta, cls, 'added', countLines(args.new_string));
+      }
+      if (typeof args.old_string === 'string') {
+        add(delta, cls, 'removed', countLines(args.old_string));
+      }
+      return delta;
+    }
+    case 'MultiEdit': {
+      const cls = pathClass(args.file_path, codeExts, docExts);
+      const edits = Array.isArray(args.edits) ? args.edits : [];
+      for (const edit of edits) {
+        if (edit === null || typeof edit !== 'object') {
+          continue;
+        }
+        const e = edit as Record<string, unknown>;
+        if (typeof e.new_string === 'string') {
+          add(delta, cls, 'added', countLines(e.new_string));
+        }
+        if (typeof e.old_string === 'string') {
+          add(delta, cls, 'removed', countLines(e.old_string));
+        }
+      }
+      return delta;
+    }
+    case 'NotebookEdit': {
+      const cls = pathClass(args.notebook_path, codeExts, docExts);
+      if (typeof args.new_source === 'string') {
+        add(delta, cls, 'added', countLines(args.new_source));
+      }
+      return delta;
+    }
+    default:
+      return delta;
+  }
+}
+
+/** classifyExtension on a possibly-non-string path. */
+function pathClass(
+  filePath: unknown,
+  codeExts: readonly string[],
+  docExts: readonly string[],
+): FileClass | undefined {
+  if (typeof filePath !== 'string') {
+    return undefined;
+  }
+  return classifyExtension(filePath, codeExts, docExts);
+}
+
 /** Sum {@link countWrittenLines} over many write-tool spans. */
 export function sumWrittenLines(
   spans: ReadonlyArray<{ toolName: string; argumentsJson: string }>,

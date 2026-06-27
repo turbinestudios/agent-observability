@@ -64,6 +64,7 @@ function mergeTreeStats(details: readonly SessionDetail[]): SessionTreeStats {
     totalTokens: 0,
     errorCount: 0,
     aiuNano: 0,
+    costUsdMicros: 0,
     linesOfCode: 0,
     linesOfDoc: 0,
     linesOfCodeRemoved: 0,
@@ -77,6 +78,9 @@ function mergeTreeStats(details: readonly SessionDetail[]): SessionTreeStats {
     acc.cachedTokens += t.cachedTokens;
     acc.errorCount += t.errorCount;
     acc.aiuNano += t.aiuNano;
+    // Claude carries token-priced USD here (Copilot's is absent → 0); summing
+    // keeps the combined "Agent run totals" cost tile correct for Claude.
+    acc.costUsdMicros = (acc.costUsdMicros ?? 0) + (t.costUsdMicros ?? 0);
     acc.linesOfCode += t.linesOfCode;
     acc.linesOfDoc += t.linesOfDoc;
     acc.linesOfCodeRemoved += t.linesOfCodeRemoved;
@@ -185,6 +189,8 @@ interface TokenCounts {
   cachedTokens: number;
   reasoningTokens: number;
   aiuNano: number;
+  /** Claude token-priced USD (micro-USD); absent for Copilot (uses aiuNano). */
+  costUsdMicros?: number;
 }
 
 function addTokens(into: TokenCounts, from: TokenCounts): void {
@@ -194,6 +200,7 @@ function addTokens(into: TokenCounts, from: TokenCounts): void {
   into.cachedTokens += from.cachedTokens;
   into.reasoningTokens += from.reasoningTokens;
   into.aiuNano += from.aiuNano;
+  into.costUsdMicros = (into.costUsdMicros ?? 0) + (from.costUsdMicros ?? 0);
 }
 
 /** Sort by input+output tokens descending (the renderer's stable ordering). */

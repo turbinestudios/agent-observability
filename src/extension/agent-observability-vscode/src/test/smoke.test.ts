@@ -87,6 +87,10 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.liveUpdates.enabled',
   'agentObservability.liveUpdates.debounceMs',
   'agentObservability.liveUpdates.otelPort',
+  'agentObservability.claudeCode.enabled',
+  'agentObservability.claudeCode.projectsPath',
+  'agentObservability.claudeCode.scanDepth',
+  'agentObservability.claudeCode.maxSessions',
 ] as const;
 
 describe('manifest contract is stable', () => {
@@ -124,6 +128,8 @@ describe('manifest contract is stable', () => {
     expect(props['agentObservability.sync.intervalMinutes'].minimum).toBe(5);
     expect(props['agentObservability.localTelemetry.enabled'].default).toBe(true);
     expect(props['agentObservability.sqlitePath'].default).toBe('');
+    expect(props['agentObservability.claudeCode.enabled'].default).toBe(true);
+    expect(props['agentObservability.claudeCode.maxSessions'].default).toBe(150);
   });
 
   it('declares the per-repository sync-scope settings, application-scoped', () => {
