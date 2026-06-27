@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { WorkflowConfig } from '../deviation/models';
 import { normalizeExtensions } from '../telemetry/locAnalysis';
+import { buildRepoSyncPolicy, RepoSyncPolicy } from '../aggregate/repoSyncPolicy';
 import { MIN_SESSION_MINUTES, parseWorkflowConfigs } from './workflowParsing';
 
 export { MIN_SESSION_MINUTES } from './workflowParsing';
@@ -32,6 +33,8 @@ export const DASHBOARD_INGESTION_URL =
 export const ConfigKeys = {
   syncEnabled: 'sync.enabled',
   syncIntervalMinutes: 'sync.intervalMinutes',
+  syncRepositoryMode: 'sync.repositoryMode',
+  syncRepositories: 'sync.repositories',
   localTelemetryEnabled: 'localTelemetry.enabled',
   sqlitePath: 'sqlitePath',
   maxSessionMinutes: 'deviation.maxSessionMinutes',
@@ -47,6 +50,8 @@ export const ConfigKeys = {
 export const ConfigDefaults = {
   syncEnabled: false,
   syncIntervalMinutes: 60,
+  syncRepositoryMode: 'all',
+  syncRepositories: [] as readonly string[],
   localTelemetryEnabled: true,
   sqlitePath: '',
   maxSessionMinutes: 60,
@@ -110,6 +115,26 @@ export class Configuration {
       return ConfigDefaults.syncIntervalMinutes;
     }
     return Math.max(MIN_SYNC_INTERVAL_MINUTES, Math.floor(raw));
+  }
+
+  /**
+   * Per-repository sync scoping policy. Resolves the `sync.repositoryMode` +
+   * `sync.repositories` settings into a normalized {@link RepoSyncPolicy} the
+   * sync engine and preview apply to decide which repositories' aggregates leave
+   * the machine. Defaults to `all` (every repository — the historical behavior),
+   * and a hand-edited invalid mode safely falls back to `all`.
+   */
+  getRepoSyncPolicy(): RepoSyncPolicy {
+    const mode = this.config().get<string>(
+      ConfigKeys.syncRepositoryMode,
+      ConfigDefaults.syncRepositoryMode,
+    );
+    const raw = this.config().get<unknown>(
+      ConfigKeys.syncRepositories,
+      ConfigDefaults.syncRepositories as unknown as string[],
+    );
+    const list = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [];
+    return buildRepoSyncPolicy(mode, list);
   }
 
   /** Feature flag: whether the local telemetry view is enabled. */

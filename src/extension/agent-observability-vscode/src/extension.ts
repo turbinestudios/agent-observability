@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'node:fs';
-import { Configuration } from './config/configuration';
+import { Configuration, CONFIG_SECTION, ConfigKeys } from './config/configuration';
+import { RepoSyncMode } from './aggregate/repoSyncPolicy';
 import { registerCommands, Refreshable } from './commands';
 import { OverviewViewProvider, OVERVIEW_VIEW_ID } from './views/overviewView';
 import { SessionsViewProvider, SESSIONS_VIEW_ID } from './views/sessionsView';
@@ -162,6 +163,13 @@ export function activate(context: vscode.ExtensionContext): void {
     previewPayload: () => {
       void runPreviewPayload(telemetry, secrets, toolVersion);
     },
+    // LOCAL-ONLY: pick which repositories cloud sync includes. Reads the repos
+    // present in local telemetry, writes the selection to USER settings, and
+    // never uploads anything (the scope-change listener below rewinds the
+    // watermark so newly-included repos backfill on the next sync).
+    configureSyncRepositories: () => {
+      void runConfigureSyncRepositories(config, telemetry);
+    },
     enableLiveUpdates: () => {
       void runEnableLiveUpdates(config, context, live);
     },
@@ -203,6 +211,22 @@ export function activate(context: vscode.ExtensionContext): void {
       overview.refresh();
       sessions.refresh();
       sync.refresh();
+    }),
+  );
+
+  // When the repository sync SCOPE changes, forget the watermark so the next run
+  // re-scans the full local window — newly-included repositories backfill rather
+  // than being skipped because their window was already marked sent. Re-sending
+  // is idempotent (server upserts by rowKey) and the local DB is a short rolling
+  // window, so the catch-up is bounded.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.syncRepositoryMode}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.syncRepositories}`)
+      ) {
+        void syncState.clearWatermark().then(() => sync.refresh());
+      }
     }),
   );
 }
@@ -349,6 +373,88 @@ async function runPreviewPayload(
 
   const doc = await vscode.workspace.openTextDocument({ content, language: 'json' });
   await vscode.window.showTextDocument(doc, { preview: true });
+}
+
+/** Sentinel value for sessions with no detected git remote (matches the row value). */
+const UNKNOWN_REPOSITORY = 'unknown';
+
+/**
+ * `configureSyncRepositories` handler. Presents a checklist of the repositories
+ * found in local telemetry (plus any already configured but no longer present,
+ * so a saved scope is never silently dropped), pre-checked to reflect the
+ * current scope, and writes the result to USER settings.
+ *
+ * Normalization keeps the round-trip intuitive: checking EVERYTHING writes mode
+ * `all` (no filter); checking a strict subset writes mode `include` with that
+ * subset. LOCAL-ONLY — it reads on-machine telemetry and writes settings; it
+ * never uploads. The scope-change listener rewinds the sync watermark.
+ */
+async function runConfigureSyncRepositories(
+  config: Configuration,
+  telemetry: TelemetryService,
+): Promise<void> {
+  const result = telemetry.getDistinctRepositories();
+  if (!result.ok) {
+    void vscode.window.showInformationMessage(
+      `Agent Observability: cannot list repositories — ${result.message}`,
+    );
+    return;
+  }
+
+  const policy = config.getRepoSyncPolicy();
+  // Union telemetry repos with any already-configured ones so a previously
+  // included/excluded repo that has aged out of local telemetry still appears
+  // and is not silently forgotten on save.
+  const allRepos = [...new Set([...result.value, ...policy.repositories])].sort();
+
+  if (allRepos.length === 0) {
+    void vscode.window.showInformationMessage(
+      'Agent Observability: no repositories found in local telemetry yet. Use Copilot in a repository, then try again.',
+    );
+    return;
+  }
+
+  interface RepoPick extends vscode.QuickPickItem {
+    repository: string;
+  }
+  const items: RepoPick[] = allRepos.map((repository) => ({
+    repository,
+    label: repository === UNKNOWN_REPOSITORY ? '$(question) No detected git remote' : repository,
+    description: repository === UNKNOWN_REPOSITORY ? 'unknown' : undefined,
+    // Pre-check what currently syncs: all → everything; include → listed;
+    // exclude → everything not listed.
+    picked:
+      policy.mode === 'all'
+        ? true
+        : policy.mode === 'include'
+          ? policy.repositories.has(repository)
+          : !policy.repositories.has(repository),
+  }));
+
+  const picked = await vscode.window.showQuickPick(items, {
+    canPickMany: true,
+    title: 'Choose Repositories to Sync',
+    placeHolder: 'Check the repositories whose aggregates may be uploaded. Unchecked repositories stay local.',
+    ignoreFocusOut: true,
+  });
+  if (picked === undefined) {
+    return; // dismissed — no change
+  }
+
+  const selected = picked.map((p) => p.repository);
+  // Checking everything means "no filter" → mode all; a subset → include list.
+  const nextMode: RepoSyncMode = selected.length === allRepos.length ? 'all' : 'include';
+  const nextList = nextMode === 'all' ? [] : selected;
+
+  const ao = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  await ao.update(ConfigKeys.syncRepositoryMode, nextMode, vscode.ConfigurationTarget.Global);
+  await ao.update(ConfigKeys.syncRepositories, nextList, vscode.ConfigurationTarget.Global);
+
+  void vscode.window.showInformationMessage(
+    nextMode === 'all'
+      ? `Agent Observability: cloud sync now includes all ${allRepos.length} repositories.`
+      : `Agent Observability: cloud sync now includes ${selected.length} of ${allRepos.length} repositories.`,
+  );
 }
 
 /** Dispose the telemetry snapshot copy + connection and any open detail panels. */

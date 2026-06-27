@@ -4,6 +4,30 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Per-repository cloud sync scope.** Cloud sync reads your merged local
+  telemetry, which spans every repository you use Copilot in — not just the open
+  workspace. Two new user-level settings now control which repositories'
+  aggregates may be uploaded: `agentObservability.sync.repositoryMode`
+  (`all` / `include` / `exclude`, default `all` — unchanged behavior) and
+  `agentObservability.sync.repositories`. Both are `application`-scoped, so the
+  policy lives in User settings and can't be silently overridden per-workspace.
+  Filtering happens at the single point where the sync engine selects rows, so it
+  scopes both the aggregate batch and the secondary context-insights batch.
+- Command (category "Agent Observability"): **Choose Repositories to Sync** — a
+  checklist of the repositories found in your local telemetry, pre-checked to the
+  current scope, that writes the selection to User settings. Checking everything
+  writes mode `all`; a subset writes `include`. Surfaced as a title-bar action on
+  the Sync view and via a clickable **Sync scope** row showing how many
+  repositories are eligible to upload.
+- Changing the sync scope now rewinds the sync watermark so newly-included
+  repositories backfill on the next run (re-sending is idempotent server-side).
+- **Open Settings** is now a persistent gear action in the title bar of all three
+  views (Overview, Sessions, Sync), not just the empty-state welcome screens.
+
 ## [0.3.0] - 2026-06-26
 
 ### Added

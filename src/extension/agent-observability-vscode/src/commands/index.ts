@@ -14,6 +14,7 @@ export const Commands = {
   syncNow: 'agentObservability.syncNow',
   openSettings: 'agentObservability.openSettings',
   setApiKey: 'agentObservability.setApiKey',
+  configureSyncRepositories: 'agentObservability.configureSyncRepositories',
   toggleConsent: 'agentObservability.toggleConsent',
   previewPayload: 'agentObservability.previewPayload',
   openSession: 'agentObservability.openSession',
@@ -53,6 +54,8 @@ export interface CommandDeps {
   refreshSessionDetail: () => void;
   /** Open the LOCAL aggregate-payload preview (Phase 5 surfaces real content). */
   previewPayload: () => void;
+  /** Pick which repositories are included in cloud sync (writes user settings). */
+  configureSyncRepositories: () => void;
   /** Turn on near-real-time live updates (configures Copilot's OTel file exporter). */
   enableLiveUpdates: () => void;
   /** Turn off near-real-time live updates. */
@@ -85,6 +88,7 @@ export function registerCommands(
     openCombinedSession,
     refreshSessionDetail,
     previewPayload,
+    configureSyncRepositories,
     enableLiveUpdates,
     disableLiveUpdates,
   } = deps;
@@ -128,6 +132,13 @@ export function registerCommands(
   // Preview the outgoing aggregate payload (LOCAL only; nothing is uploaded).
   register(Commands.previewPayload, () => {
     previewPayload();
+  });
+
+  // Choose which repositories are included in cloud sync. Opens a checklist of
+  // the repositories found in local telemetry and writes the selection to USER
+  // settings. Never uploads — it only narrows what a later sync would send.
+  register(Commands.configureSyncRepositories, () => {
+    configureSyncRepositories();
   });
 
   // Open Session Detail — invoked programmatically by a session TreeItem.

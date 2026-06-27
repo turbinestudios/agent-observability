@@ -13,6 +13,11 @@ import { InMemorySyncStateStore } from './syncState';
 import { AggregationRow } from '../aggregate/aggregator';
 import { buildBatch } from '../aggregate/aggregator';
 import { computeDeveloperId, getIdentityInput } from '../aggregate/pseudonymizer';
+import {
+  RepoSyncPolicy,
+  ALL_REPOSITORIES_POLICY,
+  buildRepoSyncPolicy,
+} from '../aggregate/repoSyncPolicy';
 
 /**
  * SyncEngine behavior tests with fakes for every collaborator and a deterministic
@@ -41,12 +46,16 @@ class FakeConfig implements SyncEngineConfig {
   constructor(
     public dashboardUrl = 'https://dashboard.example.com',
     public syncEnabled = false,
+    public repoPolicy: RepoSyncPolicy = ALL_REPOSITORIES_POLICY,
   ) {}
   getDashboardUrl(): string {
     return this.dashboardUrl;
   }
   isSyncEnabled(): boolean {
     return this.syncEnabled;
+  }
+  getRepoSyncPolicy(): RepoSyncPolicy {
+    return this.repoPolicy;
   }
 }
 
@@ -137,9 +146,14 @@ function buildEngine(opts: {
   watermarkMs?: number;
   clock?: number;
   dashboardUrl?: string;
+  repoPolicy?: RepoSyncPolicy;
 }): Built {
   const poster = new ScriptedPoster(opts.responses ?? [aggregateResponse()]);
-  const config = new FakeConfig(opts.dashboardUrl ?? 'https://dashboard.example.com');
+  const config = new FakeConfig(
+    opts.dashboardUrl ?? 'https://dashboard.example.com',
+    false,
+    opts.repoPolicy ?? ALL_REPOSITORIES_POLICY,
+  );
   const consent = new FakeConsent(opts.consented ?? true);
   const secrets = new FakeSecrets(opts.hasKey ?? true);
   const telemetry = new FakeTelemetry(opts.rows ?? [row()]);
@@ -221,6 +235,62 @@ describe('SyncEngine happy path', () => {
     expect(state.getHistory()[0].outcome).toBe('success');
     expect(statusReports).toHaveLength(1);
     expect(statusReports[0].lastOutcome).toBe('success');
+  });
+});
+
+describe('SyncEngine repository scope', () => {
+  const REPO_A = 'https://github.com/example-org/sample-repo'; // the default row repo
+  const REPO_B = 'https://github.com/example-org/other-repo';
+
+  it('uploads only the included repositories under an include policy', async () => {
+    const { engine, poster } = buildEngine({
+      rows: [
+        row({ sessionKey: 'a', repository: REPO_A }),
+        row({ sessionKey: 'b', repository: REPO_B }),
+      ],
+      repoPolicy: buildRepoSyncPolicy('include', [REPO_A]),
+    });
+
+    const result = await engine.runSync({ manual: true });
+    expect(result.status).toBe('success');
+
+    const aggregatePosts = poster.posts.filter((p) => p.url.includes('/api/ingest/aggregate'));
+    expect(aggregatePosts).toHaveLength(1);
+    const sent = JSON.parse(aggregatePosts[0].body);
+    const repos = new Set(sent.buckets.map((b: { repository: string }) => b.repository));
+    expect([...repos]).toEqual([REPO_A]);
+  });
+
+  it('drops the excluded repositories under an exclude policy', async () => {
+    const { engine, poster } = buildEngine({
+      rows: [
+        row({ sessionKey: 'a', repository: REPO_A }),
+        row({ sessionKey: 'b', repository: REPO_B }),
+      ],
+      repoPolicy: buildRepoSyncPolicy('exclude', [REPO_A]),
+    });
+
+    await engine.runSync({ manual: true });
+    const sent = JSON.parse(
+      poster.posts.find((p) => p.url.includes('/api/ingest/aggregate'))!.body,
+    );
+    const repos = new Set(sent.buckets.map((b: { repository: string }) => b.repository));
+    expect([...repos]).toEqual([REPO_B]);
+  });
+
+  it('uploads everything (default "all") when no scope is configured', async () => {
+    const { engine, poster } = buildEngine({
+      rows: [
+        row({ sessionKey: 'a', repository: REPO_A }),
+        row({ sessionKey: 'b', repository: REPO_B }),
+      ],
+    });
+    await engine.runSync({ manual: true });
+    const sent = JSON.parse(
+      poster.posts.find((p) => p.url.includes('/api/ingest/aggregate'))!.body,
+    );
+    const repos = new Set(sent.buckets.map((b: { repository: string }) => b.repository));
+    expect(repos).toEqual(new Set([REPO_A, REPO_B]));
   });
 });
 
