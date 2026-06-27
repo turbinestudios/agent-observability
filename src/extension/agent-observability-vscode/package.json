@@ -475,18 +475,20 @@
         "agentObservability.liveUpdates.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Enable near-real-time live updates: tail the OpenTelemetry JSON-lines file written by GitHub Copilot Chat's `file` exporter and overlay a live status banner on the session-detail panel as an agent runs. Off by default. Use the **Agent Observability: Enable Live Updates (Copilot OTel)** command to turn this on — it also configures Copilot's `#github.copilot.chat.otel.enabled#` / `exporterType` / `outfile` settings. The file is read locally only; nothing is uploaded. The durable history view continues to read the SQLite database regardless of this setting."
-        },
-        "agentObservability.liveUpdates.otelFilePath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Path to the OpenTelemetry JSON-lines file Copilot's `file` exporter writes (must match `#github.copilot.chat.otel.outfile#`). Leave blank to use the extension-managed default under its global storage. Set explicitly only if you point Copilot's exporter at a custom location."
+          "markdownDescription": "Enable near-real-time updates: run a localhost OpenTelemetry receiver that GitHub Copilot Chat's `otlp-http` exporter pushes spans to, ingest them into the extension's own database (Copilot's schema), and refresh the views + workflow notifications live as an agent runs. Off by default. Use the **Agent Observability: Enable Live Updates (Copilot OTel)** command to turn this on — it configures Copilot's `#github.copilot.chat.otel.enabled#` / `exporterType` / `otlpEndpoint` settings and requires a **full VS Code restart** (a window reload is not enough). Everything stays local; nothing is uploaded."
         },
         "agentObservability.liveUpdates.debounceMs": {
           "type": "number",
           "default": 400,
           "minimum": 100,
-          "markdownDescription": "Coalescing window, in milliseconds, between detecting new spans in the OTel file and reading them. Lower feels more live but costs more frequent reads; minimum 100."
+          "markdownDescription": "Coalescing window, in milliseconds, between ingesting new spans and refreshing the views. Lower feels more live but refreshes more often; minimum 100."
+        },
+        "agentObservability.liveUpdates.otelPort": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "markdownDescription": "Localhost port the extension's OpenTelemetry receiver listens on (set automatically by **Enable Live Updates**; `0` until then). Copilot's `#github.copilot.chat.otel.otlpEndpoint#` is pointed at `http://127.0.0.1:<port>`."
         }
       }
     }

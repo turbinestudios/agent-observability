@@ -137,24 +137,6 @@ export class SessionDetailPanelManager {
     this.rerenderers.get(panel)?.();
   }
 
-  /**
-   * Push a near-real-time OTel live-status snapshot to any OPEN single-session
-   * panel whose key matches one of the span's candidate ids. The detail body
-   * stays SQLite-rendered; this only patches the live banner via `postMessage`
-   * to the panel's client script. A no-op when no matching panel is open (and
-   * combined panels, keyed `combined:…`, never match a raw session id).
-   */
-  pushLiveUpdate(candidateIds: readonly string[], payload: unknown): void {
-    if (candidateIds.length === 0) {
-      return;
-    }
-    for (const [key, panel] of this.panels) {
-      if (candidateIds.includes(key)) {
-        void panel.webview.postMessage({ type: 'liveUpdate', live: payload });
-      }
-    }
-  }
-
   /** Track which detail panel is focused so {@link refreshActive} can find it. */
   private trackActive(panel: vscode.WebviewPanel): void {
     if (panel.active) {

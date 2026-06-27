@@ -80,8 +80,8 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.analysis.codeFileExtensions',
   'agentObservability.analysis.docFileExtensions',
   'agentObservability.liveUpdates.enabled',
-  'agentObservability.liveUpdates.otelFilePath',
   'agentObservability.liveUpdates.debounceMs',
+  'agentObservability.liveUpdates.otelPort',
 ] as const;
 
 describe('manifest contract is stable', () => {

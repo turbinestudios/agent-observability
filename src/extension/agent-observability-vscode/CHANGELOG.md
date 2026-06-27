@@ -27,6 +27,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   contains a phrase) when no metadata signal distinguishes the task. Evaluated only
   on the local per-turn path; its deviations are flagged `contentDerived` and never
   participate in sync.
+- **Real-time updates via a localhost OTLP receiver.** **Enable Live Updates (Copilot
+  OTel)** now points Copilot's `otlp-http` exporter at a private `127.0.0.1` endpoint,
+  ingests the pushed spans into the extension's OWN database (Copilot's exact schema),
+  and refreshes the session views + per-turn divergence notifications live as an agent
+  runs — no snapshot polling, no WAL lag. The extension becomes the telemetry sink;
+  everything stays local (the receiver binds loopback only). Requires a **full VS Code
+  restart** to switch Copilot's exporter (a window reload is not enough). New setting
+  `agentObservability.liveUpdates.otelPort` (set automatically by the command).
 
 ## [0.3.0] - 2026-06-26
 

@@ -40,8 +40,8 @@ export const ConfigKeys = {
   analysisCodeFileExtensions: 'analysis.codeFileExtensions',
   analysisDocFileExtensions: 'analysis.docFileExtensions',
   liveUpdatesEnabled: 'liveUpdates.enabled',
-  liveOtelFilePath: 'liveUpdates.otelFilePath',
   liveDebounceMs: 'liveUpdates.debounceMs',
+  liveOtelPort: 'liveUpdates.otelPort',
 } as const;
 
 /** Default values mirroring the package.json contribution defaults. */
@@ -63,8 +63,8 @@ export const ConfigDefaults = {
     '.md', '.mdx', '.markdown', '.rst', '.txt', '.adoc', '.asciidoc',
   ] as readonly string[],
   liveUpdatesEnabled: false,
-  liveOtelFilePath: '',
   liveDebounceMs: 400,
+  liveOtelPort: 0,
 } as const;
 
 /** Minimum allowed sync interval, mirroring the package.json `minimum`. */
@@ -205,29 +205,16 @@ export class Configuration {
   }
 
   /**
-   * Whether near-real-time live updates are enabled: tail Copilot's OTel
-   * file-exporter output and overlay a live status banner on the session-detail
-   * panel. Off by default; the **Enable Live Updates** command flips this and
-   * configures Copilot's `github.copilot.chat.otel.*` settings.
+   * Whether near-real-time live updates are enabled: run a localhost OTLP receiver
+   * that Copilot's `otlp-http` exporter pushes spans to, ingest them into the
+   * extension's own DB, and refresh the views live. Off by default; the **Enable
+   * Live Updates** command flips this and configures Copilot's `otel.*` settings.
    */
   isLiveUpdatesEnabled(): boolean {
     return this.config().get<boolean>(
       ConfigKeys.liveUpdatesEnabled,
       ConfigDefaults.liveUpdatesEnabled,
     );
-  }
-
-  /**
-   * Path to the OTel JSON-lines file written by Copilot's `file` exporter.
-   * Returns `undefined` (not '') when blank so callers fall back to the default
-   * under the extension's global storage.
-   */
-  getLiveOtelFilePath(): string | undefined {
-    const value = this.config().get<string>(
-      ConfigKeys.liveOtelFilePath,
-      ConfigDefaults.liveOtelFilePath,
-    ).trim();
-    return value.length > 0 ? value : undefined;
   }
 
   /**
@@ -244,6 +231,16 @@ export class Configuration {
       return ConfigDefaults.liveDebounceMs;
     }
     return Math.max(MIN_LIVE_DEBOUNCE_MS, Math.floor(raw));
+  }
+
+  /**
+   * Localhost port the live-OTLP receiver listens on, written by the Enable Live
+   * Updates command. `0` (the default) means "not configured yet". Clamped to a
+   * valid TCP port range; anything else falls back to 0.
+   */
+  getLiveOtelPort(): number {
+    const raw = this.config().get<number>(ConfigKeys.liveOtelPort, ConfigDefaults.liveOtelPort);
+    return Number.isFinite(raw) && raw > 0 && raw < 65536 ? Math.floor(raw) : 0;
   }
 
   /**

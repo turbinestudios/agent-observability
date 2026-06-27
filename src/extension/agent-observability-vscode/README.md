@@ -12,6 +12,7 @@ shared with an organization dashboard.
 | Activity Bar container, three views, commands, settings | Shipped |
 | Read-only local SQLite (`agent-traces.db`) ingestion (snapshot + read-only connection) | Shipped |
 | Local session detail timeline + per-request workflow deviation detection (with optional notifications) | Shipped |
+| Real-time updates via a localhost OTLP receiver (Copilot `otlp-http` → extension sink) | Shipped |
 | Workflow predicate DSL (metadata + local-only content predicates) | Shipped |
 | Consent toggle + organization API key in SecretStorage (opt-in, off by default) | Shipped |
 | Aggregate engine (30-min time bins, pseudonymous developer id, idempotent batch/row ids) | Shipped |
@@ -87,6 +88,26 @@ All under the **Agent Observability** category:
 | `agentObservability.deviation.maxSessionMinutes` | `60` | Local deviation detector: max expected session/turn duration. |
 | `agentObservability.deviation.notifyOnDivergence` | `false` | Raise a VS Code notification when a configured workflow diverges within a user-request turn. Per-turn divergences always show inline in the timeline regardless. |
 | `agentObservability.workflows` | `[]` | Optional per-repository expected workflows for the local deviation detector. Evaluated on-machine; never uploaded. |
+| `agentObservability.liveUpdates.enabled` | `false` | Run a localhost OTLP receiver and use the extension's own ingested DB as the live source. Turn on via **Enable Live Updates (Copilot OTel)** (requires a full VS Code restart). |
+| `agentObservability.liveUpdates.otelPort` | `0` | Localhost port the OTLP receiver listens on (set automatically by the enable command). |
+| `agentObservability.liveUpdates.debounceMs` | `400` | Coalescing window between ingesting spans and refreshing the views (minimum 100). |
+
+## Real-time updates (Copilot OTLP)
+
+Run **Agent Observability: Enable Live Updates (Copilot OTel)** to stream Copilot's
+telemetry to the extension in real time. It points Copilot Chat's OpenTelemetry
+`otlp-http` exporter at a private `http://127.0.0.1:<port>` receiver the extension
+runs; each pushed span is written into the extension's OWN SQLite database — Copilot's
+exact `agent-traces.db` schema — so the session views, the per-request workflow
+deviation detector, and the divergence notifications all update live off one source,
+with no snapshot polling or WAL lag.
+
+The extension becomes the telemetry **sink**: while live updates are on, Copilot's own
+`agent-traces.db` is no longer fed (a single exporter is active), so the extension reads
+its own DB instead. The receiver binds loopback (`127.0.0.1`) only and nothing is
+uploaded. Because Copilot reads its OTel settings at **application startup**, you must
+fully **quit and reopen VS Code** after enabling — a window reload is not enough. Use
+**Disable Live Updates** to revert.
 
 ## Workflow predicate DSL
 

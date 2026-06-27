@@ -100,6 +100,8 @@ export class TelemetryService {
   private readonly environment: PathEnvironment | undefined;
   private handles: OpenHandle[] = [];
   private cache: CacheEntry = { sessions: new Map() };
+  /** When set + present, the extension's OWN live-OTLP ingest DB (the sink). */
+  private ingestDbPath: string | undefined;
 
   constructor(config: ServiceConfig | Configuration, environment?: PathEnvironment) {
     this.config = config;
@@ -118,6 +120,20 @@ export class TelemetryService {
   /** Tear down the snapshots + connections. Call from extension deactivate(). */
   dispose(): void {
     this.disposeHandles();
+  }
+
+  /**
+   * Point the service at the extension's OWN live-OTLP ingest DB. When set AND the
+   * file exists, it becomes the SOLE source — Copilot's now-unfed (and large) DB is
+   * skipped, so reads stay cheap and reflect the real-time stream. Pass `undefined`
+   * to revert to auto-detecting Copilot's database(s).
+   */
+  setIngestDbPath(dbPath: string | undefined): void {
+    if (dbPath === this.ingestDbPath) {
+      return;
+    }
+    this.ingestDbPath = dbPath;
+    this.refresh();
   }
 
   /** Overview metrics, merged across every open source database. */
@@ -428,14 +444,21 @@ export class TelemetryService {
   private ensureOpen(): OpenHandle[] {
     const resolved = resolveDatabasePaths(this.config, this.environment);
 
-    // When nothing is readable anywhere, still attempt the denied-but-present
-    // candidate so the precise EACCES/EPERM surfaces (snapshot copy throws).
-    const targets =
-      resolved.databases.length > 0
-        ? resolved.databases
-        : resolved.primary.path !== undefined && resolved.primary.exists
-          ? [{ path: resolved.primary.path, source: resolved.primary.source }]
-          : undefined;
+    // When the live-OTLP sink is active and its DB exists, it is the SOLE source —
+    // Copilot's DB is no longer being fed (single exporter) and is large, so skip it.
+    let targets: Array<{ path: string; source: DatabaseSource }> | undefined;
+    if (this.ingestDbPath !== undefined && sourceMtime(this.ingestDbPath) !== undefined) {
+      targets = [{ path: this.ingestDbPath, source: 'ingest' }];
+    } else {
+      // When nothing is readable anywhere, still attempt the denied-but-present
+      // candidate so the precise EACCES/EPERM surfaces (snapshot copy throws).
+      targets =
+        resolved.databases.length > 0
+          ? resolved.databases
+          : resolved.primary.path !== undefined && resolved.primary.exists
+            ? [{ path: resolved.primary.path, source: resolved.primary.source }]
+            : undefined;
+    }
     if (targets === undefined) {
       this.disposeHandles();
       throw missingDbError(resolved.primary.path);
