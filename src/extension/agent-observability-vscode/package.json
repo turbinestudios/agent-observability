@@ -42,6 +42,11 @@
         {
           "id": "agentObservability.sync",
           "name": "Sync"
+        },
+        {
+          "id": "agentObservability.assistant",
+          "name": "AI Helper",
+          "type": "webview"
         }
       ]
     },
@@ -94,6 +99,12 @@
         "icon": "$(key)"
       },
       {
+        "command": "agentObservability.configureSyncRepositories",
+        "title": "Choose Repositories to Sync",
+        "category": "Agent Observability",
+        "icon": "$(filter)"
+      },
+      {
         "command": "agentObservability.toggleConsent",
         "title": "Toggle Cloud Sharing",
         "category": "Agent Observability"
@@ -120,6 +131,18 @@
         "title": "Refresh Session Detail",
         "category": "Agent Observability",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "agentObservability.openAssistant",
+        "title": "Open AI Helper",
+        "category": "Agent Observability",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "agentObservability.newChat",
+        "title": "New AI Helper Chat",
+        "category": "Agent Observability",
+        "icon": "$(add)"
       },
       {
         "command": "agentObservability.enableLiveUpdates",
@@ -159,17 +182,47 @@
         {
           "command": "agentObservability.refresh",
           "when": "view == agentObservability.overview",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "agentObservability.refresh",
           "when": "view == agentObservability.sessions",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "agentObservability.syncNow",
           "when": "view == agentObservability.sync",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentObservability.configureSyncRepositories",
+          "when": "view == agentObservability.sync",
+          "group": "navigation@2"
+        },
+        {
+          "command": "agentObservability.newChat",
+          "when": "view == agentObservability.assistant",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentObservability.openSettings",
+          "when": "view == agentObservability.overview",
+          "group": "navigation@9"
+        },
+        {
+          "command": "agentObservability.openSettings",
+          "when": "view == agentObservability.sessions",
+          "group": "navigation@9"
+        },
+        {
+          "command": "agentObservability.openSettings",
+          "when": "view == agentObservability.assistant",
+          "group": "navigation@9"
+        },
+        {
+          "command": "agentObservability.openSettings",
+          "when": "view == agentObservability.sync",
+          "group": "navigation@9"
         }
       ],
       "editor/title": [
@@ -194,6 +247,31 @@
           "minimum": 5,
           "markdownDescription": "How often background sync uploads aggregate batches, in minutes. Minimum 5."
         },
+        "agentObservability.sync.repositoryMode": {
+          "type": "string",
+          "enum": [
+            "all",
+            "include",
+            "exclude"
+          ],
+          "enumDescriptions": [
+            "Upload aggregates for every repository in your local telemetry (default).",
+            "Upload aggregates ONLY for the repositories listed in sync.repositories.",
+            "Upload aggregates for every repository EXCEPT those listed in sync.repositories."
+          ],
+          "default": "all",
+          "scope": "application",
+          "markdownDescription": "Which repositories are included in cloud sync. Cloud sync reads your MERGED local telemetry, which spans every repository you've used Copilot in — not just the open workspace — so this setting controls which of them leave the machine. `all` (default) uploads every repository; `include` uploads only those in `#agentObservability.sync.repositories#`; `exclude` uploads everything except those. Scoping is privacy-positive — it only ever uploads less. Set at the user level (cannot be overridden per-workspace)."
+        },
+        "agentObservability.sync.repositories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "Sanitized repository URLs (e.g. `https://github.com/org/repo`) that `#agentObservability.sync.repositoryMode#` applies to. Run **Agent Observability: Choose Repositories to Sync** to pick from the repositories found in your local telemetry instead of typing URLs by hand. The special value `unknown` matches sessions with no detected git remote. Hand-typed entries are normalized to canonical form, so `org/repo` shorthand and a trailing `.git` still match."
+        },
         "agentObservability.localTelemetry.enabled": {
           "type": "boolean",
           "default": true,
@@ -209,6 +287,11 @@
           "default": 60,
           "minimum": 1,
           "markdownDescription": "Maximum expected duration of an agent session, in minutes, used by the local workflow-deviation detector to flag overlong sessions (TimeoutExceeded) when no explicit workflow is configured for the repository."
+        },
+        "agentObservability.deviation.notifyOnDivergence": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Show a VS Code notification when a configured workflow diverges within a user-request turn (a step is skipped or runs out of order). Off by default; per-turn divergences are always shown inline in the session-detail timeline regardless."
         },
         "agentObservability.context.acceptedMissingFiles": {
           "type": "array",
@@ -448,18 +531,20 @@
         "agentObservability.liveUpdates.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Enable near-real-time live updates: tail the OpenTelemetry JSON-lines file written by GitHub Copilot Chat's `file` exporter and overlay a live status banner on the session-detail panel as an agent runs. Off by default. Use the **Agent Observability: Enable Live Updates (Copilot OTel)** command to turn this on — it also configures Copilot's `#github.copilot.chat.otel.enabled#` / `exporterType` / `outfile` settings. The file is read locally only; nothing is uploaded. The durable history view continues to read the SQLite database regardless of this setting."
-        },
-        "agentObservability.liveUpdates.otelFilePath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Path to the OpenTelemetry JSON-lines file Copilot's `file` exporter writes (must match `#github.copilot.chat.otel.outfile#`). Leave blank to use the extension-managed default under its global storage. Set explicitly only if you point Copilot's exporter at a custom location."
+          "markdownDescription": "Enable near-real-time updates: run a localhost OpenTelemetry receiver that GitHub Copilot Chat's `otlp-http` exporter pushes spans to, ingest them into the extension's own database (Copilot's schema), and refresh the views + workflow notifications live as an agent runs. Off by default. Use the **Agent Observability: Enable Live Updates (Copilot OTel)** command to turn this on — it configures Copilot's `#github.copilot.chat.otel.enabled#` / `exporterType` / `otlpEndpoint` settings and requires a **full VS Code restart** (a window reload is not enough). Everything stays local; nothing is uploaded."
         },
         "agentObservability.liveUpdates.debounceMs": {
           "type": "number",
           "default": 400,
           "minimum": 100,
-          "markdownDescription": "Coalescing window, in milliseconds, between detecting new spans in the OTel file and reading them. Lower feels more live but costs more frequent reads; minimum 100."
+          "markdownDescription": "Coalescing window, in milliseconds, between ingesting new spans and refreshing the views. Lower feels more live but refreshes more often; minimum 100."
+        },
+        "agentObservability.liveUpdates.otelPort": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "markdownDescription": "Localhost port the extension's OpenTelemetry receiver listens on (set automatically by **Enable Live Updates**; `0` until then). Copilot's `#github.copilot.chat.otel.otlpEndpoint#` is pointed at `http://127.0.0.1:<port>`."
         },
         "agentObservability.claudeCode.enabled": {
           "type": "boolean",

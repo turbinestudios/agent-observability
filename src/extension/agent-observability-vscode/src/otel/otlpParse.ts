@@ -27,7 +27,7 @@
 /** OTLP attribute primitive after decoding the AnyValue wrapper. */
 export type AttrValue = string | number | boolean;
 
-/** A normalized span: only the fields the live view needs. */
+/** A normalized span. */
 export interface OtlpSpan {
   name: string;
   attributes: Map<string, AttrValue>;
@@ -35,6 +35,9 @@ export interface OtlpSpan {
   endUnixNano?: string;
   traceId?: string;
   spanId?: string;
+  parentSpanId?: string;
+  /** Span status: `code` 0=unset, 1=ok, 2=error (accepts numeric or string-enum forms). */
+  status?: { code: number; message?: string };
 }
 
 /** A span paired with its owning resource's (decoded) attributes. */
@@ -42,33 +45,6 @@ export interface FlatSpan {
   span: OtlpSpan;
   resource: Map<string, AttrValue>;
 }
-
-/** Live-relevant fields projected from a single span. */
-export interface LiveFields {
-  /** All ids this span could be keyed by, most-specific first. */
-  candidateIds: string[];
-  /** `gen_ai.operation.name`: chat | execute_tool | execute_hook | core_event | … */
-  operation?: string;
-  spanName: string;
-  model?: string;
-  inputTokens: number;
-  outputTokens: number;
-  cachedTokens: number;
-  toolName?: string;
-  /** Turn index from `turn_start:N` / `turn_end:N`, or `copilot_chat.turn_count`. */
-  turn?: number;
-  /** Friendly sub-agent name from a `runSubagent[-<Name>]` span. */
-  subagentName?: string;
-  timestampMs?: number;
-}
-
-/**
- * Resource/span attribute keys that can carry a session identity. Ordered
- * most-specific first; the extension keys panels by
- * `COALESCE(conversation_id, chat_session_id)`, so we collect every candidate
- * and let the router match against whatever the open panel is keyed by.
- */
-const ID_ATTR_KEYS = ['gen_ai.conversation.id', 'conversation_id', 'chat_session_id'] as const;
 
 /** Decode an OTLP/JSON "AnyValue" wrapper to a primitive, or `undefined`. */
 function decodeAnyValue(value: unknown): AttrValue | undefined {
@@ -135,9 +111,31 @@ function pushSpan(out: FlatSpan[], raw: unknown, resource: Map<string, AttrValue
       endUnixNano: typeof s.endTimeUnixNano === 'string' ? s.endTimeUnixNano : undefined,
       traceId: typeof s.traceId === 'string' ? s.traceId : undefined,
       spanId: typeof s.spanId === 'string' ? s.spanId : undefined,
+      parentSpanId: typeof s.parentSpanId === 'string' ? s.parentSpanId : undefined,
+      status: decodeStatus(s.status),
     },
     resource,
   });
+}
+
+/**
+ * Decode an OTLP span `status`. OTLP/JSON encodes the code as either an integer
+ * (0 unset / 1 ok / 2 error) or the proto enum STRING (`STATUS_CODE_ERROR` …);
+ * tolerate both. Returns `undefined` when no status object is present.
+ */
+function decodeStatus(raw: unknown): { code: number; message?: string } | undefined {
+  if (raw === null || typeof raw !== 'object') {
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  let code = 0;
+  if (typeof r.code === 'number') {
+    code = r.code;
+  } else if (typeof r.code === 'string') {
+    code = r.code.includes('ERROR') ? 2 : r.code.includes('OK') ? 1 : 0;
+  }
+  const message = typeof r.message === 'string' ? r.message : undefined;
+  return message !== undefined ? { code, message } : { code };
 }
 
 /**
@@ -213,74 +211,4 @@ export function parseLine(line: string): FlatSpan[] {
     return []; // partial/garbled line — the tailer re-buffers; skip for now.
   }
   return flattenSpans(parsed);
-}
-
-function strAttr(attrs: Map<string, AttrValue>, key: string): string | undefined {
-  const v = attrs.get(key);
-  return typeof v === 'string' ? v : undefined;
-}
-
-function numAttr(attrs: Map<string, AttrValue>, key: string): number {
-  const v = attrs.get(key);
-  return typeof v === 'number' ? v : 0;
-}
-
-/** Nanosecond epoch string → integer ms, or `undefined` when unparseable. */
-function nanoToMs(nano?: string): number | undefined {
-  if (typeof nano !== 'string' || nano.length === 0) {
-    return undefined;
-  }
-  const n = Number(nano);
-  return Number.isFinite(n) ? Math.floor(n / 1e6) : undefined;
-}
-
-/** Project the live-relevant fields out of one flattened span. */
-export function extractLiveFields(flat: FlatSpan): LiveFields {
-  const { span, resource } = flat;
-  const a = span.attributes;
-
-  const candidateIds: string[] = [];
-  const pushId = (v: AttrValue | undefined): void => {
-    if (typeof v === 'string' && v.length > 0 && !candidateIds.includes(v)) {
-      candidateIds.push(v);
-    }
-  };
-  // Span-level ids are more specific than the resource session id; collect both.
-  for (const key of ID_ATTR_KEYS) {
-    pushId(a.get(key));
-  }
-  pushId(resource.get('session.id'));
-  pushId(span.traceId); // last resort so a session is never wholly unkeyed.
-
-  let turn: number | undefined;
-  const turnMatch = /^turn_(?:start|end):(\d+)$/.exec(span.name);
-  if (turnMatch !== null) {
-    turn = Number(turnMatch[1]);
-  } else {
-    const tc = a.get('copilot_chat.turn_count');
-    if (typeof tc === 'number') {
-      turn = tc;
-    }
-  }
-
-  let subagentName: string | undefined;
-  const subMatch = /^runSubagent(?:-(.+))?$/.exec(span.name);
-  if (subMatch !== null) {
-    subagentName = subMatch[1] ?? strAttr(a, 'gen_ai.agent.name') ?? 'subagent';
-  }
-
-  return {
-    candidateIds,
-    operation: strAttr(a, 'gen_ai.operation.name'),
-    spanName: span.name,
-    model: strAttr(a, 'gen_ai.request.model') ?? strAttr(a, 'gen_ai.response.model'),
-    inputTokens: numAttr(a, 'gen_ai.usage.input_tokens'),
-    outputTokens: numAttr(a, 'gen_ai.usage.output_tokens'),
-    cachedTokens:
-      numAttr(a, 'gen_ai.usage.cached_tokens') || numAttr(a, 'gen_ai.usage.cache_read_input_tokens'),
-    toolName: strAttr(a, 'gen_ai.tool.name'),
-    turn,
-    subagentName,
-    timestampMs: nanoToMs(span.endUnixNano ?? span.startUnixNano),
-  };
 }

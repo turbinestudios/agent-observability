@@ -4,10 +4,79 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Workflow deviation detection is now per user-request turn**, not per session.
+  Each user request (and everything the agent spawned for it) is checked
+  independently; `triggerPredicate` is now a pure applicability **gate** (it no
+  longer filters the analyzed interactions), and a workflow's `steps` are verified
+  as an ordered, not-necessarily-adjacent subsequence over the whole turn. The
+  session-level "Workflow Deviations" overview is removed from the session-detail
+  page; divergences now render inline on the offending request in the timeline.
+
+### Added
+
+- **Proactive divergence notifications** — `agentObservability.deviation.notifyOnDivergence`
+  (off by default) raises a VS Code notification when a configured workflow diverges
+  within a settled user-request turn, with an **Open session** action. Scans run on
+  refresh; a silent baseline avoids notifying for pre-existing history.
+- **`triggerContentPredicate`** — an optional LOCAL-ONLY content gate on a workflow,
+  so relevance can key on the request's intent (e.g. `copilot_chat.user_request`
+  contains a phrase) when no metadata signal distinguishes the task. Evaluated only
+  on the local per-turn path; its deviations are flagged `contentDerived` and never
+  participate in sync.
+- **Real-time updates via a localhost OTLP receiver.** **Enable Live Updates (Copilot
+  OTel)** now points Copilot's `otlp-http` exporter at a private `127.0.0.1` endpoint,
+  ingests the pushed spans into the extension's OWN database (Copilot's exact schema),
+  and refreshes the session views + per-turn divergence notifications live as an agent
+  runs — no snapshot polling, no WAL lag. The extension becomes the telemetry sink;
+  everything stays local (the receiver binds loopback only). Requires a **full VS Code
+  restart** to switch Copilot's exporter (a window reload is not enough). New setting
+  `agentObservability.liveUpdates.otelPort` (set automatically by the command).
+- **Per-repository cloud sync scope.** Cloud sync reads your merged local
+  telemetry, which spans every repository you use Copilot in — not just the open
+  workspace. Two new user-level settings now control which repositories'
+  aggregates may be uploaded: `agentObservability.sync.repositoryMode`
+  (`all` / `include` / `exclude`, default `all` — unchanged behavior) and
+  `agentObservability.sync.repositories`. Both are `application`-scoped, so the
+  policy lives in User settings and can't be silently overridden per-workspace.
+  Filtering happens at the single point where the sync engine selects rows, so it
+  scopes both the aggregate batch and the secondary context-insights batch.
+- Command (category "Agent Observability"): **Choose Repositories to Sync** — a
+  checklist of the repositories found in your local telemetry, pre-checked to the
+  current scope, that writes the selection to User settings. Checking everything
+  writes mode `all`; a subset writes `include`. Surfaced as a title-bar action on
+  the Sync view and via a clickable **Sync scope** row showing how many
+  repositories are eligible to upload.
+- Changing the sync scope now rewinds the sync watermark so newly-included
+  repositories backfill on the next run (re-sending is idempotent server-side).
+- **Open Settings** is now a persistent gear action in the title bar of all views
+  (Overview, Sessions, Sync, AI Helper), not just the empty-state welcome screens.
+
 ## [0.3.0] - 2026-06-26
 
 ### Added
 
+- **AI Helper** — a chat webview in the Agent Observability activity-bar container,
+  backed by the user's own GitHub Copilot license (`vscode.lm`) and grounded in
+  baked-in context files. An empty chat offers quick-command buttons to **generate
+  workflow definitions** from the project's Copilot customization files (instructions,
+  agents, prompts, skills) — deriving the expected agents, their order, and tools from
+  what the project declares, with the repository taken from the workspace git remote —
+  **produce the minimal `.vscode/settings.json`** for a new project, and **summarize
+  the collected logs**, plus free-text questions. Generated config can be copied or
+  applied to workspace settings behind a confirmation (workflows are validated against
+  the production parser and merged by repository).
+- Commands `Agent Observability: Open AI Helper` and
+  `Agent Observability: New AI Helper Chat`.
+- A one-time disclosure gates the first AI Helper use; only safe metadata
+  (sanitized repositories, agent/model/tool names, durations, token/AIU counts) and
+  the user's prompt are sent to Copilot — never raw prompts/responses, tool I/O, or
+  session titles, and never via the cloud-sync path. The **Generate workflows**
+  command additionally sends the contents of the project's customization files (the
+  user's own files, to the user's own Copilot license).
 - **Near-real-time live updates** for the session-detail panel. When enabled, the
   extension tails the OpenTelemetry JSON-lines file written by GitHub Copilot
   Chat's `file` exporter and overlays a live status banner — current activity,

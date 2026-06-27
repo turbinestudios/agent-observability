@@ -55,6 +55,14 @@ export interface SyncStateStore {
   getWatermarkMs(): number | undefined;
   /** Persist a new watermark (the exclusive end of a successfully sent window). */
   setWatermarkMs(value: number): Promise<void>;
+  /**
+   * Forget the watermark so the next run re-scans the full local window. Called
+   * when the repository sync scope changes, so newly-included repositories
+   * backfill from whatever local data remains. Re-sending is idempotent (the
+   * server upserts by `rowKey`), and the local source DB is a short rolling
+   * window, so the catch-up batch is naturally bounded.
+   */
+  clearWatermark(): Promise<void>;
   /** The run history, most-recent-first, capped at {@link MAX_HISTORY}. */
   getHistory(): SyncRun[];
   /** Append a run, evicting the oldest entry beyond {@link MAX_HISTORY}. */
@@ -77,6 +85,10 @@ export class InMemorySyncStateStore implements SyncStateStore {
 
   async setWatermarkMs(value: number): Promise<void> {
     this.watermarkMs = value;
+  }
+
+  async clearWatermark(): Promise<void> {
+    this.watermarkMs = undefined;
   }
 
   getHistory(): SyncRun[] {
@@ -110,6 +122,12 @@ export class GlobalStateSyncStateStore implements SyncStateStore {
 
   async setWatermarkMs(value: number): Promise<void> {
     await this.globalState.update(GlobalStateSyncStateStore.WATERMARK_KEY, value);
+  }
+
+  async clearWatermark(): Promise<void> {
+    // Setting to undefined removes the key from globalState; getWatermarkMs then
+    // reports `undefined` and the next run starts from the earliest local row.
+    await this.globalState.update(GlobalStateSyncStateStore.WATERMARK_KEY, undefined);
   }
 
   getHistory(): SyncRun[] {

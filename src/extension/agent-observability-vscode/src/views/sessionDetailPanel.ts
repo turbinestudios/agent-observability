@@ -3,6 +3,8 @@ import * as crypto from 'node:crypto';
 import { TelemetryService } from '../telemetry/telemetryService';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
 import { WorkflowDeviation } from '../deviation/models';
+import { groupInteractionsByTurn } from '../deviation/turnGrouping';
+import { SessionDetail } from '../telemetry/models';
 import { SessionDataSource, SourceRegistry } from '../sources/sessionSource';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
 import { analyzeContext, AcceptedMissingConfig } from '../context/contextAnalyzer';
@@ -22,12 +24,6 @@ export interface SourceSession {
   sessionKey: string;
 }
 
-/** Per-panel metadata, so live updates and re-renders can find their target. */
-interface PanelMeta {
-  /** Single-session panels: the source + key. Combined panels omit it. */
-  single?: SourceSession;
-}
-
 /**
  * Manages the local session-detail webview panels across BOTH sources.
  *
@@ -35,15 +31,14 @@ interface PanelMeta {
  * sorted key set) so a Copilot and a Claude session that happen to share an id
  * never collide. The detail body is rendered from whichever
  * {@link SessionDataSource} owns the session; Copilot sessions additionally get
- * the local deviation + context-analysis passes (which read Copilot-only span
- * attributes via the concrete {@link TelemetryService}), while Claude sessions
- * run deviations over metadata only and skip context analysis. The cost basis
- * (AIU vs token-priced USD) follows the source.
+ * the context-analysis pass and workflow content predicates (which read
+ * Copilot-only span attributes via the concrete {@link TelemetryService}), while
+ * Claude sessions run the per-turn deviation checks over metadata and skip
+ * context analysis. The cost basis (AIU vs token-priced USD) follows the source.
  */
 export class SessionDetailPanelManager {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
   private readonly rerenderers = new Map<vscode.WebviewPanel, () => void>();
-  private readonly meta = new Map<vscode.WebviewPanel, PanelMeta>();
   private activePanel: vscode.WebviewPanel | undefined;
 
   constructor(
@@ -73,7 +68,6 @@ export class SessionDetailPanelManager {
     );
     panel.iconPath = new vscode.ThemeIcon('comment-discussion');
     this.panels.set(panelKey, panel);
-    this.meta.set(panel, { single: { sourceId, sessionKey } });
     this.rerenderers.set(panel, () => this.render(panel, sourceId, sessionKey));
     this.trackActive(panel);
     panel.onDidDispose(() => {
@@ -127,7 +121,6 @@ export class SessionDetailPanelManager {
     );
     panel.iconPath = new vscode.ThemeIcon('layers');
     this.panels.set(panelKey, panel);
-    this.meta.set(panel, {});
     this.rerenderers.set(panel, () => this.renderCombined(panel, sourceId, keys));
     this.trackActive(panel);
     panel.onDidDispose(() => {
@@ -138,7 +131,11 @@ export class SessionDetailPanelManager {
     this.renderCombined(panel, sourceId, keys);
   }
 
-  /** Re-fetch fresh telemetry and redraw the focused detail panel. */
+  /**
+   * Re-read fresh telemetry from every source and redraw the focused detail
+   * panel — the title-bar Refresh button. Works for both the single and combined
+   * views; a no-op when no detail panel is focused.
+   */
   refreshActive(): void {
     const panel = this.activePanel;
     if (panel === undefined) {
@@ -148,23 +145,7 @@ export class SessionDetailPanelManager {
     this.rerenderers.get(panel)?.();
   }
 
-  /**
-   * Push a near-real-time live-status snapshot to any OPEN Copilot single-session
-   * panel whose key matches a candidate id. Combined panels and Claude panels are
-   * skipped (the OTel bridge is Copilot-only).
-   */
-  pushLiveUpdate(candidateIds: readonly string[], payload: unknown): void {
-    if (candidateIds.length === 0) {
-      return;
-    }
-    for (const [, panel] of this.panels) {
-      const single = this.meta.get(panel)?.single;
-      if (single !== undefined && single.sourceId === 'copilot' && candidateIds.includes(single.sessionKey)) {
-        void panel.webview.postMessage({ type: 'liveUpdate', live: payload });
-      }
-    }
-  }
-
+  /** Track which detail panel is focused so {@link refreshActive} can find it. */
   private trackActive(panel: vscode.WebviewPanel): void {
     if (panel.active) {
       this.activePanel = panel;
@@ -178,24 +159,29 @@ export class SessionDetailPanelManager {
     });
   }
 
+  /** Drop a disposed panel from the rerender registry and active-panel slot. */
   private forget(panel: vscode.WebviewPanel): void {
     this.rerenderers.delete(panel);
-    this.meta.delete(panel);
     if (this.activePanel === panel) {
       this.activePanel = undefined;
     }
   }
 
+  /** Dispose every open panel (extension deactivate). */
   dispose(): void {
     for (const panel of this.panels.values()) {
       panel.dispose();
     }
     this.panels.clear();
     this.rerenderers.clear();
-    this.meta.clear();
     this.activePanel = undefined;
   }
 
+  /**
+   * Register a message handler for webview → extension messages (accept-missing
+   * actions). When a message arrives, the handler updates the workspace
+   * configuration and re-renders.
+   */
   private registerMessageHandler(panel: vscode.WebviewPanel, sourceId: string, sessionKey: string): void {
     panel.webview.onDidReceiveMessage(async (msg: unknown) => {
       if (typeof msg !== 'object' || msg === null) return;
@@ -218,6 +204,7 @@ export class SessionDetailPanelManager {
     });
   }
 
+  /** Read the accepted-missing configuration from workspace settings. */
   private readAcceptedMissing(): AcceptedMissingConfig {
     const config = vscode.workspace.getConfiguration('agentObservability.context');
     return {
@@ -226,7 +213,7 @@ export class SessionDetailPanelManager {
     };
   }
 
-  /** Load detail (+ Copilot deviations/context) and set the panel HTML. */
+  /** Load detail (+ per-turn deviations, Copilot context) and set the panel HTML. */
   private render(panel: vscode.WebviewPanel, sourceId: string, sessionKey: string): void {
     const source = this.sources.get(sourceId);
     if (source === undefined) {
@@ -239,7 +226,7 @@ export class SessionDetailPanelManager {
       return;
     }
     const detail = result.value;
-    const found = this.detectDeviations(source, sessionKey);
+    const turnDeviations = this.detectTurnDeviations(source, sessionKey, detail);
     const costMode: CostMode = source.id === 'claude' ? 'usd' : 'aiu';
 
     // Context analysis reads Copilot-only span attributes; skip for other sources.
@@ -258,7 +245,7 @@ export class SessionDetailPanelManager {
     }
 
     const nonce = makeNonce();
-    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, contextAnalysis, costMode);
+    panel.webview.html = renderSessionDetailHtml(detail, turnDeviations, nonce, contextAnalysis, costMode);
   }
 
   /** Render the COMBINED view for several same-source session keys. */
@@ -274,7 +261,10 @@ export class SessionDetailPanelManager {
       if (!result.ok) {
         continue;
       }
-      sections.push({ detail: result.value, deviations: this.detectDeviations(source, key) });
+      sections.push({
+        detail: result.value,
+        turnDeviations: this.detectTurnDeviations(source, key, result.value),
+      });
     }
     if (sections.length === 0) {
       panel.webview.html = renderMessageHtml('None of the selected sessions could be loaded.');
@@ -288,15 +278,22 @@ export class SessionDetailPanelManager {
   }
 
   /**
-   * Run the deviation detector over a session's safe-metadata interactions. For
-   * Copilot, workflow content predicates read raw span attributes through a
-   * LOCAL-ONLY memoized lookup; for other sources the lookup is empty (metadata
-   * checks — sequence/timeout/failure — still run).
+   * Detect PER-TURN workflow deviations for a session, aligned by index to
+   * `detail.turns`. Interactions are bucketed into the same user-request turns the
+   * detail view renders, then each turn is checked independently. For Copilot,
+   * workflow content predicates read raw span attributes through a LOCAL-ONLY
+   * memoized lookup; for other sources the lookup is empty (the
+   * sequence/missing/timeout checks still run over metadata).
    */
-  private detectDeviations(source: SessionDataSource, sessionKey: string): WorkflowDeviation[] {
+  private detectTurnDeviations(
+    source: SessionDataSource,
+    sessionKey: string,
+    detail: SessionDetail,
+  ): WorkflowDeviation[][] {
+    const empty = detail.turns.map(() => [] as WorkflowDeviation[]);
     const interactions = source.getSessionInteractions(sessionKey);
     if (!interactions.ok) {
-      return [];
+      return empty;
     }
     const attributeCache = new Map<string, ReadonlyMap<string, string>>();
     const contentLookup = (attribute: string): ReadonlyMap<string, string> => {
@@ -311,7 +308,11 @@ export class SessionDetailPanelManager {
       }
       return values;
     };
-    return this.deviations.detectForSession(interactions.value, contentLookup);
+    const turns = groupInteractionsByTurn(
+      interactions.value,
+      detail.turns.map((t) => t.timestampMs),
+    );
+    return this.deviations.detectForTurns(turns, contentLookup);
   }
 }
 

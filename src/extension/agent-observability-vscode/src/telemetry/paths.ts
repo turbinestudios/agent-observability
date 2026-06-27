@@ -27,6 +27,7 @@ export type DatabaseSource =
   | 'insiders'
   | 'server'
   | 'serverInsiders'
+  | 'ingest'
   | 'none';
 
 /** One readable database the resolver found. */

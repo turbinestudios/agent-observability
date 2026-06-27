@@ -142,7 +142,7 @@ export function extractContextObservations(
       if (rel === undefined) {
         continue;
       }
-      let category = entry.category === 'unknown' ? categoryForCustomizationFile(rel) : entry.category;
+      const category = entry.category === 'unknown' ? categoryForCustomizationFile(rel) : entry.category;
       if (category === 'unknown') {
         continue;
       }

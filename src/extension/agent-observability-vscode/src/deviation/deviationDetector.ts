@@ -95,6 +95,40 @@ export class WorkflowDeviationDetector {
   }
 
   /**
+   * Per-TURN detection for the LOCAL session-detail view + notifications.
+   *
+   * Each turn (one user request plus everything it spawned) is analyzed
+   * independently against the configured workflows for its repository; results
+   * are aligned BY INDEX to `turns`. Unlike {@link detectDeviations} there is no
+   * time-gap session grouping and no synthesized default workflow — the caller
+   * supplies the turns and only explicitly configured workflows produce
+   * deviations. `triggerPredicate` gates applicability per turn (see
+   * {@link analyzeTurn}).
+   */
+  detectForTurns(
+    turns: readonly Interaction[][],
+    configs: readonly WorkflowConfig[],
+    contentLookup?: ContentLookup,
+  ): WorkflowDeviation[][] {
+    return turns.map((turn) => {
+      if (turn.length === 0) {
+        return [];
+      }
+      const config = configs.find((c) => equalsIgnoreCase(c.repository, turn[0].repository));
+      if (config === undefined) {
+        return [];
+      }
+      const deviations: WorkflowDeviation[] = [];
+      for (const workflow of config.workflows) {
+        for (const deviation of this.analyzeTurn(turn, workflow, config.repository, contentLookup)) {
+          deviations.push(deviation);
+        }
+      }
+      return deviations;
+    });
+  }
+
+  /**
    * Mirrors C# `AnalyzeSession`, generalized for the predicate DSL.
    *
    * A {@link WorkflowDefinition.triggerPredicate} (when present) scopes the
@@ -109,8 +143,11 @@ export class WorkflowDeviationDetector {
     repository: string,
     contentLookup: ContentLookup | undefined,
   ): WorkflowDeviation[] {
-    const deviations: WorkflowDeviation[] = [];
-    const now = Date.now();
+    // Content-triggered workflows are LOCAL-ONLY per-turn concerns; the
+    // session/sync path never evaluates content for applicability, so skip them.
+    if (workflow.triggerContentPredicate !== undefined) {
+      return [];
+    }
 
     const scoped =
       workflow.triggerPredicate !== undefined
@@ -119,68 +156,157 @@ export class WorkflowDeviationDetector {
 
     // A trigger that matches nothing means this workflow does not apply here.
     if (workflow.triggerPredicate !== undefined && scoped.length === 0) {
-      return deviations;
+      return [];
     }
 
-    const steps = workflow.steps;
-    const useSteps = steps !== undefined && steps.length > 0;
-    const actualSequence = distinct(scoped.map((i) => i.agentName));
-    const stepAnalyses = useSteps ? analyzeSteps(scoped, steps!, contentLookup) : undefined;
+    return runWorkflowChecks(scoped, workflow, repository, contentLookup);
+  }
 
-    // 1. Sequence deviation. The steps-path walk is METADATA-ONLY — ordering is a
-    // property of the agent/operation sequence, not of content. A content
-    // predicate failing on an otherwise in-order run is therefore NOT a reorder;
-    // it surfaces solely as a content-derived MissingSteps below. This keeps a
-    // SequenceDeviation purely metadata-derived (never `contentDerived`) and
-    // avoids double-counting one content failure as both a reorder and a miss.
-    if (workflow.sequenceDeviationAlert) {
-      const deviation = useSteps
-        ? checkStepSequence(scoped, steps!, stepAnalyses!, workflow, repository, now)
-        : checkSequenceDeviation(actualSequence, workflow, repository, now);
-      if (deviation !== undefined) {
-        deviations.push(deviation);
-      }
+  /**
+   * Per-TURN analysis for the LOCAL view + notifications.
+   *
+   * Here {@link WorkflowDefinition.triggerPredicate} is a pure applicability GATE:
+   * the workflow applies to this turn iff at least one of the turn's interactions
+   * matches it, and — unlike {@link analyzeSession} — the trigger does NOT filter
+   * the analyzed set. Every check then runs over the WHOLE turn, so a step may be
+   * satisfied by any interaction in the task, in definition order, not necessarily
+   * adjacent to the trigger. A turn the trigger does not match is not analyzed.
+   */
+  private analyzeTurn(
+    turn: readonly Interaction[],
+    workflow: WorkflowDefinition,
+    repository: string,
+    contentLookup: ContentLookup | undefined,
+  ): WorkflowDeviation[] {
+    if (!turnMatchesTrigger(turn, workflow, contentLookup)) {
+      return [];
     }
-
-    // 2. Timeout exceeded.
-    if (workflow.timeoutExceededAlert) {
-      const deviation = checkTimeoutExceeded(scoped, workflow, repository, now);
-      if (deviation !== undefined) {
-        deviations.push(deviation);
-      }
+    const deviations = runWorkflowChecks(turn, workflow, repository, contentLookup);
+    // A workflow whose RELEVANCE depended on local-only content is itself
+    // local-only: flag every resulting deviation so no sync/export path can carry it.
+    if (workflow.triggerContentPredicate !== undefined) {
+      return deviations.map((d) => ({ ...d, contentDerived: true }));
     }
-
-    // 3. Missing steps.
-    if (workflow.sequenceDeviationAlert) {
-      if (useSteps) {
-        for (const deviation of checkStepMissing(
-          scoped,
-          steps!,
-          stepAnalyses!,
-          workflow,
-          repository,
-          now,
-        )) {
-          deviations.push(deviation);
-        }
-      } else {
-        const deviation = checkMissingSteps(actualSequence, workflow, repository, now);
-        if (deviation !== undefined) {
-          deviations.push(deviation);
-        }
-      }
-    }
-
-    // 4. Tool usage anomaly.
-    if (workflow.toolUsageAnomalyAlert) {
-      const deviation = checkToolUsageAnomaly(scoped, workflow, repository, now);
-      if (deviation !== undefined) {
-        deviations.push(deviation);
-      }
-    }
-
     return deviations;
   }
+}
+
+/**
+ * Whether a workflow's trigger applies to a turn on the per-turn path. The
+ * metadata {@link WorkflowDefinition.triggerPredicate} (if any) must match some
+ * interaction, AND the {@link WorkflowDefinition.triggerContentPredicate} (if any)
+ * must match the turn's ANCHOR (earliest interaction — the user-request span)
+ * content. A content gate that cannot be evaluated (no content lookup, or the
+ * anchor carries no span id) is treated as NOT applicable: it fails CLOSED so a
+ * content-scoped workflow never fires everywhere when content is unwired — the
+ * mirror of the step content predicate's fail-OPEN inertness, which guards the
+ * opposite false alarm.
+ */
+function turnMatchesTrigger(
+  turn: readonly Interaction[],
+  workflow: WorkflowDefinition,
+  contentLookup: ContentLookup | undefined,
+): boolean {
+  const meta = workflow.triggerPredicate;
+  if (meta !== undefined && !turn.some((i) => matchesPredicate(i, meta))) {
+    return false;
+  }
+  const contentPredicate = workflow.triggerContentPredicate;
+  if (contentPredicate !== undefined) {
+    if (contentLookup === undefined || turn.length === 0) {
+      return false;
+    }
+    const anchor = turn.reduce(
+      (earliest, i) => (i.timestampMs < earliest.timestampMs ? i : earliest),
+      turn[0],
+    );
+    const spanId = anchor.spanId;
+    if (spanId === undefined || spanId.length === 0) {
+      return false;
+    }
+    const value = contentLookup(contentPredicate.attribute).get(spanId) ?? '';
+    if (!matchesContent(value, contentPredicate)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Run the four workflow checks over a set of interactions already determined to
+ * be IN SCOPE for the workflow. Shared by the session-scoped path
+ * ({@link WorkflowDeviationDetector} `analyzeSession`, where `set` is the
+ * trigger-filtered subset) and the per-turn path (`analyzeTurn`, where `set` is
+ * the whole turn). The set is time-ordered here so callers need not pre-sort.
+ */
+function runWorkflowChecks(
+  set: readonly Interaction[],
+  workflow: WorkflowDefinition,
+  repository: string,
+  contentLookup: ContentLookup | undefined,
+): WorkflowDeviation[] {
+  const ordered = [...set].sort((a, b) => a.timestampMs - b.timestampMs);
+  const deviations: WorkflowDeviation[] = [];
+  const now = Date.now();
+
+  const steps = workflow.steps;
+  const useSteps = steps !== undefined && steps.length > 0;
+  const actualSequence = distinct(ordered.map((i) => i.agentName));
+  const stepAnalyses = useSteps ? analyzeSteps(ordered, steps!, contentLookup) : undefined;
+
+  // 1. Sequence deviation. The steps-path walk is METADATA-ONLY — ordering is a
+  // property of the agent/operation sequence, not of content. A content
+  // predicate failing on an otherwise in-order run is therefore NOT a reorder;
+  // it surfaces solely as a content-derived MissingSteps below. This keeps a
+  // SequenceDeviation purely metadata-derived (never `contentDerived`) and
+  // avoids double-counting one content failure as both a reorder and a miss.
+  if (workflow.sequenceDeviationAlert) {
+    const deviation = useSteps
+      ? checkStepSequence(ordered, steps!, stepAnalyses!, workflow, repository, now)
+      : checkSequenceDeviation(actualSequence, workflow, repository, now);
+    if (deviation !== undefined) {
+      deviations.push(deviation);
+    }
+  }
+
+  // 2. Timeout exceeded.
+  if (workflow.timeoutExceededAlert) {
+    const deviation = checkTimeoutExceeded(ordered, workflow, repository, now);
+    if (deviation !== undefined) {
+      deviations.push(deviation);
+    }
+  }
+
+  // 3. Missing steps.
+  if (workflow.sequenceDeviationAlert) {
+    if (useSteps) {
+      for (const deviation of checkStepMissing(
+        ordered,
+        steps!,
+        stepAnalyses!,
+        workflow,
+        repository,
+        now,
+      )) {
+        deviations.push(deviation);
+      }
+    } else {
+      const deviation = checkMissingSteps(actualSequence, workflow, repository, now);
+      if (deviation !== undefined) {
+        deviations.push(deviation);
+      }
+    }
+  }
+
+  // 4. Tool usage anomaly.
+  if (workflow.toolUsageAnomalyAlert) {
+    const deviation = checkToolUsageAnomaly(ordered, workflow, repository, now);
+    if (deviation !== undefined) {
+      deviations.push(deviation);
+    }
+  }
+
+  return deviations;
 }
 
 /**

@@ -36,6 +36,7 @@ interface RawWorkflow {
   timeoutExceededAlert?: unknown;
   toolUsageAnomalyAlert?: unknown;
   triggerPredicate?: unknown;
+  triggerContentPredicate?: unknown;
   steps?: unknown;
 }
 
@@ -104,6 +105,12 @@ function parseWorkflow(w: RawWorkflow, defaultMaxMs: number): WorkflowDefinition
       : defaultMaxMs;
 
   const triggerPredicate = parseStepPredicate(w.triggerPredicate);
+  const triggerContentPredicate = parseContentPredicate(w.triggerContentPredicate);
+  if (triggerContentPredicate === 'invalid') {
+    // A present-but-malformed content trigger (e.g. unsupported attribute) would
+    // silently widen the gate; skip the whole workflow rather than mis-scope it.
+    return undefined;
+  }
   const steps = Array.isArray(w.steps)
     ? w.steps.map(parseStep).filter((s): s is WorkflowStep => s !== undefined)
     : [];
@@ -121,6 +128,9 @@ function parseWorkflow(w: RawWorkflow, defaultMaxMs: number): WorkflowDefinition
   };
   if (triggerPredicate !== undefined) {
     definition.triggerPredicate = triggerPredicate;
+  }
+  if (triggerContentPredicate !== undefined) {
+    definition.triggerContentPredicate = triggerContentPredicate;
   }
   // Attach `steps` only when at least one valid step parsed, so the detector
   // cleanly falls back to the agent-name `expectedSequence` path otherwise.

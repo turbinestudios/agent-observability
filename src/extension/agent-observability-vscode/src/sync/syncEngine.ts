@@ -8,6 +8,7 @@ import {
 } from '../aggregate/contextInsightsExtractor';
 import { buildContextInsightsBatch } from '../aggregate/contextInsightsAggregator';
 import { computeCanSync, describeSyncBlock } from '../consent/syncGate';
+import { RepoSyncPolicy, isRepositoryIncluded } from '../aggregate/repoSyncPolicy';
 import { DiscoveryEventRow } from '../context/discoveryParser';
 import { SyncClient, SyncOutcome, isTransient } from './syncClient';
 import { SyncRun, SyncRunOutcome, SyncStateStore } from './syncState';
@@ -43,6 +44,8 @@ export const systemClock: Clock = { nowMs: () => Date.now() };
 export interface SyncEngineConfig {
   getDashboardUrl(): string;
   isSyncEnabled(): boolean;
+  /** Which repositories' rows are allowed to upload (default: all). */
+  getRepoSyncPolicy(): RepoSyncPolicy;
 }
 
 /** Consent surface the engine reads (satisfied by {@link ConsentManager}). */
@@ -253,9 +256,18 @@ export class SyncEngine {
       return { status: 'upToDate' };
     }
 
-    // c. BUILD — only the rows inside [start, end). buildBatch re-bins/skips, but
-    // we pre-filter so the batch window matches the rows it carries.
-    const rows = allRows.filter((r) => r.startTimeMs >= start && r.startTimeMs < end);
+    // c. BUILD — only the rows inside [start, end) AND within the repository
+    // sync scope. buildBatch re-bins/skips, but we pre-filter so the batch window
+    // matches the rows it carries. Filtering here scopes BOTH the aggregate batch
+    // and the secondary context-insights batch (which derives from the same rows),
+    // so an excluded repository's data never leaves the machine via either path.
+    const policy = this.config.getRepoSyncPolicy();
+    const rows = allRows.filter(
+      (r) =>
+        r.startTimeMs >= start &&
+        r.startTimeMs < end &&
+        isRepositoryIncluded(r.repository, policy),
+    );
     const saltHex = await this.secrets.getOrCreatePseudonymSalt();
     const identity = getIdentityInput(this.options.workspaceCwd, this.options.machineId);
     const developerId = computeDeveloperId(saltHex, identity.input);

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { WorkflowConfig } from '../deviation/models';
 import { normalizeExtensions } from '../telemetry/locAnalysis';
+import { buildRepoSyncPolicy, RepoSyncPolicy } from '../aggregate/repoSyncPolicy';
 import { MIN_SESSION_MINUTES, parseWorkflowConfigs } from './workflowParsing';
 
 export { MIN_SESSION_MINUTES } from './workflowParsing';
@@ -32,15 +33,18 @@ export const DASHBOARD_INGESTION_URL =
 export const ConfigKeys = {
   syncEnabled: 'sync.enabled',
   syncIntervalMinutes: 'sync.intervalMinutes',
+  syncRepositoryMode: 'sync.repositoryMode',
+  syncRepositories: 'sync.repositories',
   localTelemetryEnabled: 'localTelemetry.enabled',
   sqlitePath: 'sqlitePath',
   maxSessionMinutes: 'deviation.maxSessionMinutes',
+  notifyOnDivergence: 'deviation.notifyOnDivergence',
   workflows: 'workflows',
   analysisCodeFileExtensions: 'analysis.codeFileExtensions',
   analysisDocFileExtensions: 'analysis.docFileExtensions',
   liveUpdatesEnabled: 'liveUpdates.enabled',
-  liveOtelFilePath: 'liveUpdates.otelFilePath',
   liveDebounceMs: 'liveUpdates.debounceMs',
+  liveOtelPort: 'liveUpdates.otelPort',
   claudeEnabled: 'claudeCode.enabled',
   claudeProjectsPath: 'claudeCode.projectsPath',
   claudeScanDepth: 'claudeCode.scanDepth',
@@ -51,9 +55,12 @@ export const ConfigKeys = {
 export const ConfigDefaults = {
   syncEnabled: false,
   syncIntervalMinutes: 60,
+  syncRepositoryMode: 'all',
+  syncRepositories: [] as readonly string[],
   localTelemetryEnabled: true,
   sqlitePath: '',
   maxSessionMinutes: 60,
+  notifyOnDivergence: false,
   analysisCodeFileExtensions: [
     '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.java', '.c',
     '.cc', '.cpp', '.h', '.hpp', '.cs', '.go', '.rs', '.rb', '.php',
@@ -65,8 +72,8 @@ export const ConfigDefaults = {
     '.md', '.mdx', '.markdown', '.rst', '.txt', '.adoc', '.asciidoc',
   ] as readonly string[],
   liveUpdatesEnabled: false,
-  liveOtelFilePath: '',
   liveDebounceMs: 400,
+  liveOtelPort: 0,
   claudeEnabled: true,
   claudeProjectsPath: '',
   claudeScanDepth: 8,
@@ -120,6 +127,26 @@ export class Configuration {
     return Math.max(MIN_SYNC_INTERVAL_MINUTES, Math.floor(raw));
   }
 
+  /**
+   * Per-repository sync scoping policy. Resolves the `sync.repositoryMode` +
+   * `sync.repositories` settings into a normalized {@link RepoSyncPolicy} the
+   * sync engine and preview apply to decide which repositories' aggregates leave
+   * the machine. Defaults to `all` (every repository — the historical behavior),
+   * and a hand-edited invalid mode safely falls back to `all`.
+   */
+  getRepoSyncPolicy(): RepoSyncPolicy {
+    const mode = this.config().get<string>(
+      ConfigKeys.syncRepositoryMode,
+      ConfigDefaults.syncRepositoryMode,
+    );
+    const raw = this.config().get<unknown>(
+      ConfigKeys.syncRepositories,
+      ConfigDefaults.syncRepositories as unknown as string[],
+    );
+    const list = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [];
+    return buildRepoSyncPolicy(mode, list);
+  }
+
   /** Feature flag: whether the local telemetry view is enabled. */
   isLocalTelemetryEnabled(): boolean {
     return this.config().get<boolean>(
@@ -152,6 +179,19 @@ export class Configuration {
       return ConfigDefaults.maxSessionMinutes;
     }
     return Math.max(MIN_SESSION_MINUTES, Math.floor(raw));
+  }
+
+  /**
+   * Whether to raise a VS Code notification when a configured workflow diverges
+   * within a user-request turn (a step skipped or out of order). Off by default;
+   * the per-turn divergences are always shown inline in the session-detail
+   * timeline regardless of this flag.
+   */
+  isNotifyOnDivergenceEnabled(): boolean {
+    return this.config().get<boolean>(
+      ConfigKeys.notifyOnDivergence,
+      ConfigDefaults.notifyOnDivergence,
+    );
   }
 
   /**
@@ -198,29 +238,16 @@ export class Configuration {
   }
 
   /**
-   * Whether near-real-time live updates are enabled: tail Copilot's OTel
-   * file-exporter output and overlay a live status banner on the session-detail
-   * panel. Off by default; the **Enable Live Updates** command flips this and
-   * configures Copilot's `github.copilot.chat.otel.*` settings.
+   * Whether near-real-time live updates are enabled: run a localhost OTLP receiver
+   * that Copilot's `otlp-http` exporter pushes spans to, ingest them into the
+   * extension's own DB, and refresh the views live. Off by default; the **Enable
+   * Live Updates** command flips this and configures Copilot's `otel.*` settings.
    */
   isLiveUpdatesEnabled(): boolean {
     return this.config().get<boolean>(
       ConfigKeys.liveUpdatesEnabled,
       ConfigDefaults.liveUpdatesEnabled,
     );
-  }
-
-  /**
-   * Path to the OTel JSON-lines file written by Copilot's `file` exporter.
-   * Returns `undefined` (not '') when blank so callers fall back to the default
-   * under the extension's global storage.
-   */
-  getLiveOtelFilePath(): string | undefined {
-    const value = this.config().get<string>(
-      ConfigKeys.liveOtelFilePath,
-      ConfigDefaults.liveOtelFilePath,
-    ).trim();
-    return value.length > 0 ? value : undefined;
   }
 
   /**
@@ -237,6 +264,16 @@ export class Configuration {
       return ConfigDefaults.liveDebounceMs;
     }
     return Math.max(MIN_LIVE_DEBOUNCE_MS, Math.floor(raw));
+  }
+
+  /**
+   * Localhost port the live-OTLP receiver listens on, written by the Enable Live
+   * Updates command. `0` (the default) means "not configured yet". Clamped to a
+   * valid TCP port range; anything else falls back to 0.
+   */
+  getLiveOtelPort(): number {
+    const raw = this.config().get<number>(ConfigKeys.liveOtelPort, ConfigDefaults.liveOtelPort);
+    return Number.isFinite(raw) && raw > 0 && raw < 65536 ? Math.floor(raw) : 0;
   }
 
   /**

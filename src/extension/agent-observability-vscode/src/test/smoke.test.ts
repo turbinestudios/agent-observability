@@ -24,6 +24,8 @@ interface ViewContribution {
 interface ConfigProperty {
   default: unknown;
   minimum?: number;
+  scope?: string;
+  enum?: string[];
 }
 interface Manifest {
   name: string;
@@ -49,11 +51,14 @@ const EXPECTED_COMMANDS = [
   'agentObservability.syncNow',
   'agentObservability.openSettings',
   'agentObservability.setApiKey',
+  'agentObservability.configureSyncRepositories',
   'agentObservability.toggleConsent',
   'agentObservability.previewPayload',
   'agentObservability.openSession',
   'agentObservability.openCombinedSession',
   'agentObservability.refreshSessionDetail',
+  'agentObservability.openAssistant',
+  'agentObservability.newChat',
   'agentObservability.enableLiveUpdates',
   'agentObservability.disableLiveUpdates',
 ] as const;
@@ -62,22 +67,26 @@ const EXPECTED_VIEWS = [
   'agentObservability.overview',
   'agentObservability.sessions',
   'agentObservability.sync',
+  'agentObservability.assistant',
 ] as const;
 
 const EXPECTED_CONFIG_KEYS = [
   'agentObservability.sync.enabled',
   'agentObservability.sync.intervalMinutes',
+  'agentObservability.sync.repositoryMode',
+  'agentObservability.sync.repositories',
   'agentObservability.localTelemetry.enabled',
   'agentObservability.sqlitePath',
   'agentObservability.deviation.maxSessionMinutes',
+  'agentObservability.deviation.notifyOnDivergence',
   'agentObservability.context.acceptedMissingFiles',
   'agentObservability.context.acceptedMissingSources',
   'agentObservability.workflows',
   'agentObservability.analysis.codeFileExtensions',
   'agentObservability.analysis.docFileExtensions',
   'agentObservability.liveUpdates.enabled',
-  'agentObservability.liveUpdates.otelFilePath',
   'agentObservability.liveUpdates.debounceMs',
+  'agentObservability.liveUpdates.otelPort',
   'agentObservability.claudeCode.enabled',
   'agentObservability.claudeCode.projectsPath',
   'agentObservability.claudeCode.scanDepth',
@@ -121,6 +130,19 @@ describe('manifest contract is stable', () => {
     expect(props['agentObservability.sqlitePath'].default).toBe('');
     expect(props['agentObservability.claudeCode.enabled'].default).toBe(true);
     expect(props['agentObservability.claudeCode.maxSessions'].default).toBe(150);
+  });
+
+  it('declares the per-repository sync-scope settings, application-scoped', () => {
+    const props = manifest.contributes.configuration.properties;
+    const mode = props['agentObservability.sync.repositoryMode'];
+    const repos = props['agentObservability.sync.repositories'];
+    // Default preserves the historical "upload all repositories" behavior.
+    expect(mode.default).toBe('all');
+    expect(mode.enum).toEqual(['all', 'include', 'exclude']);
+    expect(repos.default).toEqual([]);
+    // Scope is inherently cross-workspace, so it must be user-level only.
+    expect(mode.scope).toBe('application');
+    expect(repos.scope).toBe('application');
   });
 });
 

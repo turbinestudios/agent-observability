@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderCombinedSessionDetailHtml, CombinedSessionView } from './sessionDetailHtml';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
-import { SessionDetail } from '../telemetry/models';
+import { SessionDetail, SessionTurn } from '../telemetry/models';
 import { DeviationType, WorkflowDeviation } from '../deviation/models';
 
 /**
@@ -53,12 +53,15 @@ function session(over: Partial<SessionDetail['summary']>, detail: Partial<Sessio
   };
 }
 
-function viewFor(sessions: SessionDetail[], deviations: readonly WorkflowDeviation[][] = []): CombinedSessionView {
+function viewFor(
+  sessions: SessionDetail[],
+  turnDeviations: readonly (readonly WorkflowDeviation[][])[] = [],
+): CombinedSessionView {
   return {
     combined: combineSessionDetails(sessions),
     sections: sessions.map((detail, i) => ({
       detail,
-      deviations: deviations[i] ?? [],
+      turnDeviations: turnDeviations[i] ?? [],
     })),
   };
 }
@@ -166,8 +169,26 @@ describe('renderCombinedSessionDetailHtml', () => {
     expect(html).toMatch(/<td class="n">20<\/td>\s*<td class="n">3<\/td>\s*<td class="n">7<\/td>\s*<td class="n">1<\/td>/);
   });
 
-  it('renders each session\'s own deviations within its section', () => {
-    const a = session({ sessionId: 'a-1' });
+  it('renders each session\'s own per-turn deviations within its section', () => {
+    const turn: SessionTurn = {
+      timestampMs: 1_000,
+      agentMode: 'agent',
+      model: 'gpt-test',
+      durationMs: 10,
+      success: true,
+      userRequest: 'x',
+      llmCalls: 1,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      reasoningTokens: 0,
+      linesOfCode: 0,
+      linesOfDoc: 0,
+      linesOfCodeRemoved: 0,
+      linesOfDocRemoved: 0,
+      events: [],
+    };
+    const a = session({ sessionId: 'a-1' }, { turns: [turn] });
     const b = session({ sessionId: 'b-2' });
     const deviation: WorkflowDeviation = {
       repository: 'https://github.com/org/repo',
@@ -177,7 +198,8 @@ describe('renderCombinedSessionDetailHtml', () => {
       detectedAt: 1_000,
     };
 
-    const html = renderCombinedSessionDetailHtml(viewFor([a, b], [[deviation], []]), NONCE);
+    // Per-session, per-turn: session a's single turn carries the deviation.
+    const html = renderCombinedSessionDetailHtml(viewFor([a, b], [[[deviation]], []]), NONCE);
 
     expect(html).toContain('session a deviated');
     expect(html).toContain('wf-a');
