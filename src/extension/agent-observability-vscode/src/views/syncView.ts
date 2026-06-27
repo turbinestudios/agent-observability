@@ -4,6 +4,7 @@ import { TelemetryService } from '../telemetry/telemetryService';
 import { ConsentManager } from '../consent/consentManager';
 import { SecretManager } from '../secrets/secretManager';
 import { Commands } from '../commands';
+import { isRepositoryIncluded } from '../aggregate/repoSyncPolicy';
 import { WHAT_IS_SHARED, WHAT_IS_NOT_SHARED, DISCLOSURE_SUMMARY } from '../consent/consentDisclosure';
 import { SyncStateStore, SyncRun, SyncRunOutcome } from '../sync/syncState';
 
@@ -96,6 +97,8 @@ export class SyncViewProvider implements vscode.TreeDataProvider<SyncItem> {
           : 'Background sync is off (default). Enable agentObservability.sync.enabled to upload periodically. Sync Now always works manually.',
         new vscode.ThemeIcon(backgroundOn ? 'sync' : 'sync-ignored'),
       ),
+      // Repository scope (which repos are eligible to upload). Clickable → picker.
+      this.syncScopeRow(),
       new SyncItem(
         `Dashboard URL: ${dashboardUrl}`,
         'Built-in cloud ingestion endpoint. Aggregates are delivered here when cloud sharing is on and an API key is set.',
@@ -150,6 +153,36 @@ export class SyncViewProvider implements vscode.TreeDataProvider<SyncItem> {
       `${formatTime(run.startedAtMs)} — ${describeOutcome(run)}`,
       run.message ?? `Outcome: ${run.outcome}.`,
       new vscode.ThemeIcon(iconForOutcome(run.outcome)),
+    );
+  }
+
+  /**
+   * Repository scope row: how many of the locally-known repositories are
+   * eligible to upload. Clickable to open the "Choose Repositories to Sync"
+   * picker. Reads local telemetry only; nothing is uploaded.
+   */
+  private syncScopeRow(): SyncItem {
+    const policy = this.config.getRepoSyncPolicy();
+    const reposResult = this.telemetry.getDistinctRepositories();
+    const repos = reposResult.ok ? reposResult.value : [];
+    const command = { command: Commands.configureSyncRepositories, title: 'Choose Repositories to Sync' };
+
+    if (policy.mode === 'all') {
+      const label = repos.length > 0 ? `Sync scope: all repositories (${repos.length})` : 'Sync scope: all repositories';
+      return new SyncItem(
+        label,
+        'Every repository in your local telemetry is eligible to upload (default). Click to choose a subset. Cloud sync spans all repositories you use Copilot in, not just the open workspace.',
+        new vscode.ThemeIcon('globe'),
+        command,
+      );
+    }
+
+    const includedCount = repos.filter((r) => isRepositoryIncluded(r, policy)).length;
+    return new SyncItem(
+      `Sync scope: ${includedCount} of ${repos.length} repositories`,
+      `Only a subset of repositories is eligible to upload (mode: ${policy.mode}). Aggregates from the others stay local. Click to change the selection.`,
+      new vscode.ThemeIcon('filter'),
+      command,
     );
   }
 

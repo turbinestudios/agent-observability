@@ -371,6 +371,25 @@ export class TelemetryService {
   }
 
   /**
+   * The distinct sanitized repositories present in local telemetry, sorted.
+   * Drives the "Choose Repositories to Sync" picker so users select from what
+   * actually exists rather than typing canonical URLs. Includes the literal
+   * `unknown` when sessions have no detected git remote. Reads on-machine data
+   * only — nothing is uploaded.
+   */
+  getDistinctRepositories(): Result<string[]> {
+    const rows = this.getAggregationRows();
+    if (!rows.ok) {
+      return rows;
+    }
+    const repositories = new Set<string>();
+    for (const row of rows.value) {
+      repositories.add(row.repository);
+    }
+    return { ok: true, value: [...repositories].sort() };
+  }
+
+  /**
    * Full session drill-down for the LOCAL detail panel: summary header plus a
    * chronological timeline that MAY carry local-only raw content
    * (`userRequest`). Not cached. The session is looked up in each source

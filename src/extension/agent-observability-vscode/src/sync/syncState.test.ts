@@ -41,6 +41,13 @@ describe.each([
     expect(store.getWatermarkMs()).toBe(1234);
   });
 
+  it('clears the watermark back to undefined', async () => {
+    const store = make();
+    await store.setWatermarkMs(1234);
+    await store.clearWatermark();
+    expect(store.getWatermarkMs()).toBeUndefined();
+  });
+
   it('returns history most-recent-first', async () => {
     const store = make();
     await store.recordRun(run(1));

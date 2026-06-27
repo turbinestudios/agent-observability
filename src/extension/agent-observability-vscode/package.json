@@ -99,6 +99,12 @@
         "icon": "$(key)"
       },
       {
+        "command": "agentObservability.configureSyncRepositories",
+        "title": "Choose Repositories to Sync",
+        "category": "Agent Observability",
+        "icon": "$(filter)"
+      },
+      {
         "command": "agentObservability.toggleConsent",
         "title": "Toggle Cloud Sharing",
         "category": "Agent Observability"
@@ -176,22 +182,47 @@
         {
           "command": "agentObservability.refresh",
           "when": "view == agentObservability.overview",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "agentObservability.refresh",
           "when": "view == agentObservability.sessions",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "agentObservability.syncNow",
           "when": "view == agentObservability.sync",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentObservability.configureSyncRepositories",
+          "when": "view == agentObservability.sync",
+          "group": "navigation@2"
         },
         {
           "command": "agentObservability.newChat",
           "when": "view == agentObservability.assistant",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentObservability.openSettings",
+          "when": "view == agentObservability.overview",
+          "group": "navigation@9"
+        },
+        {
+          "command": "agentObservability.openSettings",
+          "when": "view == agentObservability.sessions",
+          "group": "navigation@9"
+        },
+        {
+          "command": "agentObservability.openSettings",
+          "when": "view == agentObservability.assistant",
+          "group": "navigation@9"
+        },
+        {
+          "command": "agentObservability.openSettings",
+          "when": "view == agentObservability.sync",
+          "group": "navigation@9"
         }
       ],
       "editor/title": [
@@ -215,6 +246,31 @@
           "default": 60,
           "minimum": 5,
           "markdownDescription": "How often background sync uploads aggregate batches, in minutes. Minimum 5."
+        },
+        "agentObservability.sync.repositoryMode": {
+          "type": "string",
+          "enum": [
+            "all",
+            "include",
+            "exclude"
+          ],
+          "enumDescriptions": [
+            "Upload aggregates for every repository in your local telemetry (default).",
+            "Upload aggregates ONLY for the repositories listed in sync.repositories.",
+            "Upload aggregates for every repository EXCEPT those listed in sync.repositories."
+          ],
+          "default": "all",
+          "scope": "application",
+          "markdownDescription": "Which repositories are included in cloud sync. Cloud sync reads your MERGED local telemetry, which spans every repository you've used Copilot in — not just the open workspace — so this setting controls which of them leave the machine. `all` (default) uploads every repository; `include` uploads only those in `#agentObservability.sync.repositories#`; `exclude` uploads everything except those. Scoping is privacy-positive — it only ever uploads less. Set at the user level (cannot be overridden per-workspace)."
+        },
+        "agentObservability.sync.repositories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "Sanitized repository URLs (e.g. `https://github.com/org/repo`) that `#agentObservability.sync.repositoryMode#` applies to. Run **Agent Observability: Choose Repositories to Sync** to pick from the repositories found in your local telemetry instead of typing URLs by hand. The special value `unknown` matches sessions with no detected git remote. Hand-typed entries are normalized to canonical form, so `org/repo` shorthand and a trailing `.git` still match."
         },
         "agentObservability.localTelemetry.enabled": {
           "type": "boolean",
