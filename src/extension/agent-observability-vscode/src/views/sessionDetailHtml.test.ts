@@ -56,6 +56,27 @@ const detail: SessionDetail = {
   treeModelTurns: [],
 };
 
+/** A single user-request turn, so per-turn divergence chips have a place to render. */
+const turnFixture: SessionTurn = {
+  timestampMs: 1_000_000,
+  agentMode: 'agent',
+  model: 'gpt-test',
+  durationMs: 1000,
+  success: true,
+  userRequest: 'do the thing',
+  llmCalls: 1,
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedTokens: 0,
+  reasoningTokens: 0,
+  linesOfCode: 0,
+  linesOfDoc: 0,
+  linesOfCodeRemoved: 0,
+  linesOfDocRemoved: 0,
+  events: [],
+};
+const detailWithTurn: SessionDetail = { ...detail, turns: [turnFixture] };
+
 function deviation(overrides: Partial<WorkflowDeviation>): WorkflowDeviation {
   return {
     repository: 'https://github.com/org/repo',
@@ -70,29 +91,31 @@ function deviation(overrides: Partial<WorkflowDeviation>): WorkflowDeviation {
 describe('renderSessionDetailHtml — local-only badge', () => {
   // The `.badge-local` CSS rule is always in the <style> block, so assert on the
   // rendered badge ELEMENT (class attribute + visible text), not the bare class.
-  it('renders a "Local only" badge for a content-derived deviation', () => {
+  it('renders a "Local only" badge for a content-derived per-turn deviation', () => {
     const html = renderSessionDetailHtml(
-      detail,
-      [deviation({ contentDerived: true, description: "Workflow step 'no-secrets' content condition not met." })],
+      detailWithTurn,
+      [[deviation({ contentDerived: true, description: "Workflow step 'no-secrets' content condition not met." })]],
       NONCE,
     );
+    expect(html).toContain('class="turn-deviations"');
     expect(html).toContain('class="badge badge-local"');
     expect(html).toContain('>Local only</span>');
   });
 
   it('does not render the badge for a metadata-only deviation', () => {
     const html = renderSessionDetailHtml(
-      detail,
-      [deviation({ type: DeviationType.TimeoutExceeded, description: 'too long' })],
+      detailWithTurn,
+      [[deviation({ type: DeviationType.TimeoutExceeded, description: 'too long' })]],
       NONCE,
     );
+    expect(html).toContain('class="turn-deviations"');
     expect(html).not.toContain('class="badge badge-local"');
     expect(html).not.toContain('>Local only</span>');
   });
 
-  it('shows the no-deviations panel when there are none', () => {
-    const html = renderSessionDetailHtml(detail, [], NONCE);
-    expect(html).toContain('No deviations detected');
+  it('renders no divergence chips when the turn has none', () => {
+    const html = renderSessionDetailHtml(detailWithTurn, [[]], NONCE);
+    expect(html).not.toContain('class="turn-deviations"');
     expect(html).not.toContain('class="badge badge-local"');
   });
 
@@ -607,8 +630,8 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
       {
         combined: combineSessionDetails([a, b]),
         sections: [
-          { detail: a, deviations: [] },
-          { detail: b, deviations: [] },
+          { detail: a, turnDeviations: [] },
+          { detail: b, turnDeviations: [] },
         ],
       },
       NONCE,

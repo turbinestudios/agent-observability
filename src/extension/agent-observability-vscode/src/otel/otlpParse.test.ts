@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractLiveFields, flattenSpans, parseLine } from './otlpParse';
+import { flattenSpans, parseLine } from './otlpParse';
 
 /**
  * Fixtures mirror the structure of a captured Copilot Agent Debug Logs export
@@ -69,53 +69,5 @@ describe('parseLine', () => {
     expect(parseLine(envelope([chatSpan]))).toHaveLength(1);
     expect(parseLine('not json')).toEqual([]);
     expect(parseLine('   ')).toEqual([]);
-  });
-});
-
-describe('extractLiveFields', () => {
-  it('reads model + tokens (string int64) from a chat span', () => {
-    const [flat] = flattenSpans(JSON.parse(envelope([chatSpan])));
-    const f = extractLiveFields(flat);
-    expect(f.operation).toBe('chat');
-    expect(f.model).toBe('gpt-5.4');
-    expect(f.inputTokens).toBe(1200);
-    expect(f.outputTokens).toBe(340);
-    expect(f.candidateIds).toContain(SESSION_ID);
-    expect(f.timestampMs).toBe(1780925693404); // endTimeUnixNano / 1e6
-  });
-
-  it('reads the tool name from an execute_tool span', () => {
-    const [flat] = flattenSpans(JSON.parse(envelope([toolSpan])));
-    const f = extractLiveFields(flat);
-    expect(f.operation).toBe('execute_tool');
-    expect(f.toolName).toBe('read_file');
-  });
-
-  it('derives the turn index from a turn boundary span name', () => {
-    const [flat] = flattenSpans(
-      JSON.parse(envelope([{ name: 'turn_start:3', attributes: [] }])),
-    );
-    expect(extractLiveFields(flat).turn).toBe(3);
-  });
-
-  it('derives the sub-agent name from a runSubagent span', () => {
-    const [flat] = flattenSpans(
-      JSON.parse(envelope([{ name: 'runSubagent-Frontend', attributes: [] }])),
-    );
-    expect(extractLiveFields(flat).subagentName).toBe('Frontend');
-  });
-
-  it('prefers a span-level conversation id over the resource session id', () => {
-    const span = {
-      name: 'chat:gpt-5.4',
-      attributes: [
-        { key: 'gen_ai.operation.name', value: { stringValue: 'chat' } },
-        { key: 'gen_ai.conversation.id', value: { stringValue: 'conv-123' } },
-      ],
-    };
-    const [flat] = flattenSpans(JSON.parse(envelope([span])));
-    const f = extractLiveFields(flat);
-    expect(f.candidateIds[0]).toBe('conv-123');
-    expect(f.candidateIds).toContain(SESSION_ID);
   });
 });

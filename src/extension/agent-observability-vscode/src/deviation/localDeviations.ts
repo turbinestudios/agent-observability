@@ -66,6 +66,27 @@ export class LocalDeviationDetector {
   }
 
   /**
+   * Detect per-TURN deviations for the LOCAL session-detail view + notifications.
+   *
+   * Each user-request turn is checked independently against the repository's
+   * EXPLICITLY CONFIGURED workflows; results are aligned by index to `turns`.
+   * Unlike {@link detectForSession} there is NO synthesized default workflow —
+   * only configured workflows produce per-turn divergences, so a repository with
+   * no `agentObservability.workflows` entry surfaces nothing. The
+   * `triggerPredicate` gates which turns a workflow applies to (it no longer
+   * filters the analyzed interactions).
+   *
+   * @param contentLookup optional LOCAL-ONLY span-content provider for content
+   *   predicates (inert when absent), as in {@link detectForSession}.
+   */
+  detectForTurns(
+    turns: readonly Interaction[][],
+    contentLookup?: ContentLookup,
+  ): WorkflowDeviation[][] {
+    return this.detector.detectForTurns(turns, this.config.getWorkflowConfigs(), contentLookup);
+  }
+
+  /**
    * The synthesized default workflow. Empty `expectedSequence` keeps sequence
    * and missing-step checks inert (they require a configured sequence), while
    * the always-on timeout and failure-rate checks still apply.

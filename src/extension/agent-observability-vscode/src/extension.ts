@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as net from 'node:net';
 import { Configuration, CONFIG_SECTION, ConfigKeys } from './config/configuration';
 import { RepoSyncMode } from './aggregate/repoSyncPolicy';
 import { registerCommands, Refreshable } from './commands';
@@ -19,7 +20,9 @@ import { GlobalStateSyncStateStore } from './sync/syncState';
 import { SyncEngine, SyncContextInsightsSource, systemClock } from './sync/syncEngine';
 import { SyncScheduler } from './sync/scheduler';
 import { registerObservabilityChatParticipant } from './chat/observabilityChat';
-import { LiveUpdateService, defaultOtelFilePath } from './otel/liveUpdateService';
+import { ChatViewProvider, ASSISTANT_VIEW_ID } from './chat/webview/chatViewProvider';
+import { WorkflowDivergenceNotifier } from './notify/workflowDivergenceNotifier';
+import { LiveOtlpService } from './otel/liveOtlpService';
 
 /**
  * Extension entrypoint.
@@ -43,7 +46,7 @@ let telemetryService: TelemetryService | undefined;
 let sessionDetailPanels: SessionDetailPanelManager | undefined;
 let consentManager: ConsentManager | undefined;
 let syncScheduler: SyncScheduler | undefined;
-let liveUpdates: LiveUpdateService | undefined;
+let liveOtlp: LiveOtlpService | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const config = new Configuration();
@@ -61,13 +64,19 @@ export function activate(context: vscode.ExtensionContext): void {
   const detailPanels = new SessionDetailPanelManager(telemetry, deviations);
   sessionDetailPanels = detailPanels;
 
-  // Near-real-time bridge: tails Copilot's OTel file-exporter output and overlays
-  // a live status banner on the session-detail panel. Off unless the user runs
-  // "Enable Live Updates" (which also configures Copilot's exporter). Reads a
-  // local file only; nothing is uploaded.
-  const live = new LiveUpdateService(config, detailPanels, context.globalStorageUri.fsPath);
-  liveUpdates = live;
-  live.start();
+  // Proactive per-turn workflow-divergence notifications (off by default). After a
+  // refresh it scans settled turns of recently-active sessions in repositories
+  // with configured workflows and toasts NEW divergences, opening the
+  // session-detail panel on click. Local-only — nothing is uploaded.
+  const divergenceNotifier = new WorkflowDivergenceNotifier(
+    config,
+    telemetry,
+    deviations,
+    (sessionKey) => detailPanels.open(sessionKey),
+  );
+
+  // The real-time OTLP receiver is wired further below, once the views + notifier
+  // it refreshes have been constructed.
 
   // Phase 7 sync wiring. The state store persists the watermark + run history;
   // the client transports batches via globalThis.fetch (vscode extension host).
@@ -134,6 +143,16 @@ export function activate(context: vscode.ExtensionContext): void {
   const sessions = new SessionsViewProvider(telemetry);
   const sync = new SyncViewProvider(config, telemetry, consent, secrets, syncState);
 
+  // AI Helper — a Copilot-backed chat webview grounded in baked-in context files
+  // and the user's LOCAL telemetry. Sends only safe metadata to the user's own
+  // Copilot model (gated by a one-time disclosure); never raw content or the key.
+  const assistant = new ChatViewProvider(context, telemetry, config);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(ASSISTANT_VIEW_ID, assistant, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
+
   // Register each provider against its contributed view id. The Sessions view
   // uses createTreeView with canSelectMany so multiple sessions can be selected
   // and combined into one detail view; the other two are simple data providers.
@@ -148,7 +167,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Refresh re-snapshots local telemetry, then fans out to every view.
   const telemetryRefresh: Refreshable = { refresh: () => telemetry.refresh() };
-  const refreshables: Refreshable[] = [telemetryRefresh, overview, sessions, sync];
+  const refreshables: Refreshable[] = [telemetryRefresh, overview, sessions, sync, divergenceNotifier];
   registerCommands(context, refreshables, {
     consent,
     secrets,
@@ -170,11 +189,16 @@ export function activate(context: vscode.ExtensionContext): void {
     configureSyncRepositories: () => {
       void runConfigureSyncRepositories(config, telemetry);
     },
+    // Focus the AI Helper view; `<viewId>.focus` is auto-registered by VS Code.
+    openAssistant: () => {
+      void vscode.commands.executeCommand(`${ASSISTANT_VIEW_ID}.focus`);
+    },
+    newChat: () => assistant.newChat(),
     enableLiveUpdates: () => {
-      void runEnableLiveUpdates(config, context, live);
+      void runEnableLiveUpdates(config);
     },
     disableLiveUpdates: () => {
-      void runDisableLiveUpdates(live);
+      void runDisableLiveUpdates(telemetry);
     },
   });
 
@@ -189,6 +213,46 @@ export function activate(context: vscode.ExtensionContext): void {
   syncScheduler = scheduler;
   scheduler.start();
 
+  // Prime the divergence-notifier baseline so a freshly-opened window does not
+  // toast for pre-existing history; subsequent refreshes notify only NEW ones.
+  divergenceNotifier.scan();
+
+  // Real-time OTLP sink. When live updates are enabled, run a localhost receiver
+  // that ingests Copilot's pushed OTLP spans into the extension's OWN DB (Copilot
+  // schema) and refreshes the views + notifier on each batch. The extension is the
+  // sink; nothing is uploaded. Copilot must be pointed here via "Enable Live
+  // Updates" (which also requires a FULL VS Code restart to switch exporters).
+  if (config.isLiveUpdatesEnabled()) {
+    const ingestDbPath = path.join(context.globalStorageUri.fsPath, 'ingest', 'agent-traces.db');
+    const refreshLive = (): void => {
+      for (const r of refreshables) {
+        r.refresh();
+      }
+      detailPanels.refreshActive();
+    };
+    const service = new LiveOtlpService({
+      ingestDbPath,
+      port: config.getLiveOtelPort(),
+      debounceMs: config.getLiveDebounceMs(),
+      onIngest: refreshLive,
+    });
+    liveOtlp = service;
+    void service
+      .start()
+      .then(() => {
+        // The ingest DB now exists → make it the sole source, then render.
+        telemetry.setIngestDbPath(ingestDbPath);
+        refreshLive();
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        void vscode.window.showErrorMessage(
+          'Agent Observability: could not start the real-time OTLP receiver on port ' +
+            `${config.getLiveOtelPort()} (${message}). Re-run “Enable Live Updates”.`,
+        );
+      });
+  }
+
   // Keep the Sync view live when consent flips (set-key already refreshes via
   // the command path, but consent can also change programmatically).
   context.subscriptions.push(consent.onDidChange(() => sync.refresh()));
@@ -198,7 +262,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({ dispose: () => detailPanels.dispose() });
   context.subscriptions.push({ dispose: () => consent.dispose() });
   context.subscriptions.push({ dispose: () => scheduler.dispose() });
-  context.subscriptions.push({ dispose: () => live.dispose() });
+  context.subscriptions.push({ dispose: () => liveOtlp?.stop() });
 
   // On configuration change (e.g. toggling the feature flag, sqlitePath, or the
   // sync.enabled/intervalMinutes settings), drop the cached snapshot, re-arm the
@@ -207,10 +271,13 @@ export function activate(context: vscode.ExtensionContext): void {
     config.onDidChange(() => {
       telemetry.refresh();
       scheduler.reschedule();
-      live.restart();
       overview.refresh();
       sessions.refresh();
       sync.refresh();
+      // Workflows or the notify flag may have changed — re-baseline so we never
+      // retroactively toast for historical divergences the new config now matches.
+      divergenceNotifier.resetBaseline();
+      divergenceNotifier.scan();
     }),
   );
 
@@ -232,32 +299,39 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 /**
- * `enableLiveUpdates` handler. Configures GitHub Copilot Chat's OpenTelemetry
- * `file` exporter (in USER settings) to stream spans to a local JSON-lines file
- * under the extension's global storage, flips the extension's own
- * `liveUpdates.*` settings on, (re)starts the tailer, and offers a window reload
- * (Copilot reads the OTel settings at startup). All local; nothing is uploaded.
+ * `enableLiveUpdates` handler. Points GitHub Copilot Chat's OpenTelemetry
+ * `otlp-http` exporter at the extension's localhost receiver (a free port stored
+ * in `liveUpdates.otelPort`), enables content capture, and flips the extension's
+ * `liveUpdates.enabled` on. All Copilot settings are written at USER (Global)
+ * scope — the only scope `exporterType` honors — and a FULL VS Code restart is
+ * required (Copilot reads these at application startup; a window reload does NOT
+ * re-read them). Everything stays local; nothing is uploaded.
  */
-async function runEnableLiveUpdates(
-  config: Configuration,
-  context: vscode.ExtensionContext,
-  live: LiveUpdateService,
-): Promise<void> {
-  const storageDir = context.globalStorageUri.fsPath;
+async function runEnableLiveUpdates(config: Configuration): Promise<void> {
+  void config;
+  let port: number;
   try {
-    await fs.promises.mkdir(storageDir, { recursive: true });
-  } catch {
-    // Best-effort: Copilot creates the file on first flush regardless.
+    port = await findFreePort();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    void vscode.window.showErrorMessage(`Agent Observability: could not find a free port (${message}).`);
+    return;
   }
-  const filePath = config.getLiveOtelFilePath() ?? defaultOtelFilePath(storageDir);
+
+  const ao = vscode.workspace.getConfiguration('agentObservability');
+  await ao.update('liveUpdates.otelPort', port, vscode.ConfigurationTarget.Global);
+  await ao.update('liveUpdates.enabled', true, vscode.ConfigurationTarget.Global);
 
   try {
-    // Section 'github.copilot.chat' + key 'otel.*' resolves to the full
-    // 'github.copilot.chat.otel.*' setting ids (registered by Copilot Chat).
+    // 'github.copilot.chat' + 'otel.*' → the full 'github.copilot.chat.otel.*' ids.
+    // exporterType is MACHINE-scoped, so it must be written at Global (USER) scope.
     const otel = vscode.workspace.getConfiguration('github.copilot.chat');
     await otel.update('otel.enabled', true, vscode.ConfigurationTarget.Global);
-    await otel.update('otel.exporterType', 'file', vscode.ConfigurationTarget.Global);
-    await otel.update('otel.outfile', filePath, vscode.ConfigurationTarget.Global);
+    await otel.update('otel.exporterType', 'otlp-http', vscode.ConfigurationTarget.Global);
+    await otel.update('otel.otlpEndpoint', `http://127.0.0.1:${port}`, vscode.ConfigurationTarget.Global);
+    await otel.update('otel.captureContent', true, vscode.ConfigurationTarget.Global);
+    // File logging pins the exporter to 'file'; turn it off so otlp-http wins.
+    await otel.update('agentDebugLog.fileLogging.enabled', false, vscode.ConfigurationTarget.Global);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     void vscode.window.showErrorMessage(
@@ -266,26 +340,18 @@ async function runEnableLiveUpdates(
     return;
   }
 
-  const ao = vscode.workspace.getConfiguration('agentObservability');
-  await ao.update('liveUpdates.enabled', true, vscode.ConfigurationTarget.Global);
-  await ao.update('liveUpdates.otelFilePath', filePath, vscode.ConfigurationTarget.Global);
-
-  live.restart();
-
-  const choice = await vscode.window.showInformationMessage(
-    `Agent Observability: live updates enabled. Copilot will stream OpenTelemetry spans to ${filePath}. Reload the window so Copilot picks up the exporter, then open a session detail while an agent runs.`,
-    'Reload Window',
+  void vscode.window.showWarningMessage(
+    `Agent Observability: real-time telemetry enabled (Copilot → http://127.0.0.1:${port}). ` +
+      'You must FULLY QUIT and reopen VS Code — a window reload is NOT enough for Copilot to switch exporters.',
   );
-  if (choice === 'Reload Window') {
-    void vscode.commands.executeCommand('workbench.action.reloadWindow');
-  }
 }
 
 /**
  * `disableLiveUpdates` handler. Turns the extension's live updates off, stops the
- * tailer, and best-effort disables Copilot's OTel exporter again.
+ * receiver, detaches the ingest source, and best-effort disables Copilot's OTel
+ * exporter. A full restart fully reverts Copilot's exporter selection.
  */
-async function runDisableLiveUpdates(live: LiveUpdateService): Promise<void> {
+async function runDisableLiveUpdates(telemetry: TelemetryService): Promise<void> {
   const ao = vscode.workspace.getConfiguration('agentObservability');
   await ao.update('liveUpdates.enabled', false, vscode.ConfigurationTarget.Global);
   try {
@@ -294,10 +360,25 @@ async function runDisableLiveUpdates(live: LiveUpdateService): Promise<void> {
   } catch {
     // Copilot Chat may be absent; nothing to turn off.
   }
-  live.stop();
+  liveOtlp?.stop();
+  liveOtlp = undefined;
+  telemetry.setIngestDbPath(undefined);
   void vscode.window.showInformationMessage(
-    'Agent Observability: live updates disabled. Reload the window to fully stop Copilot’s exporter.',
+    'Agent Observability: real-time telemetry disabled. Fully quit + reopen VS Code to fully revert Copilot’s exporter.',
   );
+}
+
+/** Find a free localhost TCP port by binding an ephemeral one, then releasing it. */
+function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+  });
 }
 
 /** Semver of the running extension, used as the batch `toolVersion`. */
@@ -467,6 +548,6 @@ export function deactivate(): void {
   consentManager = undefined;
   syncScheduler?.dispose();
   syncScheduler = undefined;
-  liveUpdates?.dispose();
-  liveUpdates = undefined;
+  liveOtlp?.stop();
+  liveOtlp = undefined;
 }

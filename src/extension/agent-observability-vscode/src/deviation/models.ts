@@ -148,12 +148,28 @@ export interface WorkflowDefinition {
   /** Emit a {@link DeviationType.ToolUsageAnomaly} on a high failure rate. */
   toolUsageAnomalyAlert: boolean;
   /**
-   * Optional structured trigger predicate. When present, only interactions
-   * matching it are considered "in scope" for this workflow (the local analog of
-   * the cloud `TriggerKqlQuery`); every check then runs over that scoped subset.
-   * Absent → the whole session is in scope (backward-compatible default).
+   * Optional metadata trigger predicate.
+   *
+   * On the per-turn LOCAL path it is a pure applicability GATE — the workflow
+   * applies to a user-request turn iff at least one of the turn's interactions
+   * matches it, and the trigger does NOT filter the analyzed interactions. On the
+   * legacy session/sync path it additionally SCOPES the checked subset (the local
+   * analog of the cloud `TriggerKqlQuery`). Absent → applies everywhere.
    */
   triggerPredicate?: StepPredicate;
+  /**
+   * Optional LOCAL-ONLY content gate on the trigger: the workflow applies to a
+   * turn only when the turn's anchor (the user-request span) content matches this
+   * predicate, in ADDITION to any {@link triggerPredicate}. Lets relevance key on
+   * what the request is ABOUT (e.g. `copilot_chat.user_request` contains "migrate
+   * the database"), which metadata alone cannot express.
+   *
+   * Evaluated ONLY on the per-turn local path — the session/sync path skips any
+   * content-triggered workflow entirely — and every deviation from a
+   * content-triggered workflow is flagged {@link WorkflowDeviation.contentDerived},
+   * so it is local-only by construction and never eligible for sync.
+   */
+  triggerContentPredicate?: ContentPredicate;
   /**
    * Optional ordered structured steps. When present and non-empty, predicate-based
    * matching supersedes {@link expectedSequence} for the sequence/missing checks.
