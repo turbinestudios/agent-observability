@@ -3,6 +3,8 @@ import * as crypto from 'node:crypto';
 import { TelemetryService } from '../telemetry/telemetryService';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
 import { WorkflowDeviation } from '../deviation/models';
+import { groupInteractionsByTurn } from '../deviation/turnGrouping';
+import { SessionDetail } from '../telemetry/models';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
 import { analyzeContext, AcceptedMissingConfig } from '../context/contextAnalyzer';
 import {
@@ -135,24 +137,6 @@ export class SessionDetailPanelManager {
     this.rerenderers.get(panel)?.();
   }
 
-  /**
-   * Push a near-real-time OTel live-status snapshot to any OPEN single-session
-   * panel whose key matches one of the span's candidate ids. The detail body
-   * stays SQLite-rendered; this only patches the live banner via `postMessage`
-   * to the panel's client script. A no-op when no matching panel is open (and
-   * combined panels, keyed `combined:…`, never match a raw session id).
-   */
-  pushLiveUpdate(candidateIds: readonly string[], payload: unknown): void {
-    if (candidateIds.length === 0) {
-      return;
-    }
-    for (const [key, panel] of this.panels) {
-      if (candidateIds.includes(key)) {
-        void panel.webview.postMessage({ type: 'liveUpdate', live: payload });
-      }
-    }
-  }
-
   /** Track which detail panel is focused so {@link refreshActive} can find it. */
   private trackActive(panel: vscode.WebviewPanel): void {
     if (panel.active) {
@@ -229,7 +213,7 @@ export class SessionDetailPanelManager {
       return;
     }
     const detail = result.value;
-    const found = this.detectDeviations(sessionKey);
+    const turnDeviations = this.detectTurnDeviations(sessionKey, detail);
     const acceptedMissing = this.readAcceptedMissing();
 
     // Extract distinct subagent friendly names from the already-resolved
@@ -244,7 +228,7 @@ export class SessionDetailPanelManager {
     const contextAnalysis = analyzeContext(sessionKey, this.telemetry, acceptedMissing, undefined, subagentNamesList);
 
     const nonce = makeNonce();
-    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, contextAnalysis);
+    panel.webview.html = renderSessionDetailHtml(detail, turnDeviations, nonce, contextAnalysis);
   }
 
   /**
@@ -262,7 +246,7 @@ export class SessionDetailPanelManager {
       }
       sections.push({
         detail: result.value,
-        deviations: this.detectDeviations(key),
+        turnDeviations: this.detectTurnDeviations(key, result.value),
       });
     }
 
@@ -281,16 +265,20 @@ export class SessionDetailPanelManager {
   }
 
   /**
-   * Run the deviation detector over a session's SAFE-metadata interactions (which
-   * carry the real agent_name the sequence/missing checks need). Workflow content
-   * predicates (if any) read raw span attributes through a LOCAL-ONLY lookup,
-   * memoized per attribute; that text is used only to compute booleans on-machine
-   * and never enters a WorkflowDeviation or any networked path.
+   * Detect PER-TURN workflow deviations for a session, aligned by index to
+   * `detail.turns`. Interactions (which carry the real agent_name the
+   * sequence/missing checks need) are bucketed into the same user-request turns
+   * the detail view renders — by the turns' start timestamps, since the turn
+   * ANCHOR rule lives in the DB layer — then each turn is checked independently.
+   * Workflow content predicates (if any) read raw span attributes through a
+   * LOCAL-ONLY lookup, memoized per attribute; that text computes booleans
+   * on-machine only and never enters a WorkflowDeviation or any networked path.
    */
-  private detectDeviations(sessionKey: string): WorkflowDeviation[] {
+  private detectTurnDeviations(sessionKey: string, detail: SessionDetail): WorkflowDeviation[][] {
+    const empty = detail.turns.map(() => [] as WorkflowDeviation[]);
     const interactions = this.telemetry.getSessionInteractions(sessionKey);
     if (!interactions.ok) {
-      return [];
+      return empty;
     }
     const attributeCache = new Map<string, ReadonlyMap<string, string>>();
     const contentLookup = (attribute: string): ReadonlyMap<string, string> => {
@@ -302,7 +290,11 @@ export class SessionDetailPanelManager {
       }
       return values;
     };
-    return this.deviations.detectForSession(interactions.value, contentLookup);
+    const turns = groupInteractionsByTurn(
+      interactions.value,
+      detail.turns.map((t) => t.timestampMs),
+    );
+    return this.deviations.detectForTurns(turns, contentLookup);
   }
 }
 

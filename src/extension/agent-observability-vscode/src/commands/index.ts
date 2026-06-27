@@ -19,6 +19,8 @@ export const Commands = {
   openSession: 'agentObservability.openSession',
   openCombinedSession: 'agentObservability.openCombinedSession',
   refreshSessionDetail: 'agentObservability.refreshSessionDetail',
+  openAssistant: 'agentObservability.openAssistant',
+  newChat: 'agentObservability.newChat',
   enableLiveUpdates: 'agentObservability.enableLiveUpdates',
   disableLiveUpdates: 'agentObservability.disableLiveUpdates',
 } as const;
@@ -53,6 +55,10 @@ export interface CommandDeps {
   refreshSessionDetail: () => void;
   /** Open the LOCAL aggregate-payload preview (Phase 5 surfaces real content). */
   previewPayload: () => void;
+  /** Reveal/focus the AI Helper webview view. */
+  openAssistant: () => void;
+  /** Clear the AI Helper conversation (start a new chat). */
+  newChat: () => void;
   /** Turn on near-real-time live updates (configures Copilot's OTel file exporter). */
   enableLiveUpdates: () => void;
   /** Turn off near-real-time live updates. */
@@ -85,6 +91,8 @@ export function registerCommands(
     openCombinedSession,
     refreshSessionDetail,
     previewPayload,
+    openAssistant,
+    newChat,
     enableLiveUpdates,
     disableLiveUpdates,
   } = deps;
@@ -154,6 +162,16 @@ export function registerCommands(
   // panel, the same fresh data a navigation click would load after a refresh.
   register(Commands.refreshSessionDetail, () => {
     refreshSessionDetail();
+  });
+
+  // Reveal the AI Helper webview view in the activity-bar container.
+  register(Commands.openAssistant, () => {
+    openAssistant();
+  });
+
+  // Start a fresh AI Helper conversation (title-bar "+" on the AI Helper view).
+  register(Commands.newChat, () => {
+    newChat();
   });
 
   // Enable/Disable near-real-time live updates. The handlers (in extension.ts)

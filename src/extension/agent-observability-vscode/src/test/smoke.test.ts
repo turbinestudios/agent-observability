@@ -54,6 +54,8 @@ const EXPECTED_COMMANDS = [
   'agentObservability.openSession',
   'agentObservability.openCombinedSession',
   'agentObservability.refreshSessionDetail',
+  'agentObservability.openAssistant',
+  'agentObservability.newChat',
   'agentObservability.enableLiveUpdates',
   'agentObservability.disableLiveUpdates',
 ] as const;
@@ -62,6 +64,7 @@ const EXPECTED_VIEWS = [
   'agentObservability.overview',
   'agentObservability.sessions',
   'agentObservability.sync',
+  'agentObservability.assistant',
 ] as const;
 
 const EXPECTED_CONFIG_KEYS = [
@@ -70,14 +73,15 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.localTelemetry.enabled',
   'agentObservability.sqlitePath',
   'agentObservability.deviation.maxSessionMinutes',
+  'agentObservability.deviation.notifyOnDivergence',
   'agentObservability.context.acceptedMissingFiles',
   'agentObservability.context.acceptedMissingSources',
   'agentObservability.workflows',
   'agentObservability.analysis.codeFileExtensions',
   'agentObservability.analysis.docFileExtensions',
   'agentObservability.liveUpdates.enabled',
-  'agentObservability.liveUpdates.otelFilePath',
   'agentObservability.liveUpdates.debounceMs',
+  'agentObservability.liveUpdates.otelPort',
 ] as const;
 
 describe('manifest contract is stable', () => {

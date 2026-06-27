@@ -110,6 +110,47 @@ describe('parseWorkflowConfigs — structured predicate DSL', () => {
     expect(configs[0].workflows[0].triggerPredicate).toBeUndefined();
   });
 
+  it('parses a valid triggerContentPredicate (intent-based relevance gate)', () => {
+    const configs = parseWorkflowConfigs(
+      [
+        {
+          repository: REPO,
+          workflows: [
+            {
+              name: 'wf',
+              triggerContentPredicate: { attribute: 'copilot_chat.user_request', contains: 'migrate' },
+              steps: [{ name: 's', predicate: { agentName: 'coder' } }],
+            },
+          ],
+        },
+      ],
+      DEFAULT_MAX_MS,
+    );
+    expect(configs[0].workflows[0].triggerContentPredicate).toEqual({
+      attribute: 'copilot_chat.user_request',
+      contains: 'migrate',
+    });
+  });
+
+  it('skips a whole workflow whose triggerContentPredicate names an unsupported attribute', () => {
+    const configs = parseWorkflowConfigs(
+      [
+        {
+          repository: REPO,
+          workflows: [
+            {
+              name: 'bad-trigger',
+              triggerContentPredicate: { attribute: 'gen_ai.response.id', contains: 'x' },
+            },
+            { name: 'good', expectedSequence: ['planner'] },
+          ],
+        },
+      ],
+      DEFAULT_MAX_MS,
+    );
+    expect(configs[0].workflows.map((w) => w.name)).toEqual(['good']);
+  });
+
   it('parses a content predicate and keeps the step', () => {
     const configs = parseWorkflowConfigs(
       [

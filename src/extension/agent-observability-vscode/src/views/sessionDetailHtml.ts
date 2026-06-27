@@ -16,8 +16,11 @@ import { escapeHtml } from './escapeHtml';
 /** One combined session, paired with the data the panel resolves per session. */
 export interface CombinedSessionSection {
   detail: SessionDetail;
-  /** Workflow deviations detected for THIS session (rendered in its section). */
-  deviations: readonly WorkflowDeviation[];
+  /**
+   * Per-turn workflow deviations for THIS session, aligned by index to
+   * `detail.turns` and rendered as chips inside the timeline (no overview section).
+   */
+  turnDeviations: readonly (readonly WorkflowDeviation[])[];
 }
 
 /**
@@ -67,7 +70,7 @@ function formatInt(value: number): string {
  */
 export function renderSessionDetailHtml(
   detail: SessionDetail,
-  deviations: readonly WorkflowDeviation[],
+  turnDeviations: readonly (readonly WorkflowDeviation[])[],
   nonce: string,
   contextAnalysis?: SessionContextAnalysis,
 ): string {
@@ -90,7 +93,6 @@ export function renderSessionDetailHtml(
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Session ${escapeHtml(shortId(summary.sessionId))}</title>
   <style nonce="${nonce}">${STYLE}</style>
-  <style nonce="${nonce}">${LIVE_STATUS_STYLE}</style>
 </head>
 <body>
   ${hasContext ? `<nav class="tab-bar">
@@ -98,99 +100,19 @@ export function renderSessionDetailHtml(
     <button class="tab-btn" data-tab="tab-context">Context Analysis</button>
   </nav>` : ''}
   <div class="tab-panel${hasContext ? '' : ' tab-panel-only'}" id="tab-overview">
-  ${LIVE_STATUS_BANNER}
   ${renderHeader(detail)}
   ${renderTreeSummary(detail.treeStats, detail.treeModelTurns)}
   ${renderMainAgentUsage(detail.agentUsage)}
   ${renderSubAgentUsage(detail.agentUsage)}
-  ${renderDeviations(deviations)}
-  ${renderTurns(detail.turns)}
+  ${renderTurns(detail.turns, turnDeviations)}
   </div>
   ${hasContext ? `<div class="tab-panel tab-panel-hidden" id="tab-context">${renderContextAnalysis(contextAnalysis)}</div>` : ''}
   <script nonce="${nonce}">${TREND_FILTER_SCRIPT}</script>
   ${hasContext ? `<script nonce="${nonce}">${TAB_SWITCH_SCRIPT}</script>` : ''}
   ${hasContext ? `<script nonce="${nonce}">${ACCEPT_MISSING_SCRIPT}</script>` : ''}
-  <script nonce="${nonce}">${LIVE_UPDATE_SCRIPT}</script>
 </body>
 </html>`;
 }
-
-/**
- * Static markup for the near-real-time live-status banner. Hidden until the
- * panel's client script receives the first `liveUpdate` message; the element ids
- * are patched in place via `textContent` (never innerHTML), so streamed values
- * such as model and tool names can never inject markup.
- */
-const LIVE_STATUS_BANNER = `<section id="ao-live" class="ao-live" hidden>
-  <div class="ao-live-head">
-    <span class="ao-live-dot"></span>
-    <span class="ao-live-title">Live</span>
-    <span id="ao-live-activity" class="ao-live-activity"></span>
-    <span id="ao-live-elapsed" class="ao-live-elapsed"></span>
-  </div>
-  <div class="ao-live-stats">
-    <span class="ao-live-stat">turn <b id="ao-live-turn">–</b></span>
-    <span class="ao-live-stat"><b id="ao-live-llm">0</b> LLM calls</span>
-    <span class="ao-live-stat"><b id="ao-live-tools">0</b> tools</span>
-    <span class="ao-live-stat"><b id="ao-live-tokens">0</b> tokens</span>
-    <span class="ao-live-stat" id="ao-live-subagents-wrap" hidden><b id="ao-live-subagents">0</b> sub-agents</span>
-  </div>
-</section>`;
-
-/** Styles for the live-status banner, using VS Code theme variables only. */
-const LIVE_STATUS_STYLE = `
-.ao-live { margin: 0 0 1rem; padding: 0.6rem 0.8rem; border: 1px solid var(--vscode-focusBorder); border-radius: 6px; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); }
-.ao-live-head { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
-.ao-live-title { text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.72rem; color: var(--vscode-charts-green, var(--vscode-foreground)); }
-.ao-live-activity { font-weight: 400; opacity: 0.9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ao-live-elapsed { margin-left: auto; font-variant-numeric: tabular-nums; opacity: 0.8; }
-.ao-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-charts-green, #3fb950); animation: ao-live-pulse 1.4s ease-in-out infinite; flex: none; }
-.ao-live-stats { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; margin-top: 0.4rem; font-size: 0.85rem; opacity: 0.95; }
-.ao-live-stat b { font-variant-numeric: tabular-nums; }
-@keyframes ao-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`;
-
-/**
- * Client script for the live banner. Listens for `{ type: 'liveUpdate', live }`
- * messages posted by {@link ../otel/liveUpdateService.LiveUpdateService} and
- * patches the banner in place. All values are written via `textContent`. Regex
- * backslashes are DOUBLED here because this string is itself a template literal:
- * the emitted script must contain single backslashes.
- */
-const LIVE_UPDATE_SCRIPT = `(function () {
-  var byId = function (id) { return document.getElementById(id); };
-  var group = function (n) { return String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ','); };
-  var startedAtMs = 0;
-  function setText(id, text) { var el = byId(id); if (el) { el.textContent = text; } }
-  function tickElapsed() {
-    if (!startedAtMs) { return; }
-    var secs = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
-    var m = Math.floor(secs / 60); var s = secs % 60;
-    setText('ao-live-elapsed', m + ':' + (s < 10 ? '0' : '') + s);
-  }
-  function paint(live) {
-    var root = byId('ao-live'); if (!root) { return; }
-    root.hidden = false;
-    if (live.startedAtMs) { startedAtMs = live.startedAtMs; }
-    setText('ao-live-activity', live.currentActivity || '');
-    setText('ao-live-turn', (live.turn === null || live.turn === undefined) ? '–' : String(live.turn));
-    setText('ao-live-llm', group(live.llmCalls || 0));
-    setText('ao-live-tools', group(live.toolCalls || 0));
-    setText('ao-live-tokens', group(live.totalTokens || 0));
-    var subs = live.subagents || [];
-    var wrap = byId('ao-live-subagents-wrap');
-    if (wrap) {
-      if (subs.length > 0) { wrap.hidden = false; setText('ao-live-subagents', String(subs.length)); }
-      else { wrap.hidden = true; }
-    }
-    tickElapsed();
-  }
-  window.addEventListener('message', function (ev) {
-    var msg = ev.data;
-    if (!msg || msg.type !== 'liveUpdate' || !msg.live) { return; }
-    paint(msg.live);
-  });
-  setInterval(tickElapsed, 1000);
-})();`;
 
 /**
  * Pure HTML renderer for the LOCAL combined-sessions webview.
@@ -277,7 +199,7 @@ function renderCombinedHeader(summary: CombinedSummary): string {
  * deviation/turn section helpers as the single-session renderer.
  */
 function renderSessionSection(section: CombinedSessionSection, open: boolean): string {
-  const { detail, deviations } = section;
+  const { detail, turnDeviations } = section;
   const s = detail.summary;
   const id = escapeHtml(shortId(s.sessionId));
   const titleLabel =
@@ -303,8 +225,7 @@ function renderSessionSection(section: CombinedSessionSection, open: boolean): s
     <summary>${summaryRow}</summary>
     <div class="section-body">
       ${meta}
-      ${renderDeviations(deviations)}
-      ${renderTurns(detail.turns)}
+      ${renderTurns(detail.turns, turnDeviations)}
     </div>
   </details>`;
 }
@@ -992,15 +913,17 @@ function renderAgentUsage(
   </section>`;
 }
 
-/** Workflow-deviations section (parity with the cloud SessionDetail page). */
-function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
+/**
+ * Per-turn workflow-divergence chips, rendered at the TOP of a turn so a relevant
+ * workflow whose steps were skipped or ran out of order is visible without
+ * expanding the request. Returns '' when the turn has no divergences (the common
+ * case — the timeline stays quiet). Reuses the `.deviation`/`.badge` styling. A
+ * content-derived divergence is flagged "Local only" (never eligible for sync).
+ */
+function renderTurnDeviations(deviations: readonly WorkflowDeviation[]): string {
   if (deviations.length === 0) {
-    return `<section class="panel">
-      <div class="panel-heading"><h2>Workflow Deviations</h2><span>No deviations detected</span></div>
-      <p class="muted">This session's workflow matches expected patterns.</p>
-    </section>`;
+    return '';
   }
-
   const cards = deviations
     .map((d) => {
       const actual =
@@ -1011,8 +934,6 @@ function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
         d.expectedSequence !== undefined && d.expectedSequence.length > 0
           ? `<div class="seq"><strong>Expected:</strong> ${d.expectedSequence.map(escapeHtml).join(' → ')}</div>`
           : '';
-      // Content-derived deviations are computed from raw local-only content and
-      // can never be synced; flag them so the distinction is visible.
       const localOnly = d.contentDerived
         ? '<span class="badge badge-local" title="Derived from local-only content (e.g. a prompt or tool argument). Never eligible for sync.">Local only</span>'
         : '';
@@ -1029,10 +950,7 @@ function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
     })
     .join('\n');
 
-  return `<section class="panel">
-    <div class="panel-heading"><h2>Workflow Deviations</h2><span>${num(deviations.length)} issue(s) detected</span></div>
-    <div class="deviation-list">${cards}</div>
-  </section>`;
+  return `<div class="turn-deviations" role="alert">${cards}</div>`;
 }
 
 /**
@@ -1040,10 +958,18 @@ function renderDeviations(deviations: readonly WorkflowDeviation[]): string {
  * with two collapsed `<details>`: the User Request (which itself nests the
  * collapsible event timeline) and the Final LLM Response.
  */
-function renderTurns(turns: readonly SessionTurn[]): string {
-  const blocks = turns.map(renderTurn).join('\n');
+function renderTurns(
+  turns: readonly SessionTurn[],
+  turnDeviations: readonly (readonly WorkflowDeviation[])[] = [],
+): string {
+  const blocks = turns.map((turn, i) => renderTurn(turn, turnDeviations[i] ?? [])).join('\n');
+  const issues = turnDeviations.reduce((total, list) => total + list.length, 0);
+  const heading =
+    issues > 0
+      ? `${num(turns.length)} turn(s) · ${num(issues)} workflow divergence(s)`
+      : `${num(turns.length)} turn(s)`;
   return `<section class="panel">
-    <div class="panel-heading"><h2>Timeline</h2><span>${num(turns.length)} turn(s)</span></div>
+    <div class="panel-heading"><h2>Timeline</h2><span>${heading}</span></div>
     <div class="turns">${blocks}</div>
   </section>`;
 }
@@ -1058,7 +984,10 @@ function renderTurns(turns: readonly SessionTurn[]): string {
  * "Activity" disclosure holding just the nested timeline. Exported so the
  * webview's XSS-safety is unit-tested against crafted request/response content.
  */
-export function renderTurn(turn: SessionTurn): string {
+export function renderTurn(
+  turn: SessionTurn,
+  deviations: readonly WorkflowDeviation[] = [],
+): string {
   const time = escapeHtml(formatTime(turn.timestampMs));
   const events = turn.events.map(renderTimelineRow).join('\n');
   const timeline = `<details class="timeline-disclosure"><summary>Timeline (${num(
@@ -1083,6 +1012,7 @@ export function renderTurn(turn: SessionTurn): string {
       : '';
 
   return `<div class="turn">
+    ${renderTurnDeviations(deviations)}
     ${request}
     ${response}
   </div>`;
@@ -1445,6 +1375,7 @@ const STYLE = `
   .badge { display: inline-block; font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: .1rem .4rem; border-radius: 3px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
   .badge-local { background: var(--vscode-inputValidation-warningBackground, transparent); color: var(--vscode-editorWarning-foreground, #c90); border: 1px solid var(--vscode-editorWarning-foreground, #c90); }
   .seq { font-size: .82rem; color: var(--vscode-descriptionForeground); }
+  .turn-deviations { display: flex; flex-direction: column; gap: .4rem; padding: .5rem .6rem; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   table { width: 100%; border-collapse: collapse; font-size: .85rem; }
   th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); font-weight: 600; }

@@ -137,7 +137,7 @@ function parseCustomizationEvent(event: DiscoveryEventRow): ContextFileEntry[] {
   const details = event.eventDetails;
 
   // Match individual entries: [applying] name — reason or [skipped] name — reason
-  const entryPattern = /\[(applying|skipped)\]\s+([^\n,—]+?)(?:\s*—\s*([^\n,\[]+))?(?=,\s*\[|$)/g;
+  const entryPattern = /\[(applying|skipped)\]\s+([^\n,—]+?)(?:\s*—\s*([^\n,[]+))?(?=,\s*\[|$)/g;
   let match: RegExpExecArray | null;
 
   while ((match = entryPattern.exec(details)) !== null) {

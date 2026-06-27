@@ -11,11 +11,13 @@ shared with an organization dashboard.
 | --- | --- |
 | Activity Bar container, three views, commands, settings | Shipped |
 | Read-only local SQLite (`agent-traces.db`) ingestion (snapshot + read-only connection) | Shipped |
-| Local session detail timeline + local workflow deviation detection | Shipped |
+| Local session detail timeline + per-request workflow deviation detection (with optional notifications) | Shipped |
+| Real-time updates via a localhost OTLP receiver (Copilot `otlp-http` → extension sink) | Shipped |
 | Workflow predicate DSL (metadata + local-only content predicates) | Shipped |
 | Consent toggle + organization API key in SecretStorage (opt-in, off by default) | Shipped |
 | Aggregate engine (30-min time bins, pseudonymous developer id, idempotent batch/row ids) | Shipped |
 | Upload to the dashboard ingestion API with retry/backoff | Shipped |
+| AI Helper — Copilot-backed chat for config & log summaries | Shipped |
 
 All raw content stays on the machine; only opt-in aggregate batches are uploaded.
 
@@ -24,6 +26,44 @@ All raw content stays on the machine; only opt-in aggregate batches are uploaded
 - **Local Overview** — summary of local Copilot agent activity.
 - **Sessions** — list and drill into local agent sessions (local-only detail).
 - **Sync** — consent status and upload of opt-in aggregate batches.
+- **AI Helper** — a chat assistant backed by your own GitHub Copilot license (see below).
+
+## AI Helper
+
+The **AI Helper** is a chat view (in the Agent Observability activity-bar container)
+that answers questions about this extension and your local telemetry using **your
+own GitHub Copilot license** (`vscode.lm`). It is grounded in concise context files
+baked into the extension, so it knows this extension's settings, the workflow DSL,
+and the telemetry model. An empty chat offers three quick-command buttons:
+
+- **Generate workflows** — drafts an `agentObservability.workflows` array from your
+  project's **Copilot customization files** (instructions, agents, prompts, skills),
+  using the agents they declare, the order they run in, and the tools they use. The
+  repository is taken from the workspace's git remote. The result can be applied to
+  `.vscode/settings.json` behind a confirmation; it is validated against the same
+  parser the deviation detector uses and **merged** by repository (your other
+  repositories' entries are kept).
+- **Set up new project** — produces the bare-minimum `.vscode/settings.json` to get
+  the extension working. Only known `agentObservability.*` keys are applied; the
+  organization API key is never written to settings (use the command instead).
+- **Summarize my logs** — a detailed natural-language summary of your collected
+  telemetry.
+
+You can also type free-text questions. Generated configuration always has a **Copy**
+button, and a settings-bound one has an **Apply** button.
+
+**Requires GitHub Copilot.** If Copilot isn't installed or signed in, the AI Helper
+says so. On first use it shows a one-time disclosure (below) and VS Code's own
+Copilot-access prompt.
+
+**Privacy.** The AI Helper sends **safe metadata** — sanitized repository names,
+agent/model/tool names, durations, and token/AIU counts — plus your typed prompt, to
+your own Copilot model. The **Generate workflows** command additionally reads your
+project's Copilot customization files (instructions, agents, prompts, skills) and
+sends their **contents** so it can infer the intended workflow — these are your own
+files going to your own Copilot license. It never sends raw prompts/responses, tool
+input/output, or session titles, and it never touches the cloud-sync path. This is a
+distinct gate from cloud sharing (which stays off by default).
 
 ## Commands
 
@@ -34,6 +74,8 @@ All under the **Agent Observability** category:
 - `Agent Observability: Open Settings`
 - `Agent Observability: Set Organization API Key`
 - `Agent Observability: Toggle Cloud Sharing`
+- `Agent Observability: Open AI Helper`
+- `Agent Observability: New AI Helper Chat`
 
 ## Settings
 
@@ -43,24 +85,52 @@ All under the **Agent Observability** category:
 | `agentObservability.sync.intervalMinutes` | `60` | Background sync interval (minimum 5). |
 | `agentObservability.localTelemetry.enabled` | `true` | Feature flag for the local telemetry view. |
 | `agentObservability.sqlitePath` | `""` | Override path to `agent-traces.db` (blank = auto-detect). |
-| `agentObservability.deviation.maxSessionMinutes` | `60` | Local deviation detector: max expected session duration. |
+| `agentObservability.deviation.maxSessionMinutes` | `60` | Local deviation detector: max expected session/turn duration. |
+| `agentObservability.deviation.notifyOnDivergence` | `false` | Raise a VS Code notification when a configured workflow diverges within a user-request turn. Per-turn divergences always show inline in the timeline regardless. |
 | `agentObservability.workflows` | `[]` | Optional per-repository expected workflows for the local deviation detector. Evaluated on-machine; never uploaded. |
+| `agentObservability.liveUpdates.enabled` | `false` | Run a localhost OTLP receiver and use the extension's own ingested DB as the live source. Turn on via **Enable Live Updates (Copilot OTel)** (requires a full VS Code restart). |
+| `agentObservability.liveUpdates.otelPort` | `0` | Localhost port the OTLP receiver listens on (set automatically by the enable command). |
+| `agentObservability.liveUpdates.debounceMs` | `400` | Coalescing window between ingesting spans and refreshing the views (minimum 100). |
+
+## Real-time updates (Copilot OTLP)
+
+Run **Agent Observability: Enable Live Updates (Copilot OTel)** to stream Copilot's
+telemetry to the extension in real time. It points Copilot Chat's OpenTelemetry
+`otlp-http` exporter at a private `http://127.0.0.1:<port>` receiver the extension
+runs; each pushed span is written into the extension's OWN SQLite database — Copilot's
+exact `agent-traces.db` schema — so the session views, the per-request workflow
+deviation detector, and the divergence notifications all update live off one source,
+with no snapshot polling or WAL lag.
+
+The extension becomes the telemetry **sink**: while live updates are on, Copilot's own
+`agent-traces.db` is no longer fed (a single exporter is active), so the extension reads
+its own DB instead. The receiver binds loopback (`127.0.0.1`) only and nothing is
+uploaded. Because Copilot reads its OTel settings at **application startup**, you must
+fully **quit and reopen VS Code** after enabling — a window reload is not enough. Use
+**Disable Live Updates** to revert.
 
 ## Workflow predicate DSL
 
 `agentObservability.workflows` lets you describe the agent workflows you expect
 per repository so the **local** deviation detector can flag sequence, missing,
-timeout, and failure-rate anomalies. There are two tiers of matching, and both
-run entirely on your machine.
+timeout, and failure-rate anomalies. Detection is **per user-request turn** (one
+request plus everything the agent spawned for it): each turn is checked
+independently, any divergence is shown inline on that request in the
+session-detail timeline, and — when `deviation.notifyOnDivergence` is on — also
+raised as a VS Code notification. There are two tiers of matching, and both run
+entirely on your machine.
 
 **Tier 1 — metadata predicates (safe).** A `StepPredicate` filters the safe
 interaction metadata: `operation`, `agentName`, `agentMode`, `model`,
 `toolName`, `success`. Every field is optional (absent = match any); strings
 compare case-insensitively. Use them in `steps[].predicate` and in an optional
-`triggerPredicate` that scopes *which* interactions belong to the workflow (the
-local analog of the cloud dashboard's `TriggerKqlQuery`). The legacy
+`triggerPredicate`, which acts as a pure **applicability gate**: the workflow
+applies to a turn when an interaction matches it, then its steps are verified as
+an ordered (not necessarily adjacent) subsequence over the whole turn. The legacy
 `expectedSequence` (an ordered list of agent names) still works and is the
-degenerate case of `steps`.
+degenerate case of `steps`. Scope by a real discriminator (`operation`,
+`toolName`, `model`, or a sub-agent `agentName`) — never `agentMode` alone, since
+every custom chat mode collapses to `agentMode: "custom"`.
 
 **Tier 2 — content predicates (local-only).** A step may add a
 `contentPredicate` that inspects a raw `span_attributes` value (e.g. the user
@@ -72,7 +142,11 @@ ReDoS-safe regex subset: catastrophic-backtracking shapes — including any rege
 alternation `|` under a repetition such as `(a|b)+` — are rejected (use a
 character class like `[ab]+` instead), and regex matching runs only over the
 first 1,000 characters of the value (vs 10,000 for `contains`) to bound
-backtracking cost. Prefer `contains` for simple checks.
+backtracking cost. Prefer `contains` for simple checks. A `triggerContentPredicate`
+(same shape, on the workflow itself) can additionally gate *applicability* on the
+request's intent — e.g. `copilot_chat.user_request` contains a phrase — for
+workflows no metadata signal can distinguish; such a workflow is evaluated only
+locally per turn and never participates in sync.
 
 ```jsonc
 "agentObservability.workflows": [
@@ -81,7 +155,7 @@ backtracking cost. Prefer `contains` for simple checks.
     "workflows": [
       {
         "name": "feature-development",
-        "triggerPredicate": { "agentMode": "agent" },
+        "triggerPredicate": { "operation": "invoke_agent" },
         "steps": [
           { "name": "plan",   "predicate": { "agentName": "planner", "operation": "chat" } },
           { "name": "code",   "predicate": { "agentName": "coder", "toolName": "edit_file" } },
