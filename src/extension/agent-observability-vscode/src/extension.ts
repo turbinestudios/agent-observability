@@ -15,10 +15,13 @@ import { getIdentityInput, computeDeveloperId } from './aggregate/pseudonymizer'
 import { FetchHttpPoster } from './sync/httpPoster';
 import { SyncClient } from './sync/syncClient';
 import { GlobalStateSyncStateStore } from './sync/syncState';
-import { SyncEngine, SyncContextInsightsSource, systemClock } from './sync/syncEngine';
+import { SyncEngine, SyncContextInsightsSource, SyncTelemetry, systemClock } from './sync/syncEngine';
 import { SyncScheduler } from './sync/scheduler';
 import { registerObservabilityChatParticipant } from './chat/observabilityChat';
 import { LiveUpdateService, defaultOtelFilePath } from './otel/liveUpdateService';
+import { ClaudeCodeService } from './claude/claudeCodeService';
+import { CopilotSource, SourceRegistry } from './sources/sessionSource';
+import { CompositeAggregationSource } from './sync/compositeAggregationSource';
 
 /**
  * Extension entrypoint.
@@ -38,7 +41,7 @@ import { LiveUpdateService, defaultOtelFilePath } from './otel/liveUpdateService
  * key) and the {@link SyncScheduler} (OFF by default, runs only when
  * `sync.enabled` is true). The API key and request body are NEVER logged.
  */
-let telemetryService: TelemetryService | undefined;
+let sources: SourceRegistry | undefined;
 let sessionDetailPanels: SessionDetailPanelManager | undefined;
 let consentManager: ConsentManager | undefined;
 let syncScheduler: SyncScheduler | undefined;
@@ -47,7 +50,13 @@ let liveUpdates: LiveUpdateService | undefined;
 export function activate(context: vscode.ExtensionContext): void {
   const config = new Configuration();
   const telemetry = new TelemetryService(config);
-  telemetryService = telemetry;
+
+  // Source registry: the Copilot SQLite path + the Claude Code JSONL path, both
+  // implementing the same SessionDataSource surface so the views/sync stay
+  // source-agnostic. The Claude source reads ~/.claude/projects on demand.
+  const claude = new ClaudeCodeService(config);
+  const registry = new SourceRegistry([new CopilotSource(telemetry, config), claude]);
+  sources = registry;
 
   // Consent + secret management (Phase 4). Both are constructed from the
   // extension context: consent in globalState, secrets in SecretStorage.
@@ -57,7 +66,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Local-only workflow deviation detection for the session-detail webview.
   const deviations = new LocalDeviationDetector(config);
-  const detailPanels = new SessionDetailPanelManager(telemetry, deviations);
+  const detailPanels = new SessionDetailPanelManager(registry, telemetry, deviations);
   sessionDetailPanels = detailPanels;
 
   // Near-real-time bridge: tails Copilot's OTel file-exporter output and overlays
@@ -112,11 +121,16 @@ export function activate(context: vscode.ExtensionContext): void {
       return flagged;
     },
   };
+  // Aggregate-sync source: the UNION of every enabled source's privacy-safe
+  // rows (Copilot + Claude Code), so the opt-in cloud batch covers both. Each
+  // source emits the same content-free AggregationRow; rows commingle and are
+  // distinguished server-side by model/repository (no schema change needed).
+  const aggregationSource = new CompositeAggregationSource(() => registry.enabled());
   const syncEngine = new SyncEngine(
     config,
     consent,
     secrets,
-    telemetry,
+    aggregationSource,
     syncClient,
     syncState,
     systemClock,
@@ -128,9 +142,10 @@ export function activate(context: vscode.ExtensionContext): void {
     contextInsightsSource,
   );
 
-  // Construct the view providers, backed by the telemetry service.
-  const overview = new OverviewViewProvider(telemetry);
-  const sessions = new SessionsViewProvider(telemetry);
+  // Construct the view providers. Overview + Sessions are source-aware (they
+  // render every enabled source); Sync stays Copilot-backed (its status view).
+  const overview = new OverviewViewProvider(registry);
+  const sessions = new SessionsViewProvider(registry);
   const sync = new SyncViewProvider(config, telemetry, consent, secrets, syncState);
 
   // Register each provider against its contributed view id. The Sessions view
@@ -145,22 +160,25 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerTreeDataProvider(SYNC_VIEW_ID, sync),
   );
 
-  // Refresh re-snapshots local telemetry, then fans out to every view.
-  const telemetryRefresh: Refreshable = { refresh: () => telemetry.refresh() };
-  const refreshables: Refreshable[] = [telemetryRefresh, overview, sessions, sync];
+  // Refresh re-reads every source (re-snapshots Copilot, re-discovers Claude),
+  // then fans out to every view.
+  const sourcesRefresh: Refreshable = { refresh: () => registry.refresh() };
+  const refreshables: Refreshable[] = [sourcesRefresh, overview, sessions, sync];
   registerCommands(context, refreshables, {
     consent,
     secrets,
     syncEngine,
-    openSession: (sessionKey) => detailPanels.open(sessionKey),
-    openCombinedSession: (sessionKeys) => detailPanels.openCombined(sessionKeys),
+    openSession: (sourceId, sessionKey) => detailPanels.open(sourceId, sessionKey),
+    openCombinedSession: (sessionList) => detailPanels.openCombined(sessionList),
     refreshSessionDetail: () => detailPanels.refreshActive(),
     // LOCAL-ONLY preview of the outgoing aggregate payload. Builds a real batch
     // from local telemetry using the SecretStorage salt + local git identity and
     // opens it as a read-only untitled JSON document. Runs regardless of consent
     // (preview != upload) and never sends anything.
     previewPayload: () => {
-      void runPreviewPayload(telemetry, secrets, toolVersion);
+      // Preview the SAME union the SyncEngine uploads (Copilot + Claude), so the
+      // preview faithfully represents the outgoing batch.
+      void runPreviewPayload(aggregationSource, secrets, toolVersion);
     },
     enableLiveUpdates: () => {
       void runEnableLiveUpdates(config, context, live);
@@ -185,8 +203,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // the command path, but consent can also change programmatically).
   context.subscriptions.push(consent.onDidChange(() => sync.refresh()));
 
-  // Dispose the snapshot + connection, detail panels, consent emitter, scheduler.
-  context.subscriptions.push({ dispose: () => telemetry.dispose() });
+  // Dispose every source (Copilot snapshot/connection + Claude caches), detail
+  // panels, consent emitter, scheduler.
+  context.subscriptions.push({ dispose: () => registry.dispose() });
   context.subscriptions.push({ dispose: () => detailPanels.dispose() });
   context.subscriptions.push({ dispose: () => consent.dispose() });
   context.subscriptions.push({ dispose: () => scheduler.dispose() });
@@ -197,7 +216,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // scheduler, and re-render the views.
   context.subscriptions.push(
     config.onDidChange(() => {
-      telemetry.refresh();
+      registry.refresh();
       scheduler.reschedule();
       live.restart();
       overview.refresh();
@@ -290,11 +309,11 @@ function readToolVersion(context: vscode.ExtensionContext): string {
  * regardless of consent because previewing != sharing.
  */
 async function runPreviewPayload(
-  telemetry: TelemetryService,
+  aggregation: SyncTelemetry,
   secrets: SecretManager,
   toolVersion: string,
 ): Promise<void> {
-  const result = telemetry.getAggregationRows();
+  const result = aggregation.getAggregationRows();
   if (!result.ok) {
     void vscode.window.showInformationMessage(
       `Agent Observability: cannot build a preview payload — ${result.message} Nothing was uploaded.`,
@@ -353,8 +372,9 @@ async function runPreviewPayload(
 
 /** Dispose the telemetry snapshot copy + connection and any open detail panels. */
 export function deactivate(): void {
-  telemetryService?.dispose();
-  telemetryService = undefined;
+  // Disposing the registry tears down every source (incl. the Copilot snapshot).
+  sources?.dispose();
+  sources = undefined;
   sessionDetailPanels?.dispose();
   sessionDetailPanels = undefined;
   consentManager?.dispose();

@@ -1,7 +1,7 @@
 {
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
-  "description": "Privacy-first local view of GitHub Copilot agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
+  "description": "Privacy-first local view of GitHub Copilot and Claude Code agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
   "version": "0.3.0",
   "publisher": "turbinestudios",
   "license": "UNLICENSED",
@@ -48,11 +48,11 @@
     "viewsWelcome": [
       {
         "view": "agentObservability.overview",
-        "contents": "Local Overview will summarize your GitHub Copilot agent activity from the on-disk telemetry database.\n\nLocal telemetry reading arrives in a later phase. Nothing is read or uploaded yet.\n\n[Open Settings](command:agentObservability.openSettings)"
+        "contents": "Local Overview summarizes your GitHub Copilot and Claude Code agent activity, read on-disk from this machine.\n\nNothing is uploaded unless you opt in to aggregate sharing.\n\n[Open Settings](command:agentObservability.openSettings)"
       },
       {
         "view": "agentObservability.sessions",
-        "contents": "Sessions will list your local Copilot agent sessions with prompt, tool, model, duration and success detail.\n\nSession browsing arrives in a later phase. All session detail stays on this machine.\n\n[Refresh](command:agentObservability.refresh)"
+        "contents": "Sessions lists your local Copilot and Claude Code agent sessions — grouped by source and repository — with prompt, tool, model, duration and cost detail.\n\nAll session detail stays on this machine.\n\n[Refresh](command:agentObservability.refresh)"
       },
       {
         "view": "agentObservability.sync",
@@ -460,6 +460,28 @@
           "default": 400,
           "minimum": 100,
           "markdownDescription": "Coalescing window, in milliseconds, between detecting new spans in the OTel file and reading them. Lower feels more live but costs more frequent reads; minimum 100."
+        },
+        "agentObservability.claudeCode.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Capture **Claude Code** agent sessions. When on, the extension reads Claude Code's JSON-lines transcripts from `~/.claude/projects` and shows those sessions alongside GitHub Copilot in the unified Overview and Sessions views (grouped under a **Claude Code** source node). Transcripts are read locally and on demand; raw prompts, completions, and tool I/O never leave the machine. Like Copilot, only opt-in, pre-aggregated, non-sensitive statistics are ever uploaded (gated on `#agentObservability.sync.enabled#`)."
+        },
+        "agentObservability.claudeCode.projectsPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Override the path to Claude Code's `projects` directory. Leave blank to auto-detect: the `CLAUDE_CONFIG_DIR` environment variable's `projects` subdirectory if set, else `~/.claude/projects`. Set this only if your transcripts live elsewhere."
+        },
+        "agentObservability.claudeCode.scanDepth": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "markdownDescription": "Maximum directory depth to recurse when scanning the projects directory for Claude Code transcripts (`*.jsonl`). The `subagents/` subtree of a session is ALWAYS scanned regardless of this limit (so deeply-nested sub-agent side-chains like `subagents/workflows/wf_*/` are never missed); this bounds only the project-tree walk above it. Raise it only for unusually deep project nesting."
+        },
+        "agentObservability.claudeCode.maxSessions": {
+          "type": "number",
+          "default": 150,
+          "minimum": 1,
+          "markdownDescription": "Maximum number of most-recently-active Claude Code sessions to surface in the Sessions list (and aggregate for sync) at once. Bounds the synchronous transcript-parsing cost so the tree stays responsive when a machine has accumulated thousands of sessions. Older sessions beyond this count are reported via an info row rather than dropped silently. Full token/cost detail for any shown session is computed lazily and cached."
         }
       }
     }

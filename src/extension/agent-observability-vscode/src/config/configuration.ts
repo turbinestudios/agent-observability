@@ -41,6 +41,10 @@ export const ConfigKeys = {
   liveUpdatesEnabled: 'liveUpdates.enabled',
   liveOtelFilePath: 'liveUpdates.otelFilePath',
   liveDebounceMs: 'liveUpdates.debounceMs',
+  claudeEnabled: 'claudeCode.enabled',
+  claudeProjectsPath: 'claudeCode.projectsPath',
+  claudeScanDepth: 'claudeCode.scanDepth',
+  claudeMaxSessions: 'claudeCode.maxSessions',
 } as const;
 
 /** Default values mirroring the package.json contribution defaults. */
@@ -63,6 +67,10 @@ export const ConfigDefaults = {
   liveUpdatesEnabled: false,
   liveOtelFilePath: '',
   liveDebounceMs: 400,
+  claudeEnabled: true,
+  claudeProjectsPath: '',
+  claudeScanDepth: 8,
+  claudeMaxSessions: 150,
 } as const;
 
 /** Minimum allowed sync interval, mirroring the package.json `minimum`. */
@@ -229,6 +237,47 @@ export class Configuration {
       return ConfigDefaults.liveDebounceMs;
     }
     return Math.max(MIN_LIVE_DEBOUNCE_MS, Math.floor(raw));
+  }
+
+  /**
+   * Feature flag: whether Claude Code transcript capture is enabled. On by
+   * default — Claude Code sessions are read from `~/.claude/projects` and shown
+   * alongside Copilot in the unified views.
+   */
+  isClaudeEnabled(): boolean {
+    return this.config().get<boolean>(ConfigKeys.claudeEnabled, ConfigDefaults.claudeEnabled);
+  }
+
+  /**
+   * Explicit override of the Claude Code `projects` directory. Returns `undefined`
+   * (not '') when blank so callers fall back to `CLAUDE_CONFIG_DIR` / `~/.claude`.
+   */
+  getClaudeProjectsPathOverride(): string | undefined {
+    const value = this.config()
+      .get<string>(ConfigKeys.claudeProjectsPath, ConfigDefaults.claudeProjectsPath)
+      .trim();
+    return value.length > 0 ? value : undefined;
+  }
+
+  /** Max directory depth to recurse when scanning for Claude transcripts. */
+  getClaudeScanDepth(): number {
+    const raw = this.config().get<number>(ConfigKeys.claudeScanDepth, ConfigDefaults.claudeScanDepth);
+    if (!Number.isFinite(raw)) {
+      return ConfigDefaults.claudeScanDepth;
+    }
+    return Math.max(1, Math.floor(raw));
+  }
+
+  /**
+   * Max number of most-recent Claude sessions to surface / aggregate by default,
+   * bounding the synchronous parse cost. Clamped to a sane floor.
+   */
+  getClaudeMaxSessions(): number {
+    const raw = this.config().get<number>(ConfigKeys.claudeMaxSessions, ConfigDefaults.claudeMaxSessions);
+    if (!Number.isFinite(raw) || raw <= 0) {
+      return ConfigDefaults.claudeMaxSessions;
+    }
+    return Math.floor(raw);
   }
 
   /**

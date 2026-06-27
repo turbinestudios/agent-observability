@@ -3,10 +3,12 @@ import * as crypto from 'node:crypto';
 import { TelemetryService } from '../telemetry/telemetryService';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
 import { WorkflowDeviation } from '../deviation/models';
+import { SessionDataSource, SourceRegistry } from '../sources/sessionSource';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
 import { analyzeContext, AcceptedMissingConfig } from '../context/contextAnalyzer';
 import {
   CombinedSessionSection,
+  CostMode,
   renderCombinedSessionDetailHtml,
   renderSessionDetailHtml,
 } from './sessionDetailHtml';
@@ -14,44 +16,52 @@ import {
 /** Webview view type used for all session-detail panels. */
 const VIEW_TYPE = 'agentObservability.sessionDetail';
 
+/** A session addressed by its source + key. */
+export interface SourceSession {
+  sourceId: string;
+  sessionKey: string;
+}
+
+/** Per-panel metadata, so live updates and re-renders can find their target. */
+interface PanelMeta {
+  /** Single-session panels: the source + key. Combined panels omit it. */
+  single?: SourceSession;
+}
+
 /**
- * Manages the local session-detail webview panels.
+ * Manages the local session-detail webview panels across BOTH sources.
  *
- * One panel per session key (keyed registry): opening an already-open session
- * reveals the existing panel instead of creating a duplicate. Panels render
- * HTML under a strict per-render CSP with a fresh nonce (scripts are nonce-gated
- * for the interactive legend filter). The session timeline — including the
- * local-only `userRequest` — is rendered HTML-escaped and never leaves the
- * machine.
+ * A panel is keyed by `${sourceId}::${sessionKey}` (combined panels by their
+ * sorted key set) so a Copilot and a Claude session that happen to share an id
+ * never collide. The detail body is rendered from whichever
+ * {@link SessionDataSource} owns the session; Copilot sessions additionally get
+ * the local deviation + context-analysis passes (which read Copilot-only span
+ * attributes via the concrete {@link TelemetryService}), while Claude sessions
+ * run deviations over metadata only and skip context analysis. The cost basis
+ * (AIU vs token-priced USD) follows the source.
  */
 export class SessionDetailPanelManager {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
-
-  /**
-   * Per-panel re-render closure, used by {@link refreshActive} to redraw a panel
-   * without re-threading its session key(s). Kept in sync with {@link panels} on
-   * create/dispose.
-   */
   private readonly rerenderers = new Map<vscode.WebviewPanel, () => void>();
-
-  /** The currently focused detail panel, tracked via `onDidChangeViewState`. */
+  private readonly meta = new Map<vscode.WebviewPanel, PanelMeta>();
   private activePanel: vscode.WebviewPanel | undefined;
 
   constructor(
+    private readonly sources: SourceRegistry,
     private readonly telemetry: TelemetryService,
     private readonly deviations: LocalDeviationDetector,
   ) {}
 
-  /**
-   * Open (or reveal) the detail panel for a session key. Loads the detail from
-   * the telemetry service and renders it; on failure renders a single
-   * explanatory message (never throwing into the command handler).
-   */
-  open(sessionKey: string): void {
-    const existing = this.panels.get(sessionKey);
+  /** Open (or reveal) the detail panel for a source's session key. */
+  open(sourceId: string, sessionKey: string): void {
+    if (sessionKey.length === 0) {
+      return;
+    }
+    const panelKey = `${sourceId}::${sessionKey}`;
+    const existing = this.panels.get(panelKey);
     if (existing !== undefined) {
       existing.reveal(existing.viewColumn ?? vscode.ViewColumn.Active);
-      this.render(existing, sessionKey);
+      this.render(existing, sourceId, sessionKey);
       return;
     }
 
@@ -59,45 +69,53 @@ export class SessionDetailPanelManager {
       VIEW_TYPE,
       `Session ${shortLabel(sessionKey)}`,
       vscode.ViewColumn.Active,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: false,
-      },
+      { enableScripts: true, retainContextWhenHidden: false },
     );
     panel.iconPath = new vscode.ThemeIcon('comment-discussion');
-    this.panels.set(sessionKey, panel);
-    this.rerenderers.set(panel, () => this.render(panel, sessionKey));
+    this.panels.set(panelKey, panel);
+    this.meta.set(panel, { single: { sourceId, sessionKey } });
+    this.rerenderers.set(panel, () => this.render(panel, sourceId, sessionKey));
     this.trackActive(panel);
     panel.onDidDispose(() => {
-      this.panels.delete(sessionKey);
+      this.panels.delete(panelKey);
       this.forget(panel);
     });
-    this.registerMessageHandler(panel, sessionKey);
+    this.registerMessageHandler(panel, sourceId, sessionKey);
 
-    this.render(panel, sessionKey);
+    this.render(panel, sourceId, sessionKey);
   }
 
   /**
-   * Open (or reveal) a SINGLE combined panel for a set of session keys. The keys
-   * are de-duplicated and sorted to form a stable panel id, so reopening the same
-   * selection reveals the existing panel. A selection of one falls back to the
-   * regular single-session view.
+   * Open (or reveal) a SINGLE combined panel for several sessions. Selections
+   * spanning sources are narrowed to the FIRST source present (a combined card
+   * mixes one cost basis); a selection of one falls back to the single view.
    */
-  openCombined(sessionKeys: readonly string[]): void {
-    const keys = [...new Set(sessionKeys.filter((k) => k.length > 0))].sort();
-    if (keys.length === 0) {
+  openCombined(sessions: readonly SourceSession[]): void {
+    const cleaned = sessions.filter((s) => s.sessionKey.length > 0);
+    if (cleaned.length === 0) {
       return;
     }
+    const sourceId = cleaned[0].sourceId;
+    const keys = [...new Set(cleaned.filter((s) => s.sourceId === sourceId).map((s) => s.sessionKey))].sort();
+    // A combined card uses one cost basis, so a cross-source selection is narrowed
+    // to the first source — surfaced, not silent (mirrors the tree's truncation row).
+    const dropped = cleaned.filter((s) => s.sourceId !== sourceId).length;
+    if (dropped > 0) {
+      const label = this.sources.get(sourceId)?.label ?? sourceId;
+      void vscode.window.showInformationMessage(
+        `Agent Observability: combined the ${label} sessions; ${dropped} session(s) from other sources were not combined (a combined view uses a single cost basis).`,
+      );
+    }
     if (keys.length === 1) {
-      this.open(keys[0]);
+      this.open(sourceId, keys[0]);
       return;
     }
 
-    const panelId = `combined:${keys.join('|')}`;
-    const existing = this.panels.get(panelId);
+    const panelKey = `combined:${sourceId}:${keys.join('|')}`;
+    const existing = this.panels.get(panelKey);
     if (existing !== undefined) {
       existing.reveal(existing.viewColumn ?? vscode.ViewColumn.Active);
-      this.renderCombined(existing, keys);
+      this.renderCombined(existing, sourceId, keys);
       return;
     }
 
@@ -108,52 +126,45 @@ export class SessionDetailPanelManager {
       { enableScripts: true, retainContextWhenHidden: false },
     );
     panel.iconPath = new vscode.ThemeIcon('layers');
-    this.panels.set(panelId, panel);
-    this.rerenderers.set(panel, () => this.renderCombined(panel, keys));
+    this.panels.set(panelKey, panel);
+    this.meta.set(panel, {});
+    this.rerenderers.set(panel, () => this.renderCombined(panel, sourceId, keys));
     this.trackActive(panel);
     panel.onDidDispose(() => {
-      this.panels.delete(panelId);
+      this.panels.delete(panelKey);
       this.forget(panel);
     });
 
-    this.renderCombined(panel, keys);
+    this.renderCombined(panel, sourceId, keys);
   }
 
-  /**
-   * Re-fetch fresh local telemetry and redraw the currently focused detail panel
-   * — the title-bar Refresh button. Drops the cached snapshot first so the redraw
-   * reflects new on-disk telemetry (the same data the navigation click would
-   * load after a refresh), then replays the panel's render closure. Works for
-   * both the single and combined views; a no-op when no detail panel is focused.
-   */
+  /** Re-fetch fresh telemetry and redraw the focused detail panel. */
   refreshActive(): void {
     const panel = this.activePanel;
     if (panel === undefined) {
       return;
     }
-    this.telemetry.refresh();
+    this.sources.refresh();
     this.rerenderers.get(panel)?.();
   }
 
   /**
-   * Push a near-real-time OTel live-status snapshot to any OPEN single-session
-   * panel whose key matches one of the span's candidate ids. The detail body
-   * stays SQLite-rendered; this only patches the live banner via `postMessage`
-   * to the panel's client script. A no-op when no matching panel is open (and
-   * combined panels, keyed `combined:…`, never match a raw session id).
+   * Push a near-real-time live-status snapshot to any OPEN Copilot single-session
+   * panel whose key matches a candidate id. Combined panels and Claude panels are
+   * skipped (the OTel bridge is Copilot-only).
    */
   pushLiveUpdate(candidateIds: readonly string[], payload: unknown): void {
     if (candidateIds.length === 0) {
       return;
     }
-    for (const [key, panel] of this.panels) {
-      if (candidateIds.includes(key)) {
+    for (const [, panel] of this.panels) {
+      const single = this.meta.get(panel)?.single;
+      if (single !== undefined && single.sourceId === 'copilot' && candidateIds.includes(single.sessionKey)) {
         void panel.webview.postMessage({ type: 'liveUpdate', live: payload });
       }
     }
   }
 
-  /** Track which detail panel is focused so {@link refreshActive} can find it. */
   private trackActive(panel: vscode.WebviewPanel): void {
     if (panel.active) {
       this.activePanel = panel;
@@ -167,33 +178,28 @@ export class SessionDetailPanelManager {
     });
   }
 
-  /** Drop a disposed panel from the rerender registry and active-panel slot. */
   private forget(panel: vscode.WebviewPanel): void {
     this.rerenderers.delete(panel);
+    this.meta.delete(panel);
     if (this.activePanel === panel) {
       this.activePanel = undefined;
     }
   }
 
-  /** Dispose every open panel (extension deactivate). */
   dispose(): void {
     for (const panel of this.panels.values()) {
       panel.dispose();
     }
     this.panels.clear();
     this.rerenderers.clear();
+    this.meta.clear();
     this.activePanel = undefined;
   }
 
-  /**
-   * Register a message handler for webview → extension messages (accept-missing actions).
-   * When a message arrives, the handler updates the workspace configuration and re-renders.
-   */
-  private registerMessageHandler(panel: vscode.WebviewPanel, sessionKey: string): void {
+  private registerMessageHandler(panel: vscode.WebviewPanel, sourceId: string, sessionKey: string): void {
     panel.webview.onDidReceiveMessage(async (msg: unknown) => {
       if (typeof msg !== 'object' || msg === null) return;
       const message = msg as { type?: string; file?: string; source?: string };
-
       const config = vscode.workspace.getConfiguration('agentObservability.context');
 
       if (message.type === 'accept-missing-file' && typeof message.file === 'string') {
@@ -201,18 +207,17 @@ export class SessionDetailPanelManager {
         if (!current.includes(message.file)) {
           await config.update('acceptedMissingFiles', [...current, message.file], vscode.ConfigurationTarget.Workspace);
         }
-        this.render(panel, sessionKey);
+        this.render(panel, sourceId, sessionKey);
       } else if (message.type === 'accept-missing-source' && typeof message.source === 'string') {
         const current: string[] = config.get('acceptedMissingSources', []);
         if (!current.includes(message.source)) {
           await config.update('acceptedMissingSources', [...current, message.source], vscode.ConfigurationTarget.Workspace);
         }
-        this.render(panel, sessionKey);
+        this.render(panel, sourceId, sessionKey);
       }
     });
   }
 
-  /** Read the accepted-missing configuration from workspace settings. */
   private readAcceptedMissing(): AcceptedMissingConfig {
     const config = vscode.workspace.getConfiguration('agentObservability.context');
     return {
@@ -221,79 +226,83 @@ export class SessionDetailPanelManager {
     };
   }
 
-  /** Load detail + deviations + context analysis and set the panel HTML. */
-  private render(panel: vscode.WebviewPanel, sessionKey: string): void {
-    const result = this.telemetry.getSessionDetail(sessionKey);
+  /** Load detail (+ Copilot deviations/context) and set the panel HTML. */
+  private render(panel: vscode.WebviewPanel, sourceId: string, sessionKey: string): void {
+    const source = this.sources.get(sourceId);
+    if (source === undefined) {
+      panel.webview.html = renderMessageHtml(`Unknown telemetry source "${sourceId}".`);
+      return;
+    }
+    const result = source.getSessionDetail(sessionKey);
     if (!result.ok) {
       panel.webview.html = renderMessageHtml(result.message);
       return;
     }
     const detail = result.value;
-    const found = this.detectDeviations(sessionKey);
-    const acceptedMissing = this.readAcceptedMissing();
+    const found = this.detectDeviations(source, sessionKey);
+    const costMode: CostMode = source.id === 'claude' ? 'usd' : 'aiu';
 
-    // Extract distinct subagent friendly names from the already-resolved
-    // agentUsage (same data the Overview tab uses). These are passed to the
-    // context analyzer as a fallback name list so collapsibles show the same
-    // friendly names even when discovery event IDs can't be matched by DB query.
-    const subagentNamesList = [...new Set(
-      detail.agentUsage
-        .filter((u) => u.kind === 'subagent')
-        .map((u) => u.agentName),
-    )];
-    const contextAnalysis = analyzeContext(sessionKey, this.telemetry, acceptedMissing, undefined, subagentNamesList);
+    // Context analysis reads Copilot-only span attributes; skip for other sources.
+    let contextAnalysis = undefined;
+    if (source.id === 'copilot') {
+      const subagentNamesList = [
+        ...new Set(detail.agentUsage.filter((u) => u.kind === 'subagent').map((u) => u.agentName)),
+      ];
+      contextAnalysis = analyzeContext(
+        sessionKey,
+        this.telemetry,
+        this.readAcceptedMissing(),
+        undefined,
+        subagentNamesList,
+      );
+    }
 
     const nonce = makeNonce();
-    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, contextAnalysis);
+    panel.webview.html = renderSessionDetailHtml(detail, found, nonce, contextAnalysis, costMode);
   }
 
-  /**
-   * Render the COMBINED view for several session keys: fetch each session's
-   * detail + deviations, sort the sections by start time, and merge the usage
-   * rollups. Cost is derived from each session's AIU at render time. Sessions that
-   * fail to load are skipped; when none load, a single explanatory message is shown.
-   */
-  private renderCombined(panel: vscode.WebviewPanel, keys: readonly string[]): void {
+  /** Render the COMBINED view for several same-source session keys. */
+  private renderCombined(panel: vscode.WebviewPanel, sourceId: string, keys: readonly string[]): void {
+    const source = this.sources.get(sourceId);
+    if (source === undefined) {
+      panel.webview.html = renderMessageHtml(`Unknown telemetry source "${sourceId}".`);
+      return;
+    }
     const sections: CombinedSessionSection[] = [];
     for (const key of keys) {
-      const result = this.telemetry.getSessionDetail(key);
+      const result = source.getSessionDetail(key);
       if (!result.ok) {
         continue;
       }
-      sections.push({
-        detail: result.value,
-        deviations: this.detectDeviations(key),
-      });
+      sections.push({ detail: result.value, deviations: this.detectDeviations(source, key) });
     }
-
     if (sections.length === 0) {
       panel.webview.html = renderMessageHtml('None of the selected sessions could be loaded.');
       return;
     }
-
-    // Chronological by session start so the timeline reads top-to-bottom.
     sections.sort((a, b) => a.detail.summary.startedAtMs - b.detail.summary.startedAtMs);
-
     const combined = combineSessionDetails(sections.map((s) => s.detail));
-
+    const costMode: CostMode = source.id === 'claude' ? 'usd' : 'aiu';
     const nonce = makeNonce();
-    panel.webview.html = renderCombinedSessionDetailHtml({ combined, sections }, nonce);
+    panel.webview.html = renderCombinedSessionDetailHtml({ combined, sections }, nonce, costMode);
   }
 
   /**
-   * Run the deviation detector over a session's SAFE-metadata interactions (which
-   * carry the real agent_name the sequence/missing checks need). Workflow content
-   * predicates (if any) read raw span attributes through a LOCAL-ONLY lookup,
-   * memoized per attribute; that text is used only to compute booleans on-machine
-   * and never enters a WorkflowDeviation or any networked path.
+   * Run the deviation detector over a session's safe-metadata interactions. For
+   * Copilot, workflow content predicates read raw span attributes through a
+   * LOCAL-ONLY memoized lookup; for other sources the lookup is empty (metadata
+   * checks — sequence/timeout/failure — still run).
    */
-  private detectDeviations(sessionKey: string): WorkflowDeviation[] {
-    const interactions = this.telemetry.getSessionInteractions(sessionKey);
+  private detectDeviations(source: SessionDataSource, sessionKey: string): WorkflowDeviation[] {
+    const interactions = source.getSessionInteractions(sessionKey);
     if (!interactions.ok) {
       return [];
     }
     const attributeCache = new Map<string, ReadonlyMap<string, string>>();
     const contentLookup = (attribute: string): ReadonlyMap<string, string> => {
+      if (source.id !== 'copilot') {
+        return new Map<string, string>();
+      }
       let values = attributeCache.get(attribute);
       if (values === undefined) {
         const result = this.telemetry.getSpanAttributes(sessionKey, attribute);
