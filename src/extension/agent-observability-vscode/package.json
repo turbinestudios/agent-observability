@@ -154,6 +154,12 @@
         "command": "agentObservability.disableLiveUpdates",
         "title": "Disable Live Updates",
         "category": "Agent Observability"
+      },
+      {
+        "command": "agentObservability.showLogs",
+        "title": "Show Logs",
+        "category": "Agent Observability",
+        "icon": "$(output)"
       }
     ],
     "menus": {
@@ -203,6 +209,16 @@
           "command": "agentObservability.newChat",
           "when": "view == agentObservability.assistant",
           "group": "navigation@1"
+        },
+        {
+          "command": "agentObservability.showLogs",
+          "when": "view == agentObservability.overview",
+          "group": "navigation@8"
+        },
+        {
+          "command": "agentObservability.showLogs",
+          "when": "view == agentObservability.sync",
+          "group": "navigation@8"
         },
         {
           "command": "agentObservability.openSettings",

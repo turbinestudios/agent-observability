@@ -26,6 +26,8 @@ import { LiveOtlpService } from './otel/liveOtlpService';
 import { ClaudeCodeService } from './claude/claudeCodeService';
 import { CopilotSource, SourceRegistry } from './sources/sessionSource';
 import { CompositeAggregationSource } from './sync/compositeAggregationSource';
+import { OutputChannelLogger } from './log/outputChannelLogger';
+import { Logger } from './log/logger';
 
 /**
  * Extension entrypoint.
@@ -52,6 +54,12 @@ let syncScheduler: SyncScheduler | undefined;
 let liveOtlp: LiveOtlpService | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
+  // Diagnostic Output channel ("Agent Observability"). Content-free by contract
+  // (counts/ids/statuses only — never prompts, completions, the API key, or the
+  // pseudonym salt). Stays local; this is diagnostics, not telemetry.
+  const logger = new OutputChannelLogger();
+  context.subscriptions.push(logger);
+
   const config = new Configuration();
   const telemetry = new TelemetryService(config);
 
@@ -214,11 +222,13 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     newChat: () => assistant.newChat(),
     enableLiveUpdates: () => {
-      void runEnableLiveUpdates(config);
+      void runEnableLiveUpdates(config, logger);
     },
     disableLiveUpdates: () => {
-      void runDisableLiveUpdates(telemetry);
+      void runDisableLiveUpdates(telemetry, logger);
     },
+    showLogs: () => logger.show(),
+    logger,
   });
 
   // `@obs` chat participant — lives in the GitHub Copilot chat window and renders
@@ -235,6 +245,14 @@ export function activate(context: vscode.ExtensionContext): void {
   // Prime the divergence-notifier baseline so a freshly-opened window does not
   // toast for pre-existing history; subsequent refreshes notify only NEW ones.
   divergenceNotifier.scan();
+
+  // Content-free activation summary (sources + feature-flag state). Useful when a
+  // user reports "I see no sessions" — the log shows which sources were enabled.
+  const sourceStates = registry.all().map((s) => `${s.label}=${s.isEnabled() ? 'on' : 'off'}`);
+  logger.info(
+    `Activated v${toolVersion}. Sources: ${sourceStates.join(', ')}. ` +
+      `Live updates: ${config.isLiveUpdatesEnabled() ? 'on' : 'off'}.`,
+  );
 
   // Real-time OTLP sink. When live updates are enabled, run a localhost receiver
   // that ingests Copilot's pushed OTLP spans into the extension's OWN DB (Copilot
@@ -254,17 +272,20 @@ export function activate(context: vscode.ExtensionContext): void {
       port: config.getLiveOtelPort(),
       debounceMs: config.getLiveDebounceMs(),
       onIngest: refreshLive,
+      onError: (err) => logger.error('Live OTLP pipeline error', err),
     });
     liveOtlp = service;
     void service
       .start()
-      .then(() => {
+      .then((boundPort) => {
         // The ingest DB now exists → make it the sole source, then render.
         telemetry.setIngestDbPath(ingestDbPath);
+        logger.info(`Live OTLP receiver listening on 127.0.0.1:${boundPort}.`);
         refreshLive();
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
+        logger.error('Could not start the live OTLP receiver', err);
         void vscode.window.showErrorMessage(
           'Agent Observability: could not start the real-time OTLP receiver on port ' +
             `${config.getLiveOtelPort()} (${message}). Re-run “Enable Live Updates”.`,
@@ -327,13 +348,14 @@ export function activate(context: vscode.ExtensionContext): void {
  * required (Copilot reads these at application startup; a window reload does NOT
  * re-read them). Everything stays local; nothing is uploaded.
  */
-async function runEnableLiveUpdates(config: Configuration): Promise<void> {
+async function runEnableLiveUpdates(config: Configuration, logger: Logger): Promise<void> {
   void config;
   let port: number;
   try {
     port = await findFreePort();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    logger.error('Could not find a free port for live updates', err);
     void vscode.window.showErrorMessage(`Agent Observability: could not find a free port (${message}).`);
     return;
   }
@@ -354,12 +376,14 @@ async function runEnableLiveUpdates(config: Configuration): Promise<void> {
     await otel.update('agentDebugLog.fileLogging.enabled', false, vscode.ConfigurationTarget.Global);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    logger.error("Could not configure Copilot's OpenTelemetry exporter", err);
     void vscode.window.showErrorMessage(
       `Agent Observability: could not configure Copilot's OpenTelemetry exporter (${message}). Ensure the GitHub Copilot Chat extension is installed.`,
     );
     return;
   }
 
+  logger.info(`Live updates enabled — Copilot OTel pointed at http://127.0.0.1:${port} (restart required).`);
   void vscode.window.showWarningMessage(
     `Agent Observability: real-time telemetry enabled (Copilot → http://127.0.0.1:${port}). ` +
       'You must FULLY QUIT and reopen VS Code — a window reload is NOT enough for Copilot to switch exporters.',
@@ -371,7 +395,7 @@ async function runEnableLiveUpdates(config: Configuration): Promise<void> {
  * receiver, detaches the ingest source, and best-effort disables Copilot's OTel
  * exporter. A full restart fully reverts Copilot's exporter selection.
  */
-async function runDisableLiveUpdates(telemetry: TelemetryService): Promise<void> {
+async function runDisableLiveUpdates(telemetry: TelemetryService, logger: Logger): Promise<void> {
   const ao = vscode.workspace.getConfiguration('agentObservability');
   await ao.update('liveUpdates.enabled', false, vscode.ConfigurationTarget.Global);
   try {
@@ -383,6 +407,7 @@ async function runDisableLiveUpdates(telemetry: TelemetryService): Promise<void>
   liveOtlp?.stop();
   liveOtlp = undefined;
   telemetry.setIngestDbPath(undefined);
+  logger.info('Live updates disabled; OTLP receiver stopped.');
   void vscode.window.showInformationMessage(
     'Agent Observability: real-time telemetry disabled. Fully quit + reopen VS Code to fully revert Copilot’s exporter.',
   );

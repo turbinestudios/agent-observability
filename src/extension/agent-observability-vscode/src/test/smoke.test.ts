@@ -61,6 +61,7 @@ const EXPECTED_COMMANDS = [
   'agentObservability.newChat',
   'agentObservability.enableLiveUpdates',
   'agentObservability.disableLiveUpdates',
+  'agentObservability.showLogs',
 ] as const;
 
 const EXPECTED_VIEWS = [

@@ -4,6 +4,7 @@ import { ConsentManager } from '../consent/consentManager';
 import { consentModalDetail } from '../consent/consentDisclosure';
 import { SecretManager } from '../secrets/secretManager';
 import { SyncEngine } from '../sync/syncEngine';
+import { Logger } from '../log/logger';
 
 /**
  * Stable command ids. These MUST match the `contributes.commands` entries in
@@ -24,6 +25,7 @@ export const Commands = {
   newChat: 'agentObservability.newChat',
   enableLiveUpdates: 'agentObservability.enableLiveUpdates',
   disableLiveUpdates: 'agentObservability.disableLiveUpdates',
+  showLogs: 'agentObservability.showLogs',
 } as const;
 
 /** The required prefix of an organization API key (`aoa_<keyId>_<secret>`). */
@@ -66,6 +68,10 @@ export interface CommandDeps {
   enableLiveUpdates: () => void;
   /** Turn off near-real-time live updates. */
   disableLiveUpdates: () => void;
+  /** Reveal the extension's diagnostic Output channel. */
+  showLogs: () => void;
+  /** Content-free diagnostic log; manual sync outcomes are recorded here. */
+  logger: Logger;
 }
 
 /** Fan out a refresh to every registered view provider. */
@@ -99,6 +105,8 @@ export function registerCommands(
     newChat,
     enableLiveUpdates,
     disableLiveUpdates,
+    showLogs,
+    logger,
   } = deps;
 
   const register = (id: string, handler: (...args: unknown[]) => unknown): void => {
@@ -114,7 +122,7 @@ export function registerCommands(
   // never uploads when it is closed). Drives the real Phase 7 upload behind a
   // progress notification and refreshes the views with the outcome.
   register(Commands.syncNow, () => {
-    void runSyncNow(syncEngine, () => refreshAll(refreshables));
+    void runSyncNow(syncEngine, logger, () => refreshAll(refreshables));
   });
 
   // Open the extension's settings filtered to this section.
@@ -196,6 +204,11 @@ export function registerCommands(
   register(Commands.disableLiveUpdates, () => {
     disableLiveUpdates();
   });
+
+  // Reveal the diagnostic Output channel ("Agent Observability").
+  register(Commands.showLogs, () => {
+    showLogs();
+  });
 }
 
 /**
@@ -223,7 +236,8 @@ function sourceSessionsFromCommandArgs(args: unknown[]): Array<{ sourceId: strin
  * consent + API-key gate (no network when closed) and never logs the key/body.
  * After the run the views are refreshed so the Sync history updates.
  */
-async function runSyncNow(syncEngine: SyncEngine, onChanged: () => void): Promise<void> {
+async function runSyncNow(syncEngine: SyncEngine, logger: Logger, onChanged: () => void): Promise<void> {
+  logger.info('Manual sync requested.');
   const result = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Agent Observability: syncing aggregates…' },
     () => syncEngine.runSync({ manual: true }),
@@ -233,17 +247,21 @@ async function runSyncNow(syncEngine: SyncEngine, onChanged: () => void): Promis
 
   switch (result.status) {
     case 'success':
+      logger.info(`Manual sync uploaded ${result.bucketsSent} bucket(s).`);
       void vscode.window.showInformationMessage(
         `Agent Observability: uploaded ${result.bucketsSent} aggregate ${result.bucketsSent === 1 ? 'bucket' : 'buckets'}.`,
       );
       return;
     case 'upToDate':
+      logger.info('Manual sync: already up to date.');
       void vscode.window.showInformationMessage('Agent Observability: already up to date — nothing new to upload.');
       return;
     case 'blocked':
+      logger.warn(`Manual sync blocked: ${result.reason}`);
       void vscode.window.showInformationMessage(`Agent Observability: cannot sync — ${result.reason} Nothing was uploaded.`);
       return;
     case 'failed':
+      logger.error(`Manual sync failed: ${result.message}`);
       void vscode.window.showErrorMessage(`Agent Observability: sync failed — ${result.message}`);
       return;
   }
