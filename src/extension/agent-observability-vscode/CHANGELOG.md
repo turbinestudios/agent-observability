@@ -4,6 +4,26 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Live updates are now scoped to the open session-detail panel.** A live signal
+  (a Copilot OTLP push or a Claude transcript write) re-renders the focused
+  session-detail panel in near-real-time, but no longer refreshes the Sessions,
+  Overview, or Sync trees on every poll — so the session list no longer flickers a
+  loading state as the extension polls. Those trees still refresh on a manual
+  refresh, a configuration change, and once when the live receiver first binds; the
+  full session list does not need to be near-real-time. The proactive
+  divergence-notifier scan still runs on the live path (it renders no loading UI and
+  is off by default).
+- **Live session-detail updates no longer reset the view.** A near-real-time update
+  used to reassign the whole webview HTML, which reloaded the panel and collapsed
+  every disclosure, reset the active tab, and jumped the scroll. The panel now mounts
+  the document once and pushes only the new body as a message; an in-page controller
+  swaps it in and restores open collapsibles, the active tab, and scroll — so a data
+  push is seamless. (Manual refresh and accept-missing actions are preserved too.)
+
 ## [0.4.0] - 2026-06-29
 
 ### Changed

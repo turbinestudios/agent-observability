@@ -204,14 +204,33 @@ export function activate(context: vscode.ExtensionContext): void {
   // and the controller coalesces the burst into a single debounced refresh.
   const ingestDbPath = path.join(context.globalStorageUri.fsPath, 'ingest', 'agent-traces.db');
 
-  // Live refresh — CHEAP, targeted invalidation (vs the heavy full registry
-  // refresh): drop the Copilot snapshot so freshly-ingested OTLP rows reload, and
-  // forget the Claude directory listing so only the changed transcript re-parses
-  // (its mtime-keyed caches survive). Then re-render the views + the focused
-  // detail panel without a second full source re-read.
-  const refreshLive = (): void => {
+  // CHEAP, targeted invalidation (vs the heavy full registry refresh): drop the
+  // Copilot snapshot so freshly-ingested OTLP rows reload, and forget the Claude
+  // directory listing so only the changed transcript re-parses (its mtime-keyed
+  // caches survive). A subsequent read/re-render then sees the new activity.
+  const invalidateLiveSources = (): void => {
     telemetry.refresh();
     claude.invalidateDiscovery();
+  };
+
+  // LIVE poll (debounced; fires on every observed signal). Deliberately SCOPED to
+  // the opened detail panel(s): the session list / overview / sync trees are NOT
+  // refreshed here, so polling never flickers the list with a loading state. Those
+  // trees refresh on a manual refresh, a config change, or when the receiver first
+  // binds (below) — the full session list does not need to be near-real-time. The
+  // divergence-notifier scan stays: it renders no tree/loading UI and is gated off
+  // by default, so opt-in proactive toasts still fire in near-real-time.
+  const refreshLive = (): void => {
+    invalidateLiveSources();
+    divergenceNotifier.refresh();
+    detailPanels.rerenderActive();
+  };
+
+  // One-time render when the OTLP receiver binds and the ingest DB becomes the
+  // Copilot source — refresh EVERY view once so the switch is reflected. This is a
+  // setup event, not a recurring poll, so the full tree fan-out is fine here.
+  const renderAllViews = (): void => {
+    invalidateLiveSources();
     overview.refresh();
     sessions.refresh();
     sync.refresh();
@@ -247,10 +266,11 @@ export function activate(context: vscode.ExtensionContext): void {
         port: config.getLiveOtelPort(),
         signal: () => controller.signal(),
         onListening: (boundPort) => {
-          // The ingest DB now exists → make it the sole Copilot source, then render.
+          // The ingest DB now exists → make it the sole Copilot source, then render
+          // every view ONCE (one-time setup, not a poll — safe to refresh the trees).
           telemetry.setIngestDbPath(ingestDbPath);
           logger.info(`Live OTLP receiver listening on 127.0.0.1:${boundPort}.`);
-          refreshLive();
+          renderAllViews();
         },
         onStartError: (err) => {
           logger.error('Could not start the live OTLP receiver', err);

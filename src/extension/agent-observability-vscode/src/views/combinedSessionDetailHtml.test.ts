@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { renderCombinedSessionDetailHtml, CombinedSessionView } from './sessionDetailHtml';
+import {
+  renderCombinedSessionDetailHtml,
+  renderCombinedSessionDetailContent,
+  CombinedSessionView,
+} from './sessionDetailHtml';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
 import { SessionDetail, SessionTurn } from '../telemetry/models';
 import { DeviationType, WorkflowDeviation } from '../deviation/models';
@@ -134,6 +138,21 @@ describe('renderCombinedSessionDetailHtml', () => {
     // A centered label carrying each session's short id sits over its scope.
     expect(html).toMatch(/class="trend-session-label"[^>]*>aaaa</);
     expect(html).toMatch(/class="trend-session-label"[^>]*>bbbb</);
+  });
+
+  it('mounts the live shell and keys each session section with a stable data-k', () => {
+    const a = session({ sessionId: 'aaaa-1111' });
+    const b = session({ sessionId: 'bbbb-2222' });
+
+    const html = renderCombinedSessionDetailHtml(viewFor([a, b]), NONCE);
+    expect(html).toContain('<div id="live-root">');
+
+    // The body the panel posts as an `update` carries the per-section keys (and no
+    // document shell), so the controller can restore each section's open state.
+    const content = renderCombinedSessionDetailContent(viewFor([a, b]));
+    expect(content).not.toContain('<!DOCTYPE');
+    expect(content).toContain('data-k="s0"');
+    expect(content).toContain('data-k="s1"');
   });
 
   it('escapes a malicious session title', () => {
