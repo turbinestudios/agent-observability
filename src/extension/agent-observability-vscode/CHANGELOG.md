@@ -4,7 +4,7 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-06-29
 
 ### Changed
 
@@ -35,6 +35,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   everything stays local (the receiver binds loopback only). Requires a **full VS Code
   restart** to switch Copilot's exporter (a window reload is not enough). New setting
   `agentObservability.liveUpdates.otelPort` (set automatically by the command).
+- **Live updates now cover Claude Code too — via a transcript file watcher.** A shared
+  live-update controller drives near-real-time refreshes from both sources behind a
+  single debounce: Copilot's OTLP receiver and a new recursive watcher over Claude
+  Code's `~/.claude/projects` JSONL transcripts. Because Claude writes those transcripts
+  as a session runs, the Sessions/Overview views and the open session-detail panel now
+  update live while a Claude Code agent works — with **no exporter setup and no VS Code
+  restart** (unlike Copilot). **Enable Live Updates** now starts the Claude watcher
+  immediately. A transcript event re-parses only the changed session (its mtime-keyed
+  caches survive), so the live refresh stays cheap. Everything stays local; nothing is
+  uploaded.
 - **Per-repository cloud sync scope.** Cloud sync reads your merged local
   telemetry, which spans every repository you use Copilot in — not just the open
   workspace. Two new user-level settings now control which repositories'

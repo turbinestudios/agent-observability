@@ -145,6 +145,21 @@ export class SessionDetailPanelManager {
     this.rerenderers.get(panel)?.();
   }
 
+  /**
+   * Re-render the focused detail panel WITHOUT re-reading every source. Used by
+   * the live-update path, where the caller has already done the cheap, targeted
+   * source invalidation (drop the Copilot snapshot + the Claude discovery listing)
+   * so a full {@link SourceRegistry.refresh} would needlessly re-snapshot/re-parse.
+   * A no-op when no detail panel is focused.
+   */
+  rerenderActive(): void {
+    const panel = this.activePanel;
+    if (panel === undefined) {
+      return;
+    }
+    this.rerenderers.get(panel)?.();
+  }
+
   /** Track which detail panel is focused so {@link refreshActive} can find it. */
   private trackActive(panel: vscode.WebviewPanel): void {
     if (panel.active) {

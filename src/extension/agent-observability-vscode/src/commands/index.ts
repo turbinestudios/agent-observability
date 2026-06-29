@@ -197,7 +197,8 @@ export function registerCommands(
 
   // Enable/Disable near-real-time live updates. The handlers (in extension.ts)
   // write Copilot's `github.copilot.chat.otel.*` settings + the extension's
-  // `liveUpdates.*` settings and (re)start the file tailer. All local; no upload.
+  // `liveUpdates.*` settings and (re)start the live pipeline — the Copilot OTLP
+  // receiver and the Claude transcript watcher. All local; no upload.
   register(Commands.enableLiveUpdates, () => {
     enableLiveUpdates();
   });

@@ -23,7 +23,11 @@ import { registerObservabilityChatParticipant } from './chat/observabilityChat';
 import { ChatViewProvider, ASSISTANT_VIEW_ID } from './chat/webview/chatViewProvider';
 import { WorkflowDivergenceNotifier } from './notify/workflowDivergenceNotifier';
 import { LiveOtlpService } from './otel/liveOtlpService';
+import { LiveUpdateController } from './live/liveUpdateController';
+import { ClaudeWatcher } from './live/claudeWatcher';
+import { vscodeFileWatchFactory } from './live/vscodeFileWatchFactory';
 import { ClaudeCodeService } from './claude/claudeCodeService';
+import { resolveClaudeProjectsDirs } from './claude/paths';
 import { CopilotSource, SourceRegistry } from './sources/sessionSource';
 import { CompositeAggregationSource } from './sync/compositeAggregationSource';
 import { OutputChannelLogger } from './log/outputChannelLogger';
@@ -51,7 +55,7 @@ let sources: SourceRegistry | undefined;
 let sessionDetailPanels: SessionDetailPanelManager | undefined;
 let consentManager: ConsentManager | undefined;
 let syncScheduler: SyncScheduler | undefined;
-let liveOtlp: LiveOtlpService | undefined;
+let liveController: LiveUpdateController | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   // Diagnostic Output channel ("Agent Observability"). Content-free by contract
@@ -193,6 +197,96 @@ export function activate(context: vscode.ExtensionContext): void {
   // then fans out to every view.
   const sourcesRefresh: Refreshable = { refresh: () => registry.refresh() };
   const refreshables: Refreshable[] = [sourcesRefresh, overview, sessions, sync, divergenceNotifier];
+
+  // ── Real-time live updates ──────────────────────────────────────────────────
+  // Both live sources (the Copilot OTLP receiver + the Claude transcript watcher)
+  // funnel through ONE LiveUpdateController: each calls `signal()` on new activity
+  // and the controller coalesces the burst into a single debounced refresh.
+  const ingestDbPath = path.join(context.globalStorageUri.fsPath, 'ingest', 'agent-traces.db');
+
+  // Live refresh — CHEAP, targeted invalidation (vs the heavy full registry
+  // refresh): drop the Copilot snapshot so freshly-ingested OTLP rows reload, and
+  // forget the Claude directory listing so only the changed transcript re-parses
+  // (its mtime-keyed caches survive). Then re-render the views + the focused
+  // detail panel without a second full source re-read.
+  const refreshLive = (): void => {
+    telemetry.refresh();
+    claude.invalidateDiscovery();
+    overview.refresh();
+    sessions.refresh();
+    sync.refresh();
+    divergenceNotifier.refresh();
+    detailPanels.rerenderActive();
+  };
+
+  const stopLive = (): void => {
+    liveController?.stop();
+    liveController = undefined;
+  };
+
+  // Build + start the live pipeline for whichever sources apply. Idempotent: a
+  // re-entry (e.g. the Enable command) tears the previous one down first. Off
+  // unless `liveUpdates.enabled`.
+  const startLive = (): void => {
+    stopLive();
+    if (!config.isLiveUpdatesEnabled()) {
+      return;
+    }
+    const controller = new LiveUpdateController({
+      onRefresh: refreshLive,
+      debounceMs: config.getLiveDebounceMs(),
+      onError: (err) => logger.error('Live update pipeline error', err),
+    });
+
+    // Copilot: localhost OTLP receiver. Copilot must be pointed here via "Enable
+    // Live Updates", which also needs a FULL VS Code restart for Copilot to switch
+    // exporters; the receiver itself is harmless to run before that.
+    controller.register(
+      new LiveOtlpService({
+        ingestDbPath,
+        port: config.getLiveOtelPort(),
+        signal: () => controller.signal(),
+        onListening: (boundPort) => {
+          // The ingest DB now exists → make it the sole Copilot source, then render.
+          telemetry.setIngestDbPath(ingestDbPath);
+          logger.info(`Live OTLP receiver listening on 127.0.0.1:${boundPort}.`);
+          refreshLive();
+        },
+        onStartError: (err) => {
+          logger.error('Could not start the live OTLP receiver', err);
+          void vscode.window.showErrorMessage(
+            'Agent Observability: could not start the real-time OTLP receiver on port ' +
+              `${config.getLiveOtelPort()}. Re-run “Enable Live Updates”.`,
+          );
+        },
+        onError: (err) => logger.error('Live OTLP pipeline error', err),
+      }),
+    );
+
+    // Claude Code: transcript file watcher. No exporter config and NO restart —
+    // the JSONL files are always being written, so watching them is the signal.
+    if (claude.isEnabled()) {
+      controller.register(
+        new ClaudeWatcher({
+          resolveDirs: () => resolveClaudeProjectsDirs(config),
+          factory: vscodeFileWatchFactory,
+          signal: () => controller.signal(),
+          onWatching: (dirs) => {
+            logger.info(
+              dirs.length > 0
+                ? `Watching ${dirs.length} Claude Code transcript ${dirs.length === 1 ? 'directory' : 'directories'} for live updates.`
+                : 'Live updates on, but no Claude Code transcript directory exists yet — it is picked up on the next refresh/restart.',
+            );
+          },
+          onError: (err) => logger.error('Claude Code watcher error', err),
+        }),
+      );
+    }
+
+    liveController = controller;
+    void controller.start();
+  };
+
   registerCommands(context, refreshables, {
     consent,
     secrets,
@@ -222,9 +316,13 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     newChat: () => assistant.newChat(),
     enableLiveUpdates: () => {
-      void runEnableLiveUpdates(config, logger);
+      // Write the settings, then start the pipeline immediately: the Claude
+      // watcher goes live now (no restart); Copilot's exporter still needs a
+      // full restart, but the receiver is already listening for it.
+      void runEnableLiveUpdates(config, logger).then(() => startLive());
     },
     disableLiveUpdates: () => {
+      stopLive();
       void runDisableLiveUpdates(telemetry, logger);
     },
     showLogs: () => logger.show(),
@@ -254,44 +352,11 @@ export function activate(context: vscode.ExtensionContext): void {
       `Live updates: ${config.isLiveUpdatesEnabled() ? 'on' : 'off'}.`,
   );
 
-  // Real-time OTLP sink. When live updates are enabled, run a localhost receiver
-  // that ingests Copilot's pushed OTLP spans into the extension's OWN DB (Copilot
-  // schema) and refreshes the views + notifier on each batch. The extension is the
-  // sink; nothing is uploaded. Copilot must be pointed here via "Enable Live
-  // Updates" (which also requires a FULL VS Code restart to switch exporters).
-  if (config.isLiveUpdatesEnabled()) {
-    const ingestDbPath = path.join(context.globalStorageUri.fsPath, 'ingest', 'agent-traces.db');
-    const refreshLive = (): void => {
-      for (const r of refreshables) {
-        r.refresh();
-      }
-      detailPanels.refreshActive();
-    };
-    const service = new LiveOtlpService({
-      ingestDbPath,
-      port: config.getLiveOtelPort(),
-      debounceMs: config.getLiveDebounceMs(),
-      onIngest: refreshLive,
-      onError: (err) => logger.error('Live OTLP pipeline error', err),
-    });
-    liveOtlp = service;
-    void service
-      .start()
-      .then((boundPort) => {
-        // The ingest DB now exists → make it the sole source, then render.
-        telemetry.setIngestDbPath(ingestDbPath);
-        logger.info(`Live OTLP receiver listening on 127.0.0.1:${boundPort}.`);
-        refreshLive();
-      })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        logger.error('Could not start the live OTLP receiver', err);
-        void vscode.window.showErrorMessage(
-          'Agent Observability: could not start the real-time OTLP receiver on port ' +
-            `${config.getLiveOtelPort()} (${message}). Re-run “Enable Live Updates”.`,
-        );
-      });
-  }
+  // Start the real-time pipeline (no-op unless live updates are enabled). The
+  // controller runs the Copilot OTLP receiver and the Claude transcript watcher,
+  // coalescing their signals into one debounced refresh. Everything stays local;
+  // nothing is uploaded.
+  startLive();
 
   // Keep the Sync view live when consent flips (set-key already refreshes via
   // the command path, but consent can also change programmatically).
@@ -303,7 +368,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({ dispose: () => detailPanels.dispose() });
   context.subscriptions.push({ dispose: () => consent.dispose() });
   context.subscriptions.push({ dispose: () => scheduler.dispose() });
-  context.subscriptions.push({ dispose: () => liveOtlp?.stop() });
+  context.subscriptions.push({ dispose: () => stopLive() });
 
   // On configuration change (e.g. toggling the feature flag, sqlitePath, or the
   // sync.enabled/intervalMinutes settings), drop the cached snapshot, re-arm the
@@ -385,15 +450,16 @@ async function runEnableLiveUpdates(config: Configuration, logger: Logger): Prom
 
   logger.info(`Live updates enabled — Copilot OTel pointed at http://127.0.0.1:${port} (restart required).`);
   void vscode.window.showWarningMessage(
-    `Agent Observability: real-time telemetry enabled (Copilot → http://127.0.0.1:${port}). ` +
-      'You must FULLY QUIT and reopen VS Code — a window reload is NOT enough for Copilot to switch exporters.',
+    'Agent Observability: real-time updates enabled. Claude Code sessions update live now (no restart). ' +
+      `For Copilot (→ http://127.0.0.1:${port}) you must FULLY QUIT and reopen VS Code — a window reload is NOT enough for Copilot to switch exporters.`,
   );
 }
 
 /**
- * `disableLiveUpdates` handler. Turns the extension's live updates off, stops the
- * receiver, detaches the ingest source, and best-effort disables Copilot's OTel
- * exporter. A full restart fully reverts Copilot's exporter selection.
+ * `disableLiveUpdates` handler. Turns the extension's live updates off, detaches
+ * the ingest source, and best-effort disables Copilot's OTel exporter. The live
+ * pipeline (OTLP receiver + Claude watcher) is stopped by the command wrapper via
+ * `stopLive()` before this runs. A full restart fully reverts Copilot's exporter.
  */
 async function runDisableLiveUpdates(telemetry: TelemetryService, logger: Logger): Promise<void> {
   const ao = vscode.workspace.getConfiguration('agentObservability');
@@ -404,12 +470,10 @@ async function runDisableLiveUpdates(telemetry: TelemetryService, logger: Logger
   } catch {
     // Copilot Chat may be absent; nothing to turn off.
   }
-  liveOtlp?.stop();
-  liveOtlp = undefined;
   telemetry.setIngestDbPath(undefined);
-  logger.info('Live updates disabled; OTLP receiver stopped.');
+  logger.info('Live updates disabled; receiver + watcher stopped.');
   void vscode.window.showInformationMessage(
-    'Agent Observability: real-time telemetry disabled. Fully quit + reopen VS Code to fully revert Copilot’s exporter.',
+    'Agent Observability: real-time updates disabled. Fully quit + reopen VS Code to fully revert Copilot’s exporter.',
   );
 }
 
@@ -594,6 +658,6 @@ export function deactivate(): void {
   consentManager = undefined;
   syncScheduler?.dispose();
   syncScheduler = undefined;
-  liveOtlp?.stop();
-  liveOtlp = undefined;
+  liveController?.stop();
+  liveController = undefined;
 }

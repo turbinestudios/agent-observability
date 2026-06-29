@@ -64,23 +64,27 @@ afterEach(() => {
 });
 
 describe('LiveOtlpService', () => {
-  it('ingests a posted trace into its DB and fires a (debounced) onIngest', async () => {
+  it('ingests a posted trace into its DB and signals on the batch', async () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), 'agent-obs-live-'));
     const dbPath = path.join(tmp, 'agent-traces.db');
-    let ingestCount = 0;
+    let signalCount = 0;
+    let boundPort = 0;
     const service = new LiveOtlpService({
       ingestDbPath: dbPath,
       port: 0,
-      debounceMs: 20,
-      onIngest: () => {
-        ingestCount += 1;
+      signal: () => {
+        signalCount += 1;
+      },
+      onListening: (p) => {
+        boundPort = p;
       },
     });
-    const port = await service.start();
+    await service.start();
     try {
-      await post(port, '/v1/traces', body);
-      await delay(80); // let the debounce window elapse
-      expect(ingestCount).toBe(1);
+      expect(boundPort).toBeGreaterThan(0);
+      await post(boundPort, '/v1/traces', body);
+      await delay(40); // let the request handler write + signal
+      expect(signalCount).toBe(1);
     } finally {
       service.stop();
     }

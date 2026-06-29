@@ -95,6 +95,18 @@ export class ClaudeCodeService implements SessionDataSource {
     this.truncatedCount = 0;
   }
 
+  /**
+   * Cheap invalidation for the live watcher: forget only the directory listing
+   * so the next query re-walks to pick up new/removed session files, while the
+   * mtime-keyed parse + summary caches survive. Because those caches are keyed by
+   * file mtime, an appended-to transcript misses the cache and re-parses, but
+   * every untouched session is reused — so a transcript event during an active
+   * session costs one re-parse, not a full re-scan of the most-recent N sessions.
+   */
+  invalidateDiscovery(): void {
+    this.discovered = undefined;
+  }
+
   dispose(): void {
     this.refresh();
   }
