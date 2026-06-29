@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { renderSessionDetailHtml, renderCombinedSessionDetailHtml } from './sessionDetailHtml';
+import {
+  renderSessionDetailHtml,
+  renderSessionDetailContent,
+  renderCombinedSessionDetailHtml,
+} from './sessionDetailHtml';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
 import {
   SessionDetail,
@@ -134,6 +138,45 @@ describe('renderSessionDetailHtml — local-only badge', () => {
     expect(html).not.toContain('<dt>Repository</dt>');
     expect(html).not.toContain('<dt>Interactions</dt>');
     expect(html).not.toContain('<dt>Tokens in / out</dt>');
+  });
+});
+
+describe('renderSessionDetailHtml — live in-place update shell', () => {
+  // The panel mounts the full document ONCE, then pushes data as `update` messages
+  // so the in-page controller swaps the body WITHOUT reloading — keeping open
+  // collapsibles, the active tab, and scroll. These guard that contract.
+  it('wraps the body in a single #live-root and mounts exactly one controller', () => {
+    const html = renderSessionDetailHtml(detailWithTurn, [[]], NONCE);
+    expect(html).toContain('<div id="live-root">');
+    const scripts = [...html.matchAll(/<script nonce="[^"]*">/g)];
+    expect(scripts).toHaveLength(1);
+    // The controller acquires the API once and handles the live `update` message.
+    expect(html).toContain('acquireVsCodeApi()');
+    expect(html).toContain("msg.type !== 'update'");
+  });
+
+  it('the controller restores open collapsibles, the active tab, and scroll', () => {
+    const html = renderSessionDetailHtml(detailWithTurn, [[]], NONCE);
+    expect(html).toContain('details[data-k]'); // snapshot/restore keying
+    expect(html).toContain('tab-btn-active'); // tab restore
+    expect(html).toContain('window.scrollTo'); // scroll restore
+  });
+
+  it('renderSessionDetailContent returns just the body the panel posts as an update', () => {
+    const content = renderSessionDetailContent(detailWithTurn, [[]]);
+    // Body only — no document shell, styles, scripts, or the #live-root wrapper.
+    expect(content).not.toContain('<!DOCTYPE');
+    expect(content).not.toContain('<html');
+    expect(content).not.toContain('<script');
+    expect(content).not.toContain('id="live-root"');
+    // It IS the live markup: the turn block is present.
+    expect(content).toContain('User request');
+  });
+
+  it('keys each turn disclosure with a stable data-k so its open state survives a push', () => {
+    const html = renderSessionDetailHtml(detailWithTurn, [[]], NONCE);
+    expect(html).toContain('data-k="t0r"'); // user-request disclosure
+    expect(html).toContain('data-k="t0l"'); // nested event timeline
   });
 });
 

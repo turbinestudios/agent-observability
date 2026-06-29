@@ -101,8 +101,6 @@ export function renderSessionDetailHtml(
     "font-src 'none'",
   ].join('; ');
 
-  const hasContext = contextAnalysis !== undefined;
-
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -113,7 +111,29 @@ export function renderSessionDetailHtml(
   <style nonce="${nonce}">${STYLE}</style>
 </head>
 <body>
-  ${hasContext ? `<nav class="tab-bar">
+  <div id="live-root">${renderSessionDetailContent(detail, turnDeviations, contextAnalysis, costMode)}</div>
+  <script nonce="${nonce}">${WEBVIEW_CONTROLLER}</script>
+</body>
+</html>`;
+}
+
+/**
+ * The mutable BODY of the single-session view — the tab bar + panels, WITHOUT the
+ * document shell, styles, or scripts. {@link renderSessionDetailHtml} wraps this in
+ * `#live-root` for the INITIAL render; on a live/refresh re-render the panel posts
+ * the SAME markup as an `update` message and the in-page {@link WEBVIEW_CONTROLLER}
+ * swaps it into `#live-root` WITHOUT reloading the document — so open collapsibles,
+ * the active tab, and scroll position survive a data push (the whole point of the
+ * near-real-time updates being non-disruptive).
+ */
+export function renderSessionDetailContent(
+  detail: SessionDetail,
+  turnDeviations: readonly (readonly WorkflowDeviation[])[],
+  contextAnalysis?: SessionContextAnalysis,
+  costMode: CostMode = 'aiu',
+): string {
+  const hasContext = contextAnalysis !== undefined;
+  return `${hasContext ? `<nav class="tab-bar">
     <button class="tab-btn tab-btn-active" data-tab="tab-overview">Overview</button>
     <button class="tab-btn" data-tab="tab-context">Context Analysis</button>
   </nav>` : ''}
@@ -124,12 +144,7 @@ export function renderSessionDetailHtml(
   ${renderSubAgentUsage(detail.agentUsage, costMode)}
   ${renderTurns(detail.turns, turnDeviations)}
   </div>
-  ${hasContext ? `<div class="tab-panel tab-panel-hidden" id="tab-context">${renderContextAnalysis(contextAnalysis)}</div>` : ''}
-  <script nonce="${nonce}">${TREND_FILTER_SCRIPT}</script>
-  ${hasContext ? `<script nonce="${nonce}">${TAB_SWITCH_SCRIPT}</script>` : ''}
-  ${hasContext ? `<script nonce="${nonce}">${ACCEPT_MISSING_SCRIPT}</script>` : ''}
-</body>
-</html>`;
+  ${hasContext ? `<div class="tab-panel tab-panel-hidden" id="tab-context">${renderContextAnalysis(contextAnalysis)}</div>` : ''}`;
 }
 
 /**
@@ -148,7 +163,6 @@ export function renderCombinedSessionDetailHtml(
   nonce: string,
   costMode: CostMode = 'aiu',
 ): string {
-  const { combined, sections } = view;
   const csp = [
     "default-src 'none'",
     `style-src 'nonce-${nonce}'`,
@@ -157,8 +171,35 @@ export function renderCombinedSessionDetailHtml(
     "font-src 'none'",
   ].join('; ');
 
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Combined sessions (${num(view.combined.summary.sessionCount)})</title>
+  <style nonce="${nonce}">${STYLE}</style>
+</head>
+<body>
+  <div id="live-root">${renderCombinedSessionDetailContent(view, costMode)}</div>
+  <script nonce="${nonce}">${WEBVIEW_CONTROLLER}</script>
+</body>
+</html>`;
+}
+
+/**
+ * The mutable BODY of the combined view (aggregate header + merged tables +
+ * per-session sections), WITHOUT the shell/styles/scripts — the combined
+ * counterpart to {@link renderSessionDetailContent}, posted as an `update` on a
+ * live/refresh re-render so the controller can swap it in without a reload.
+ */
+export function renderCombinedSessionDetailContent(
+  view: CombinedSessionView,
+  costMode: CostMode = 'aiu',
+): string {
+  const { combined, sections } = view;
   const sectionsHtml = sections
-    .map((section, index) => renderSessionSection(section, index === 0, costMode))
+    .map((section, index) => renderSessionSection(section, index === 0, costMode, index))
     .join('\n');
 
   // The combined "Agent run totals" card mirrors the single-session one, over the
@@ -172,27 +213,14 @@ export function renderCombinedSessionDetailHtml(
     pointCount: section.detail.treeModelTurns.length,
   }));
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Combined sessions (${num(combined.summary.sessionCount)})</title>
-  <style nonce="${nonce}">${STYLE}</style>
-</head>
-<body>
-  ${renderCombinedHeader(combined.summary)}
+  return `${renderCombinedHeader(combined.summary)}
   ${renderTreeSummary(combined.treeStats, mergedModelTurns, trendSessions, costMode)}
   ${renderMainAgentUsage(combined.agentUsage, costMode)}
   ${renderSubAgentUsage(combined.agentUsage, costMode)}
   <section class="panel">
     <div class="panel-heading"><h2>Sessions</h2><span>${num(sections.length)} session(s)</span></div>
     <div class="turns">${sectionsHtml}</div>
-  </section>
-  <script nonce="${nonce}">${TREND_FILTER_SCRIPT}</script>
-</body>
-</html>`;
+  </section>`;
 }
 
 /**
@@ -224,6 +252,7 @@ function renderSessionSection(
   section: CombinedSessionSection,
   open: boolean,
   costMode: CostMode,
+  index = 0,
 ): string {
   const { detail, turnDeviations } = section;
   const s = detail.summary;
@@ -254,11 +283,11 @@ function renderSessionSection(
       <div><dt>Duration</dt><dd>${escapeHtml(formatDuration(s.durationMs))}</dd></div>
     </dl>`;
 
-  return `<details class="turn-request session-section"${open ? ' open' : ''}>
+  return `<details class="turn-request session-section"${open ? ' open' : ''} data-k="s${num(index)}">
     <summary>${summaryRow}</summary>
     <div class="section-body">
       ${meta}
-      ${renderTurns(detail.turns, turnDeviations)}
+      ${renderTurns(detail.turns, turnDeviations, `s${num(index)}t`)}
     </div>
   </details>`;
 }
@@ -1016,8 +1045,11 @@ function renderTurnDeviations(deviations: readonly WorkflowDeviation[]): string 
 function renderTurns(
   turns: readonly SessionTurn[],
   turnDeviations: readonly (readonly WorkflowDeviation[])[] = [],
+  keyPrefix = 't',
 ): string {
-  const blocks = turns.map((turn, i) => renderTurn(turn, turnDeviations[i] ?? [])).join('\n');
+  const blocks = turns
+    .map((turn, i) => renderTurn(turn, turnDeviations[i] ?? [], `${keyPrefix}${i}`))
+    .join('\n');
   const issues = turnDeviations.reduce((total, list) => total + list.length, 0);
   const heading =
     issues > 0
@@ -1042,10 +1074,11 @@ function renderTurns(
 export function renderTurn(
   turn: SessionTurn,
   deviations: readonly WorkflowDeviation[] = [],
+  key = 't0',
 ): string {
   const time = escapeHtml(formatTime(turn.timestampMs));
   const events = turn.events.map(renderTimelineRow).join('\n');
-  const timeline = `<details class="timeline-disclosure"><summary>Timeline (${num(
+  const timeline = `<details class="timeline-disclosure" data-k="${escapeHtml(key)}l"><summary>Timeline (${num(
     turn.events.length,
   )} event(s))</summary><div class="timeline">${events}</div></details>`;
 
@@ -1057,11 +1090,11 @@ export function renderTurn(
     ? '<span class="turn-label">User request</span>'
     : '<span class="turn-label muted">Activity (no user request)</span>';
   const requestSummary = `<span class="time">${time}</span>${label}${renderTurnTokens(turn)}`;
-  const request = `<details class="turn-request"><summary>${requestSummary}</summary>${requestBody}</details>`;
+  const request = `<details class="turn-request" data-k="${escapeHtml(key)}r"><summary>${requestSummary}</summary>${requestBody}</details>`;
 
   const response =
     turn.finalResponse !== undefined && turn.finalResponse.length > 0
-      ? `<details class="turn-response"><summary><span class="turn-label">Final LLM response</span></summary><pre>${escapeHtml(
+      ? `<details class="turn-response" data-k="${escapeHtml(key)}p"><summary><span class="turn-label">Final LLM response</span></summary><pre>${escapeHtml(
           turn.finalResponse,
         )}</pre></details>`
       : '';
@@ -1173,12 +1206,12 @@ function renderContextAnalysis(analysis: SessionContextAnalysis): string {
   const sections: string[] = [];
 
   // Total Overview (open by default)
-  sections.push(renderAgentContextSection(analysis.total, true));
+  sections.push(renderAgentContextSection(analysis.total, true, 0));
 
   // Per-agent sections (collapsed by default)
-  for (const agent of analysis.agents) {
-    sections.push(renderAgentContextSection(agent, false));
-  }
+  analysis.agents.forEach((agent, i) => {
+    sections.push(renderAgentContextSection(agent, false, i + 1));
+  });
 
   return `<div class="context-analysis">${sections.join('\n')}</div>`;
 }
@@ -1186,7 +1219,7 @@ function renderContextAnalysis(analysis: SessionContextAnalysis): string {
 /**
  * Render one agent's context analysis as a collapsible `<details>` section.
  */
-function renderAgentContextSection(agent: AgentContextAnalysis, open: boolean): string {
+function renderAgentContextSection(agent: AgentContextAnalysis, open: boolean, index = 0): string {
   const kindBadge = agent.kind === 'total'
     ? ''
     : `<span class="ctx-badge ctx-badge-${agent.kind}">${escapeHtml(agent.kind)}</span>`;
@@ -1194,7 +1227,7 @@ function renderAgentContextSection(agent: AgentContextAnalysis, open: boolean): 
   const fileCount = agent.loadedFiles.filter((f) => f.status !== 'skipped').length;
   const countLabel = `${num(fileCount)} file(s) in context`;
 
-  return `<details class="ctx-section"${open ? ' open' : ''}>
+  return `<details class="ctx-section"${open ? ' open' : ''} data-k="c${num(index)}">
   <summary class="ctx-section-summary">
     <span class="ctx-section-title">${escapeHtml(agent.agentName)}</span>
     ${kindBadge}
@@ -1524,18 +1557,33 @@ const STYLE = `
 ` + Array.from({ length: 101 }, (_, i) => `.ctx-w-${i}{width:${i}%}`).join('');
 
 /**
- * Client-side script for interactive legend filtering on the token trend chart.
- * Clicking a legend key toggles that series into a filter set; when any filters are
- * active only those series are visible, and the y-axis rescales to their maximum.
- * A "Reset filter" button clears all filters and restores the original view.
+ * The SINGLE in-page controller for the session-detail webview.
+ *
+ * It is set ONCE in the document shell (by `renderSessionDetailHtml` /
+ * `renderCombinedSessionDetailHtml`); the panel never reassigns the webview HTML
+ * afterwards. On a live or refresh re-render the panel posts an
+ * `{ type: 'update', html }` message carrying the freshly-rendered BODY
+ * (`renderSessionDetailContent` / `renderCombinedSessionDetailContent`). This
+ * controller swaps that into `#live-root` and then RESTORES the volatile UI state
+ * — which collapsibles are open (keyed by their `data-k`), the active tab, and the
+ * scroll offset — so a data push never collapses sections, flips tabs, or jumps the
+ * scroll. Because the document is never reloaded there is no flash, and
+ * `acquireVsCodeApi()` is called exactly once (it may only be called once).
+ *
+ * The three interactions (token-trend legend filtering, tab switching, and
+ * accept-missing actions) are re-runnable init functions, re-invoked after each
+ * content swap so the freshly-injected nodes get their listeners.
  */
-const TREND_FILTER_SCRIPT = `
+const WEBVIEW_CONTROLLER = `
 (function() {
+  var vscode = acquireVsCodeApi();
+  var root = document.getElementById('live-root');
   var TOKEN_SERIES = ['input', 'cached', 'output'];
   var BAR_SERIES = ['loc', 'lod', 'nloc', 'nlod'];
-  var ALL_SERIES = TOKEN_SERIES.concat(BAR_SERIES);
 
-  document.querySelectorAll('.tree-trend').forEach(function(container) {
+  // ── Token-trend legend filtering ─────────────────────────────────────────────
+  function initTrend() {
+  (root || document).querySelectorAll('.tree-trend').forEach(function(container) {
     var svg = container.querySelector('.trend-svg');
     var legend = container.querySelector('.trend-legend');
     if (!svg || !legend) return;
@@ -1765,17 +1813,12 @@ const TREND_FILTER_SCRIPT = `
       });
     }
   });
-})();
-`;
+  }
 
-/**
- * Client-side script for tab switching between "Overview" and "Context Analysis".
- * Shows/hides tab panels and updates the active tab button state.
- */
-const TAB_SWITCH_SCRIPT = `
-(function() {
-  var buttons = document.querySelectorAll('.tab-btn');
-  var panels = document.querySelectorAll('.tab-panel');
+  // ── Tab switching (Overview / Context Analysis) ──────────────────────────────
+  function initTabs() {
+  var buttons = (root || document).querySelectorAll('.tab-btn');
+  var panels = (root || document).querySelectorAll('.tab-panel');
   buttons.forEach(function(btn) {
     btn.addEventListener('click', function() {
       var target = btn.getAttribute('data-tab');
@@ -1790,19 +1833,12 @@ const TAB_SWITCH_SCRIPT = `
       });
     });
   });
-})();
-`;
+  }
 
-/**
- * Client-side script for "Accept missing context" interactions.
- * Uses acquireVsCodeApi to post messages to the extension host.
- */
-const ACCEPT_MISSING_SCRIPT = `
-(function() {
-  var vscode = acquireVsCodeApi();
-
+  // ── Accept-missing actions (Context Analysis tab) ────────────────────────────
+  function initAcceptMissing() {
   // "Accept file" buttons (checkmark in the last column)
-  document.querySelectorAll('.ctx-accept-btn').forEach(function(btn) {
+  (root || document).querySelectorAll('.ctx-accept-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
       var file = btn.getAttribute('data-accept-file');
       if (file) {
@@ -1815,7 +1851,7 @@ const ACCEPT_MISSING_SCRIPT = `
   });
 
   // Clickable source file names
-  document.querySelectorAll('.ctx-accept-source').forEach(function(el) {
+  (root || document).querySelectorAll('.ctx-accept-source').forEach(function(el) {
     el.addEventListener('click', function() {
       var source = el.getAttribute('data-source');
       if (source) {
@@ -1826,7 +1862,7 @@ const ACCEPT_MISSING_SCRIPT = `
   });
 
   // Clickable missing file names
-  document.querySelectorAll('.ctx-accept-file').forEach(function(el) {
+  (root || document).querySelectorAll('.ctx-accept-file').forEach(function(el) {
     el.addEventListener('click', function() {
       var file = el.getAttribute('data-file');
       if (file) {
@@ -1836,5 +1872,64 @@ const ACCEPT_MISSING_SCRIPT = `
       }
     });
   });
+  }
+
+  function initAll() { initTrend(); initTabs(); initAcceptMissing(); }
+
+  // ── Volatile UI state, preserved across a content swap ───────────────────────
+  // Snapshot which collapsibles are open (by their stable data-k) and the active
+  // tab, then re-apply them after the swap so a data push leaves the view exactly
+  // as the user left it. Unknown/new data-k keys keep their server-rendered default.
+  function snapshotOpen() {
+    var map = {};
+    if (root) {
+      root.querySelectorAll('details[data-k]').forEach(function(d) {
+        map[d.getAttribute('data-k')] = d.open;
+      });
+    }
+    return map;
+  }
+  function restoreOpen(map) {
+    if (!root || !map) return;
+    root.querySelectorAll('details[data-k]').forEach(function(d) {
+      var k = d.getAttribute('data-k');
+      if (Object.prototype.hasOwnProperty.call(map, k)) d.open = map[k];
+    });
+  }
+  function activeTab() {
+    var btn = root && root.querySelector('.tab-btn.tab-btn-active');
+    return btn ? btn.getAttribute('data-tab') : null;
+  }
+  function restoreTab(id) {
+    if (!root || !id) return;
+    var btns = root.querySelectorAll('.tab-btn');
+    var panels = root.querySelectorAll('.tab-panel');
+    var found = false;
+    btns.forEach(function(b) {
+      var on = b.getAttribute('data-tab') === id;
+      b.classList.toggle('tab-btn-active', on);
+      if (on) found = true;
+    });
+    if (!found) return; // the saved tab no longer exists — keep the default
+    panels.forEach(function(p) { p.classList.toggle('tab-panel-hidden', p.id !== id); });
+  }
+
+  // A live/refresh re-render arrives as new BODY markup. Swap it in, restore the
+  // volatile UI state, and re-wire the interactions — all synchronously, so the
+  // browser paints the restored result in a single frame (no flash, no reset).
+  window.addEventListener('message', function(event) {
+    var msg = event.data;
+    if (!root || !msg || msg.type !== 'update' || typeof msg.html !== 'string') return;
+    var openMap = snapshotOpen();
+    var tab = activeTab();
+    var sx = window.scrollX, sy = window.scrollY;
+    root.innerHTML = msg.html;
+    restoreOpen(openMap);
+    restoreTab(tab);
+    initAll();
+    window.scrollTo(sx, sy);
+  });
+
+  initAll();
 })();
 `;

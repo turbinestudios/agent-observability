@@ -12,7 +12,9 @@ import {
   CombinedSessionSection,
   CostMode,
   renderCombinedSessionDetailHtml,
+  renderCombinedSessionDetailContent,
   renderSessionDetailHtml,
+  renderSessionDetailContent,
 } from './sessionDetailHtml';
 
 /** Webview view type used for all session-detail panels. */
@@ -39,6 +41,15 @@ export interface SourceSession {
 export class SessionDetailPanelManager {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
   private readonly rerenderers = new Map<vscode.WebviewPanel, () => void>();
+  /**
+   * Panels whose live document shell is already mounted. The FIRST render of a
+   * panel sets `webview.html` (the full document + the in-page controller); every
+   * later render posts an `update` message carrying just the body, so the controller
+   * swaps it in WITHOUT reloading — preserving open collapsibles, the active tab,
+   * and scroll. A panel reverts to "not mounted" if it falls back to a message doc
+   * (see {@link renderMessage}), so the next good render rebuilds the shell.
+   */
+  private readonly mounted = new WeakSet<vscode.WebviewPanel>();
   private activePanel: vscode.WebviewPanel | undefined;
 
   constructor(
@@ -64,7 +75,10 @@ export class SessionDetailPanelManager {
       VIEW_TYPE,
       `Session ${shortLabel(sessionKey)}`,
       vscode.ViewColumn.Active,
-      { enableScripts: true, retainContextWhenHidden: false },
+      // Retain context when hidden so live updates (posted as `update` messages,
+      // not via `webview.html`) survive the panel being tabbed away and back —
+      // otherwise VS Code would reload the shell to its initial, pre-update state.
+      { enableScripts: true, retainContextWhenHidden: true },
     );
     panel.iconPath = new vscode.ThemeIcon('comment-discussion');
     this.panels.set(panelKey, panel);
@@ -117,7 +131,9 @@ export class SessionDetailPanelManager {
       VIEW_TYPE,
       `Combined sessions (${keys.length})`,
       vscode.ViewColumn.Active,
-      { enableScripts: true, retainContextWhenHidden: false },
+      // See the single-session panel: retained so live `update` messages survive
+      // the panel being hidden and re-shown.
+      { enableScripts: true, retainContextWhenHidden: true },
     );
     panel.iconPath = new vscode.ThemeIcon('layers');
     this.panels.set(panelKey, panel);
@@ -177,6 +193,7 @@ export class SessionDetailPanelManager {
   /** Drop a disposed panel from the rerender registry and active-panel slot. */
   private forget(panel: vscode.WebviewPanel): void {
     this.rerenderers.delete(panel);
+    this.mounted.delete(panel);
     if (this.activePanel === panel) {
       this.activePanel = undefined;
     }
@@ -228,16 +245,21 @@ export class SessionDetailPanelManager {
     };
   }
 
-  /** Load detail (+ per-turn deviations, Copilot context) and set the panel HTML. */
+  /**
+   * Render (or live-update) the single-session detail. The FIRST render of a panel
+   * mounts the full document; later renders post the body as an `update` message so
+   * the in-page controller swaps it in without reloading — preserving the open
+   * collapsibles, active tab, and scroll the user has set.
+   */
   private render(panel: vscode.WebviewPanel, sourceId: string, sessionKey: string): void {
     const source = this.sources.get(sourceId);
     if (source === undefined) {
-      panel.webview.html = renderMessageHtml(`Unknown telemetry source "${sourceId}".`);
+      this.renderMessage(panel, `Unknown telemetry source "${sourceId}".`);
       return;
     }
     const result = source.getSessionDetail(sessionKey);
     if (!result.ok) {
-      panel.webview.html = renderMessageHtml(result.message);
+      this.renderMessage(panel, result.message);
       return;
     }
     const detail = result.value;
@@ -259,15 +281,22 @@ export class SessionDetailPanelManager {
       );
     }
 
-    const nonce = makeNonce();
-    panel.webview.html = renderSessionDetailHtml(detail, turnDeviations, nonce, contextAnalysis, costMode);
+    if (this.mounted.has(panel)) {
+      void panel.webview.postMessage({
+        type: 'update',
+        html: renderSessionDetailContent(detail, turnDeviations, contextAnalysis, costMode),
+      });
+      return;
+    }
+    panel.webview.html = renderSessionDetailHtml(detail, turnDeviations, makeNonce(), contextAnalysis, costMode);
+    this.mounted.add(panel);
   }
 
-  /** Render the COMBINED view for several same-source session keys. */
+  /** Render (or live-update) the COMBINED view for several same-source session keys. */
   private renderCombined(panel: vscode.WebviewPanel, sourceId: string, keys: readonly string[]): void {
     const source = this.sources.get(sourceId);
     if (source === undefined) {
-      panel.webview.html = renderMessageHtml(`Unknown telemetry source "${sourceId}".`);
+      this.renderMessage(panel, `Unknown telemetry source "${sourceId}".`);
       return;
     }
     const sections: CombinedSessionSection[] = [];
@@ -282,14 +311,32 @@ export class SessionDetailPanelManager {
       });
     }
     if (sections.length === 0) {
-      panel.webview.html = renderMessageHtml('None of the selected sessions could be loaded.');
+      this.renderMessage(panel, 'None of the selected sessions could be loaded.');
       return;
     }
     sections.sort((a, b) => a.detail.summary.startedAtMs - b.detail.summary.startedAtMs);
     const combined = combineSessionDetails(sections.map((s) => s.detail));
     const costMode: CostMode = source.id === 'claude' ? 'usd' : 'aiu';
-    const nonce = makeNonce();
-    panel.webview.html = renderCombinedSessionDetailHtml({ combined, sections }, nonce, costMode);
+
+    if (this.mounted.has(panel)) {
+      void panel.webview.postMessage({
+        type: 'update',
+        html: renderCombinedSessionDetailContent({ combined, sections }, costMode),
+      });
+      return;
+    }
+    panel.webview.html = renderCombinedSessionDetailHtml({ combined, sections }, makeNonce(), costMode);
+    this.mounted.add(panel);
+  }
+
+  /**
+   * Replace the panel with a standalone message document (unknown source / failed
+   * load). A message doc has no live shell, so the panel is marked un-mounted —
+   * the next successful render rebuilds the shell (and its `update` listener).
+   */
+  private renderMessage(panel: vscode.WebviewPanel, message: string): void {
+    panel.webview.html = renderMessageHtml(message);
+    this.mounted.delete(panel);
   }
 
   /**
