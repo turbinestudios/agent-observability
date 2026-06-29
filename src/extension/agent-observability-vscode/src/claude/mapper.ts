@@ -35,6 +35,7 @@ import {
 } from '../telemetry/models';
 import { AggregationRow } from '../aggregate/aggregator';
 import { mapToolName } from '../aggregate/builtinTools';
+import { sanitizeModelId } from '../aggregate/modelId';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 import { countClaudeWrittenLines, WriteLineDelta } from '../telemetry/locAnalysis';
 import { claudeCostMicros } from './pricing';
@@ -238,11 +239,14 @@ export function buildAggregationRows(input: ClaudeSessionInput): AggregationRow[
   for (const records of transcripts) {
     const { records: turns } = extractTranscript(records, input.codeExts, input.docExts);
     for (const turn of turns) {
+      // Contract-safe model id for the cloud batch (Claude ids are already clean,
+      // but sanitize defensively — same chokepoint the Copilot path uses).
+      const model = sanitizeModelId(turn.model);
       rows.push({
         startTimeMs: turn.timestampMs,
         sessionKey: input.sessionId,
         repository,
-        model: turn.model,
+        model,
         agentMode: CLAUDE_AGENT_MODE,
         operation: 'chat',
         durationMs: turn.durationMs,
@@ -258,7 +262,7 @@ export function buildAggregationRows(input: ClaudeSessionInput): AggregationRow[
           startTimeMs: tool.timestampMs,
           sessionKey: input.sessionId,
           repository,
-          model: turn.model,
+          model,
           agentMode: CLAUDE_AGENT_MODE,
           operation,
           ...(operation === 'execute_tool' ? { toolName: mapToolName(tool.name) } : {}),

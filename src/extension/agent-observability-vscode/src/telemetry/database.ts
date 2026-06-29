@@ -4,6 +4,7 @@ import { RepositoryResolver } from './repositoryResolver';
 import { UNKNOWN_REPOSITORY } from './repositoryUrl';
 import { AggregationRow } from '../aggregate/aggregator';
 import { mapToolName } from '../aggregate/builtinTools';
+import { sanitizeModelId } from '../aggregate/modelId';
 import {
   Interaction,
   OverviewMetrics,
@@ -603,7 +604,10 @@ export class TelemetryDatabase {
         startTimeMs: row.start_time_ms,
         sessionKey,
         repository: resolver.resolve(sessionKey),
-        model: resolveModel(row.response_model, row.request_model),
+        // Cloud path only: collapse display-name models (e.g. "GPT-4o (Preview)")
+        // to a contract-safe id so the server's model regex never 400s the batch.
+        // Local views keep the friendly name via the bare resolveModel.
+        model: sanitizeModelId(resolveModel(row.response_model, row.request_model)),
         agentMode,
         operation,
         toolName,
