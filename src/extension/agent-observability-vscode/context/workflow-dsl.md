@@ -31,11 +31,28 @@ appear in the project context files digest in the request — never invent them.
 ]
 ```
 
+## A custom agent is not one fixed pipeline
+
+A custom agent (or custom chat mode) is a DISPATCHER, not a deterministic pipeline. The same agent runs
+different skills/tasks on different invocations, so the agents, tools, and order observed in its sessions
+legitimately VARY run to run. Two consequences for generation:
+
+1. **Model the flow, not the agent.** Do not emit one rigid workflow per agent — that flags every run that
+   does something else as a false deviation. Model each distinct TASK/FLOW the project defines (often a
+   single skill or prompt). One agent exposing several skills should yield SEVERAL narrowly-scoped workflows
+   — or none — never one catch-all sequence.
+2. **Assert only invariants.** Put in `expectedSequence`/`steps` ONLY actions that occur on EVERY run of that
+   flow. The detector reports any declared step a turn did not perform as a missing-step deviation, so an
+   optional/conditional step is a false alarm on the runs that skip it. When in doubt, leave it out; if a flow
+   has no step that always runs, emit a workflow with NO `expectedSequence`/`steps` (timeout + tool-usage
+   checks still apply) rather than guessing an order.
+
 ## Field reference
 - `repository` (required): sanitized repo URL, e.g. `https://github.com/org/repo`.
 - `workflows` (required): array of workflow definitions:
   - `name` (required): human-readable, e.g. `feature-development`.
-  - `expectedSequence`: ordered agent names. When present, enables sequence + missing-step checks.
+  - `expectedSequence`: ordered agent names. When present, enables sequence + missing-step checks. Include
+    ONLY agents that run on every invocation of this flow — a name that is sometimes absent is reported missing.
   - `maxDurationMinutes`: session duration threshold; defaults to `deviation.maxSessionMinutes`.
   - `sequenceDeviationAlert` / `timeoutExceededAlert` / `toolUsageAnomalyAlert`: booleans, default `true`.
   - `triggerPredicate`: optional metadata filter scoping which interactions count — see "Scope each
@@ -73,6 +90,11 @@ The custom mode/agent NAME is not metadata — it lives only in the local-only `
 content attribute. To assert "this ran in mode X", use a step `contentPredicate` on `copilot_chat.mode_name`,
 never the metadata trigger. If the context files expose no real discriminator, emit ONE repo-wide workflow
 rather than a vague trigger.
+
+To separate one skill/task from the OTHERS the same agent can run (the usual case — see "A custom agent is
+not one fixed pipeline"), no metadata field distinguishes them, so reach for a `triggerContentPredicate` on
+the request intent (below) or a `toolName`/`model` unique to that flow. Without such a discriminator, a
+per-skill `expectedSequence` will be reported missing on every run of the agent's other skills.
 
 When relevance is about what the request is ABOUT (intent) rather than metadata, add a
 `triggerContentPredicate` — a LOCAL-ONLY content gate on the turn's user request. The workflow then applies
