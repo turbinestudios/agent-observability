@@ -8,10 +8,10 @@ import {
 
 /**
  * Unit tests for the per-repository sync scoping policy. Pin the privacy-relevant
- * invariants: `all` is the behavior-preserving default, `include`/`exclude` are
- * exact-membership over the SANITIZED repository form, hand-edited entries are
- * normalized through the same sanitizer the rows use, and an invalid mode fails
- * safe to `all` (never silently dropping uploads).
+ * invariants: `all` uploads everything (the opt-in escape hatch), `include`
+ * (the default) / `exclude` are exact-membership over the SANITIZED repository
+ * form, hand-edited entries are normalized through the same sanitizer the rows
+ * use, and an invalid mode fails safe to `all` (never silently dropping uploads).
  */
 
 const REPO_A = 'https://github.com/example-org/repo-a';

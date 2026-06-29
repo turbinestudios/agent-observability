@@ -83,8 +83,8 @@ All under the **Agent Observability** category:
 | --- | --- | --- |
 | `agentObservability.sync.enabled` | `false` | Opt in to cloud aggregate sharing (opt-out by default). |
 | `agentObservability.sync.intervalMinutes` | `60` | Background sync interval (minimum 5). |
-| `agentObservability.sync.repositoryMode` | `"all"` | Which repositories cloud sync includes: `all`, `include`, or `exclude`. User-level only. |
-| `agentObservability.sync.repositories` | `[]` | Repository URLs the mode applies to. Use **Choose Repositories to Sync** to pick from local telemetry. `unknown` matches sessions with no git remote. |
+| `agentObservability.sync.repositoryMode` | `"include"` | Which repositories cloud sync includes: `include` (only those listed — the default), `all`, or `exclude`. User-level only. |
+| `agentObservability.sync.repositories` | `[]` | Repository URLs the mode applies to. With the default `include` mode and this list empty, nothing uploads until you pick at least one. Use **Choose Repositories to Sync** to pick from local telemetry. `unknown` matches sessions with no git remote. |
 | `agentObservability.localTelemetry.enabled` | `true` | Feature flag for the local telemetry view. |
 | `agentObservability.sqlitePath` | `""` | Override path to `agent-traces.db` (blank = auto-detect). |
 | `agentObservability.deviation.maxSessionMinutes` | `60` | Local deviation detector: max expected session/turn duration. |

@@ -171,7 +171,7 @@ export class SyncViewProvider implements vscode.TreeDataProvider<SyncItem> {
       const label = repos.length > 0 ? `Sync scope: all repositories (${repos.length})` : 'Sync scope: all repositories';
       return new SyncItem(
         label,
-        'Every repository in your local telemetry is eligible to upload (default). Click to choose a subset. Cloud sync spans all repositories you use Copilot in, not just the open workspace.',
+        'Every repository in your local telemetry is eligible to upload (mode: all). Click to choose a subset. Cloud sync spans all repositories you use Copilot in, not just the open workspace.',
         new vscode.ThemeIcon('globe'),
         command,
       );

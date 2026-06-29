@@ -136,8 +136,9 @@ describe('manifest contract is stable', () => {
     const props = manifest.contributes.configuration.properties;
     const mode = props['agentObservability.sync.repositoryMode'];
     const repos = props['agentObservability.sync.repositories'];
-    // Default preserves the historical "upload all repositories" behavior.
-    expect(mode.default).toBe('all');
+    // Default is privacy-first: include-only, so an empty repositories list
+    // uploads nothing until the user explicitly picks repositories to share.
+    expect(mode.default).toBe('include');
     expect(mode.enum).toEqual(['all', 'include', 'exclude']);
     expect(repos.default).toEqual([]);
     // Scope is inherently cross-workspace, so it must be user-level only.

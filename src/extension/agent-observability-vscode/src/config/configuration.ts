@@ -55,7 +55,7 @@ export const ConfigKeys = {
 export const ConfigDefaults = {
   syncEnabled: false,
   syncIntervalMinutes: 60,
-  syncRepositoryMode: 'all',
+  syncRepositoryMode: 'include',
   syncRepositories: [] as readonly string[],
   localTelemetryEnabled: true,
   sqlitePath: '',
@@ -131,8 +131,9 @@ export class Configuration {
    * Per-repository sync scoping policy. Resolves the `sync.repositoryMode` +
    * `sync.repositories` settings into a normalized {@link RepoSyncPolicy} the
    * sync engine and preview apply to decide which repositories' aggregates leave
-   * the machine. Defaults to `all` (every repository — the historical behavior),
-   * and a hand-edited invalid mode safely falls back to `all`.
+   * the machine. Defaults to `include` (privacy-first — with an empty
+   * `sync.repositories` list nothing is uploaded until the user picks at least
+   * one repository), and a hand-edited invalid mode safely falls back to `all`.
    */
   getRepoSyncPolicy(): RepoSyncPolicy {
     const mode = this.config().get<string>(

@@ -255,13 +255,13 @@
             "exclude"
           ],
           "enumDescriptions": [
-            "Upload aggregates for every repository in your local telemetry (default).",
-            "Upload aggregates ONLY for the repositories listed in sync.repositories.",
+            "Upload aggregates for every repository in your local telemetry.",
+            "Upload aggregates ONLY for the repositories listed in sync.repositories (default).",
             "Upload aggregates for every repository EXCEPT those listed in sync.repositories."
           ],
-          "default": "all",
+          "default": "include",
           "scope": "application",
-          "markdownDescription": "Which repositories are included in cloud sync. Cloud sync reads your MERGED local telemetry, which spans every repository you've used Copilot in — not just the open workspace — so this setting controls which of them leave the machine. `all` (default) uploads every repository; `include` uploads only those in `#agentObservability.sync.repositories#`; `exclude` uploads everything except those. Scoping is privacy-positive — it only ever uploads less. Set at the user level (cannot be overridden per-workspace)."
+          "markdownDescription": "Which repositories are included in cloud sync. Cloud sync reads your MERGED local telemetry, which spans every repository you've used Copilot in — not just the open workspace — so this setting controls which of them leave the machine. `include` (default) uploads only the repositories in `#agentObservability.sync.repositories#` — so nothing is uploaded until you pick at least one; `all` uploads every repository; `exclude` uploads everything except those listed. Scoping is privacy-positive — it only ever uploads less. Run **Agent Observability: Choose Repositories to Sync** to pick from your local telemetry, or set `all` to upload everything. Set at the user level (cannot be overridden per-workspace)."
         },
         "agentObservability.sync.repositories": {
           "type": "array",

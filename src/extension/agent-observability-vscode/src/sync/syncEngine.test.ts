@@ -278,7 +278,7 @@ describe('SyncEngine repository scope', () => {
     expect([...repos]).toEqual([REPO_B]);
   });
 
-  it('uploads everything (default "all") when no scope is configured', async () => {
+  it('uploads everything under an "all" policy', async () => {
     const { engine, poster } = buildEngine({
       rows: [
         row({ sessionKey: 'a', repository: REPO_A }),

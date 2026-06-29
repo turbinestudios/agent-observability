@@ -10,12 +10,14 @@ import { sanitizeRepositoryUrl } from '../telemetry/repositoryUrl';
  * pure so it unit-tests headless and can be shared by the sync engine, the
  * preview command, and the Sync view's scope summary.
  *
- * Privacy note: scoping only ever uploads LESS. The default mode `all` preserves
- * the historical behavior (every repository), so existing installs are
- * unaffected until a user explicitly narrows the scope.
+ * Privacy note: scoping only ever uploads LESS. The default mode is `include`
+ * with an empty repository list, so a fresh install uploads NOTHING until the
+ * user explicitly picks repositories to share. `all` is the opt-in escape hatch
+ * for uploading every repository. An unrecognized (hand-edited) mode fails safe
+ * to `all` rather than silently dropping uploads.
  */
 
-/** Which repositories are uploaded. `all` = no filtering (default). */
+/** Which repositories are uploaded. `include` (the default) = only listed repos. */
 export type RepoSyncMode = 'all' | 'include' | 'exclude';
 
 /** The three valid modes, exported for validation at the config boundary. */
@@ -32,7 +34,7 @@ export interface RepoSyncPolicy {
   repositories: ReadonlySet<string>;
 }
 
-/** A policy that uploads everything — the default, behavior-preserving state. */
+/** A policy that uploads everything — the opt-in `all` mode. */
 export const ALL_REPOSITORIES_POLICY: RepoSyncPolicy = {
   mode: 'all',
   repositories: new Set<string>(),

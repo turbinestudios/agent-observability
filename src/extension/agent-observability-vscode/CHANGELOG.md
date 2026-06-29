@@ -39,8 +39,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   telemetry, which spans every repository you use Copilot in — not just the open
   workspace. Two new user-level settings now control which repositories'
   aggregates may be uploaded: `agentObservability.sync.repositoryMode`
-  (`all` / `include` / `exclude`, default `all` — unchanged behavior) and
-  `agentObservability.sync.repositories`. Both are `application`-scoped, so the
+  (`include` / `all` / `exclude`, default `include`) and
+  `agentObservability.sync.repositories`. The default is privacy-first: `include`
+  with an empty repository list uploads NOTHING until you pick at least one
+  repository to share (set the mode to `all` to upload every repository). Both
+  are `application`-scoped, so the
   policy lives in User settings and can't be silently overridden per-workspace.
   Filtering happens at the single point where the sync engine selects rows, so it
   scopes both the aggregate batch and the secondary context-insights batch.
