@@ -292,7 +292,8 @@ export class TelemetryDatabase {
       totalRepositories: dimensions.repositories.length,
       totalModels: dimensions.models.length,
       avgDurationMs: agg.avg_duration_ms === null ? 0 : Math.round(agg.avg_duration_ms),
-      inputTokens: agg.input_tokens ?? 0,
+      // TIN = fresh (non-cache-read) input; cache reads live in `cachedTokens`.
+      inputTokens: freshInput(agg.input_tokens ?? 0, agg.cached_tokens ?? 0),
       outputTokens: agg.output_tokens ?? 0,
       cachedTokens: agg.cached_tokens ?? 0,
       errorCount: agg.error_count ?? 0,
@@ -460,7 +461,7 @@ export class TelemetryDatabase {
         interactionCount: row.span_count,
         llmCalls: row.llm_calls,
         toolCalls: row.tool_calls,
-        inputTokens: row.total_input_tokens ?? 0,
+        inputTokens: freshInput(row.total_input_tokens ?? 0, row.total_cached_tokens ?? 0),
         outputTokens: row.total_output_tokens ?? 0,
         cachedTokens: row.total_cached_tokens ?? 0,
         model: modelBySession.get(row.session_id) ?? 'unknown',
@@ -741,7 +742,9 @@ export class TelemetryDatabase {
       // Header (main-thread) token totals. The per-model/per-agent breakdowns are
       // built separately over the whole tree in treeUsageRollups().
       if (countsTokens) {
-        inputTokens += rowInput;
+        // TIN excludes the row's cache reads (counted in `cachedTokens`) so the
+        // two buckets stay disjoint; per-row subtraction sums to gross − cached.
+        inputTokens += freshInput(rowInput, rowCached);
         outputTokens += rowOutput;
         cachedTokens += rowCached;
       }
@@ -844,7 +847,9 @@ export class TelemetryDatabase {
       // header totals.
       if (operation === 'chat' || (operation === 'invoke_agent' && !isSpawnedSubAgent)) {
         currentTurn.llmCalls += 1;
-        currentTurn.inputTokens += row.input_tokens ?? 0;
+        // TIN excludes cache reads (see the header-totals rule above) so summing
+        // turns still reproduces the header's fresh-input total.
+        currentTurn.inputTokens += freshInput(row.input_tokens ?? 0, row.cached_tokens ?? 0);
         currentTurn.outputTokens += row.output_tokens ?? 0;
         currentTurn.cachedTokens += row.cached_tokens ?? 0;
         currentTurn.reasoningTokens += row.reasoning_tokens ?? 0;
@@ -964,7 +969,9 @@ export class TelemetryDatabase {
     const points: SessionModelTurnPoint[] = rows.map((row) => ({
       timestampMs: row.start_time_ms,
       model: resolveModel(row.response_model, row.request_model),
-      inputTokens: row.input_tokens ?? 0,
+      // TIN = fresh (non-cache-read) input so the trend's per-field sums still
+      // reconcile with the tree-stats card (which is also fresh).
+      inputTokens: freshInput(row.input_tokens ?? 0, row.cached_tokens ?? 0),
       outputTokens: row.output_tokens ?? 0,
       cachedTokens: row.cached_tokens ?? 0,
       reasoningTokens: row.reasoning_tokens ?? 0,
@@ -1091,15 +1098,18 @@ export class TelemetryDatabase {
           )
         : { added: { code: 0, doc: 0 }, removed: { code: 0, doc: 0 } };
 
-    const inputTokens = agg.input_tokens ?? 0;
+    const cachedTokens = agg.cached_tokens ?? 0;
+    // TIN = fresh (non-cache-read) input; cache reads are the disjoint TCI bucket.
+    const inputTokens = freshInput(agg.input_tokens ?? 0, cachedTokens);
     const outputTokens = agg.output_tokens ?? 0;
     return {
       modelTurns: agg.model_turns ?? 0,
       toolCalls: agg.tool_calls ?? 0,
       inputTokens,
       outputTokens,
-      cachedTokens: agg.cached_tokens ?? 0,
-      totalTokens: inputTokens + outputTokens,
+      cachedTokens,
+      // True total over disjoint buckets (= gross input + output; value unchanged).
+      totalTokens: inputTokens + cachedTokens + outputTokens,
       errorCount: agg.error_count ?? 0,
       aiuNano: aiuRow?.aiu_nano ?? 0,
       linesOfCode: writeLines.added.code,
@@ -1194,9 +1204,11 @@ export class TelemetryDatabase {
       const kind: 'main' | 'subagent' = isSubagent ? 'subagent' : 'main';
       const agentName = friendlyAgentName(kind, row.agent_name, row.debug_label);
       const calls = row.llm_calls;
-      const input = row.input_tokens ?? 0;
-      const output = row.output_tokens ?? 0;
       const cached = row.cached_tokens ?? 0;
+      // TIN = fresh (non-cache-read) input, disjoint from `cached`; matches the
+      // tiles/header so the per-model/per-agent tables reconcile with the card.
+      const input = freshInput(row.input_tokens ?? 0, cached);
+      const output = row.output_tokens ?? 0;
       const reasoning = row.reasoning_tokens ?? 0;
       const aiu = row.aiu_nano ?? 0;
 
@@ -2008,6 +2020,24 @@ export class TelemetryDatabase {
     );
     return this.humanSessionsCache;
   }
+}
+
+/**
+ * Display-only "fresh" (non-cache-read) input for a Copilot/OTel `chat` span.
+ *
+ * Copilot reports `gen_ai.usage.input_tokens` as the GROSS prompt count with the
+ * cache-read tokens FOLDED IN, and `cached_tokens` (= `cache_read.input_tokens`)
+ * as a subset of it. The detail view shows TIN/TCI as DISJOINT buckets — matching
+ * the Claude path, where the API reports uncached input separately from cache reads
+ * — so TIN must exclude the cache-read portion. Subtract it here, clamped at 0
+ * (cached is always ≤ gross input in practice).
+ *
+ * This is a DISPLAY normalization only: the stored `spans.input_tokens` and the
+ * cloud-aggregation path ({@link ../aggregate/aggregator}) keep the gross value,
+ * which is the documented OTel/`prompt_tokens` convention.
+ */
+function freshInput(grossInput: number, cached: number): number {
+  return Math.max(0, grossInput - cached);
 }
 
 /** Resolve a model id: response_model, then request_model, else `unknown`. */

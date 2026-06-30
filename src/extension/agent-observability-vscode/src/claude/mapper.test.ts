@@ -107,8 +107,10 @@ describe('buildSessionSummary (main thread only)', () => {
     expect(s.llmCalls).toBe(2);
     expect(s.toolCalls).toBe(3); // Read, Write, Task — sub-agent's Grep excluded
     expect(s.interactionCount).toBe(5);
-    expect(s.inputTokens).toBe(15);
+    // TIN = fresh input incl. cache writes (creation): (10 + 50) + 5 = 65.
+    expect(s.inputTokens).toBe(65);
     expect(s.outputTokens).toBe(28);
+    // TCI = cache READS only, disjoint from TIN.
     expect(s.cachedTokens).toBe(100);
     expect(s.model).toBe(OPUS);
     expect(s.repository).toBe('https://github.com/org/repo');
@@ -124,10 +126,12 @@ describe('buildSessionDetail (whole tree)', () => {
     const t = detail.treeStats;
     expect(t.modelTurns).toBe(3); // 2 main + 1 sub
     expect(t.toolCalls).toBe(4); // 3 main + 1 sub
-    expect(t.inputTokens).toBe(18);
+    // TIN = fresh input incl. cache writes: (10+50) + 5 + 3 = 68.
+    expect(t.inputTokens).toBe(68);
     expect(t.outputTokens).toBe(32);
     expect(t.cachedTokens).toBe(110);
-    expect(t.totalTokens).toBe(50);
+    // TT = disjoint buckets' true total: 68 (TIN) + 110 (TCI) + 32 (TOUT) = 210.
+    expect(t.totalTokens).toBe(210);
     expect(t.errorCount).toBe(1); // the sub-agent's Grep tool_result is_error
     expect(t.aiuNano).toBe(0);
     expect(t.linesOfCode).toBe(3); // Write wrote 3 lines to a .ts file
@@ -191,6 +195,12 @@ describe('buildAggregationRows (cloud-safe, whole tree)', () => {
     // Tokens live only on chat rows.
     expect(tools.every((r) => r.inputTokens === 0 && r.outputTokens === 0)).toBe(true);
     expect(invoke.every((r) => r.inputTokens === 0)).toBe(true);
+    // Cloud keeps RAW input_tokens: the 50 cache-CREATION tokens folded into the
+    // local TIN display are subtracted back out here, so the org-sync contract is
+    // unchanged. Raw chat input = 10 + 5 + 3 = 18 (NOT the display's 68); cache
+    // reads pass through as 100 + 0 + 10 = 110.
+    expect(chat.reduce((a, r) => a + r.inputTokens, 0)).toBe(18);
+    expect(chat.reduce((a, r) => a + r.cachedTokens, 0)).toBe(110);
     // Every row is agent-mode 'agent', carries the resolved repository + model.
     expect(rows.every((r) => r.agentMode === 'agent')).toBe(true);
     expect(rows.every((r) => r.repository === 'https://github.com/org/repo')).toBe(true);

@@ -106,9 +106,10 @@ describe('renderCombinedSessionDetailHtml', () => {
     const html = renderCombinedSessionDetailHtml(viewFor([a, b]), NONCE);
 
     expect(html).toContain('Agent run totals');
-    // Merged totals: model turns 2+5=7, total tokens 140+260=400, errors 1+0=1.
+    // Merged totals: model turns 2+5=7, errors 1+0=1. TT is re-derived over the
+    // disjoint buckets: input 300 + cached 30 + output 100 = 430.
     expect(html).toContain('>7<'); // MT
-    expect(html).toContain('>400<'); // TT
+    expect(html).toContain('>430<'); // TT
     // Merged AIU 1 + 3 = 4 AIU.
     expect(html).toContain('4.00');
   });

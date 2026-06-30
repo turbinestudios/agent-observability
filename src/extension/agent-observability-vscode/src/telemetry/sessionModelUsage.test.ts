@@ -31,7 +31,8 @@ const AGENT_RUN_INFRA = '8319bef8-8bca-40ce-9eb5-026215d785c0';
 const CONSTITUENT_CONVERSATION = 'e7c40c84-7288-42c2-8aa3-54a296fba4f4';
 /**
  * The "default" agent run: one main thread plus a spawned (unnamed) sub-agent, all
- * `claude-opus-4-6`. Main 22 turns / 541,672 in; sub-agent 4 turns / 36,452 in.
+ * `claude-opus-4-6`. Main 22 turns / 541,672 gross in (138,034 fresh); sub-agent 4
+ * turns / 36,452 gross in (9,343 fresh).
  */
 const AGENT_RUN_DEFAULT = '97fb6af7-7d93-45fe-a00b-289fa761bf66';
 
@@ -69,7 +70,8 @@ describe('TelemetryDatabase.getSessionDetail — tree-scoped model/agent breakdo
     expect(opus).toMatchObject({
       model: 'claude-opus-4-6',
       llmCalls: 26,
-      inputTokens: 458647,
+      // TIN = fresh (non-cache-read) input = gross 458647 − 435540 cache reads.
+      inputTokens: 23107,
       outputTokens: 16392,
       cachedTokens: 435540,
     });
@@ -91,7 +93,7 @@ describe('TelemetryDatabase.getSessionDetail — tree-scoped model/agent breakdo
       detail.modelUsage.reduce((acc, u) => acc + u[key], 0);
 
     // The breakdown sums to the whole-tree card.
-    expect(sum('inputTokens')).toBe(detail.treeStats.inputTokens); // 469,461
+    expect(sum('inputTokens')).toBe(detail.treeStats.inputTokens); // 33,921 fresh
     expect(sum('outputTokens')).toBe(detail.treeStats.outputTokens);
     expect(sum('cachedTokens')).toBe(detail.treeStats.cachedTokens);
     expect(sum('llmCalls')).toBe(detail.treeStats.modelTurns); // 28 chat spans
@@ -109,8 +111,8 @@ describe('TelemetryDatabase.getSessionDetail — tree-scoped model/agent breakdo
     }
     // The sub-agent's model now appears (the old single-session rollup dropped it).
     expect(detail.modelUsage.some((u) => u.model === 'claude-sonnet-4-6')).toBe(true);
-    // The main-thread summary still excludes it (458,647 main vs 469,461 tree).
-    expect(detail.summary.inputTokens).toBe(458647);
+    // The main-thread summary still excludes it (23,107 fresh main vs 33,921 tree).
+    expect(detail.summary.inputTokens).toBe(23107);
     expect(detail.summary.llmCalls).toBe(6); // 6 main-thread invoke_agent spans
   });
 
@@ -124,7 +126,8 @@ describe('TelemetryDatabase.getSessionDetail — tree-scoped model/agent breakdo
 
     // Main thread is one friendly-labelled agent on claude-opus-4-6.
     expect(new Set(main.map((u) => u.agentName))).toEqual(new Set(['Main agent']));
-    expect(main.reduce((a, u) => a + u.inputTokens, 0)).toBe(458647);
+    // Fresh main-thread input (gross 458647 − 435540 cache reads).
+    expect(main.reduce((a, u) => a + u.inputTokens, 0)).toBe(23107);
 
     // The spawned sub-agent surfaces under its debug-log name, across both model
     // forms it ran.
@@ -174,12 +177,14 @@ describe('TelemetryDatabase.getSessionDetail — tree-scoped model/agent breakdo
     expect(detail.modelUsage[0]).toMatchObject({
       model: 'claude-opus-4-6',
       llmCalls: 26,
-      inputTokens: 578124,
+      // Fresh tree input = gross 578124 − 430747 cache reads.
+      inputTokens: 147377,
     });
     expect(detail.modelUsage[0].inputTokens).toBe(detail.treeStats.inputTokens);
 
-    // Main-thread summary is unchanged (excludes the spawned sub-agent).
-    expect(detail.summary.inputTokens).toBe(541672);
+    // Main-thread summary still excludes the spawned sub-agent; TIN is now fresh
+    // (gross 541672 − 403638 cache reads = 138034).
+    expect(detail.summary.inputTokens).toBe(138034);
     expect(detail.summary.outputTokens).toBe(10792);
     expect(detail.summary.cachedTokens).toBe(403638);
     expect(detail.summary.llmCalls).toBe(7);
@@ -189,9 +194,10 @@ describe('TelemetryDatabase.getSessionDetail — tree-scoped model/agent breakdo
     const main = detail.agentUsage.filter((u) => u.kind === 'main');
     const subs = detail.agentUsage.filter((u) => u.kind === 'subagent');
     expect(main).toHaveLength(1);
-    expect(main[0]).toMatchObject({ agentName: 'Main agent', llmCalls: 22, inputTokens: 541672 });
+    // Fresh input: main 541672−403638=138034; sub 36452−27109=9343.
+    expect(main[0]).toMatchObject({ agentName: 'Main agent', llmCalls: 22, inputTokens: 138034 });
     expect(subs).toHaveLength(1);
-    expect(subs[0]).toMatchObject({ agentName: 'Sub-agent', llmCalls: 4, inputTokens: 36452 });
+    expect(subs[0]).toMatchObject({ agentName: 'Sub-agent', llmCalls: 4, inputTokens: 9343 });
     expect(detail.agentUsage.reduce((a, u) => a + u.inputTokens, 0)).toBe(
       detail.treeStats.inputTokens,
     );

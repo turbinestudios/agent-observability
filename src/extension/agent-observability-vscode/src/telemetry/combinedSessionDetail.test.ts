@@ -174,8 +174,9 @@ describe('combineSessionDetails', () => {
       inputTokens: 300,
       outputTokens: 100,
       cachedTokens: 30,
-      // Re-derived from merged input + output, NOT the bogus per-session 999s.
-      totalTokens: 400,
+      // Re-derived from merged input + cached + output (300+30+100), NOT the bogus
+      // per-session 999s.
+      totalTokens: 430,
       errorCount: 3,
       aiuNano: 4_000_000_000,
       // Claude token-priced cost is summed across sessions (was dropped before).

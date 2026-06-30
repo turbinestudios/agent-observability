@@ -50,7 +50,8 @@ export function combineSessionDetails(details: readonly SessionDetail[]): Combin
 /**
  * Sum every session's whole-agent-tree totals into one {@link SessionTreeStats}.
  * Each field adds directly; {@link SessionTreeStats.totalTokens} is re-derived as
- * input + output so it stays consistent regardless of the per-session value. Shares
+ * input + cached + output (the disjoint buckets' true total) so it stays consistent
+ * regardless of the per-session value. Shares
  * the tree-overlap CAVEAT above: selecting an orchestrator and its own sub-agent
  * would double-count, but independent selections sum exactly.
  */
@@ -86,7 +87,7 @@ function mergeTreeStats(details: readonly SessionDetail[]): SessionTreeStats {
     acc.linesOfCodeRemoved += t.linesOfCodeRemoved;
     acc.linesOfDocRemoved += t.linesOfDocRemoved;
   }
-  acc.totalTokens = acc.inputTokens + acc.outputTokens;
+  acc.totalTokens = acc.inputTokens + acc.cachedTokens + acc.outputTokens;
   return acc;
 }
 

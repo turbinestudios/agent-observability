@@ -124,9 +124,11 @@ describe('TelemetryDatabase against the fixture', () => {
     }
     expect(stats.modelTurns).toBe(26);
     expect(stats.toolCalls).toBe(52);
-    expect(stats.inputTokens).toBe(578124);
+    // TIN = fresh (non-cache-read) input = gross 578124 − 430747 cache reads.
+    expect(stats.inputTokens).toBe(147377);
     expect(stats.outputTokens).toBe(11507);
     expect(stats.cachedTokens).toBe(430747);
+    // TT unchanged: TIN + TCI + TOUT = 147377 + 430747 + 11507 (= gross + output).
     expect(stats.totalTokens).toBe(589631);
     expect(stats.errorCount).toBe(97);
     // Fixture AIU values are sanitized to zero (exercised non-zero in sessionAiu.test.ts).

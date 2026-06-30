@@ -389,13 +389,23 @@ export interface SessionTreeStats {
   modelTurns: number;
   /** `execute_tool` span count across the tree → GitHub's "Tool Calls". */
   toolCalls: number;
-  /** Σ `input_tokens` over the tree's `chat` spans. */
+  /**
+   * Fresh (non-cache-read) input tokens over the tree's `chat` spans → "Total Input
+   * Tokens". DISJOINT from {@link cachedTokens}: Claude = uncached `input_tokens` +
+   * `cache_creation`; Copilot = gross `input_tokens` − cache reads.
+   */
   inputTokens: number;
   /** Σ `output_tokens` over the tree's `chat` spans. */
   outputTokens: number;
-  /** Σ `cached_tokens` over the tree's `chat` spans → "Total Cached Input Tokens". */
+  /**
+   * Cache-READ input tokens over the tree's `chat` spans → "Total Cached Input
+   * Tokens". The cheap reused-prompt bucket, disjoint from {@link inputTokens}.
+   */
   cachedTokens: number;
-  /** {@link inputTokens} + {@link outputTokens} → GitHub's "Total Tokens". */
+  /**
+   * {@link inputTokens} + {@link cachedTokens} + {@link outputTokens} → "Total
+   * Tokens". The three buckets are disjoint, so this is the genuine total.
+   */
   totalTokens: number;
   /** Count of spans with `status_code === 2` across the tree → "Errors". */
   errorCount: number;

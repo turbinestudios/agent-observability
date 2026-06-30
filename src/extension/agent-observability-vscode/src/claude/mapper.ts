@@ -87,6 +87,13 @@ interface ExtractedTurn {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  /**
+   * `cache_creation_input_tokens`, ALREADY folded into {@link inputTokens} for
+   * display (cache writes are fresh, near-full-price input). Kept separately only
+   * so {@link buildAggregationRows} can subtract it back out and upload RAW
+   * `input_tokens` to the cloud — the org-sync contract predates this fold.
+   */
+  cacheCreationTokens: number;
   reasoningTokens: number;
   costMicros: number;
   /** Approx generation latency (ms): gap from the previous record. */
@@ -251,7 +258,9 @@ export function buildAggregationRows(input: ClaudeSessionInput): AggregationRow[
         operation: 'chat',
         durationMs: turn.durationMs,
         statusCode: turn.success ? 1 : 2,
-        inputTokens: turn.inputTokens,
+        // Cloud keeps RAW `input_tokens`: display folds cache writes into TIN, but
+        // the org-sync contract predates that, so subtract them back out here.
+        inputTokens: turn.inputTokens - turn.cacheCreationTokens,
         outputTokens: turn.outputTokens,
         cachedTokens: turn.cachedTokens,
         reasoningTokens: turn.reasoningTokens,
@@ -342,7 +351,14 @@ function extractAssistantTurn(
   const ts = parseTs(record.timestamp);
   const model = typeof message.model === 'string' && message.model.length > 0 ? message.model : 'unknown';
   const usage = message.usage;
-  const inputTokens = intOf(usage?.input_tokens);
+  // TIN (display) = every input token processed FRESH this turn: uncached
+  // `input_tokens` PLUS `cache_creation_input_tokens` (cache writes are new,
+  // ~full-price input — not reuse). TCI is the cheap cache READS only. The two are
+  // disjoint, mirroring the Copilot path (gross input − cache reads). Cost is
+  // unaffected (claudeCostMicros prices all three buckets from `usage` directly),
+  // and the cloud batch keeps RAW input (see buildAggregationRows).
+  const cacheCreationTokens = intOf(usage?.cache_creation_input_tokens);
+  const inputTokens = intOf(usage?.input_tokens) + cacheCreationTokens;
   const outputTokens = intOf(usage?.output_tokens);
   const cachedTokens = intOf(usage?.cache_read_input_tokens);
   const reasoningTokens = intOf(usage?.reasoning_tokens);
@@ -385,6 +401,7 @@ function extractAssistantTurn(
     inputTokens,
     outputTokens,
     cachedTokens,
+    cacheCreationTokens,
     reasoningTokens,
     costMicros: claudeCostMicros(model, usage),
     durationMs: prevTs > 0 && ts > 0 ? Math.max(0, ts - prevTs) : 0,
@@ -443,7 +460,10 @@ function buildTreeStats(main: ExtractedTurn[], subs: SubExtract[]): SessionTreeS
   for (const sub of subs) {
     accumulate(sub.extract.records);
   }
-  stats.totalTokens = stats.inputTokens + stats.outputTokens;
+  // TT is the genuine total: fresh input (TIN) + cache reads (TCI) + output. The
+  // three buckets are disjoint, so nothing is double-counted and nothing (incl.
+  // cache reads, which the old `input + output` silently dropped) is lost.
+  stats.totalTokens = stats.inputTokens + stats.cachedTokens + stats.outputTokens;
   return stats;
 }
 
