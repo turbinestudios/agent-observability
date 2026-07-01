@@ -6,6 +6,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Context Analysis tab for Claude Code sessions.** The tab (previously
+  Copilot-only) now appears on Claude session-detail views. Because Claude emits no
+  discovery telemetry, the loaded-context set is reconstructed from the transcript
+  plus the on-disk `.claude` / CLAUDE.md tree: the always-in-context memory
+  hierarchy (project `CLAUDE.md` up to the root + user `~/.claude/CLAUDE.md`),
+  invoked skills and sub-agent definition files, and context-directory `Read` calls.
+  The per-agent context-window bar uses the largest `input + cache_read +
+  cache_creation` across each agent's turns. A caption notes the view is
+  best-effort and reflects the current on-disk state. All analysis is LOCAL-ONLY.
+
 ### Changed
 
 - **Live updates are now scoped to the open session-detail panel.** A live signal

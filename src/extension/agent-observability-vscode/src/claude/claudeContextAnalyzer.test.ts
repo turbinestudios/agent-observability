@@ -76,6 +76,8 @@ describe('analyzeClaudeContext', () => {
     expect(read?.status).toBe('read');
 
     expect(result!.total.kind).toBe('total');
+    // Best-effort provenance caption is attached for the Claude path.
+    expect(result!.note).toMatch(/on-disk/i);
   });
 
   it('adds a partition per sub-agent, named to match the Overview tab', () => {

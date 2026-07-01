@@ -88,8 +88,18 @@ export function analyzeClaudeContext(
     return undefined;
   }
 
-  return { total: buildTotalAnalysis(agents), agents };
+  return { total: buildTotalAnalysis(agents), agents, note: CLAUDE_CONTEXT_NOTE };
 }
+
+/**
+ * Provenance caption for the tab. Claude emits no discovery telemetry, so this
+ * view is reconstructed and reflects the filesystem as it is NOW — unlike the
+ * point-in-time Copilot path. Kept honest for the reader.
+ */
+const CLAUDE_CONTEXT_NOTE =
+  'Reconstructed from the transcript and the current on-disk CLAUDE.md / .claude files. '
+  + 'This reflects files as they are now, not necessarily as they were during the session. '
+  + 'Skills and sub-agent definitions are counted when invoked, and per-file token sizes are estimates.';
 
 // ── internals ────────────────────────────────────────────────────────────────
 
