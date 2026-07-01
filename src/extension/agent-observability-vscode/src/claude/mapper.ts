@@ -82,6 +82,13 @@ export interface ClaudeSessionInput {
 
 /** One extracted `assistant` turn with its triggered tool calls. */
 interface ExtractedTurn {
+  /**
+   * Stable id of the source assistant record (its transcript `uuid`, or a
+   * synthesized ordinal when absent). Used LOCALLY as the `chat` interaction's
+   * span id so the deviation detector's content predicates can correlate the
+   * turn's prompt ({@link buildUserRequestContent}); never persisted or synced.
+   */
+  spanId: string;
   timestampMs: number;
   model: string;
   inputTokens: number;
@@ -104,6 +111,13 @@ interface ExtractedTurn {
   loc: WriteLineDelta;
   /** Assistant final text (for the detail view's final response). */
   responseText: string;
+  /**
+   * Governing top-level user prompt driving this turn, when known (LOCAL-ONLY).
+   * Carried so a content trigger can key on `copilot_chat.user_request`; read
+   * only by {@link buildUserRequestContent} for local content matching and
+   * NEVER copied into an aggregation row or synced.
+   */
+  userRequest?: string;
 }
 
 /** One `tool_use` block resolved against its `tool_result`. */
@@ -196,6 +210,8 @@ export function buildInteractions(input: ClaudeSessionInput): Interaction[] {
       timestampMs: turn.timestampMs,
       sessionId: input.sessionId,
       traceId: input.sessionId,
+      // Local correlation key for content predicates (see buildUserRequestContent).
+      ...(turn.spanId.length > 0 ? { spanId: turn.spanId } : {}),
       operation: 'chat',
       agentName: 'claude',
       agentMode: CLAUDE_AGENT_MODE,
@@ -227,6 +243,28 @@ export function buildInteractions(input: ClaudeSessionInput): Interaction[] {
     }
   }
   return out;
+}
+
+/**
+ * LOCAL-ONLY: map each main-thread `chat` interaction's span id → the governing
+ * user prompt text, for the deviation detector's `copilot_chat.user_request`
+ * content predicates. The Claude equivalent of the Copilot span-attributes
+ * lookup, but reconstructed from the in-memory transcript rather than a DB.
+ *
+ * PRIVACY: the prompt text stays on this machine — it is consumed only to
+ * produce a boolean match, and any deviation it contributes to is flagged
+ * `contentDerived` and excluded from sync. Nothing here reaches an
+ * {@link AggregationRow}.
+ */
+export function buildUserRequestContent(input: ClaudeSessionInput): Map<string, string> {
+  const { records: turns } = extractTranscript(input.mainRecords, input.codeExts, input.docExts);
+  const map = new Map<string, string>();
+  for (const turn of turns) {
+    if (turn.spanId.length > 0 && turn.userRequest !== undefined && turn.userRequest.length > 0) {
+      map.set(turn.spanId, turn.userRequest);
+    }
+  }
+  return map;
 }
 
 /**
@@ -305,7 +343,13 @@ export function extractTranscript(
   const resultIndex = buildToolResultIndex(records);
   const turns: ExtractedTurn[] = [];
   let prevTs = 0;
+  // Latest genuine top-level user prompt, carried onto each assistant turn it
+  // drives so a LOCAL content trigger can key on it. Never synced.
+  let currentUserRequest: string | undefined;
   for (const record of records) {
+    if (isUserRequest(record)) {
+      currentUserRequest = messageText(record.message).trim() || undefined;
+    }
     if (!isAssistant(record)) {
       // Advance the latency baseline past any intervening record with a time.
       const ts = parseTs(record.timestamp);
@@ -315,6 +359,14 @@ export function extractTranscript(
       continue;
     }
     const turn = extractAssistantTurn(record, resultIndex, prevTs, codeExts, docExts);
+    // Guarantee a non-empty, stable span id even when the record has no uuid, so
+    // the content lookup can always correlate the turn's anchor.
+    if (turn.spanId.length === 0) {
+      turn.spanId = `main-${turns.length}`;
+    }
+    if (currentUserRequest !== undefined) {
+      turn.userRequest = currentUserRequest;
+    }
     turns.push(turn);
     prevTs = turn.timestampMs > 0 ? turn.timestampMs : prevTs;
   }
@@ -396,6 +448,7 @@ function extractAssistantTurn(
   }
 
   return {
+    spanId: typeof record.uuid === 'string' && record.uuid.length > 0 ? record.uuid : '',
     timestampMs: ts,
     model,
     inputTokens,

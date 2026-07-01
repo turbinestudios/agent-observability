@@ -342,10 +342,12 @@ export class SessionDetailPanelManager {
   /**
    * Detect PER-TURN workflow deviations for a session, aligned by index to
    * `detail.turns`. Interactions are bucketed into the same user-request turns the
-   * detail view renders, then each turn is checked independently. For Copilot,
-   * workflow content predicates read raw span attributes through a LOCAL-ONLY
-   * memoized lookup; for other sources the lookup is empty (the
-   * sequence/missing/timeout checks still run over metadata).
+   * detail view renders, then each turn is checked independently. Workflow content
+   * predicates read raw content through the source's own LOCAL-ONLY, memoized
+   * {@link SessionDataSource.getSessionContent} (Copilot from span attributes,
+   * Claude reconstructed from the transcript); a source that supplies none leaves
+   * content predicates inert (the sequence/missing/timeout checks still run over
+   * metadata).
    */
   private detectTurnDeviations(
     source: SessionDataSource,
@@ -359,13 +361,13 @@ export class SessionDetailPanelManager {
     }
     const attributeCache = new Map<string, ReadonlyMap<string, string>>();
     const contentLookup = (attribute: string): ReadonlyMap<string, string> => {
-      if (source.id !== 'copilot') {
-        return new Map<string, string>();
-      }
       let values = attributeCache.get(attribute);
       if (values === undefined) {
-        const result = this.telemetry.getSpanAttributes(sessionKey, attribute);
-        values = result.ok ? result.value : new Map<string, string>();
+        // Each source supplies its own local-only content (Copilot from span
+        // attributes, Claude reconstructed from the transcript); a source that
+        // implements no lookup leaves content predicates inert.
+        const result = source.getSessionContent?.(sessionKey, attribute);
+        values = result?.ok ? result.value : new Map<string, string>();
         attributeCache.set(attribute, values);
       }
       return values;

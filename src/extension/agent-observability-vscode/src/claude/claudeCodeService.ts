@@ -26,6 +26,7 @@ import {
   buildInteractions,
   buildSessionDetail,
   buildSessionSummary,
+  buildUserRequestContent,
 } from './mapper';
 
 /**
@@ -206,6 +207,22 @@ export class ClaudeCodeService implements SessionDataSource {
         return [];
       }
       return buildInteractions(input);
+    });
+  }
+
+  getSessionContent(sessionKey: string, attribute: string): Result<ReadonlyMap<string, string>> {
+    return this.guard(() => {
+      // Only the user's prompt is reconstructable from a Claude transcript; every
+      // other content attribute (tool args, system prompt, …) is Copilot-specific
+      // with no Claude equivalent, so it stays empty and the predicate is inert.
+      if (attribute !== 'copilot_chat.user_request') {
+        return new Map<string, string>();
+      }
+      const input = this.loadSessionInput(sessionKey, false);
+      if (input === undefined) {
+        return new Map<string, string>();
+      }
+      return buildUserRequestContent(input);
     });
   }
 
