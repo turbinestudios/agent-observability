@@ -562,6 +562,32 @@
           "maximum": 65535,
           "markdownDescription": "Localhost port the extension's OpenTelemetry receiver listens on (set automatically by **Enable Live Updates**; `0` until then). Copilot's `#github.copilot.chat.otel.otlpEndpoint#` is pointed at `http://127.0.0.1:<port>`."
         },
+        "agentObservability.copilotArchive.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "markdownDescription": "Keep a **durable archive** of GitHub Copilot agent sessions. Copilot writes only a short, rolling `agent-traces.db` inside VS Code's per-edition `globalStorage`, so history is lost and sessions differ between windows. When on (default), the extension continuously copies Copilot's spans into a single archive under your home directory (`~/.agent-observability/copilot/agent-traces.db`), so sessions persist and appear in **every** VS Code window and edition on this machine — the way Claude Code sessions already do. Zero setup; runs in the background; nothing is uploaded. History that Copilot rotated out before the archive first ran cannot be recovered."
+        },
+        "agentObservability.copilotArchive.path": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Override the archive database file path. Leave blank to use `AGENT_OBSERVABILITY_HOME/copilot/agent-traces.db` if that environment variable is set, else `~/.agent-observability/copilot/agent-traces.db`. Set this only to relocate the archive."
+        },
+        "agentObservability.copilotArchive.retentionDays": {
+          "type": "number",
+          "default": 180,
+          "minimum": 1,
+          "scope": "application",
+          "markdownDescription": "How many days of Copilot sessions the archive retains. Older sessions are pruned on each sweep. Defaults to 180 days — long enough to beat Copilot's short rolling window. The archive stores only non-sensitive metadata (counts, tokens, models, timings), so it grows slowly."
+        },
+        "agentObservability.copilotArchive.sweepIntervalSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 10,
+          "scope": "application",
+          "markdownDescription": "How often (seconds) the extension copies new Copilot spans into the archive while VS Code is open. Lower captures sooner but does slightly more background work; minimum 10."
+        },
         "agentObservability.claudeCode.enabled": {
           "type": "boolean",
           "default": true,

@@ -102,6 +102,13 @@ export class TelemetryService {
   private cache: CacheEntry = { sessions: new Map() };
   /** When set + present, the extension's OWN live-OTLP ingest DB (the sink). */
   private ingestDbPath: string | undefined;
+  /**
+   * When set + present, the DURABLE, home-anchored Copilot archive
+   * ({@link ../otel/copilotArchiver.CopilotArchiver}). Read as the sole source
+   * UNLESS the live-OTLP ingest DB is active (that stays the real-time source),
+   * and preferred over auto-detecting Copilot's short-lived native DB(s).
+   */
+  private archiveDbPath: string | undefined;
 
   constructor(config: ServiceConfig | Configuration, environment?: PathEnvironment) {
     this.config = config;
@@ -133,6 +140,21 @@ export class TelemetryService {
       return;
     }
     this.ingestDbPath = dbPath;
+    this.refresh();
+  }
+
+  /**
+   * Point the service at the durable, home-anchored Copilot archive. When set AND
+   * the file exists, it is read as the SOLE source in place of Copilot's
+   * short-lived native DB(s) — so sessions persist and are identical in every VS
+   * Code window. The live-OTLP ingest DB, when active, still takes precedence (it
+   * is the real-time source). Pass `undefined` to stop preferring the archive.
+   */
+  setArchiveDbPath(dbPath: string | undefined): void {
+    if (dbPath === this.archiveDbPath) {
+      return;
+    }
+    this.archiveDbPath = dbPath;
     this.refresh();
   }
 
@@ -463,11 +485,16 @@ export class TelemetryService {
   private ensureOpen(): OpenHandle[] {
     const resolved = resolveDatabasePaths(this.config, this.environment);
 
-    // When the live-OTLP sink is active and its DB exists, it is the SOLE source —
-    // Copilot's DB is no longer being fed (single exporter) and is large, so skip it.
+    // Source precedence, each SOLE when it applies (so the merge stays over one
+    // disjoint source and additive rollups never double-count):
+    //   1. live-OTLP ingest DB — real-time, when live updates are on;
+    //   2. durable home archive — persists Copilot history across windows/editions;
+    //   3. Copilot's short-lived native DB(s) — first-run fallback until (2) exists.
     let targets: Array<{ path: string; source: DatabaseSource }> | undefined;
     if (this.ingestDbPath !== undefined && sourceMtime(this.ingestDbPath) !== undefined) {
       targets = [{ path: this.ingestDbPath, source: 'ingest' }];
+    } else if (this.archiveDbPath !== undefined && sourceMtime(this.archiveDbPath) !== undefined) {
+      targets = [{ path: this.archiveDbPath, source: 'ingest' }];
     } else {
       // When nothing is readable anywhere, still attempt the denied-but-present
       // candidate so the precise EACCES/EPERM surfaces (snapshot copy throws).
