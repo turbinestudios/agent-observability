@@ -98,4 +98,10 @@ export interface SessionContextAnalysis {
   total: AgentContextAnalysis;
   /** Per-agent breakdowns: [main, subagent-A, subagent-B, ...]. */
   agents: AgentContextAnalysis[];
+  /**
+   * Optional provenance caption shown atop the tab. Set by sources whose analysis
+   * is best-effort/reconstructed (e.g. the Claude path's current-disk-state
+   * caveat); omitted by the point-in-time Copilot path.
+   */
+  note?: string;
 }

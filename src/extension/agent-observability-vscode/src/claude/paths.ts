@@ -63,7 +63,7 @@ export interface ClaudeSessionFiles {
   mtimeMs: number;
 }
 
-const defaultFs: ClaudeFs = {
+export const defaultFs: ClaudeFs = {
   homedir: () => os.homedir(),
   env: process.env,
   isDirectory: (p) => {

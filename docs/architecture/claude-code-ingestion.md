@@ -62,9 +62,31 @@ The Claude path produces the **same** model shapes as the Copilot path
 - **Overview view** — merges metrics across sources, with a per-source breakdown.
 - **Session-detail webview** — reused verbatim. The cost basis follows the source
   via a `CostMode`: Copilot shows AIU (`aiuToUsd`), Claude shows the token-priced
-  USD estimate carried on `costUsdMicros`. Copilot sessions additionally run the
-  deviation + context-analysis passes (Copilot-only span attributes); Claude
-  sessions run deviation checks over metadata and skip context analysis.
+  USD estimate carried on `costUsdMicros`. Both sources drive the deviation and
+  **Context Analysis** passes; each source owns producing its own context analysis
+  via the optional `SessionDataSource.getContextAnalysis` (Copilot from OTel span
+  attributes, Claude from the transcript + on-disk `.claude`/CLAUDE.md tree — see
+  below). The shared per-agent pipeline (`context/contextAnalyzer.ts`) is reused by
+  both via `buildAgentAnalysisFromParts` / `buildTotalAnalysis`.
+
+### Context Analysis (Claude path)
+
+Claude Code emits no discovery telemetry, so `claude/claudeContextAnalyzer.ts`
+reconstructs the loaded-context set (`claude/claudeContextDiscovery.ts`):
+
+- **Always-in-context** — every `CLAUDE.md` / `CLAUDE.local.md` from the session
+  `cwd` up to the filesystem root, plus the user `~/.claude/CLAUDE.md`.
+- **On-invocation** — context-directory `Read` tool calls, `Skill` invocations
+  (each loads a `SKILL.md`), and per-sub-agent definition files (`.claude/agents/<type>.md`).
+- **Token budget** — per agent, the largest `input_tokens + cache_read + cache_creation`
+  across its turns (true window occupancy, since Claude serves most of a prompt from
+  cache). Per-file sizes are estimated from disk (`≈ chars/4`).
+
+Caveats (surfaced as a caption on the tab, `SessionContextAnalysis.note`): the
+filesystem is read at analysis time, so it reflects the **current** on-disk state,
+not the exact bytes present during the run (Copilot's is point-in-time); skills and
+sub-agent definitions are counted as loaded only when invoked. Everything stays
+LOCAL-ONLY — none of it reaches the cloud-aggregate `AggregationRow`.
 
 ### Mapping semantics (mirrors the Copilot mapping)
 

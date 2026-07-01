@@ -120,6 +120,18 @@ describe('sessionDetailHtml — context analysis tab', () => {
     expect(html).toContain('Subagent: Explore');
   });
 
+  it('renders a provenance caption when a note is present', () => {
+    const analysis = { ...minimalContextAnalysis(), note: 'Reconstructed from the transcript.' };
+    const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', analysis);
+    expect(html).toContain('class="ctx-note"');
+    expect(html).toContain('Reconstructed from the transcript.');
+  });
+
+  it('omits the caption when no note is present (Copilot path)', () => {
+    const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', minimalContextAnalysis());
+    expect(html).not.toContain('class="ctx-note"');
+  });
+
   it('renders loaded files table', () => {
     const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', minimalContextAnalysis());
     expect(html).toContain('copilot-instructions.md');

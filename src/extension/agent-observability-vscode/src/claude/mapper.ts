@@ -75,6 +75,12 @@ export interface ClaudeSessionInput {
   subagents: ClaudeSubagentTranscript[];
   /** SANITIZED repository (already resolved from `cwd`). */
   repository: string;
+  /**
+   * Raw working directory of the session (from the transcript records), used
+   * LOCAL-ONLY by the context analyzer to locate the CLAUDE.md / `.claude`
+   * hierarchy. Never uploaded — the cloud path carries only {@link repository}.
+   */
+  cwd?: string;
   /** Code/doc extension lists for LoC classification (normalized). */
   codeExts: readonly string[];
   docExts: readonly string[];

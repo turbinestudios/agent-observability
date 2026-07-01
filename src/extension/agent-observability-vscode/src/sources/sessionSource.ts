@@ -10,6 +10,8 @@ import type {
   SessionDetail,
   SessionSummary,
 } from '../telemetry/models';
+import type { SessionContextAnalysis } from '../context/models';
+import { analyzeContext, type AcceptedMissingConfig } from '../context/contextAnalyzer';
 
 /**
  * A pluggable agent-telemetry source feeding the unified views.
@@ -52,6 +54,19 @@ export interface SessionDataSource {
    * nothing was hidden. Surfaced as an info row so the cap is never silent.
    */
   truncationNote?(): string | undefined;
+
+  /**
+   * LOCAL-ONLY context-window analysis for a session — the data behind the
+   * "Context Analysis" tab. Each source derives it from its OWN raw data (Copilot
+   * from OTel span attributes, Claude from the transcript plus the on-disk
+   * `.claude` / CLAUDE.md tree), which is why it lives on the source rather than in
+   * the panel. Optional: a source with no context signal simply omits it and the
+   * tab is hidden. Returns `undefined` when there is nothing to show.
+   */
+  getContextAnalysis?(
+    sessionKey: string,
+    acceptedMissing: AcceptedMissingConfig,
+  ): SessionContextAnalysis | undefined;
 }
 
 /**
@@ -91,6 +106,19 @@ export class CopilotSource implements SessionDataSource {
   }
   getAggregationRows(sinceMs?: number, untilMs?: number): Result<AggregationRow[]> {
     return this.telemetry.getAggregationRows(sinceMs, untilMs);
+  }
+  getContextAnalysis(
+    sessionKey: string,
+    acceptedMissing: AcceptedMissingConfig,
+  ): SessionContextAnalysis | undefined {
+    // Prefer the friendly subagent names the Overview tab resolved, so the two
+    // tabs label the same agents identically; fall back to the analyzer's own
+    // DB-derived names when the detail can't be loaded.
+    const detail = this.telemetry.getSessionDetail(sessionKey);
+    const subagentNamesList = detail.ok
+      ? [...new Set(detail.value.agentUsage.filter((u) => u.kind === 'subagent').map((u) => u.agentName))]
+      : undefined;
+    return analyzeContext(sessionKey, this.telemetry, acceptedMissing, undefined, subagentNamesList);
   }
   refresh(): void {
     this.telemetry.refresh();

@@ -1205,6 +1205,11 @@ function formatDuration(ms: number): string {
 function renderContextAnalysis(analysis: SessionContextAnalysis): string {
   const sections: string[] = [];
 
+  // Optional provenance caption (e.g. the Claude disk-state caveat).
+  if (analysis.note !== undefined && analysis.note.length > 0) {
+    sections.push(`<p class="ctx-note">${escapeHtml(analysis.note)}</p>`);
+  }
+
   // Total Overview (open by default)
   sections.push(renderAgentContextSection(analysis.total, true, 0));
 
@@ -1508,6 +1513,7 @@ const STYLE = `
 
   /* ─── Context Analysis ─────────────────────────────────── */
   .context-analysis { display: flex; flex-direction: column; gap: .75rem; }
+  .ctx-note { margin: 0; padding: .5rem .7rem; font-size: .78rem; line-height: 1.45; color: var(--vscode-descriptionForeground); background: var(--vscode-textBlockQuote-background, var(--vscode-editorWidget-background)); border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-panel-border)); border-radius: 3px; }
   .ctx-section { border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); border-radius: 6px; overflow: hidden; }
   .ctx-section-summary { cursor: pointer; display: flex; align-items: center; gap: .65rem; padding: .55rem .8rem; list-style: none; background: var(--vscode-editorWidget-background); }
   .ctx-section-summary::-webkit-details-marker { display: none; }
