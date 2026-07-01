@@ -410,6 +410,62 @@
                         }
                       }
                     },
+                    "triggerContentPredicate": {
+                      "type": "object",
+                      "required": [
+                        "attribute"
+                      ],
+                      "anyOf": [
+                        {
+                          "required": [
+                            "contains"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "matches"
+                          ]
+                        }
+                      ],
+                      "additionalProperties": false,
+                      "markdownDescription": "**Local-only** content gate on the trigger, evaluated in ADDITION to `triggerPredicate`: the workflow applies to a user-request turn only when the turn's anchor (the user-request span) content matches. Lets relevance key on what the request is ABOUT — e.g. `copilot_chat.user_request` contains `/implement-new-feature` — which metadata alone cannot express. Evaluated entirely on this machine; the matched text NEVER leaves it and any deviation it produces is marked local-only and excluded from sync by construction. Requires one of `contains` or `matches`. An unsupported `attribute`, a missing condition, or an unsafe regex skips the whole workflow.",
+                      "properties": {
+                        "attribute": {
+                          "type": "string",
+                          "enum": [
+                            "copilot_chat.user_request",
+                            "gen_ai.input.messages",
+                            "gen_ai.output.messages",
+                            "gen_ai.system_instructions",
+                            "gen_ai.tool.call.arguments",
+                            "gen_ai.tool.call.result",
+                            "gen_ai.tool.definitions",
+                            "gen_ai.tool.description",
+                            "copilot_chat.reasoning_content",
+                            "copilot_chat.hook_input",
+                            "copilot_chat.hook_output",
+                            "copilot_chat.hook_command",
+                            "copilot_chat.request.options",
+                            "copilot_chat.repo.head_branch_name",
+                            "copilot_chat.repo.head_commit_hash",
+                            "copilot_chat.mode_name"
+                          ],
+                          "markdownDescription": "Raw `span_attributes` key to inspect. Restricted to the forbidden-to-sync local-only content set (plus `copilot_chat.mode_name`). Any other key is rejected and the workflow is skipped. Use `copilot_chat.user_request` to match the user's prompt text (e.g. a `/slash-command`). For Claude Code sessions only `copilot_chat.user_request` is populated; other keys have no Claude equivalent and never match."
+                        },
+                        "contains": {
+                          "type": "string",
+                          "markdownDescription": "Case-insensitive substring to look for. Preferred over `matches` for simple checks."
+                        },
+                        "matches": {
+                          "type": "string",
+                          "markdownDescription": "Regex pattern to test against the attribute value. A conservative ReDoS-safe subset is enforced: regex alternation `|` under a repetition (e.g. `(a|b)+`) and other catastrophic-backtracking shapes are rejected and the workflow is skipped — use a character class such as `[ab]+` instead. Regex matching runs only over the first 1,000 characters of the value (vs 10,000 for `contains`) to bound backtracking cost. Prefer `contains` for simple checks."
+                        },
+                        "negate": {
+                          "type": "boolean",
+                          "markdownDescription": "Invert the match (e.g. assert the prompt does NOT contain the value)."
+                        }
+                      }
+                    },
                     "steps": {
                       "type": "array",
                       "markdownDescription": "Optional ordered, structured workflow steps. When present, predicate-based matching supersedes `expectedSequence` for the sequence and missing-step checks: each step must match at least one in-scope interaction, in order. All matching runs locally.",

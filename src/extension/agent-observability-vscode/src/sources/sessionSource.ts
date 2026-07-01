@@ -43,6 +43,15 @@ export interface SessionDataSource {
   getSessionInteractions(sessionKey: string): Result<Interaction[]>;
   getAggregationRows(sinceMs?: number, untilMs?: number): Result<AggregationRow[]>;
 
+  /**
+   * Optional LOCAL-ONLY content lookup for the per-turn deviation detector's
+   * content predicates: span id → raw value of `attribute` for this session.
+   * `attribute` is one of `CONTENT_PREDICATE_ATTRIBUTES`. An unsupported
+   * attribute — or a source that captures no content — returns an empty map,
+   * leaving content predicates inert. The matched text is never synced.
+   */
+  getSessionContent?(sessionKey: string, attribute: string): Result<ReadonlyMap<string, string>>;
+
   /** Drop cached state so the next query re-reads from disk. */
   refresh(): void;
   /** Release any held resources (snapshots, connections, caches). */
@@ -103,6 +112,9 @@ export class CopilotSource implements SessionDataSource {
   }
   getSessionInteractions(sessionKey: string): Result<Interaction[]> {
     return this.telemetry.getSessionInteractions(sessionKey);
+  }
+  getSessionContent(sessionKey: string, attribute: string): Result<ReadonlyMap<string, string>> {
+    return this.telemetry.getSpanAttributes(sessionKey, attribute);
   }
   getAggregationRows(sinceMs?: number, untilMs?: number): Result<AggregationRow[]> {
     return this.telemetry.getAggregationRows(sinceMs, untilMs);

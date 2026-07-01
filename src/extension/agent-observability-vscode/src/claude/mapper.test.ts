@@ -6,9 +6,14 @@ import {
   buildMainTurns,
   buildSessionDetail,
   buildSessionSummary,
+  buildUserRequestContent,
 } from './mapper';
 import { claudeCostMicros } from './pricing';
 import { TranscriptRecord } from './transcript';
+import { WorkflowDeviationDetector } from '../deviation/deviationDetector';
+import { DeviationType, WorkflowConfig } from '../deviation/models';
+
+const REPO = 'https://github.com/org/repo';
 
 /** A tiny but realistic session: a prompt → 2 assistant turns (3 tool calls,
  *  one of them a Task spawn) → final response, plus one Explore sub-agent. */
@@ -240,5 +245,87 @@ describe('buildInteractions (deviation metadata, main thread)', () => {
     expect(interactions.filter((i) => i.operation === 'execute_tool')).toHaveLength(2);
     expect(interactions.filter((i) => i.operation === 'invoke_agent')).toHaveLength(1);
     expect(interactions.every((i) => i.sessionId === 'sess-1' && i.agentMode === 'agent')).toBe(true);
+  });
+
+  it('carries a stable span id on chat interactions only (the prompt anchor)', () => {
+    const interactions = buildInteractions(input());
+    const chats = interactions.filter((i) => i.operation === 'chat');
+    expect(chats.every((i) => typeof i.spanId === 'string' && (i.spanId as string).length > 0)).toBe(true);
+    // Two turns → two distinct anchors.
+    expect(new Set(chats.map((i) => i.spanId)).size).toBe(2);
+    // Tool / sub-agent interactions are never user-request anchors.
+    expect(interactions.filter((i) => i.operation !== 'chat').every((i) => i.spanId === undefined)).toBe(true);
+  });
+
+  it('uses the transcript uuid as the span id when present', () => {
+    const recs: TranscriptRecord[] = [
+      { type: 'user', timestamp: '2026-05-01T10:00:00.000Z', message: { role: 'user', content: 'hi' } },
+      {
+        type: 'assistant', uuid: 'u-123', timestamp: '2026-05-01T10:00:01.000Z',
+        message: { role: 'assistant', model: OPUS, usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] },
+      },
+    ];
+    const interactions = buildInteractions({
+      sessionId: 's', mainRecords: recs, subagents: [], repository: REPO, codeExts: [], docExts: [],
+    });
+    expect(interactions.find((i) => i.operation === 'chat')?.spanId).toBe('u-123');
+  });
+});
+
+describe('buildUserRequestContent (local-only prompt lookup)', () => {
+  it('maps each chat span id to the governing user prompt', () => {
+    const content = buildUserRequestContent(input());
+    const chats = buildInteractions(input()).filter((i) => i.operation === 'chat');
+    // Both turns are driven by the single "Add a feature" prompt.
+    for (const chat of chats) {
+      expect(content.get(chat.spanId as string)).toBe('Add a feature');
+    }
+  });
+
+  it('lets a content-gated trigger scope a workflow to a Claude slash-command prompt', () => {
+    const recs: TranscriptRecord[] = [
+      { type: 'user', timestamp: '2026-05-01T10:00:00.000Z', message: { role: 'user', content: '/implement-new-feature add dark mode' } },
+      {
+        type: 'assistant', timestamp: '2026-05-01T10:00:02.000Z',
+        message: { role: 'assistant', model: OPUS, usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: 'end_turn', content: [{ type: 'text', text: 'sure' }] },
+      },
+    ];
+    const claudeInput: ClaudeSessionInput = {
+      sessionId: 's2', mainRecords: recs, subagents: [], repository: REPO, codeExts: [], docExts: [],
+    };
+    const interactions = buildInteractions(claudeInput);
+    const content = buildUserRequestContent(claudeInput);
+    const lookup = (attribute: string): ReadonlyMap<string, string> =>
+      attribute === 'copilot_chat.user_request' ? content : new Map<string, string>();
+
+    // A step that never appears (no `planner`) → the workflow APPLYING is proven by
+    // a MissingSteps deviation, which only fires when the content trigger matches.
+    const config: WorkflowConfig = {
+      repository: REPO,
+      workflows: [
+        {
+          name: 'implement-new-feature',
+          expectedSequence: [],
+          maxDurationMs: 60 * 60_000,
+          sequenceDeviationAlert: true,
+          timeoutExceededAlert: false,
+          toolUsageAnomalyAlert: false,
+          triggerContentPredicate: { attribute: 'copilot_chat.user_request', contains: '/implement-new-feature' },
+          steps: [{ name: 'Plan', predicate: { agentName: 'planner' } }],
+        },
+      ],
+    };
+    const detector = new WorkflowDeviationDetector();
+
+    const [matched] = detector.detectForTurns([interactions], [config], lookup);
+    expect(matched.some((d) => d.type === DeviationType.MissingSteps)).toBe(true);
+    expect(matched.every((d) => d.contentDerived === true)).toBe(true);
+
+    // A prompt without the command leaves the workflow inapplicable (fails closed).
+    const anchor = interactions.find((i) => i.operation === 'chat')?.spanId as string;
+    const otherLookup = (attribute: string): ReadonlyMap<string, string> =>
+      attribute === 'copilot_chat.user_request' ? new Map([[anchor, 'just chatting']]) : new Map<string, string>();
+    const [unmatched] = detector.detectForTurns([interactions], [config], otherLookup);
+    expect(unmatched).toEqual([]);
   });
 });
