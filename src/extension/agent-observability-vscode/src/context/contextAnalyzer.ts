@@ -16,7 +16,7 @@ import type {
   SessionContextAnalysis,
 } from './models';
 import { parseDiscoveryEvents, type DiscoveryEventRow } from './discoveryParser';
-import { parseToolReads } from './toolCallDetector';
+import { parseToolReads, type ToolReadRow } from './toolCallDetector';
 import { resolveReferences } from './referenceResolver';
 import { estimateContextSizes, findOversizedFiles } from './sizeEstimator';
 
@@ -284,22 +284,68 @@ function partitionByAgent(
 }
 
 /**
- * Build a single agent's context analysis from its partition of data.
+ * Source-agnostic per-agent context analysis inputs. Both the Copilot path
+ * (discovery events + tool reads parsed from OTel span attributes) and the Claude
+ * path (filesystem discovery + transcript tool reads) reduce their raw data to
+ * this shape, so {@link buildAgentAnalysisFromParts} runs the identical reference/
+ * size/oversized pipeline for either source.
+ */
+export interface AgentContextParts {
+  /** Friendly name: "Main Agent" or the subagent name. */
+  agentName: string;
+  /** Whether this is the main thread or a spawned subagent. */
+  kind: 'main' | 'subagent';
+  /** Already-parsed discovery/customization file entries (applied/skipped). */
+  discoveryFiles: ContextFileEntry[];
+  /** Raw file-read rows to fold in as `read` entries (deduped, filtered upstream). */
+  toolReadRows: readonly ToolReadRow[];
+  /** Raw system-prompt text for per-file size attribution; `undefined` for Claude. */
+  systemInstructionsText: string | undefined;
+  /** Representative context-window token count (largest span/turn). */
+  inputTokens: number;
+}
+
+/**
+ * Build a single agent's context analysis from its partition of data (Copilot).
+ * Thin wrapper that parses the Copilot discovery event strings, then delegates to
+ * the shared {@link buildAgentAnalysisFromParts}.
  */
 function buildAgentAnalysis(partition: AgentPartition, acceptedMissing?: AcceptedMissingConfig): AgentContextAnalysis {
-  // Parse discovery events into file entries
-  const discoveryFiles = parseDiscoveryEvents(partition.discoveryEvents);
+  return buildAgentAnalysisFromParts(
+    {
+      agentName: partition.agentName,
+      kind: partition.kind,
+      discoveryFiles: parseDiscoveryEvents(partition.discoveryEvents),
+      toolReadRows: partition.toolReads,
+      systemInstructionsText: partition.systemInstructionsText,
+      inputTokens: partition.inputTokens,
+    },
+    acceptedMissing,
+  );
+}
 
-  // Detect additional files from tool reads
+/**
+ * Build a single agent's context analysis from source-agnostic {@link AgentContextParts}.
+ * Runs the shared pipeline: fold tool reads into the loaded set, resolve
+ * cross-references, detect expected-but-missing files, estimate per-file sizes, and
+ * flag oversized files.
+ */
+export function buildAgentAnalysisFromParts(
+  parts: AgentContextParts,
+  acceptedMissing?: AcceptedMissingConfig,
+): AgentContextAnalysis {
+  const { discoveryFiles } = parts;
+
+  // Detect additional files from tool reads (skip ones already from discovery)
   const knownNames = new Set(discoveryFiles.map((f) => f.name));
-  const toolReadFiles = parseToolReads(partition.toolReads, knownNames);
+  const toolReadFiles = parseToolReads(parts.toolReadRows, knownNames);
 
   // Combine all loaded files
   const allFiles = [...discoveryFiles, ...toolReadFiles];
 
   // Resolve cross-references (only among applied/read files)
   const appliedFiles = allFiles.filter((f) => f.status !== 'skipped');
-  const references = resolveReferences(appliedFiles, partition.systemInstructionsText);
+  const references = resolveReferences(appliedFiles, parts.systemInstructionsText);
 
   // Detect expected-but-missing files
   const loadedNames = new Set(allFiles.filter((f) => f.status !== 'skipped').map((f) => f.name));
@@ -312,14 +358,14 @@ function buildAgentAnalysis(partition: AgentPartition, acceptedMissing?: Accepte
 
   // Estimate sizes
   const { entries, totalContextTokens, contextFileTokens, otherContextTokens } =
-    estimateContextSizes(allFiles, partition.systemInstructionsText, partition.inputTokens);
+    estimateContextSizes(allFiles, parts.systemInstructionsText, parts.inputTokens);
 
   // Find oversized files
   const oversizedFiles = findOversizedFiles(entries);
 
   return {
-    agentName: partition.agentName,
-    kind: partition.kind,
+    agentName: parts.agentName,
+    kind: parts.kind,
     loadedFiles: entries,
     expectedMissing,
     totalContextTokens,
@@ -389,9 +435,10 @@ export function filterAcceptedMissing(
 }
 
 /**
- * Build the "Total Overview" by aggregating all agent analyses.
+ * Build the "Total Overview" by aggregating all agent analyses. Shared by both
+ * the Copilot and Claude analyzers.
  */
-function buildTotalAnalysis(agents: readonly AgentContextAnalysis[]): AgentContextAnalysis {
+export function buildTotalAnalysis(agents: readonly AgentContextAnalysis[]): AgentContextAnalysis {
   // Deduplicate loaded files across agents (by name, keeping the richest entry)
   const fileMap = new Map<string, ContextFileEntry>();
   for (const agent of agents) {
