@@ -7,7 +7,7 @@ import { groupInteractionsByTurn } from '../deviation/turnGrouping';
 import { SessionDetail } from '../telemetry/models';
 import { SessionDataSource, SourceRegistry } from '../sources/sessionSource';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
-import { analyzeContext, AcceptedMissingConfig } from '../context/contextAnalyzer';
+import { AcceptedMissingConfig } from '../context/contextAnalyzer';
 import {
   CombinedSessionSection,
   CostMode,
@@ -266,20 +266,10 @@ export class SessionDetailPanelManager {
     const turnDeviations = this.detectTurnDeviations(source, sessionKey, detail);
     const costMode: CostMode = source.id === 'claude' ? 'usd' : 'aiu';
 
-    // Context analysis reads Copilot-only span attributes; skip for other sources.
-    let contextAnalysis = undefined;
-    if (source.id === 'copilot') {
-      const subagentNamesList = [
-        ...new Set(detail.agentUsage.filter((u) => u.kind === 'subagent').map((u) => u.agentName)),
-      ];
-      contextAnalysis = analyzeContext(
-        sessionKey,
-        this.telemetry,
-        this.readAcceptedMissing(),
-        undefined,
-        subagentNamesList,
-      );
-    }
+    // Context analysis is produced by the owning source from its own raw data
+    // (Copilot from span attributes, Claude from transcript + filesystem). A source
+    // that can't produce it omits the method, and the tab stays hidden.
+    const contextAnalysis = source.getContextAnalysis?.(sessionKey, this.readAcceptedMissing());
 
     if (this.mounted.has(panel)) {
       void panel.webview.postMessage({

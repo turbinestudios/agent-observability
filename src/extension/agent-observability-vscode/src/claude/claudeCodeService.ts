@@ -10,6 +10,9 @@ import {
 } from '../telemetry/models';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 import { SessionDataSource } from '../sources/sessionSource';
+import type { SessionContextAnalysis } from '../context/models';
+import type { AcceptedMissingConfig } from '../context/contextAnalyzer';
+import { analyzeClaudeContext } from './claudeContextAnalyzer';
 import {
   ClaudeFs,
   ClaudePathConfig,
@@ -224,6 +227,31 @@ export class ClaudeCodeService implements SessionDataSource {
     }
   }
 
+  /**
+   * LOCAL-ONLY context-window analysis for a Claude session. Reconstructs the
+   * loaded-context set from the transcript plus the on-disk CLAUDE.md / `.claude`
+   * tree (see {@link analyzeClaudeContext}). Returns `undefined` when capture is
+   * disabled, the session is missing, or there is no context signal — the panel
+   * hides the tab in that case. Never throws into the view.
+   */
+  getContextAnalysis(
+    sessionKey: string,
+    acceptedMissing: AcceptedMissingConfig,
+  ): SessionContextAnalysis | undefined {
+    if (!this.config.isClaudeEnabled()) {
+      return undefined;
+    }
+    try {
+      const input = this.loadSessionInput(sessionKey, true);
+      if (input === undefined) {
+        return undefined;
+      }
+      return analyzeClaudeContext(input, acceptedMissing, this.env);
+    } catch {
+      return undefined;
+    }
+  }
+
   getAggregationRows(sinceMs?: number, untilMs?: number): Result<AggregationRow[]> {
     return this.guard(() => {
       const sessions = this.ensureDiscovered();
@@ -335,6 +363,7 @@ export class ClaudeCodeService implements SessionDataSource {
       mainRecords,
       subagents,
       repository: this.gitResolver.resolve(cwd),
+      cwd,
       codeExts: this.config.getCodeFileExtensions(),
       docExts: this.config.getDocFileExtensions(),
     };
