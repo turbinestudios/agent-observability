@@ -8,6 +8,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Durable, machine-wide Copilot session archive** (on by default). Copilot writes
+  only a short, rolling `agent-traces.db` inside VS Code's per-edition
+  `globalStorage`, so history is lost and sessions differ between windows. The
+  extension now continuously sweeps Copilot's native database — across every
+  discovered edition/environment (Stable, Insiders, WSL) plus the live-OTLP ingest
+  DB — into a single durable archive under your home directory
+  (`~/.agent-observability/copilot/agent-traces.db`), which the read layer prefers.
+  Copilot sessions now persist long-term and appear in **every** VS Code window and
+  edition on the machine — the way Claude Code sessions already do. Zero setup; runs
+  in the background; a single-writer lease keeps one window authoritative; nothing is
+  uploaded. Sessions Copilot rotated out before the archive first ran cannot be
+  recovered. New settings: `agentObservability.copilotArchive.enabled` (default
+  `true`), `.path`, `.retentionDays` (default `180`), and `.sweepIntervalSeconds`
+  (default `60`).
 - **Context Analysis tab for Claude Code sessions.** The tab (previously
   Copilot-only) now appears on Claude session-detail views. Because Claude emits no
   discovery telemetry, the loaded-context set is reconstructed from the transcript

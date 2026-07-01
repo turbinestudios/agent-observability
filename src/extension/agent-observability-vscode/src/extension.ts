@@ -23,6 +23,8 @@ import { registerObservabilityChatParticipant } from './chat/observabilityChat';
 import { ChatViewProvider, ASSISTANT_VIEW_ID } from './chat/webview/chatViewProvider';
 import { WorkflowDivergenceNotifier } from './notify/workflowDivergenceNotifier';
 import { LiveOtlpService } from './otel/liveOtlpService';
+import { CopilotArchiver } from './otel/copilotArchiver';
+import { resolveArchiveDbPath } from './otel/archivePaths';
 import { LiveUpdateController } from './live/liveUpdateController';
 import { ClaudeWatcher } from './live/claudeWatcher';
 import { vscodeFileWatchFactory } from './live/vscodeFileWatchFactory';
@@ -56,6 +58,7 @@ let sessionDetailPanels: SessionDetailPanelManager | undefined;
 let consentManager: ConsentManager | undefined;
 let syncScheduler: SyncScheduler | undefined;
 let liveController: LiveUpdateController | undefined;
+let copilotArchiver: CopilotArchiver | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   // Diagnostic Output channel ("Agent Observability"). Content-free by contract
@@ -243,6 +246,46 @@ export function activate(context: vscode.ExtensionContext): void {
     liveController = undefined;
   };
 
+  // ── Durable Copilot archive ─────────────────────────────────────────────────
+  // Copilot writes only a short, rolling native DB in per-edition globalStorage,
+  // so its history is lost and differs between windows. The archiver continuously
+  // sweeps that native DB (and the live-ingest DB) into ONE durable, home-anchored
+  // archive, which the read layer then prefers — so Copilot sessions persist and
+  // appear in EVERY VS Code window/edition, the way Claude Code's do. On by
+  // default, independent of live updates; a single-writer lease keeps one window
+  // authoritative. Everything stays local; nothing is uploaded.
+  const stopArchiver = (): void => {
+    copilotArchiver?.stop();
+    copilotArchiver = undefined;
+  };
+
+  const startArchiver = (): void => {
+    stopArchiver();
+    const archiveDbPath = resolveArchiveDbPath(config);
+    if (!config.isCopilotArchiveEnabled() || archiveDbPath === undefined) {
+      telemetry.setArchiveDbPath(undefined);
+      return;
+    }
+    // Prefer the archive as the read source (falls back to the native DB until the
+    // first sweep creates it), then sweep and reflect the result once.
+    telemetry.setArchiveDbPath(archiveDbPath);
+    const archiver = new CopilotArchiver({
+      archiveDbPath,
+      config,
+      liveIngestDbPath: ingestDbPath,
+      retentionMs: config.getArchiveRetentionMs(),
+      sweepIntervalMs: config.getArchiveSweepMs(),
+      // A sweep that ingests new spans refreshes the same non-disruptive way the
+      // live sources do (detail panels + notifier); the list picks up new sessions
+      // on the next full refresh.
+      signal: refreshLive,
+      onError: (err) => logger.error('Copilot archive sweep error', err),
+    });
+    copilotArchiver = archiver;
+    archiver.start(); // first sweep runs synchronously
+    renderAllViews(); // reflect the freshly-populated archive once
+  };
+
   // Build + start the live pipeline for whichever sources apply. Idempotent: a
   // re-entry (e.g. the Enable command) tears the previous one down first. Off
   // unless `liveUpdates.enabled`.
@@ -378,6 +421,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // nothing is uploaded.
   startLive();
 
+  // Start the durable Copilot archive (on by default). Runs regardless of live
+  // updates; nothing is uploaded.
+  startArchiver();
+
   // Keep the Sync view live when consent flips (set-key already refreshes via
   // the command path, but consent can also change programmatically).
   context.subscriptions.push(consent.onDidChange(() => sync.refresh()));
@@ -389,6 +436,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({ dispose: () => consent.dispose() });
   context.subscriptions.push({ dispose: () => scheduler.dispose() });
   context.subscriptions.push({ dispose: () => stopLive() });
+  context.subscriptions.push({ dispose: () => stopArchiver() });
 
   // On configuration change (e.g. toggling the feature flag, sqlitePath, or the
   // sync.enabled/intervalMinutes settings), drop the cached snapshot, re-arm the
@@ -419,6 +467,16 @@ export function activate(context: vscode.ExtensionContext): void {
         event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.syncRepositories}`)
       ) {
         void syncState.clearWatermark().then(() => sync.refresh());
+      }
+      // Re-arm the archiver when its enable/retention/sweep/path settings change
+      // (re-reads config; toggling off detaches the archive as the read source).
+      if (
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotArchiveEnabled}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotArchiveRetentionDays}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotArchiveSweepSeconds}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotArchivePath}`)
+      ) {
+        startArchiver();
       }
     }),
   );
@@ -680,4 +738,6 @@ export function deactivate(): void {
   syncScheduler = undefined;
   liveController?.stop();
   liveController = undefined;
+  copilotArchiver?.stop();
+  copilotArchiver = undefined;
 }

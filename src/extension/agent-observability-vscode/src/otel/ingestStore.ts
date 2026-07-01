@@ -19,7 +19,7 @@ import { SpanRows } from './otlpToRows';
 const SCHEMA_VERSION = 1;
 
 /** The columns of the `spans` table, in the order {@link SpanRows} carries them. */
-const SPAN_COLUMNS = [
+export const SPAN_COLUMNS = [
   'span_id', 'trace_id', 'parent_span_id', 'name', 'start_time_ms', 'end_time_ms',
   'status_code', 'status_message', 'operation_name', 'provider_name', 'agent_name',
   'conversation_id', 'request_model', 'response_model', 'input_tokens', 'output_tokens',
@@ -80,6 +80,34 @@ const INSERT_SPAN_SQL =
   `VALUES (${SPAN_COLUMNS.map(() => '?').join(', ')})`;
 const INSERT_ATTR_SQL = 'INSERT OR REPLACE INTO span_attributes (span_id, key, value) VALUES (?, ?, ?)';
 
+/**
+ * Sidecar table (NOT part of Copilot's schema) tracking, per swept source DB,
+ * the high-water `end_time_ms` already copied into this store and the source's
+ * last-seen mtime for a cheap skip-if-unchanged. Used only by the
+ * {@link ./copilotArchiver.CopilotArchiver}; empty (and ignored) in the live
+ * ingest DB. The read layer validates only `spans`/`span_attributes`/`sessions`,
+ * so this extra table is invisible to it.
+ */
+const WATERMARK_DDL = `
+CREATE TABLE IF NOT EXISTS archive_watermark (
+  source_path TEXT PRIMARY KEY,
+  last_end_ms INTEGER NOT NULL,
+  source_mtime_ms REAL,
+  updated_ms INTEGER NOT NULL
+);`;
+
+const UPSERT_WATERMARK_SQL =
+  'INSERT OR REPLACE INTO archive_watermark ' +
+  '(source_path, last_end_ms, source_mtime_ms, updated_ms) VALUES (?, ?, ?, ?)';
+
+/** A sweep watermark for one source DB (see {@link WATERMARK_DDL}). */
+export interface SweepWatermark {
+  /** Highest `end_time_ms` already ingested from the source (minus a grace overlap). */
+  lastEndMs: number;
+  /** The source's mtime at the last sweep, or `null` if it was unavailable. */
+  sourceMtimeMs: number | null;
+}
+
 export class IngestStore {
   private readonly db: Database;
 
@@ -87,7 +115,12 @@ export class IngestStore {
     this.db = new Database(path);
     // Enable FK cascade so pruning spans also removes their attributes/events.
     this.db.exec('PRAGMA foreign_keys = ON;');
+    // Defense-in-depth for the shared home archive: if two writers ever race the
+    // single-writer lease (see {@link ./writerLease}), a brief file lock retries
+    // rather than failing outright. Harmless for the single-process live path.
+    this.db.exec('PRAGMA busy_timeout = 5000;');
     this.db.exec(SCHEMA_DDL);
+    this.db.exec(WATERMARK_DDL);
     if (this.getRow<{ version: number }>('SELECT version FROM schema_version LIMIT 1') === undefined) {
       this.db.run('INSERT INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]);
     }
@@ -142,6 +175,23 @@ export class IngestStore {
     const cutoff = nowMs - maxAgeMs;
     this.db.run('DELETE FROM spans WHERE start_time_ms < ?', [cutoff]);
     return this.db.get('SELECT changes() AS n')?.n as number ?? 0;
+  }
+
+  /** Read the sweep watermark for a source DB, or `undefined` if never swept. */
+  readWatermark(sourcePath: string): SweepWatermark | undefined {
+    const row = this.db.get(
+      'SELECT last_end_ms, source_mtime_ms FROM archive_watermark WHERE source_path = ?',
+      [sourcePath],
+    ) as { last_end_ms: number; source_mtime_ms: number | null } | null;
+    if (row === null) {
+      return undefined;
+    }
+    return { lastEndMs: row.last_end_ms, sourceMtimeMs: row.source_mtime_ms };
+  }
+
+  /** Upsert the sweep watermark for a source DB (keyed by its path). */
+  writeWatermark(sourcePath: string, lastEndMs: number, sourceMtimeMs: number | null, nowMs: number): void {
+    this.db.run(UPSERT_WATERMARK_SQL, [sourcePath, lastEndMs, sourceMtimeMs, nowMs]);
   }
 
   close(): void {

@@ -88,3 +88,76 @@ describe('TelemetryService with a live-OTLP ingest source', () => {
     service.dispose();
   });
 });
+
+/** A one-chat-span session envelope for the given session id. */
+function envelopeFor(session: string) {
+  return {
+    resourceSpans: [
+      {
+        resource: { attributes: [] },
+        scopeSpans: [
+          {
+            spans: [
+              {
+                name: 'chat',
+                spanId: `c-${session}`,
+                traceId: `tr-${session}`,
+                startTimeUnixNano: '1700000000000000000',
+                endTimeUnixNano: '1700000001000000000',
+                status: { code: 1 },
+                attributes: [
+                  { key: 'gen_ai.operation.name', value: sv('chat') },
+                  { key: 'gen_ai.conversation.id', value: sv(session) },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+describe('TelemetryService with a durable archive source', () => {
+  it('reads the archive as the sole source when set and present, else falls back', () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), 'agent-obs-arc-'));
+    const archivePath = path.join(tmp, 'agent-traces.db');
+    const store = new IngestStore(archivePath);
+    store.writeSpans(otlpSpansToRows(flattenSpans(envelopeFor('arch-sess'))));
+    store.close();
+
+    const service = new TelemetryService(config, noCopilotEnv);
+    // No archive set + no Copilot DB → typed failure.
+    expect(service.getSessionInteractions('arch-sess').ok).toBe(false);
+
+    service.setArchiveDbPath(archivePath);
+    expect(service.getSessionInteractions('arch-sess').ok).toBe(true);
+    service.dispose();
+  });
+
+  it('prefers the live-ingest DB over the archive when both are set', () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), 'agent-obs-arc-'));
+    const archivePath = path.join(tmp, 'archive.db');
+    const ingestPath = path.join(tmp, 'ingest.db');
+
+    const arc = new IngestStore(archivePath);
+    arc.writeSpans(otlpSpansToRows(flattenSpans(envelopeFor('arch-only'))));
+    arc.close();
+    const ing = new IngestStore(ingestPath);
+    ing.writeSpans(otlpSpansToRows(flattenSpans(envelopeFor('live-only'))));
+    ing.close();
+
+    const service = new TelemetryService(config, noCopilotEnv);
+    service.setArchiveDbPath(archivePath);
+    service.setIngestDbPath(ingestPath);
+
+    // Live-ingest is the SOLE source → its session has interactions; the
+    // archive-only session is invisible (a source is open, so the lookup
+    // succeeds with an empty result rather than failing).
+    const live = service.getSessionInteractions('live-only');
+    expect(live.ok && live.value.length > 0).toBe(true);
+    const arch = service.getSessionInteractions('arch-only');
+    expect(arch.ok && arch.value.length === 0).toBe(true);
+    service.dispose();
+  });
+});

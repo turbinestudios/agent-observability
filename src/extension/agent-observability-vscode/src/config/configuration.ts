@@ -45,6 +45,10 @@ export const ConfigKeys = {
   liveUpdatesEnabled: 'liveUpdates.enabled',
   liveDebounceMs: 'liveUpdates.debounceMs',
   liveOtelPort: 'liveUpdates.otelPort',
+  copilotArchiveEnabled: 'copilotArchive.enabled',
+  copilotArchivePath: 'copilotArchive.path',
+  copilotArchiveRetentionDays: 'copilotArchive.retentionDays',
+  copilotArchiveSweepSeconds: 'copilotArchive.sweepIntervalSeconds',
   claudeEnabled: 'claudeCode.enabled',
   claudeProjectsPath: 'claudeCode.projectsPath',
   claudeScanDepth: 'claudeCode.scanDepth',
@@ -74,6 +78,10 @@ export const ConfigDefaults = {
   liveUpdatesEnabled: false,
   liveDebounceMs: 400,
   liveOtelPort: 0,
+  copilotArchiveEnabled: true,
+  copilotArchivePath: '',
+  copilotArchiveRetentionDays: 180,
+  copilotArchiveSweepSeconds: 60,
   claudeEnabled: true,
   claudeProjectsPath: '',
   claudeScanDepth: 8,
@@ -85,6 +93,13 @@ export const MIN_SYNC_INTERVAL_MINUTES = 5;
 
 /** Minimum live-update debounce, mirroring the package.json `minimum`. */
 export const MIN_LIVE_DEBOUNCE_MS = 100;
+
+/** Minimum archive retention (days) + sweep interval (seconds), mirroring package.json. */
+export const MIN_ARCHIVE_RETENTION_DAYS = 1;
+export const MIN_ARCHIVE_SWEEP_SECONDS = 10;
+
+/** Milliseconds per day, for the retention conversion. */
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
  * Typed accessor over the `agentObservability` workspace configuration.
@@ -275,6 +290,63 @@ export class Configuration {
   getLiveOtelPort(): number {
     const raw = this.config().get<number>(ConfigKeys.liveOtelPort, ConfigDefaults.liveOtelPort);
     return Number.isFinite(raw) && raw > 0 && raw < 65536 ? Math.floor(raw) : 0;
+  }
+
+  /**
+   * Feature flag: whether the durable Copilot archive is enabled. On by default —
+   * the extension sweeps Copilot's short-lived native `agent-traces.db` into a
+   * home-anchored archive so sessions persist and appear in every VS Code window
+   * (the behavior Claude Code already has). Zero setup; nothing is uploaded.
+   */
+  isCopilotArchiveEnabled(): boolean {
+    return this.config().get<boolean>(
+      ConfigKeys.copilotArchiveEnabled,
+      ConfigDefaults.copilotArchiveEnabled,
+    );
+  }
+
+  /**
+   * Explicit override of the archive DB file path. Returns `undefined` (not '')
+   * when blank so callers fall back to `AGENT_OBSERVABILITY_HOME` /
+   * `~/.agent-observability`.
+   */
+  getCopilotArchivePathOverride(): string | undefined {
+    const value = this.config()
+      .get<string>(ConfigKeys.copilotArchivePath, ConfigDefaults.copilotArchivePath)
+      .trim();
+    return value.length > 0 ? value : undefined;
+  }
+
+  /**
+   * How long the archive retains sessions, as milliseconds. Clamped to the
+   * documented minimum so a hand-edited settings.json can't drive a pathological
+   * value. Defaults to 180 days — long enough to beat Copilot's short rolling
+   * window and approach Claude Code's retention.
+   */
+  getArchiveRetentionMs(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.copilotArchiveRetentionDays,
+      ConfigDefaults.copilotArchiveRetentionDays,
+    );
+    const days = Number.isFinite(raw)
+      ? Math.max(MIN_ARCHIVE_RETENTION_DAYS, Math.floor(raw))
+      : ConfigDefaults.copilotArchiveRetentionDays;
+    return days * MS_PER_DAY;
+  }
+
+  /**
+   * Interval between archive sweeps, as milliseconds, clamped to the documented
+   * minimum so a hand-edited settings.json can't drive a busy-loop.
+   */
+  getArchiveSweepMs(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.copilotArchiveSweepSeconds,
+      ConfigDefaults.copilotArchiveSweepSeconds,
+    );
+    const seconds = Number.isFinite(raw)
+      ? Math.max(MIN_ARCHIVE_SWEEP_SECONDS, Math.floor(raw))
+      : ConfigDefaults.copilotArchiveSweepSeconds;
+    return seconds * 1000;
   }
 
   /**
