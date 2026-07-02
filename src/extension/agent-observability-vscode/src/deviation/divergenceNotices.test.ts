@@ -12,8 +12,10 @@ function located(
   turnStartMs: number,
   workflowName: string,
   type = DeviationType.MissingSteps,
+  sourceId = 'copilot',
 ): LocatedDivergence {
   return {
+    sourceId,
     sessionKey,
     turnStartMs,
     deviation: {
@@ -75,5 +77,24 @@ describe('selectNewDivergences', () => {
     const second = selectNewDivergences(current, first.nextSeen);
     expect(first.toNotify).toHaveLength(1);
     expect(second.toNotify).toHaveLength(0);
+  });
+
+  it('treats the same session+turn+workflow in DIFFERENT sources as distinct', () => {
+    // A Claude sessionId and a Copilot sessionKey can be the same string; the
+    // source id must keep them from colliding in the seen-set.
+    const current = [
+      located('shared-id', 1000, 'wf', DeviationType.MissingSteps, 'copilot'),
+      located('shared-id', 1000, 'wf', DeviationType.MissingSteps, 'claude'),
+    ];
+    const { toNotify } = selectNewDivergences(current, new Set());
+    expect(toNotify).toHaveLength(2);
+  });
+});
+
+describe('divergenceKey', () => {
+  it('namespaces by source so an identical location in another source does not collide', () => {
+    const copilot = located('shared-id', 1000, 'wf');
+    const claude = located('shared-id', 1000, 'wf', DeviationType.MissingSteps, 'claude');
+    expect(divergenceKey(copilot)).not.toBe(divergenceKey(claude));
   });
 });
