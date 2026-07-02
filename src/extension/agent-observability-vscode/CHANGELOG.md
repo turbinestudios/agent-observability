@@ -4,7 +4,7 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] - 2026-07-02
 
 ### Added
 
@@ -31,6 +31,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   The per-agent context-window bar uses the largest `input + cache_read +
   cache_creation` across each agent's turns. A caption notes the view is
   best-effort and reflects the current on-disk state. All analysis is LOCAL-ONLY.
+- **AI Helper can now run on Claude Code.** A backend / model / effort selector row
+  in the AI Helper chat lets you answer chats with either your GitHub Copilot
+  license (default, unchanged) or the Claude Code CLI installed on this machine,
+  under your own Anthropic login. Claude requests run locally via `claude -p` with
+  all tools disabled and no session files written; streaming, cancellation, and the
+  existing grounding + one-time-disclosure flow are preserved. New
+  `application`-scoped settings (the dropdowns write them):
+  `agentObservability.aiHelper.backend` (`copilot` | `claude-code`, default
+  `copilot`), `.copilotModel`, `.claudeModel` (alias like `sonnet` or a full model
+  id), `.claudeEffort`, and `.claudeCliPath`.
+- **Repository detail view.** Repository rows in the Sessions tree get an inline
+  hover button and context-menu entry — **Open Repository Details** — that opens a
+  repository-level webview: the merged "Agent run totals" tiles plus the aggregated
+  Main agent / Spawned sub-agents tables over EVERY session of that repository.
+  Multi-selecting repository rows opens ONE combined view whose header lists each
+  covered repository with its included-session count (a cross-source selection
+  narrows to the first source, keeping one cost basis per card). Failed session
+  loads and the per-source session cap are surfaced in the header, never dropped
+  silently. Repository panels get the title-bar Refresh and live updates just like
+  session panels.
 
 ### Changed
 
@@ -49,6 +69,43 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   the document once and pushes only the new body as a message; an in-page controller
   swaps it in and restores open collapsibles, the active tab, and scroll — so a data
   push is seamless. (Manual refresh and accept-missing actions are preserved too.)
+- **Proactive divergence notifications now cover every enabled source.** The
+  notifier was bound to the Copilot telemetry service, so Claude Code sessions never
+  produced divergence toasts. It now scans the settled user-request turns of recent
+  sessions across all sources — including content-triggered workflows, whose prompt
+  text stays LOCAL-ONLY and is read per source (Copilot from span attributes, Claude
+  from the transcript). Settle/baseline/dedup behaviour is unchanged; dedup keys now
+  include the source id so session ids from different sources can never collide.
+- **`triggerContentPredicate` now works for Claude Code sessions.** Claude chat
+  interactions carry a stable per-turn id and their governing user prompt, so
+  prompt-content workflow triggers (e.g. a slash command in the request) gate Claude
+  turns the same way as Copilot ones. Matched text is never stored on a deviation,
+  and content-derived deviations remain excluded from sync.
+- **Token totals now separate fresh input from cache reads — for both sources.**
+  "Total Input Tokens" counts fresh (non-cache-read) input (Claude: uncached input +
+  cache creation; Copilot: gross input minus cache reads), "Total Cached Input
+  Tokens" counts cache reads only, and "Total Tokens" is input + cached + output —
+  three disjoint buckets, so the total no longer double-counts cached input. Applies
+  to the session-detail totals card, the per-model / per-agent tables, and combined
+  views. Cloud aggregation is deliberately unchanged for now, so org-dashboard token
+  numbers keep the old semantics and can differ from local views.
+- **Session-detail panels are now titled.** The detail header and the editor tab
+  show the session's LOCAL-ONLY title (the same one the Sessions list shows) instead
+  of the short session id; the id stays visible in the header eyebrow. Untitled
+  sessions keep the id.
+
+### Fixed
+
+- Workflows using `triggerContentPredicate` were flagged as invalid by VS Code's
+  settings validation: the property was parsed and evaluated at runtime but missing
+  from the extension's settings schema, so the `additionalProperties: false`
+  workflow object rejected it. It is now declared in the schema.
+- Cloud sync no longer fails a whole aggregate batch when source telemetry carries a
+  human-facing model display name (e.g. `Claude Sonnet 4.5`, whose spaces fail the
+  ingestion API's model-id pattern, causing the server to reject the entire batch).
+  Model ids are sanitized to the contract's allowed character set on the cloud path
+  only (blank or information-free values become `unknown`); local views keep the
+  friendly model name.
 
 ## [0.4.0] - 2026-06-29
 
