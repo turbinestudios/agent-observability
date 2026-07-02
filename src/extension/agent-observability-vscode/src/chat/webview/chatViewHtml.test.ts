@@ -30,6 +30,19 @@ describe('renderChatHtml', () => {
     expect(html).toContain('id="stop"');
   });
 
+  it('includes the backend/model/effort selector row', () => {
+    expect(html).toContain('id="backendSel"');
+    expect(html).toContain('id="modelSel"');
+    expect(html).toContain('id="effortSel"');
+    // The effort dropdown starts hidden; it only shows for the Claude backend.
+    expect(html).toMatch(/id="effortSel" class="hidden"/);
+  });
+
+  it('wires the selector row to the preference protocol', () => {
+    expect(html).toContain("type: 'setPreference'");
+    expect(html).toContain("msg.type === 'uiState'");
+  });
+
   it('does not reference any external resource (CSP would block it anyway)', () => {
     expect(html).not.toMatch(/src="https?:/);
     expect(html).not.toMatch(/href="https?:\/\//);

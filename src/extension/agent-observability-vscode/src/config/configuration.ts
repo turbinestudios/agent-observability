@@ -3,6 +3,8 @@ import { WorkflowConfig } from '../deviation/models';
 import { normalizeExtensions } from '../telemetry/locAnalysis';
 import { buildRepoSyncPolicy, RepoSyncPolicy } from '../aggregate/repoSyncPolicy';
 import { MIN_SESSION_MINUTES, parseWorkflowConfigs } from './workflowParsing';
+import { ClaudeEffort, DEFAULT_CLAUDE_MODEL, parseClaudeEffort } from '../chat/backends/claudeCliArgs';
+import type { BackendId } from '../chat/backends/chatBackend';
 
 export { MIN_SESSION_MINUTES } from './workflowParsing';
 
@@ -53,6 +55,11 @@ export const ConfigKeys = {
   claudeProjectsPath: 'claudeCode.projectsPath',
   claudeScanDepth: 'claudeCode.scanDepth',
   claudeMaxSessions: 'claudeCode.maxSessions',
+  aiHelperBackend: 'aiHelper.backend',
+  aiHelperCopilotModel: 'aiHelper.copilotModel',
+  aiHelperClaudeModel: 'aiHelper.claudeModel',
+  aiHelperClaudeEffort: 'aiHelper.claudeEffort',
+  aiHelperClaudeCliPath: 'aiHelper.claudeCliPath',
 } as const;
 
 /** Default values mirroring the package.json contribution defaults. */
@@ -86,6 +93,11 @@ export const ConfigDefaults = {
   claudeProjectsPath: '',
   claudeScanDepth: 8,
   claudeMaxSessions: 150,
+  aiHelperBackend: 'copilot',
+  aiHelperCopilotModel: '',
+  aiHelperClaudeModel: 'sonnet',
+  aiHelperClaudeEffort: 'high',
+  aiHelperClaudeCliPath: '',
 } as const;
 
 /** Minimum allowed sync interval, mirroring the package.json `minimum`. */
@@ -388,6 +400,45 @@ export class Configuration {
       return ConfigDefaults.claudeMaxSessions;
     }
     return Math.floor(raw);
+  }
+
+  /**
+   * Which backend answers AI Helper chats. A hand-edited invalid value safely
+   * falls back to `copilot` (the original behavior).
+   */
+  getAiHelperBackend(): BackendId {
+    const raw = this.config().get<string>(ConfigKeys.aiHelperBackend, ConfigDefaults.aiHelperBackend);
+    return raw === 'claude-code' ? 'claude-code' : 'copilot';
+  }
+
+  /** Preferred Copilot model id/family for the AI Helper; '' = first available. */
+  getAiHelperCopilotModel(): string {
+    return this.config()
+      .get<string>(ConfigKeys.aiHelperCopilotModel, ConfigDefaults.aiHelperCopilotModel)
+      .trim();
+  }
+
+  /** Claude model (alias or full id) for the AI Helper; blank falls back to the default alias. */
+  getAiHelperClaudeModel(): string {
+    const value = this.config()
+      .get<string>(ConfigKeys.aiHelperClaudeModel, ConfigDefaults.aiHelperClaudeModel)
+      .trim();
+    return value.length > 0 ? value : DEFAULT_CLAUDE_MODEL;
+  }
+
+  /** Reasoning effort for the Claude Code CLI; invalid values fall back to the default. */
+  getAiHelperClaudeEffort(): ClaudeEffort {
+    return parseClaudeEffort(
+      this.config().get<string>(ConfigKeys.aiHelperClaudeEffort, ConfigDefaults.aiHelperClaudeEffort),
+    );
+  }
+
+  /** Claude Code CLI executable; blank falls back to `claude` on PATH. */
+  getAiHelperClaudeCliPath(): string {
+    const value = this.config()
+      .get<string>(ConfigKeys.aiHelperClaudeCliPath, ConfigDefaults.aiHelperClaudeCliPath)
+      .trim();
+    return value.length > 0 ? value : 'claude';
   }
 
   /**

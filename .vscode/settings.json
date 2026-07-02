@@ -1,9 +1,25 @@
 {
-  // Agent Observability is now extension-first: install the "Agent Observability (Local)"
-  // VS Code extension (src/extension/agent-observability-vscode). It reads Copilot's local
-  // SQLite telemetry on-machine and only uploads opt-in, raw-content-free AGGREGATES.
-  // See docs/onboarding.md. The legacy OTLP -> cloud collector path has been retired
-  // (Phase 11), so the raw OTel exporter is explicitly disabled here — no prompts or
-  // responses are exported, and there is no collector endpoint to point at.
-  "github.copilot.chat.otel.enabled": false
+  "agentObservability.workflows": [
+    {
+      "repository": "https://github.com/turbinestudios/agent-observability",
+      "workflows": [
+        {
+          "name": "coherence-check",
+          "steps": [
+            {
+              "name": "Use Coherence Check Skill",
+              "predicate": {
+                "operation": "execute_tool",
+                "toolName": "read_file"
+              },
+              "contentPredicate": {
+                "attribute": "gen_ai.tool.call.arguments",
+                "contains": "coherence-check-key-files.yml"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
 }

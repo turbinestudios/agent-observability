@@ -96,6 +96,11 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.claudeCode.projectsPath',
   'agentObservability.claudeCode.scanDepth',
   'agentObservability.claudeCode.maxSessions',
+  'agentObservability.aiHelper.backend',
+  'agentObservability.aiHelper.copilotModel',
+  'agentObservability.aiHelper.claudeModel',
+  'agentObservability.aiHelper.claudeEffort',
+  'agentObservability.aiHelper.claudeCliPath',
 ] as const;
 
 describe('manifest contract is stable', () => {
@@ -135,6 +140,29 @@ describe('manifest contract is stable', () => {
     expect(props['agentObservability.sqlitePath'].default).toBe('');
     expect(props['agentObservability.claudeCode.enabled'].default).toBe(true);
     expect(props['agentObservability.claudeCode.maxSessions'].default).toBe(150);
+  });
+
+  it('declares the AI Helper backend/model/effort settings, application-scoped', () => {
+    const props = manifest.contributes.configuration.properties;
+    const backend = props['agentObservability.aiHelper.backend'];
+    expect(backend.default).toBe('copilot');
+    expect(backend.enum).toEqual(['copilot', 'claude-code']);
+    const effort = props['agentObservability.aiHelper.claudeEffort'];
+    expect(effort.default).toBe('high');
+    expect(effort.enum).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(props['agentObservability.aiHelper.copilotModel'].default).toBe('');
+    expect(props['agentObservability.aiHelper.claudeModel'].default).toBe('sonnet');
+    expect(props['agentObservability.aiHelper.claudeCliPath'].default).toBe('');
+    // Backend/model choices are machine-level (CLI install, Copilot license) — user-scope only.
+    for (const key of [
+      'agentObservability.aiHelper.backend',
+      'agentObservability.aiHelper.copilotModel',
+      'agentObservability.aiHelper.claudeModel',
+      'agentObservability.aiHelper.claudeEffort',
+      'agentObservability.aiHelper.claudeCliPath',
+    ]) {
+      expect(props[key].scope).toBe('application');
+    }
   });
 
   it('declares the per-repository sync-scope settings, application-scoped', () => {

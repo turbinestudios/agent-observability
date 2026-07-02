@@ -665,6 +665,51 @@
           "default": 150,
           "minimum": 1,
           "markdownDescription": "Maximum number of most-recently-active Claude Code sessions to surface in the Sessions list (and aggregate for sync) at once. Bounds the synchronous transcript-parsing cost so the tree stays responsive when a machine has accumulated thousands of sessions. Older sessions beyond this count are reported via an info row rather than dropped silently. Full token/cost detail for any shown session is computed lazily and cached."
+        },
+        "agentObservability.aiHelper.backend": {
+          "type": "string",
+          "enum": [
+            "copilot",
+            "claude-code"
+          ],
+          "enumDescriptions": [
+            "Use your GitHub Copilot subscription via VS Code's built-in language model API (default).",
+            "Use the Claude Code CLI installed on this machine, under your own Anthropic login."
+          ],
+          "default": "copilot",
+          "scope": "application",
+          "markdownDescription": "Which AI backend answers **AI Helper** chats. `claude-code` requires the Claude Code CLI installed and signed in; requests run locally via `claude -p` with all tools disabled and no session files written. The AI Helper's backend dropdown writes this setting."
+        },
+        "agentObservability.aiHelper.copilotModel": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Copilot model id or family for the AI Helper (e.g. `gpt-4o`). Leave blank to use the first available model. The AI Helper's model dropdown writes this setting."
+        },
+        "agentObservability.aiHelper.claudeModel": {
+          "type": "string",
+          "default": "sonnet",
+          "scope": "application",
+          "markdownDescription": "Claude model for the AI Helper when `#agentObservability.aiHelper.backend#` is `claude-code`: an alias (`sonnet`, `opus`, `haiku`, `fable`) or any full model id (e.g. `claude-sonnet-5`). Custom ids typed here appear in the model dropdown as `(custom)`."
+        },
+        "agentObservability.aiHelper.claudeEffort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "default": "high",
+          "scope": "application",
+          "markdownDescription": "Reasoning effort passed to the Claude Code CLI (`--effort`). Ignored by the Copilot backend. Note: `xhigh` is not supported by every model — unsupported combinations surface as an error in the chat."
+        },
+        "agentObservability.aiHelper.claudeCliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Path to the Claude Code CLI executable. Leave blank to use `claude` from your PATH (on Windows, `claude.cmd` is also tried automatically). Set this only if the CLI is installed somewhere unusual."
         }
       }
     }

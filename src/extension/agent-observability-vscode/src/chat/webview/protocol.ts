@@ -7,8 +7,13 @@
  * model output itself.
  */
 
+import type { AiHelperUiState } from '../backends/uiState';
+
 /** Which generated config an Apply button targets. */
 export type ApplyKind = 'workflows' | 'config';
+
+/** Which selector-row preference a webview change targets. */
+export type PreferenceKey = 'backend' | 'model' | 'effort';
 
 /** Messages sent FROM the webview TO the extension host. */
 export type WebviewToHost =
@@ -17,7 +22,8 @@ export type WebviewToHost =
   | { type: 'runQuickCommand'; id: string }
   | { type: 'stop' }
   | { type: 'applyConfig'; kind: ApplyKind; code: string }
-  | { type: 'copy'; text: string };
+  | { type: 'copy'; text: string }
+  | { type: 'setPreference'; key: PreferenceKey; value: string };
 
 /** Messages sent FROM the extension host TO the webview. */
 export type HostToWebview =
@@ -28,4 +34,5 @@ export type HostToWebview =
   | { type: 'assistantDone'; id: string }
   | { type: 'error'; message: string }
   | { type: 'applied'; ok: boolean; message: string }
-  | { type: 'reset' };
+  | { type: 'reset' }
+  | { type: 'uiState'; state: AiHelperUiState };

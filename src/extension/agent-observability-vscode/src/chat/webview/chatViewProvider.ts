@@ -1,16 +1,19 @@
 import * as vscode from 'vscode';
 import * as crypto from 'node:crypto';
-import { Configuration } from '../../config/configuration';
+import { CONFIG_SECTION, ConfigKeys, Configuration } from '../../config/configuration';
 import { TelemetryService } from '../../telemetry/telemetryService';
 import { OverviewMetrics } from '../../telemetry/models';
 import { Conversation, assembleMessages } from '../conversation';
 import { ContextLoader } from '../contextLoader';
 import { getQuickCommand, selectContextForFreeText } from '../quickCommands';
-import { describeLmError, isCancellation, noModelsError } from '../lmErrors';
-import { selectCopilotModel, streamRequest } from '../languageModelClient';
+import { isCancellation } from '../lmErrors';
+import { ChatBackend, ChatBackendRegistry } from '../backends/chatBackend';
+import { CopilotBackend } from '../backends/copilotBackend';
+import { ClaudeCodeBackend } from '../backends/claudeCodeBackend';
+import { buildUiState, BackendOption } from '../backends/uiState';
 import { renderChatHtml } from './chatViewHtml';
 import { markdownToHtml } from './markdownToHtml';
-import { HostToWebview, WebviewToHost } from './protocol';
+import { HostToWebview, PreferenceKey, WebviewToHost } from './protocol';
 import {
   buildWorkflowGenPreamble,
   mergeWorkflowsByRepository,
@@ -54,6 +57,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private readonly conversation = new Conversation();
   private readonly contextLoader: ContextLoader;
+  private readonly backends: ChatBackendRegistry;
   private cts: vscode.CancellationTokenSource | undefined;
   private busy = false;
   private messageCounter = 0;
@@ -64,6 +68,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly config: Configuration,
   ) {
     this.contextLoader = new ContextLoader(context.extensionUri);
+    this.backends = new ChatBackendRegistry([new CopilotBackend(config), new ClaudeCodeBackend(config)]);
+    context.subscriptions.push(config.onDidChange(() => void this.postUiState()));
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -119,9 +125,60 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'applyConfig':
         await this.handleApply(msg.kind, msg.code);
         return;
+      case 'setPreference':
+        await this.handleSetPreference(msg.key, msg.value);
+        return;
       case 'ready':
+        void this.postUiState();
         return;
     }
+  }
+
+  /** Persist a selector-row change; the config-change listener reposts the UI state. */
+  private async handleSetPreference(key: PreferenceKey, value: string): Promise<void> {
+    const suffix =
+      key === 'backend'
+        ? ConfigKeys.aiHelperBackend
+        : key === 'effort'
+          ? ConfigKeys.aiHelperClaudeEffort
+          : this.config.getAiHelperBackend() === 'claude-code'
+            ? ConfigKeys.aiHelperClaudeModel
+            : ConfigKeys.aiHelperCopilotModel;
+    await vscode.workspace
+      .getConfiguration(CONFIG_SECTION)
+      .update(suffix, value, vscode.ConfigurationTarget.Global);
+  }
+
+  /** Gather backend availability + models and push the selector-row state. */
+  private async postUiState(): Promise<void> {
+    if (!this.view) {
+      return;
+    }
+    const activeBackend = this.config.getAiHelperBackend();
+    const backendOptions: BackendOption[] = await Promise.all(
+      this.backends.all().map(async (backend) => {
+        const availability = await backend.isAvailable();
+        return {
+          id: backend.id,
+          label: backend.label,
+          available: availability.available,
+          hint: availability.available ? undefined : availability.reason,
+        };
+      }),
+    );
+    const active = this.backends.get(activeBackend);
+    const models = active ? await active.listModels() : [];
+    const state = buildUiState({
+      backends: backendOptions,
+      activeBackend,
+      models,
+      activeModel:
+        activeBackend === 'claude-code'
+          ? this.config.getAiHelperClaudeModel()
+          : this.config.getAiHelperCopilotModel(),
+      activeEffort: this.config.getAiHelperClaudeEffort(),
+    });
+    this.post({ type: 'uiState', state });
   }
 
   /** Run one user turn: gather context + telemetry, stream the model response. */
@@ -129,7 +186,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this.busy || userText.trim().length === 0) {
       return;
     }
-    if (!(await this.ensureDisclosed())) {
+    const backend = this.backends.get(this.config.getAiHelperBackend());
+    if (!backend) {
+      return; // registry always carries both ids; guards a corrupted setting
+    }
+    if (!(await this.ensureDisclosed(backend))) {
       return;
     }
 
@@ -140,9 +201,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     let acc = '';
     let started = false;
     try {
-      const model = await selectCopilotModel();
-      if (!model) {
-        this.post({ type: 'error', message: noModelsError().message });
+      const availability = await backend.isAvailable();
+      if (!availability.available) {
+        this.post({ type: 'error', message: availability.reason });
         return;
       }
 
@@ -159,9 +220,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const render = (): void => {
         this.post({ type: 'assistantHtml', id, html: markdownToHtml(acc) });
       };
-      await streamRequest(
-        model,
-        messages,
+      await backend.streamChat(
+        { messages },
         (delta) => {
           acc += delta;
           const now = Date.now();
@@ -185,7 +245,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.post({ type: 'assistantDone', id });
         }
       } else {
-        this.post({ type: 'error', message: describeLmError(err).message });
+        this.post({ type: 'error', message: backend.describeError(err).message });
       }
     } finally {
       this.cts?.dispose();
@@ -280,29 +340,39 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * One-time disclosure before the first AI Helper request. A distinct gate from
-   * the cloud-sync consent and from VS Code's own per-extension LM consent prompt.
+   * One-time, per-backend disclosure before the first AI Helper request through
+   * that backend — the data goes to a different company per backend. A distinct
+   * gate from the cloud-sync consent and from VS Code's own per-extension LM
+   * consent prompt. The Copilot key predates backend selection, so users who
+   * already consented are not re-prompted.
    */
-  private async ensureDisclosed(): Promise<boolean> {
-    if (this.context.globalState.get<boolean>(DISCLOSURE_KEY, false)) {
+  private async ensureDisclosed(backend: ChatBackend): Promise<boolean> {
+    const key = backend.id === 'copilot' ? DISCLOSURE_KEY : `${DISCLOSURE_KEY}.${backend.id}`;
+    if (this.context.globalState.get<boolean>(key, false)) {
       return true;
     }
-    const choice = await vscode.window.showInformationMessage(
-      'Use the AI Helper?',
-      {
-        modal: true,
-        detail:
-          'The AI Helper sends your message and a summary of your local telemetry — repository names, ' +
+    const detail =
+      backend.id === 'copilot'
+        ? 'The AI Helper sends your message and a summary of your local telemetry — repository names, ' +
           'agent/model/tool names, durations, and token counts — to GitHub Copilot under your own ' +
           'license. The “Generate workflows” command additionally reads your project’s Copilot ' +
           'customization files (instructions, agents, prompts, skills) and sends their contents. Raw ' +
           'prompts, completions, tool input/output, and session titles are never sent, and nothing here ' +
-          'uses the cloud-sync path, which stays off.',
-      },
+          'uses the cloud-sync path, which stays off.'
+        : 'The AI Helper sends your message and a summary of your local telemetry — repository names, ' +
+          'agent/model/tool names, durations, and token counts — to Anthropic via the Claude Code CLI, ' +
+          'under your own Claude login. The “Generate workflows” command additionally reads your ' +
+          'project’s Copilot customization files (instructions, agents, prompts, skills) and sends their ' +
+          'contents. The CLI runs locally with all tools disabled and writes no session files. Raw ' +
+          'prompts, completions, tool input/output, and session titles are never sent, and nothing here ' +
+          'uses the cloud-sync path, which stays off.';
+    const choice = await vscode.window.showInformationMessage(
+      `Use the AI Helper with ${backend.label}?`,
+      { modal: true, detail },
       'Continue',
     );
     if (choice === 'Continue') {
-      await this.context.globalState.update(DISCLOSURE_KEY, true);
+      await this.context.globalState.update(key, true);
       return true;
     }
     return false;

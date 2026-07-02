@@ -11,12 +11,26 @@ import { AssembledMessage } from './conversation';
  * manually in the Extension Host rather than by vitest (which has no `vscode`).
  */
 
-/** Select the user's first available Copilot chat model, or `undefined` if none. */
-export async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefined> {
+/** All Copilot chat models currently available to this user (may be empty). */
+export async function listCopilotModels(): Promise<vscode.LanguageModelChat[]> {
   if (typeof vscode.lm?.selectChatModels !== 'function') {
-    return undefined;
+    return [];
   }
-  const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
+  return [...(await vscode.lm.selectChatModels({ vendor: 'copilot' }))];
+}
+
+/**
+ * Select the user's Copilot chat model: the one matching `preferredId` (by id,
+ * then family) when set, else the first available, else `undefined`.
+ */
+export async function selectCopilotModel(preferredId?: string): Promise<vscode.LanguageModelChat | undefined> {
+  const models = await listCopilotModels();
+  if (preferredId !== undefined && preferredId.length > 0) {
+    const preferred = models.find((m) => m.id === preferredId || m.family === preferredId);
+    if (preferred) {
+      return preferred;
+    }
+  }
   return models[0];
 }
 

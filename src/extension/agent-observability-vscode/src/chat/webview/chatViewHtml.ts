@@ -32,10 +32,15 @@ export function renderChatHtml(nonce: string): string {
 </head>
 <body>
   <div id="empty">
-    <p class="intro">Ask about your local Copilot telemetry, or pick a task. Answers use your own GitHub Copilot license.</p>
+    <p class="intro">Ask about your local agent telemetry, or pick a task. Answers use the backend selected below (GitHub Copilot or Claude Code) under your own license.</p>
     <div class="qc-list">${buttons}</div>
   </div>
   <div id="messages" class="hidden" aria-live="polite"></div>
+  <div id="prefs">
+    <select id="backendSel" aria-label="AI backend"></select>
+    <select id="modelSel" aria-label="Model"></select>
+    <select id="effortSel" class="hidden" aria-label="Reasoning effort"></select>
+  </div>
   <div id="inputRow">
     <textarea id="input" rows="1" placeholder="Type a message…" aria-label="Message"></textarea>
     <button id="send" title="Send">Send</button>
@@ -96,7 +101,13 @@ body {
 .mini-btn { font-size: 0.85em; padding: 2px 8px; cursor: pointer; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: none; border-radius: 4px; }
 .mini-btn.primary { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
 .mini-btn:hover { filter: brightness(1.1); }
-#inputRow { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--vscode-widget-border, transparent); align-items: flex-end; }
+#prefs { display: flex; gap: 6px; padding: 6px 8px 0; border-top: 1px solid var(--vscode-widget-border, transparent); }
+#prefs select {
+  flex: 1; min-width: 0; padding: 2px 4px; font-family: inherit; font-size: 0.9em;
+  color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border, transparent)); border-radius: 4px;
+}
+#inputRow { display: flex; gap: 6px; padding: 8px; align-items: flex-end; }
 #input {
   flex: 1; resize: none; max-height: 140px; padding: 6px 8px;
   font-family: inherit; font-size: inherit;
@@ -184,6 +195,68 @@ const SCRIPT = `
     qcs[j].addEventListener('click', function () { post({ type: 'runQuickCommand', id: this.getAttribute('data-cmd') }); });
   }
 
+  var backendSel = document.getElementById('backendSel');
+  var modelSel = document.getElementById('modelSel');
+  var effortSel = document.getElementById('effortSel');
+  var rebuildingPrefs = false;
+
+  function fillSelect(sel, options, active) {
+    sel.innerHTML = '';
+    for (var k = 0; k < options.length; k++) {
+      var opt = document.createElement('option');
+      opt.value = options[k].value;
+      opt.textContent = options[k].text;
+      if (options[k].disabled) opt.disabled = true;
+      if (options[k].value === active) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
+
+  function applyUiState(state) {
+    rebuildingPrefs = true;
+    var backendOpts = [];
+    for (var b = 0; b < state.backends.length; b++) {
+      var be = state.backends[b];
+      backendOpts.push({
+        value: be.id,
+        text: be.available || !be.hint ? be.label : be.label + ' — ' + be.hint,
+        disabled: !be.available && be.id !== state.activeBackend
+      });
+    }
+    fillSelect(backendSel, backendOpts, state.activeBackend);
+
+    var modelOpts = [];
+    if (state.activeBackend === 'copilot') {
+      modelOpts.push({ value: '', text: 'Auto (first available)' });
+    }
+    for (var m = 0; m < state.models.length; m++) {
+      modelOpts.push({ value: state.models[m].id, text: state.models[m].label });
+    }
+    fillSelect(modelSel, modelOpts, state.activeModel);
+
+    if (state.efforts) {
+      var effortOpts = [];
+      for (var e = 0; e < state.efforts.length; e++) {
+        effortOpts.push({ value: state.efforts[e], text: 'Effort: ' + state.efforts[e] });
+      }
+      fillSelect(effortSel, effortOpts, state.activeEffort);
+      effortSel.classList.remove('hidden');
+    } else {
+      effortSel.classList.add('hidden');
+    }
+    rebuildingPrefs = false;
+  }
+
+  function onPrefChange(key, sel) {
+    sel.addEventListener('change', function () {
+      if (rebuildingPrefs) return;
+      post({ type: 'setPreference', key: key, value: sel.value });
+    });
+  }
+  onPrefChange('backend', backendSel);
+  onPrefChange('model', modelSel);
+  onPrefChange('effort', effortSel);
+
   window.addEventListener('message', function (event) {
     var msg = event.data;
     if (!msg || typeof msg.type !== 'string') return;
@@ -195,6 +268,7 @@ const SCRIPT = `
     if (msg.type === 'error') { addMessage('error').textContent = msg.message; return; }
     if (msg.type === 'applied') { addMessage(msg.ok ? 'system' : 'error').textContent = msg.message; return; }
     if (msg.type === 'reset') { messages.innerHTML = ''; bubbles = {}; messages.classList.add('hidden'); empty.classList.remove('hidden'); return; }
+    if (msg.type === 'uiState') { applyUiState(msg.state); return; }
   });
 
   post({ type: 'ready' });
