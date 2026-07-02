@@ -1,0 +1,60 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Session Views: The Overview and Sessions Trees",
+  "description": "The two tree views a user actually clicks. The Overview tree renders content-free totals; the Sessions tree is a three-level hierarchy (source → repository → session) whose leaves open the detail panel. Both are source-agnostic — they program against `SessionDataSource` and re-render on refresh. Third in the series.",
+  "nextTour": "Session Detail: Rendering the Token Trend and Run Totals",
+  "steps": [
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/overviewView.ts",
+      "line": 18,
+      "title": "The Overview provider",
+      "description": "**Situation.** The Overview view is the at-a-glance panel: total requests, tokens, model turns, errors — the numbers, never the messages.\n\n**Mechanism.** `OverviewViewProvider` implements VS Code's `TreeDataProvider<OverviewItem>`. It holds the `SourceRegistry` and reads aggregate metrics from every enabled source.\n\n**Implication.** Because it depends only on the registry (not on Copilot or Claude specifically), the same tree renders totals across both tools with no branching.\n\n**Gotcha.** This provider surfaces only content-free aggregates (from `getOverview`, Tour 2) — there is no path from this view to raw message text."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/overviewView.ts",
+      "line": 39,
+      "title": "Building the metric rows",
+      "description": "**Situation.** VS Code asks the provider for its tree nodes; for Overview those are flat labelled metric rows.\n\n**Mechanism.** `getChildren` (line 32) delegates to `getRootItems` (here), which pulls the registry's overview metrics and maps each number to a labelled `OverviewItem` (e.g. \"Requests\", \"Total tokens\").\n\n**Implication.** Adding a new headline metric is a one-line push here, provided the underlying aggregate already exists in `OverviewMetrics`.\n\n**Gotcha.** These items are display-only leaves — they don't expand, so there's no lazy child-loading to reason about here (unlike the Sessions tree)."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/overviewView.ts",
+      "line": 24,
+      "title": "Refreshing on new data",
+      "description": "**Situation.** When telemetry changes (a refresh, or a live signal), the tree must redraw.\n\n**Mechanism.** `refresh()` fires the provider's `onDidChangeTreeData` event emitter, which tells VS Code to re-query `getChildren`. This provider is one of the `refreshables` wired in `activate()`.\n\n**Implication.** The view is fully reactive: the live pipeline from Tour 2 ends here as a single `refresh()` call that repaints the totals.\n\n**Gotcha.** `refresh()` doesn't re-read the DB itself — `registry.refresh()` does that first; this only invalidates the *view*. Order matters: data refresh, then view refresh."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionsView.ts",
+      "line": 20,
+      "title": "The Sessions provider",
+      "description": "**Situation.** The Sessions view is the primary navigator — a hierarchy the user drills into to reach a specific run.\n\n**Mechanism.** `SessionsViewProvider` is a `TreeDataProvider<SessionTreeItem>` that renders three levels: source root → repository → session, reading from the same `SourceRegistry`.\n\n**Implication.** Sessions from Copilot and Claude appear side by side, grouped consistently, because both expose sessions through `SessionDataSource`.\n\n**Gotcha.** When only one source is enabled, the tree elides the redundant top level and starts at repositories (see the dispatch next) — a small UX nicety that the `getChildren` logic handles."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionsView.ts",
+      "line": 36,
+      "title": "Three-level lazy expansion",
+      "description": "**Situation.** Trees in VS Code are built lazily — `getChildren` is called with the node being expanded (or `undefined` for the root).\n\n**Mechanism.** This dispatch branches on the element's level: no element → `getRoots()` (line 50); a source node → `getRepositories(source)` (line 62); a repository node → `getSessions(source, repository)` (line 85).\n\n**Implication.** Only the expanded branch is computed, so a machine with thousands of sessions doesn't pay to materialize them all up front.\n\n**Gotcha.** `getRoots` short-circuits to `getRepositories(enabled[0])` when there's a single enabled source — that's the level-eliding behavior mentioned above."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionsView.ts",
+      "line": 62,
+      "title": "Grouping sessions by repository",
+      "description": "**Situation.** Users think in terms of \"what did the agent do in *this* repo\", so sessions are grouped by repository.\n\n**Mechanism.** `getRepositories` asks the source for its sessions and buckets them by their repository label into expandable `SessionTreeItem` nodes.\n\n**Implication.** The grouping key is the same `repository` field later used to *filter* which rows are eligible for cloud sync (Tour 6) and to slice dashboard analytics (Tour 8) — one concept, end to end.\n\n**Gotcha.** Repository is derived from local git metadata and stays local; only its role as a grouping/allow-list key is shared with the cloud, never as free-text that could leak a path."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionsView.ts",
+      "line": 85,
+      "title": "Session leaves open the detail panel",
+      "description": "**Situation.** The leaf nodes are individual sessions; clicking one should open the rich detail webview.\n\n**Mechanism.** `getSessions` builds a `SessionTreeItem` per session and attaches the open-detail command, carrying the source id + session key so the panel manager knows exactly what to render.\n\n**Implication.** This is the hand-off point into Tour 4: the click here becomes a `getSessionDetail(sessionKey)` call and, ultimately, the token-trend SVG.\n\n**Gotcha.** The item carries *keys*, not the loaded detail — the (potentially raw-content) read is deferred until the panel actually opens, so browsing the tree never loads message text."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/extension.ts",
+      "line": 191,
+      "title": "Multi-select enables combined detail",
+      "description": "**Situation.** Sometimes a user wants to analyze several related runs as one — e.g. a task that spanned multiple sessions.\n\n**Mechanism.** The Sessions view is registered with `createTreeView(..., { canSelectMany: true })`, so VS Code allows selecting multiple session leaves at once; the open-detail command then receives all selected keys.\n\n**Implication.** Those keys flow into `combineSessionDetails` (Tour 4), producing a single merged trend across the selection — the feature this one manifest flag unlocks.\n\n**Gotcha.** Overview and Sync are plain `registerTreeDataProvider` (no multi-select); only Sessions opts into `canSelectMany`, because only it feeds the combinable detail view."
+    },
+    {
+      "title": "Views recap",
+      "description": "Both trees are thin, reactive projections of the `SourceRegistry`: **Overview** renders content-free totals, and **Sessions** is a lazily-expanded source → repository → session hierarchy whose leaves hand a session key to the detail panel. Multi-select (`canSelectMany`) is what makes *combined* detail possible.\n\nNext, follow a single click all the way to pixels: the query, the agent-tree walk, the LOC/token/cost math, and the inline SVG trend graph. Continue to **Session Detail: Rendering the Token Trend and Run Totals**."
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Telemetry Ingestion: From On-Disk Databases to Session Reads",
+  "description": "How the extension reads Copilot's on-disk SQLite database without corrupting the live file (snapshot + WAL replay), where the single raw-content query lives, how the append-only archive preserves history past Copilot's rolling retention, and how live updates arrive via an OTLP receiver and the Claude transcript watcher. Second in the series.",
+  "nextTour": "Session Views: The Overview and Sessions Trees",
+  "steps": [
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/paths.ts",
+      "line": 114,
+      "title": "Discovering Copilot's database",
+      "description": "**Situation.** Before anything can be read, the extension must locate Copilot's telemetry SQLite file, whose path differs per OS and VS Code channel (stable/insiders).\n\n**Mechanism.** `resolveDatabasePaths` takes a `PathEnvironment` (home dir, platform, app name) and computes the candidate ingest DB path plus the extension's own archive DB path.\n\n**Implication.** Path resolution is pure and injectable, so it's unit-testable without touching the real filesystem — an important seam for a component that otherwise reaches into user directories.\n\n**Gotcha.** The function returns *candidates*; the file may not exist yet (Copilot not installed / no sessions). Callers must treat a missing file as \"empty\", never an error."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/snapshot.ts",
+      "line": 72,
+      "title": "Snapshotting to avoid locking the live DB",
+      "description": "**Situation.** Copilot actively writes to its SQLite DB. Opening that live file for reading risks lock contention and torn reads.\n\n**Mechanism.** `createReadonlySnapshot` copies the DB (and its sidecar files) into a private temp location, returning a `ReadonlySnapshot` handle the reader can safely query.\n\n**Implication.** All queries run against an immutable copy, so the extension never blocks Copilot and always sees a consistent point-in-time view.\n\n**Gotcha.** SQLite in WAL mode keeps recent writes in a separate `-wal` file, so a naive copy of just the main DB would miss the newest data — which the next two steps fix."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/snapshot.ts",
+      "line": 140,
+      "title": "Normalizing the journal mode",
+      "description": "**Situation.** The bundled SQLite engine is `node-sqlite3-wasm`, which cannot open a database still in WAL journal mode the way native SQLite would.\n\n**Mechanism.** `normalizeJournalMode` rewrites the copied database's header so it can be opened as a plain rollback-journal database by the wasm engine.\n\n**Implication.** This is the compatibility shim that lets a pure-wasm SQLite (no native addon to compile/ship) read a WAL-mode Copilot DB.\n\n**Gotcha.** This mutation happens only on the *copy* — the original Copilot DB is never touched, preserving the read-only guarantee."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/snapshot.ts",
+      "line": 190,
+      "title": "Replaying the WAL by hand",
+      "description": "**Situation.** After switching the copy off WAL mode, the writes still sitting in the `-wal` file must be merged in, or the newest sessions would vanish.\n\n**Mechanism.** `replayWal` manually applies the copied WAL frames onto the snapshot's main database file, reproducing what SQLite's own checkpoint would have done.\n\n**Implication.** Combined with the prior two steps, the reader now sees *all* committed data — including the session the user just finished — through a wasm-friendly file.\n\n**Gotcha.** WAL frame parsing is format-sensitive; this is the trickiest part of ingestion, and it's why snapshotting is centralized in one well-tested module rather than inlined at call sites."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/database.ts",
+      "line": 88,
+      "title": "Querying the snapshot",
+      "description": "**Situation.** With a clean snapshot on disk, `TelemetryDatabase` is the query layer over it.\n\n**Mechanism.** It opens the snapshot with the wasm SQLite engine and exposes typed methods — overview aggregates, session enumeration, per-session detail, and the recursive agent-tree walks used for run totals (Tour 4).\n\n**Implication.** This class concentrates all SQL. Aggregate/metric methods select only counts and token sums (`operation_name = 'chat'`), never message text.\n\n**Gotcha.** The agent-tree methods (e.g. `treeModelTurnPoints`, `sessionTreeIds`) traverse spawned sub-agent sessions via a bounded BFS — deep recursion is capped to avoid pathological cycles."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/database.ts",
+      "line": 630,
+      "title": "The ONE method that reads raw content",
+      "description": "**Situation.** Privacy auditing needs a single, obvious place where message text is read — and here it is, called out explicitly in the code comment.\n\n**Mechanism.** `getSessionDetail` (just below, line 639) is documented as *the only* method that reads raw content: it selects the LLM spans for one session via `WHERE COALESCE(conversation_id, chat_session_id) = ?` and returns prompts/completions for the local webview.\n\n**Implication.** Every other method is content-free by construction, so \"does this read raw content?\" has exactly one answer to audit. The raw result feeds only the local detail panel — never aggregation or sync.\n\n**Gotcha.** Keep this the single raw-content reader. If a new feature needs message text, route it through here rather than adding a second raw query elsewhere — that keeps the audit surface at one method."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/telemetryService.ts",
+      "line": 98,
+      "title": "The orchestration layer",
+      "description": "**Situation.** `TelemetryService` is what the rest of the extension (via `CopilotSource`) actually calls; it hides snapshotting and DB lifecycle.\n\n**Mechanism.** On `refresh()` it re-resolves paths, re-snapshots, and (re)opens a `TelemetryDatabase`, exposing `getOverview` and `getSessionDetail` as `Result<T>` values so callers get typed success/failure without exceptions.\n\n**Implication.** Callers never see a raw SQLite handle or a temp path — they see stable, source-agnostic methods, which is what lets `CopilotSource` be a thin adapter.\n\n**Gotcha.** Results are recomputed on `refresh`; there's no long-lived open handle to the *live* DB, avoiding the lock issues the snapshot design exists to prevent."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/telemetryService.ts",
+      "line": 138,
+      "title": "Pointing at ingest vs. archive",
+      "description": "**Situation.** There are two databases in play: Copilot's live *ingest* DB and the extension's own *archive* DB.\n\n**Mechanism.** `setIngestDbPath` (here) and `setArchiveDbPath` (line 153) let the service switch which file it reads, and reads can union both so history persists beyond Copilot's rolling retention.\n\n**Implication.** Overview and session reads can span \"what Copilot still has\" plus \"what we archived earlier\", giving a longer window than Copilot alone retains.\n\n**Gotcha.** The archive is populated by the `CopilotArchiver` (two steps down); if archiving is off, reads are limited to whatever Copilot currently keeps."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/telemetryService.ts",
+      "line": 162,
+      "title": "Overview metrics are content-free",
+      "description": "**Situation.** The Overview tree (Tour 3) needs totals — request counts, token sums, model turns — without any message text.\n\n**Mechanism.** `getOverview(sinceMs?)` runs pure aggregate SQL (`SUM(... WHERE operation_name = 'chat')`) and returns an `OverviewMetrics` object of numbers.\n\n**Implication.** The most-viewed surface in the extension touches zero raw content, reinforcing that raw reads are the exception (one method), not the rule.\n\n**Gotcha.** The optional `sinceMs` window filters by time; omit it and you get all-time totals across both ingest and archive."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/otel/copilotArchiver.ts",
+      "line": 75,
+      "title": "Preserving history past Copilot's retention",
+      "description": "**Situation.** Copilot's telemetry DB is a rolling store — old sessions eventually disappear. The extension wants a durable local history.\n\n**Mechanism.** `CopilotArchiver` periodically copies new rows from the ingest snapshot into the extension's own append-only archive DB.\n\n**Implication.** Long-term trends survive even after Copilot drops the original rows, and it all stays local — the archive never leaves the machine.\n\n**Gotcha.** The archive is *append-only* and content-carrying (it mirrors Copilot rows), so it lives under the extension's private storage and is subject to the same privacy invariant as the live DB."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/otel/copilotArchiver.ts",
+      "line": 92,
+      "title": "The archiver's timer loop",
+      "description": "**Situation.** Archiving must happen continuously but cheaply in the background.\n\n**Mechanism.** `start()` kicks off a periodic tick that sweeps new rows into the archive; each sweep snapshots, diffs against what's already archived, and appends only the delta.\n\n**Implication.** Steady-state cost is proportional to *new* activity, not total history, so the archive scales without re-copying everything each tick.\n\n**Gotcha.** `start()` is idempotent-friendly but should be paired with disposal on deactivate; the archiver is registered in `context.subscriptions` so VS Code tears it down cleanly."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/otel/otlpReceiver.ts",
+      "line": 54,
+      "title": "Live spans over OTLP",
+      "description": "**Situation.** Polling the DB catches finished writes, but for *real-time* updates the extension listens for Copilot's OpenTelemetry spans directly.\n\n**Mechanism.** `OtlpReceiver` runs a tiny local HTTP endpoint; `handle()` (line 80) decodes an OTLP trace-export request via `decodeTraceRequest` (line 24) into `SpanRows`.\n\n**Implication.** New model turns can surface in the UI seconds after they happen, without waiting for the next snapshot sweep.\n\n**Gotcha.** The receiver binds locally only — it's an ingestion endpoint for the local Copilot process, never a remote-facing server."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/otel/liveOtlpService.ts",
+      "line": 38,
+      "title": "Feeding live spans into the app",
+      "description": "**Situation.** Decoded spans need to become UI updates.\n\n**Mechanism.** `LiveOtlpService` implements `LiveSource`: it wires the receiver's `onSpans` callback (line 85) to translate incoming `SpanRows` into the same models the DB reader produces, then signals the live controller.\n\n**Implication.** Live and batch paths converge on one model shape, so the views don't care whether an update came from a snapshot read or a live span.\n\n**Gotcha.** Live spans are a *supplement* to the authoritative DB, not a replacement — the snapshot read remains the source of truth on the next refresh."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/live/liveUpdateController.ts",
+      "line": 65,
+      "title": "Debounced fan-out to the views",
+      "description": "**Situation.** Multiple live sources (OTLP + Claude watcher) can fire rapidly; refreshing the whole UI on every event would thrash.\n\n**Mechanism.** Each `LiveSource` is `register`ed (line 37) with the `LiveUpdateController`, and calls `signal()` when something changes. `signal()` coalesces bursts and triggers a single coordinated refresh.\n\n**Implication.** The UI stays responsive under a stream of live events because refreshes are debounced into one fan-out.\n\n**Gotcha.** `signal()` only *requests* a refresh; the actual re-read still goes through `registry.refresh()`, so live updates never bypass the snapshot/privacy path."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/live/claudeWatcher.ts",
+      "line": 58,
+      "title": "Watching Claude's transcripts live",
+      "description": "**Situation.** Claude Code writes JSONL transcripts to disk rather than a SQLite DB, so it needs its own live path.\n\n**Mechanism.** `ClaudeWatcher.start()` watches `~/.claude/projects` for file changes and, on activity, calls `claudeService.invalidateDiscovery()` (in `ClaudeCodeService`, line 110) and signals the live controller.\n\n**Implication.** Claude sessions appear and update in the same trees as Copilot, in near real time, through the identical `LiveSource` → controller → refresh pipeline.\n\n**Gotcha.** The watcher invalidates *discovery* rather than parsing eagerly — the actual JSONL read is deferred to the next refresh, keeping the watcher lightweight."
+    },
+    {
+      "title": "Ingestion recap",
+      "description": "You've traced the full local read path: **discover** Copilot's SQLite (`paths.ts`) → **snapshot** it safely with **WAL replay** (`snapshot.ts`) → **query** it (`database.ts`, with the single raw-content method) → **orchestrate** via `TelemetryService` → **archive** history (`copilotArchiver.ts`) → and receive **live** updates over OTLP and the Claude watcher, all coalesced by the `LiveUpdateController`.\n\nNothing here touches the network. Next, see how these reads become the two tree views a user actually clicks — continue to **Session Views: The Overview and Sessions Trees**."
+    }
+  ]
+}

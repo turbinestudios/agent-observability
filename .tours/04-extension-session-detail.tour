@@ -1,0 +1,102 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Session Detail: Rendering the Token Trend and Run Totals",
+  "description": "The flagship read path, end to end: click a session → run the single raw-content query → walk the agent tree (including spawned sub-agents) to gather per-turn token points → attribute lines of code/doc → compute cost → merge multi-selected sessions → and finally render the run-totals card and the inline SVG token-trend graph inside a CSP-locked webview. This is the 'trend graph rendered in the session detail view' path. Fourth in the series.",
+  "nextTour": "Workflow Deviation Detection and Divergence Notifications",
+  "steps": [
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
+      "line": 260,
+      "title": "A click becomes a detail read",
+      "description": "**Situation.** The user clicked a session leaf (Tour 3). The panel now needs the full detail for that key.\n\n**Mechanism.** `render` calls `source.getSessionDetail(sessionKey)`, returning a `Result<SessionDetail>` from whichever source owns the key (Copilot or Claude).\n\n**Implication.** This is the moment the deferred, possibly raw-content read finally happens — nothing before this point loaded message text.\n\n**Gotcha.** It's a `Result`, not a throw: a failed/absent session renders an error state in the panel rather than crashing the extension host."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/database.ts",
+      "line": 639,
+      "title": "Query X: the session-detail SQL",
+      "description": "**Situation.** For the Copilot source, `getSessionDetail` (line 639) is the concrete SQL behind the click — and, as its comment states, the ONE method that reads raw content.\n\n**Mechanism.** It selects the LLM spans for the session with `WHERE COALESCE(conversation_id, chat_session_id) = ?`, returning prompts, completions, and tool I/O for the local webview.\n\n**Implication.** This is the \"query X\" that fetches the data the detail view renders. Its raw output stays in-process and flows only to the local panel — never to aggregation or sync.\n\n**Gotcha.** `COALESCE(conversation_id, chat_session_id)` handles two id schemes Copilot has used; keying on the coalesced value keeps old and new sessions addressable by one key."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/database.ts",
+      "line": 937,
+      "title": "The trend's data points",
+      "description": "**Situation.** The trend graph plots token usage per model turn across the *entire* agent run, not just the top-level session.\n\n**Mechanism.** `treeModelTurnPoints` produces one `SessionModelTurnPoint` per model turn — input, cached, and output tokens plus per-turn line counts — for every session in the agent tree.\n\n**Implication.** These points are the exact array later handed to `renderTokenTrend`; the SVG is a direct visualization of this query's output.\n\n**Gotcha.** \"Model turn\" ≠ \"tool call\": only assistant LLM turns are plotted, which the next step's filter enforces."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/database.ts",
+      "line": 963,
+      "title": "The filter that defines a 'turn'",
+      "description": "**Situation.** A raw span table mixes chat turns, tool executions, and hook invocations; the trend must count only the model's own turns.\n\n**Mechanism.** The `treeModelTurnPoints` query filters `WHERE operation_name = 'chat'` (and scopes to the tree's conversation ids), so each plotted point corresponds to exactly one assistant turn.\n\n**Implication.** This is the \"filters are applied\" step — the same `operation_name = 'chat'` predicate is used consistently for overview totals and run totals, so counts reconcile across views.\n\n**Gotcha.** Tool calls are counted separately (the `TC` tile in the totals card); conflating them with `chat` turns would double-count activity, which this filter prevents."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/database.ts",
+      "line": 1382,
+      "title": "Following spawned sub-agents",
+      "description": "**Situation.** An agent run can spawn sub-agents, each its own session; \"run totals\" must include them or the numbers understate the work.\n\n**Mechanism.** `sessionTreeIds` performs a bounded breadth-first search from the root session across parent/child links (capped by `MAX_TREE_HOPS`), returning every session id in the tree.\n\n**Implication.** Token points, tool calls, LOC, and cost are all summed over this id set, so the card and trend reflect the *whole* agent run, sub-agents included.\n\n**Gotcha.** The hop cap is a safety valve against cyclic or pathological parent links — the BFS terminates even on malformed trees rather than looping forever."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/database.ts",
+      "line": 1510,
+      "title": "Attributing lines of code to spans",
+      "description": "**Situation.** The totals card shows lines of code/doc added and removed (LOC/LOD/nLOC/nLOD), which must be attributed to the run's spans.\n\n**Mechanism.** `treeWrittenLinesBySpan` walks the tree's edit spans and tallies written lines per span, feeding the per-turn `loc`/`lod` fields on each trend point.\n\n**Implication.** Line counts ride along with token counts on the very same points, so the totals card and the trend derive from one coherent traversal.\n\n**Gotcha.** Classifying a line as code vs. documentation (and added vs. removed) is delegated to `locAnalysis` — the next step — so the SQL stays about *which* edits happened, not *how* to categorize them."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/locAnalysis.ts",
+      "line": 93,
+      "title": "Code vs. documentation",
+      "description": "**Situation.** \"Lines of code\" and \"lines of documentation\" are separate tiles, so each edited file must be classified.\n\n**Mechanism.** `classifyExtension` maps a file extension to a code/doc/other bucket, and `countWrittenLines` (line 256) parses the edit to count added and removed lines.\n\n**Implication.** The nLOC/nLOD (removed) tiles exist because `countWrittenLines` distinguishes additions from deletions — not just a net diff.\n\n**Gotcha.** Extension classification is heuristic (e.g. `.md` → doc, `.ts` → code); an unknown extension falls into 'other' and is excluded from both LOC and LOD rather than guessed."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/pricing.ts",
+      "line": 24,
+      "title": "Turning usage into cost",
+      "description": "**Situation.** The totals card shows a cost tile — AIU for Copilot, or an estimated USD for Claude.\n\n**Mechanism.** `aiuToUsd` converts integer nano-AIU to dollars at the fixed rate `USD_PER_AIU = 0.01` (line 18): `(aiuNano / 1e9) * USD_PER_AIU`.\n\n**Implication.** Cost is a pure, deterministic function of usage counts — no external pricing calls — so the number is reproducible and offline.\n\n**Gotcha.** The card renders exactly one cost tile: Copilot shows AIU (with the derived USD), Claude shows the token-priced USD estimate. The `costMode` flag downstream picks which."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/telemetry/combinedSessionDetail.ts",
+      "line": 37,
+      "title": "Merging a multi-selected set",
+      "description": "**Situation.** If the user multi-selected sessions (via `canSelectMany`, Tour 3), the panel must show them as one combined run.\n\n**Mechanism.** `combineSessionDetails` concatenates the per-session details in start-time order, producing a merged point series plus the `TrendSession` segments that later draw per-session dividers on the trend.\n\n**Implication.** The single-session view is just the degenerate case (one segment); the same rendering code handles one or many selections.\n\n**Gotcha.** Merge order is by start time, so the combined trend reads left-to-right chronologically even if the user selected the sessions out of order."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
+      "line": 281,
+      "title": "Rendering HTML with a CSP nonce",
+      "description": "**Situation.** The detail (including raw content) must be shown in a webview, which is an untrusted rendering surface.\n\n**Mechanism.** `panel.webview.html = renderSessionDetailHtml(detail, turnDeviations, makeNonce(), contextAnalysis, costMode)` builds the full document with a fresh per-render nonce and passes in the deviation markers (Tour 5) and cost mode.\n\n**Implication.** All content is server-rendered strings the extension controls; the nonce lets the CSP allow only this render's inline `<style>`/`<script>`, blocking injection.\n\n**Gotcha.** Because raw content is interpolated into HTML, every value must be escaped at the boundary — the renderer uses `escapeHtml` on user-derived text (you'll see it in the totals labels)."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailHtml.ts",
+      "line": 88,
+      "title": "The CSP-locked document shell",
+      "description": "**Situation.** The webview needs a complete HTML document with a strict Content-Security-Policy.\n\n**Mechanism.** `renderSessionDetailHtml` wraps the body (built by `renderSessionDetailContent`, line 129) in a document whose CSP allows only nonce-tagged inline styles/scripts and no remote origins.\n\n**Implication.** Even though the panel shows local raw content, it cannot phone home — the CSP forbids any outbound fetch, reinforcing the privacy invariant at the render layer.\n\n**Gotcha.** The nonce must match between the CSP header and every inline `<style>`/`<script>`; a mismatch silently blank-renders the styled/interactive parts."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailHtml.ts",
+      "line": 323,
+      "title": "The run-totals card",
+      "description": "**Situation.** Above the trend sits the \"Agent run totals\" card — MT, TC, TIN/TOUT/TCI, TT, ERR, the cost tile, and LOC/LOD/nLOC/nLOD.\n\n**Mechanism.** `renderTreeSummary` assembles those tiles from the `SessionTreeStats` (the summed tree traversal) and lays them out as a right-aligned definition list, each acronym carrying its full name in a `title` tooltip.\n\n**Implication.** Every tile here is a total over the whole agent tree computed by the queries in steps 3–8 — the card and the trend are two views of one dataset.\n\n**Gotcha.** Exactly one cost tile is emitted based on `costMode` ('aiu' → AIU tile, 'usd' → estimated-cost tile); don't expect both."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailHtml.ts",
+      "line": 362,
+      "title": "Trend graph is rendered here",
+      "description": "**Situation.** This is the exact line where the token trend graph is injected into the session-detail view.\n\n**Mechanism.** Inside the card's `.tree-row`, `${renderTokenTrend(modelTurns, trendSessions)}` renders the SVG to the left of the totals list, passing the per-turn points (from `treeModelTurnPoints`) and the per-session segments (from `combineSessionDetails`).\n\n**Implication.** This single interpolation is the \"trend graph rendered in the session detail view\": query output in, inline SVG out, no client-side charting library.\n\n**Gotcha.** `trendSessions` is `undefined` for a single-session view and populated for a combined view — that's what toggles the per-session dividers and id labels on the plot."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailHtml.ts",
+      "line": 472,
+      "title": "Building the SVG trend by hand",
+      "description": "**Situation.** The trend must be a self-contained, CSP-safe graphic with no external JS.\n\n**Mechanism.** `renderTokenTrend` buckets the turns (one point per turn, or one per `GROUP_SIZE = 5` once the run exceeds `GROUP_THRESHOLD = 25`, lines 406–408), sums each bucket via `sumModelTurns` (line 411), then emits a fixed `600×200` viewBox with polylines for input/cached/output tokens and hover `<title>` tooltips.\n\n**Implication.** All coordinates are numeric and computed server-side, so the SVG is safe to inject and renders identically offline — a deliberate choice over a charting dependency.\n\n**Gotcha.** With fewer than two points it returns a \"Not enough model turns to plot a token trend\" placeholder — so very short sessions show the empty state, by design, not a broken axis."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
+      "line": 276,
+      "title": "Live-updating an open panel",
+      "description": "**Situation.** If new turns stream in (Tour 2's live pipeline) while a detail panel is open, the trend should update without a manual reopen.\n\n**Mechanism.** The panel posts a `{ type: 'update' }` message to the webview with freshly rendered content, and the panel's script swaps it in — so the SVG redraws with the new points.\n\n**Implication.** The detail view is reactive end to end: live span → controller `signal()` → re-read → re-render → `postMessage` → updated trend.\n\n**Gotcha.** Updates target only already-mounted panels; a closed session isn't re-rendered until reopened, keeping live work proportional to what's actually on screen."
+    },
+    {
+      "title": "Trend graph recap",
+      "description": "You've followed the flagship path end to end: **click** → `getSessionDetail` (**query X**, the single raw-content read) → `treeModelTurnPoints` with the `operation_name = 'chat'` **filter** → `sessionTreeIds` BFS to include **sub-agents** → **LOC** attribution (`treeWrittenLinesBySpan` + `locAnalysis`) → **cost** (`aiuToUsd`) → optional **combine** for multi-select → **render** the totals card and the inline **SVG trend** (`renderTokenTrend`) inside a CSP-locked webview, with **live** `postMessage` refreshes.\n\nEverything here is local. Next, see how the same per-turn data is checked against configured workflows to flag divergences. Continue to **Workflow Deviation Detection and Divergence Notifications**."
+    }
+  ]
+}

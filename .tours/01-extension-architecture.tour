@@ -1,0 +1,85 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Extension Architecture: The Split Model and Activation Wiring",
+  "description": "Orientation tour for the VS Code extension (the telemetry *producer*). Learn the split model, how `activate()` wires every subsystem together, the source-agnostic abstraction that lets Copilot and Claude Code coexist, and the privacy invariant that governs everything downstream. Start here, then follow the chain through ingestion, views, session detail, deviation, and cloud sync.",
+  "isPrimary": true,
+  "nextTour": "Telemetry Ingestion: From On-Disk Databases to Session Reads",
+  "steps": [
+    {
+      "file": "AGENTS.md",
+      "line": 3,
+      "title": "The split model",
+      "description": "**Situation.** Agent Observability is built as a *split model*: a local VS Code extension (this codebase, the *producer*) reads on-disk Copilot/Claude telemetry and keeps all raw content on the machine, while a separate Blazor dashboard (the *consumer*) serves org-level aggregate-only analytics.\n\n**Mechanism.** The two halves communicate through exactly one channel — an opt-in aggregate batch defined by a shared JSON Schema. Nothing else crosses the boundary.\n\n**Implication.** You can read and modify the entire extension without ever touching a network path, because raw reads are always local. The producer/consumer seam is the single place privacy is enforced.\n\n**Gotcha.** A worktree copy of this repo may exist under `.claude/worktrees/`. Always work in the canonical `src/extension/agent-observability-vscode/...` tree — the worktree can diverge."
+    },
+    {
+      "file": "AGENTS.md",
+      "line": 45,
+      "title": "The privacy invariant (do not break)",
+      "description": "**Situation.** This is the contract every feature must respect. Raw content — prompts, completions, tool I/O, file paths, identities, branch and commit names — **never leaves the machine**.\n\n**Mechanism.** The only outbound payload is the opt-in aggregate batch, which is `additionalProperties: false` at every level (you'll see the schema at the end of this tour). Cloud sharing is **off by default**, gated on explicit consent *plus* an API key stored in VS Code SecretStorage — never in `settings.json`.\n\n**Implication.** As you read the ingestion, view, and detail code in later tours, notice that raw content flows *inward* to the local webview only. The aggregation/sync code (Tour 6) is the sole path that produces network output.\n\n**Gotcha.** The dashboard ingestion URL is a hardcoded constant, not a user setting — so a batch can never be redirected to an arbitrary host by config."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/extension.ts",
+      "line": 63,
+      "title": "Activation entry point",
+      "description": "**Situation.** `activate()` is the composition root — every subsystem is constructed and wired here, in dependency order. The extension activates on `onStartupFinished` (see the manifest step later), so this runs shortly after VS Code opens.\n\n**Mechanism.** It first builds the content-free diagnostic `OutputChannelLogger`, then a `Configuration` wrapper over settings, then the `TelemetryService` (the Copilot reader). No I/O happens yet — construction is cheap; reads are deferred to `refresh()`.\n\n**Implication.** Because everything is hand-wired here (no DI container), this function is the map of the whole extension: read it top-to-bottom and you've seen every moving part.\n\n**Gotcha.** The logger is content-free *by contract* — counts, ids, and statuses only, never prompts/completions/keys. Keep it that way when adding diagnostics."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/extension.ts",
+      "line": 77,
+      "title": "One registry, two sources",
+      "description": "**Situation.** The extension supports two telemetry producers — GitHub Copilot (a local SQLite DB) and Claude Code (local JSONL transcripts) — and must treat them uniformly.\n\n**Mechanism.** `SourceRegistry` is constructed with `[new CopilotSource(telemetry, config), claude]`. Both implement the same `SessionDataSource` surface, so everything downstream (views, session detail, aggregation) is source-agnostic.\n\n**Implication.** Adding a third agent tool later means implementing one interface and adding it to this array — no changes to views or sync.\n\n**Gotcha.** The Claude source reads `~/.claude/projects` on demand; it is discovered lazily, so an absent Claude install simply yields an empty source rather than an error."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/sources/sessionSource.ts",
+      "line": 30,
+      "title": "The source-agnostic contract",
+      "description": "**Situation.** This is the `SessionDataSource` interface — the seam that decouples the UI from where telemetry actually comes from.\n\n**Mechanism.** It exposes a small, uniform surface: enumerate sessions, fetch overview metrics, and fetch a full session detail by key. Each source maps its native storage (SQLite rows vs. JSONL lines) onto these shared shapes.\n\n**Implication.** The Overview tree, Sessions tree, and the aggregation pipeline all program against this interface, so they never branch on \"is this Copilot or Claude?\".\n\n**Gotcha.** Session *keys* must be stable and unique across sources — the detail-panel manager keys panels by `${sourceId}::${sessionKey}` to avoid collisions."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/sources/sessionSource.ts",
+      "line": 88,
+      "title": "The Copilot source adapter",
+      "description": "**Situation.** `CopilotSource` adapts the `TelemetryService` (SQLite reader) to the `SessionDataSource` interface.\n\n**Mechanism.** It delegates enumeration and detail reads to the `TelemetryService`, translating Copilot's telemetry rows into the shared session/overview/detail models. The Claude equivalent (`ClaudeCodeService`) implements the same interface over JSONL.\n\n**Implication.** This adapter is where Copilot-specific concerns (DB snapshotting, WAL replay — Tour 2) stay isolated. The rest of the app sees only the neutral interface.\n\n**Gotcha.** `CopilotSource` holds no data of its own — it's a thin translation layer, so it stays cheap to construct during `activate()`."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/sources/sessionSource.ts",
+      "line": 146,
+      "title": "The registry fans out",
+      "description": "**Situation.** `SourceRegistry` is the collection that the views and sync engine talk to.\n\n**Mechanism.** It exposes `enabled()` (the currently active sources) and `refresh()` (re-read every source). A `refresh` re-snapshots Copilot and re-discovers Claude, then the views re-render from the fresh data.\n\n**Implication.** \"Refresh\" semantics are centralized here — one call updates every source, and the view providers simply subscribe.\n\n**Gotcha.** Only *enabled* sources participate; a source can be present but disabled, which is why callers use `registry.enabled()` rather than iterating all sources."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/extension.ts",
+      "line": 88,
+      "title": "The session-detail webview manager",
+      "description": "**Situation.** `SessionDetailPanelManager` owns the rich webview that renders a single session (or a combined multi-session view) — including the token trend graph you'll dissect in Tour 4.\n\n**Mechanism.** It is constructed with the `registry` (to fetch details from any source), the `telemetry` service, and the `LocalDeviationDetector` (Tour 5) so the panel can overlay workflow-divergence markers on turns.\n\n**Implication.** This is the *only* component that surfaces raw content, and it does so strictly inside a local, CSP-locked webview — never over the network.\n\n**Gotcha.** Panels are keyed per source+session and reused; opening the same session twice re-focuses the existing panel instead of spawning a duplicate."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/extension.ts",
+      "line": 155,
+      "title": "The one and only uploader",
+      "description": "**Situation.** `SyncEngine` is the single component in the entire extension that can produce network output.\n\n**Mechanism.** It is wired with `consent`, `secrets`, a `CompositeAggregationSource` (the union of every enabled source's privacy-safe rows), the `syncClient`, and identity inputs (`machineId`, `workspaceCwd`). Tour 6 traces exactly how it double-gates on consent + API key before building and posting a batch.\n\n**Implication.** Auditing \"can this extension ever exfiltrate data?\" reduces to auditing this one constructor and its `syncEngine.ts`. Everything else is local-only by construction.\n\n**Gotcha.** The aggregation source is the *union* of Copilot + Claude rows; both emit the same content-free `AggregationRow`, so the cloud batch covers both tools with no schema change."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/extension.ts",
+      "line": 191,
+      "title": "Registering the activity-bar views",
+      "description": "**Situation.** Three tree views (Overview, Sessions, Sync) plus a webview (AI Helper) are registered against their contributed view ids here.\n\n**Mechanism.** Overview and Sync use `registerTreeDataProvider`; Sessions uses `createTreeView` with `canSelectMany: true` so a user can multi-select sessions and combine them into one detail view.\n\n**Implication.** `canSelectMany` is what enables the *combined* session detail (multiple sessions merged into one trend) — remember this when Tour 4 shows `combineSessionDetails`.\n\n**Gotcha.** The view ids here must exactly match the ids contributed in `package.json` (next step); a mismatch silently yields an empty view."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/package.json",
+      "line": 32,
+      "title": "Manifest: the contributed views",
+      "description": "**Situation.** The runtime wiring you just saw is mirrored declaratively in the manifest under `contributes.views`.\n\n**Mechanism.** A custom `viewsContainers` activity-bar entry (line 23) hosts the `agentObservability.overview`, `.sessions`, `.sync`, and `.assistant` views. Activation is `onStartupFinished` (line 20), so the extension loads without blocking startup.\n\n**Implication.** This is the contract between VS Code and the code in `extension.ts`: ids, titles, and the webview view all originate here.\n\n**Gotcha.** Any change under this manifest (or extension source) requires a version bump + CHANGELOG entry per the repo's extension-versioning rule — don't forget it when editing."
+    },
+    {
+      "file": "schemas/aggregate-batch.schema.json",
+      "line": 72,
+      "title": "The only thing that leaves the machine",
+      "description": "**Situation.** This shared JSON Schema is the single data contract crossing the producer→consumer boundary, and it is the physical embodiment of the privacy invariant.\n\n**Mechanism.** `\"additionalProperties\": false` appears at every object level (here at the batch root, and again on each nested object), and identity is an opaque `pseudonymousDeveloperId` matching `^dev_[0-9a-f]{32}$` (line 44) — a shape that *structurally* cannot hold an email or free text.\n\n**Implication.** Both the extension's aggregator (Tour 6) and the dashboard's `AggregateBatchValidator` (Tour 7) validate against this schema, so a raw-content field literally cannot be added on one side without breaking the other.\n\n**Gotcha.** Never relax `additionalProperties` to `true` \"just to ship a field\" — that single change would silently open the exfiltration surface the whole design exists to prevent."
+    },
+    {
+      "title": "Where to go next",
+      "description": "You've now seen the whole map: the split model, the privacy invariant, the `activate()` composition root, the source-agnostic `SessionDataSource` abstraction, the view registration, and the aggregate schema that is the *only* outbound contract.\n\nThe series continues in dependency order:\n\n1. **Telemetry Ingestion** — how Copilot's SQLite DB is safely snapshotted (WAL replay) and read, plus the live OTLP receiver and Claude watcher.\n2. **Session Views** — the Overview and Sessions trees.\n3. **Session Detail** — the token trend graph and run totals (the flagship read path).\n4. **Deviation Detection** — local workflow-divergence analysis and notifications.\n5. **Aggregate + Sync** — the privacy-safe cloud upload path.\n\nThen the dashboard tours (7–9) pick up on the consumer side. Continue to **Telemetry Ingestion: From On-Disk Databases to Session Reads**."
+    }
+  ]
+}

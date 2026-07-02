@@ -1,0 +1,90 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Dashboard Analytics: From Table Buckets to Radzen Charts",
+  "description": "The read side of the dashboard. Trace a page load from the Blazor landing page through the analytics service that queries stored aggregate buckets (filtered by a lookback window), merges latency histograms into an approximate p95, and shapes a metrics model that Radzen chart components bind to. Then see the sibling pages: repository activity, pseudonymous developer activity, and LLM/model usage. Eighth in the series.",
+  "nextTour": "Context Hotspots: Scoring and Rendering Friction",
+  "steps": [
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/Index.razor",
+      "line": 1,
+      "title": "The landing page",
+      "description": "**Situation.** `@page \"/\"` is the dashboard home — headline tiles plus a request-volume chart and a model-breakdown donut.\n\n**Mechanism.** The component injects `IAnalyticsService` and renders from a `DashboardMetrics` model it loads on initialization.\n\n**Implication.** Every number on this page is an *aggregate* read back from Table Storage — there is no raw content anywhere in the consumer, by construction.\n\n**Gotcha.** The page binds to a nullable `metrics` field, so the markup guards for the pre-load state; the charts appear only once the async fetch completes."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/Index.razor",
+      "line": 104,
+      "title": "Fetching with a lookback filter",
+      "description": "**Situation.** The page needs metrics for a bounded time window, not all history.\n\n**Mechanism.** `metrics = await Analytics.GetDashboardMetricsAsync(TimeSpan.FromHours(24))` requests the last 24 hours; the same call reruns with a `cancellationToken` on refresh (line 116).\n\n**Implication.** This `TimeSpan` *is* the filter — it flows into the service and becomes the query's time predicate over stored buckets.\n\n**Gotcha.** The window is fixed at 24h for the landing page; other pages pass their own `TimeSpan`, so the lookback is a per-call parameter, not global state."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/IAnalyticsService.cs",
+      "line": 9,
+      "title": "The analytics contract",
+      "description": "**Situation.** Pages depend on an abstraction, not a concrete store, so the data source can swap (Table vs. in-memory).\n\n**Mechanism.** `IAnalyticsService` declares the read methods: `GetDashboardMetricsAsync` (line 11), `GetRepositoryActivityAsync` (line 13), `GetModelUsageAsync` (line 17), and developer activity.\n\n**Implication.** Each page maps to exactly one interface method, keeping the UI thin and the querying testable in isolation.\n\n**Gotcha.** It's registered in `Program.cs` (line 68) as a singleton delegating to `AggregateAnalyticsService`, so all pages share one implementation instance."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/AggregateAnalyticsService.cs",
+      "line": 38,
+      "title": "Query X: building dashboard metrics",
+      "description": "**Situation.** This is the concrete query behind the landing page.\n\n**Mechanism.** `GetDashboardMetricsAsync(lookback, ...)` reads the relevant buckets, then computes totals, the request-volume series, the model breakdown, and a p95 latency, returning a `DashboardMetrics`.\n\n**Implication.** All the page's tiles and charts come from this one method — it's the \"query X\" that the UI simply visualizes.\n\n**Gotcha.** It composes several private helpers (read → merge → percentile); the method stays readable because each concern is its own function, examined next."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/AggregateAnalyticsService.cs",
+      "line": 174,
+      "title": "Reading buckets within the window",
+      "description": "**Situation.** Aggregation must start from the stored rows that fall inside the lookback.\n\n**Mechanism.** `ReadBucketsAsync(lookback, ...)` queries the aggregate store (`TableAggregateStore.QueryBucketsAsync`, Tour 7) and filters rows to those within the time window.\n\n**Implication.** This is where the `TimeSpan` from the page becomes an actual data filter — everything downstream operates on this windowed set.\n\n**Gotcha.** The read is org/partition-scoped by the store, so a page only ever sees its tenant's buckets — the isolation established at ingest carries through to analytics."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/AggregateAnalyticsService.cs",
+      "line": 217,
+      "title": "Merging latency histograms",
+      "description": "**Situation.** Latency arrives as per-bucket *counts* (Tour 6's `LATENCY_BOUNDS_MS`), spread across many rows that must be combined.\n\n**Mechanism.** `MergeHistogram(buckets)` sums the per-boundary counts across all matching rows into one merged histogram array.\n\n**Implication.** The dashboard reconstructs an org-wide latency distribution from coarse, privacy-safe counts — no individual request timing was ever transmitted.\n\n**Gotcha.** The merge assumes every row shares the same bucket boundaries; that invariant is exactly why the ingest validator (Tour 7) rejects histograms that don't match the fixed bounds."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/AggregateAnalyticsService.cs",
+      "line": 241,
+      "title": "Approximating p95 from buckets",
+      "description": "**Situation.** A percentile is a per-value statistic, but only bucketed counts exist.\n\n**Mechanism.** `ApproximateP95(merged)` walks the cumulative histogram to find the bucket where the 95th percentile falls and returns a representative latency for it.\n\n**Implication.** You get a useful tail-latency indicator while the underlying data stays aggregate — the deliberate trade-off of the histogram design.\n\n**Gotcha.** It's an *approximation* bounded by bucket granularity; the code names it `ApproximateP95` to keep that expectation honest rather than implying exactness."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Models/DashboardMetrics.cs",
+      "line": 3,
+      "title": "The view model",
+      "description": "**Situation.** The service and the Razor page need a shared shape to hand data across.\n\n**Mechanism.** `DashboardMetrics` (line 3) bundles totals, a `RequestVolume` series of `TimeSeriesPoint` (line 20), a `ModelBreakdown` of `NamedValue` (line 29), and the p95 — alongside sibling summaries `DeveloperActivitySummary` (line 38) and `RepositoryActivitySummary` (line 53).\n\n**Implication.** These are plain projections built for charting; they carry labels and numbers only, matching the privacy-safe nature of the source.\n\n**Gotcha.** `NamedValue` has a `SecondaryValue` too — the LLM page (later) binds tokens to it while showing the model name as the category."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/Index.razor",
+      "line": 56,
+      "title": "Binding the request-volume chart",
+      "description": "**Situation.** The computed `RequestVolume` series must become a visible column chart.\n\n**Mechanism.** `<RadzenColumnSeries Data=\"@metrics.RequestVolume\" CategoryProperty=\"Label\" ValueProperty=\"Value\" .../>` binds the model's time-series directly to a Radzen chart component.\n\n**Implication.** Rendering is declarative — no manual SVG here (unlike the extension's trend graph); the Radzen library owns the drawing.\n\n**Gotcha.** The `CategoryProperty`/`ValueProperty` names must match `TimeSeriesPoint`'s members (`Label`/`Value`); a rename there silently empties the chart."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/Index.razor",
+      "line": 76,
+      "title": "The model-breakdown donut",
+      "description": "**Situation.** Alongside volume, the page shows which models were used and in what proportion.\n\n**Mechanism.** `<RadzenDonutSeries Data=\"@metrics.ModelBreakdown\" CategoryProperty=\"Label\" ValueProperty=\"Value\" />` binds the `NamedValue` breakdown to a donut.\n\n**Implication.** Model mix is visible at a glance, sourced from the same aggregate read — one query populates multiple charts.\n\n**Gotcha.** Model names come from the aggregate `model` dimension, a closed vocabulary from the extension; unexpected values would simply appear as their own slice rather than break the donut."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/Repository.razor",
+      "line": 86,
+      "title": "Repository activity page",
+      "description": "**Situation.** `@page \"/repository\"` ranks repositories by request volume.\n\n**Mechanism.** It calls `Analytics.GetRepositoryActivityAsync(TimeSpan.FromHours(24))` (line 86, service impl at line 104) and binds the result to a `<RadzenBarSeries>` (line 29) with `CategoryProperty=\"Repository\"`.\n\n**Implication.** The `repository` dimension — validated and PII-hardened at ingest (Tour 7) — becomes a first-class analytics axis here.\n\n**Gotcha.** Only allow-listed repositories the extension chose to sync (Tour 6) can appear; the dashboard can't show repos that were never uploaded."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/DeveloperActivity.razor",
+      "line": 59,
+      "title": "Pseudonymous developer activity",
+      "description": "**Situation.** `@page \"/developer-activity\"` shows per-developer activity and an active-developer count.\n\n**Mechanism.** It calls `Analytics.GetDeveloperActivityAsync(TimeSpan.FromHours(24))` (line 59, service impl at line 130), which groups by the opaque `pseudonymousDeveloperId`.\n\n**Implication.** \"Active developers\" is a distinct-count over `dev_...` tokens — real people are counted without ever being identified.\n\n**Gotcha.** Because the id is salted per org and irreversible (Tour 6), the dashboard literally cannot map a row back to a person, even intentionally."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/LlmAnalytics.razor",
+      "line": 81,
+      "title": "LLM / model usage page",
+      "description": "**Situation.** `@page \"/llm-analytics\"` drills into per-model token usage.\n\n**Mechanism.** It calls `Analytics.GetModelUsageAsync(TimeSpan.FromHours(24))` (line 81, service impl at line 156) and binds tokens to a column chart via `ValueProperty=\"SecondaryValue\"` (line 41), showing the model name as the category.\n\n**Implication.** This reuses the `NamedValue.SecondaryValue` slot for tokens, demonstrating how one small model serves several chart shapes.\n\n**Gotcha.** Token totals are sums over aggregate buckets, so they reconcile with the landing page's model breakdown — same source, different projection."
+    },
+    {
+      "title": "Analytics recap",
+      "description": "The consumer read path is uniform across pages: a Razor page picks a **lookback** `TimeSpan` → calls one `IAnalyticsService` method → `AggregateAnalyticsService` **reads windowed buckets** (`ReadBucketsAsync` → `QueryBucketsAsync`) → **merges histograms** and **approximates p95** → returns a **plain view model** → **Radzen** components bind and render. Repository, developer (pseudonymous), and LLM pages are the same pattern over different dimensions.\n\nOne more analytics surface goes deeper — context-file friction scoring. Continue to **Context Hotspots: Scoring and Rendering Friction**."
+    }
+  ]
+}

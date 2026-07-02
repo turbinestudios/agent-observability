@@ -1,0 +1,102 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Privacy-Safe Aggregation and Cloud Sync",
+  "description": "The single path in the whole extension that produces network output. See how local rows are reduced to a content-free aggregate batch, how identity becomes an irreversible pseudonym, how the double gate (explicit consent + an API key in SecretStorage) blocks sync by default, how repositories are filtered by an allow-list, and how the batch is POSTed to a hardcoded ingestion URL. Sixth in the series.",
+  "nextTour": "Dashboard Ingestion API: Auth, Strict Deserialize, Validate, Store",
+  "steps": [
+    {
+      "file": "src/extension/agent-observability-vscode/src/aggregate/aggregator.ts",
+      "line": 124,
+      "title": "Rows become a batch",
+      "description": "**Situation.** This is where local telemetry is distilled into the only thing that may ever leave the machine.\n\n**Mechanism.** `buildBatch(input)` takes content-free `AggregationRow`s and produces an `AggregateBatch` matching the shared schema — bucketed counts, token sums, and latency histograms keyed by operation/model/repository.\n\n**Implication.** Auditing \"what could we upload?\" starts and largely ends here: the function's output type *is* the wire contract.\n\n**Gotcha.** `buildBatch` only aggregates; it never reads message text. If a field can't be derived from counts/enums, it doesn't belong in a batch."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/aggregate/aggregator.ts",
+      "line": 48,
+      "title": "The content-free row shape",
+      "description": "**Situation.** Every source (Copilot, Claude) must emit rows in one neutral shape for aggregation.\n\n**Mechanism.** `AggregationRow` carries only non-identifying dimensions and measures — operation, model, repository, token counts, latency — no prompts, completions, paths, or names.\n\n**Implication.** Because the *input* to aggregation is already content-free, there's no raw text present to accidentally serialize downstream.\n\n**Gotcha.** `repository` is the one string field, and it is constrained/validated (allow-list on send, regex on ingest) precisely because a free string is the riskiest member of this shape."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/aggregate/aggregator.ts",
+      "line": 32,
+      "title": "Operation allow-list",
+      "description": "**Situation.** Only a fixed set of operations is meaningful to aggregate; anything else is noise or a bug.\n\n**Mechanism.** `VALID_OPERATIONS` is a `ReadonlySet` of the allowed operation strings, and `buildBatch` guards every row against it (line 131), dropping unknown operations.\n\n**Implication.** The batch can only contain vetted operation categories, so the server sees a closed vocabulary it can validate identically.\n\n**Gotcha.** A new operation must be added here *and* to the server's `AllowedOperations` (Tour 7) — the two allow-lists must stay in lockstep or valid data gets rejected."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/aggregate/models.ts",
+      "line": 31,
+      "title": "Latency as a histogram, not values",
+      "description": "**Situation.** Latency is useful analytics, but raw per-request latencies could be a fingerprinting vector.\n\n**Mechanism.** `LATENCY_BOUNDS_MS` defines fixed histogram bucket boundaries; the batch reports *counts per bucket*, never individual timings.\n\n**Implication.** The dashboard can approximate percentiles (Tour 8) from bucket counts while the extension discloses only coarse distributions.\n\n**Gotcha.** The server requires the histogram to match these exact bounds; changing them is a coordinated schema change, not a local tweak."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/aggregate/pseudonymizer.ts",
+      "line": 76,
+      "title": "Deriving an identity input",
+      "description": "**Situation.** Org analytics want a stable \"active developers\" count, which needs a per-developer key — but not a real identity.\n\n**Mechanism.** `getIdentityInput(workspaceCwd, machineId)` resolves a stable local identity seed (machine id / workspace) into a normalized input string.\n\n**Implication.** The seed is computed locally and only ever fed into the one-way hash next — the raw seed itself is never transmitted.\n\n**Gotcha.** Identity is derived from local machine signals, so the same developer maps consistently — enabling distinct-counts — without the server learning who they are."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/aggregate/pseudonymizer.ts",
+      "line": 49,
+      "title": "One-way pseudonymization",
+      "description": "**Situation.** The identity input must become an opaque token that cannot be reversed to a person.\n\n**Mechanism.** `computeDeveloperId(saltHex, identityInput)` returns `dev_` + the first 16 bytes of `HMAC-SHA256(salt, input)` as hex — a `^dev_[0-9a-f]{32}$` string.\n\n**Implication.** Without the org's secret salt (which never leaves the machine), the pseudonym is not reversible, satisfying the schema's PII-exclusion guarantee.\n\n**Gotcha.** Determinism depends on a *stable* salt — hence the salt is created once and persisted in SecretStorage (next step), not regenerated per run."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/secrets/secretManager.ts",
+      "line": 67,
+      "title": "The salt that never leaves",
+      "description": "**Situation.** The HMAC salt is the secret that makes pseudonyms both stable and irreversible; it must be protected.\n\n**Mechanism.** `getOrCreatePseudonymSalt()` lazily generates a random salt and stores it under `SecretManager.PSEUDONYM_SALT` (line 26) in VS Code SecretStorage, returning the existing one thereafter.\n\n**Implication.** The salt lives only in the OS secret store; it is used to compute `dev_` ids but is *never* included in any batch, so the server can never de-pseudonymize.\n\n**Gotcha.** Deleting the salt (or moving machines) rotates the pseudonym — the same human then counts as a new developer id. That's an accepted trade-off for keeping the salt purely local."
+    },
+    {
+      "file": "schemas/aggregate-batch.schema.json",
+      "line": 44,
+      "title": "The schema forbids PII structurally",
+      "description": "**Situation.** Even if code had a bug, the wire contract itself should make PII impossible.\n\n**Mechanism.** The `pseudonymousDeveloperId` field is pinned to `\"pattern\": \"^dev_[0-9a-f]{32}$\"` — a shape an email, username, or free-text value cannot satisfy.\n\n**Implication.** Both the extension (before send) and the dashboard (on ingest) validate against this pattern, so a stray identity string is rejected on *both* ends.\n\n**Gotcha.** This is defense in depth layered on the `computeDeveloperId` output — the code produces the right shape, and the schema refuses anything else."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/consent/consentManager.ts",
+      "line": 49,
+      "title": "Gate 1: explicit consent",
+      "description": "**Situation.** Cloud sharing must be opt-in and revocable, never assumed.\n\n**Mechanism.** `canSync(secrets)` combines `isConsented()` (line 27, backed by `CONSENT_KEY` in globalState, default false) with the presence of an API key, so consent alone isn't enough.\n\n**Implication.** A user who never explicitly consents never syncs — the default is silence.\n\n**Gotcha.** Consent state lives in `globalState`, not settings, so it isn't accidentally committed or synced via Settings Sync as a shareable value."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/consent/syncGate.ts",
+      "line": 21,
+      "title": "The double gate, distilled",
+      "description": "**Situation.** The full precondition for sync must be one testable predicate.\n\n**Mechanism.** `computeCanSync(state)` returns true only when *both* consent is granted *and* an API key exists; `describeSyncBlock(state)` (line 29) explains, for the UI, exactly which condition is missing.\n\n**Implication.** \"Are we allowed to upload?\" is a single pure function — easy to test and impossible to satisfy by accident.\n\n**Gotcha.** Missing *either* input blocks sync; the descriptive helper is what turns a blocked state into an actionable message in the Sync view."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/sync/syncEngine.ts",
+      "line": 195,
+      "title": "The engine enforces the gate",
+      "description": "**Situation.** The `SyncEngine` (class at line 143) is the only uploader; it must refuse to run when the gate is closed.\n\n**Mechanism.** Before doing any work it evaluates `if (!computeCanSync(gateState)) { ... }` and bails out — no aggregation, no network.\n\n**Implication.** The gate isn't advisory UI; it's structurally in front of the one code path that can transmit, so a closed gate means zero bytes sent.\n\n**Gotcha.** The gate is re-checked here at send time (not just when the UI rendered), so revoking consent takes effect on the very next attempt."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/sync/syncEngine.ts",
+      "line": 269,
+      "title": "Repository allow-list filter",
+      "description": "**Situation.** Even when syncing, a team may want only certain repositories included.\n\n**Mechanism.** Rows are filtered by `isRepositoryIncluded(r.repository, policy)`, so only allow-listed repositories contribute to the batch.\n\n**Implication.** Repository scoping happens *before* the batch is built, so excluded repos never appear in the payload at all.\n\n**Gotcha.** This is the same `repository` grouping key from the Sessions tree (Tour 3) — its role as an allow-list is why it's the one string the contract permits."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/sync/syncEngine.ts",
+      "line": 274,
+      "title": "Assemble, then send",
+      "description": "**Situation.** With the gate open and rows filtered, the engine composes the final batch.\n\n**Mechanism.** It computes `developerId = computeDeveloperId(saltHex, identity.input)` (line 273), calls `buildBatch({...})` (line 274) to produce the schema-shaped payload, then hands it to `sendWithRetry(() => client.sendBatch(batch))` (line 284).\n\n**Implication.** Every privacy control converges here: gated, filtered, pseudonymized, aggregated — only then does a network call get scheduled.\n\n**Gotcha.** `sendWithRetry` adds bounded retries for transient failures; it does not weaken the gate — a gate failure short-circuits long before this line."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/sync/syncClient.ts",
+      "line": 101,
+      "title": "POST to a hardcoded URL",
+      "description": "**Situation.** The batch must go to the dashboard's ingestion endpoint and nowhere else.\n\n**Mechanism.** `sendBatch` (line 94) builds the request against `joinUrl(baseUrl, '/api/ingest/aggregate')` (line 101), where `baseUrl` is a hardcoded constant, and attaches the API key for authentication.\n\n**Implication.** Because the destination isn't a user setting, a batch can't be redirected to an attacker-controlled host via config — the target is fixed in code.\n\n**Gotcha.** There's a sibling `sendContextInsights` (line 125) posting to `/api/ingest/context-insights` for Tour 9's data; both share this hardcoded-base discipline."
+    },
+    {
+      "file": "src/extension/agent-observability-vscode/src/sync/scheduler.ts",
+      "line": 51,
+      "title": "Off by default, and rate-limited",
+      "description": "**Situation.** Nothing should sync unless the user turned it on, and even then not too frequently.\n\n**Mechanism.** `SyncScheduler` (line 29) checks `if (!this.config.isSyncEnabled())` (line 51) and does nothing when disabled (the default), and enforces a minimum interval between runs when enabled.\n\n**Implication.** The safe state is the default state: install the extension and, with no consent/key/enablement, it is a purely local tool.\n\n**Gotcha.** Enabling sync still requires the double gate to pass — the scheduler decides *when* to try, while `computeCanSync` decides *whether* it's allowed."
+    },
+    {
+      "title": "Sync recap",
+      "description": "This is the whole outbound story: local rows → **content-free** `AggregationRow`s → `buildBatch` (allow-listed operations, **histogram** latencies) → **irreversible** `dev_` pseudonym (salt kept in SecretStorage) → **double gate** (`computeCanSync`: consent + API key) enforced *inside* `SyncEngine` → **repository allow-list** → POST to a **hardcoded** `/api/ingest/aggregate` — all **off by default**.\n\nThat batch now crosses to the consumer. Continue on the dashboard side with **Dashboard Ingestion API: Auth, Strict Deserialize, Validate, Store**."
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Context Hotspots: Scoring and Rendering Friction",
+  "description": "The dashboard's context-friction analytics, end to end. See how a separate context-insights aggregate batch (its own privacy-safe schema) is read back, grouped per context file, and scored with a weighted composite (skip + friction + token + frequency) so teams can see which instruction/context files agents skip or that correlate with errors — then ranked into a Radzen bar chart. Ninth and final in the series.",
+  "steps": [
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/ContextHotspots.razor",
+      "line": 1,
+      "title": "The hotspots page",
+      "description": "**Situation.** `@page \"/context-hotspots\"` surfaces which context/instruction files are causing friction for agents — being skipped, or co-occurring with errors and deviations.\n\n**Mechanism.** It injects `IContextHotspotAnalyticsService` (line 2) and renders a ranked bar chart plus a table, filtered by a repository and a sprint window.\n\n**Implication.** This turns the context-insights aggregate stream into an actionable \"fix these files\" view — the most product-specific analytics surface.\n\n**Gotcha.** It's fed by a *different* ingestion path than the main aggregates (`/api/ingest/context-insights`), with its own schema — the two analytics families are parallel, not shared."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/ContextHotspots.razor",
+      "line": 156,
+      "title": "The sprint-window filter",
+      "description": "**Situation.** Friction is best judged over a recent window (a sprint), not all time.\n\n**Mechanism.** A `<select>` bound to `sprintWeeks` (line 36, default 2 at line 153) drives `Lookback => TimeSpan.FromDays(sprintWeeks * 7)` (line 156); changing it calls `ReloadAsync`.\n\n**Implication.** This `TimeSpan` is the filter passed into every hotspot query — the same lookback pattern as the analytics pages (Tour 8), just user-adjustable here.\n\n**Gotcha.** `@bind:after=\"ReloadAsync\"` re-runs the query on every change, so the chart reflows immediately when the window changes."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/ContextHotspots.razor",
+      "line": 172,
+      "title": "Fetching hotspots",
+      "description": "**Situation.** With a repository and lookback chosen, the page requests the scored hotspots.\n\n**Mechanism.** `hotspots = await Hotspots.GetHotspotsAsync(repo, Lookback)` (line 172), after populating the repository dropdown via `GetRepositoriesAsync(Lookback)` (line 170).\n\n**Implication.** The page holds the fully-scored list and merely presents it; all ranking logic lives in the service, examined next.\n\n**Gotcha.** `repo` scopes the query to one repository, so hotspots are compared within a repo rather than mixing files across unrelated codebases."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/ContextHotspotAnalyticsService.cs",
+      "line": 70,
+      "title": "Query X: computing hotspots",
+      "description": "**Situation.** This is the query that turns stored context-insight rows into ranked hotspots.\n\n**Mechanism.** `GetHotspotsAsync(repo, lookback, ...)` reads the windowed rows, groups them per context file, sums the additive measures (applied/skipped/error/deviation counts), and scores each group.\n\n**Implication.** One method owns read + group + score + order, producing exactly what the page binds — the \"query X\" for this feature.\n\n**Gotcha.** Some measures aren't additive (e.g. a max token estimate); the grouping must recombine those correctly rather than summing, per the schema's own note."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/ContextHotspotAnalyticsService.cs",
+      "line": 157,
+      "title": "Reading the windowed rows",
+      "description": "**Situation.** Scoring starts from the stored context-insight rows inside the lookback.\n\n**Mechanism.** `ReadRowsAsync(lookback, ...)` queries `TableContextInsightStore.QueryRowsAsync` (Tour 7's sibling store) and filters to the window.\n\n**Implication.** As with the main analytics, the `TimeSpan` becomes the actual data filter, and results are org-partition-scoped by the store.\n\n**Gotcha.** Both `GetRepositoriesAsync` and `GetHotspotsAsync` funnel through this one read, so the repo dropdown and the chart always agree on the underlying dataset."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/ContextHotspotAnalyticsService.cs",
+      "line": 32,
+      "title": "The scoring weights",
+      "description": "**Situation.** \"Friction\" is subjective, so the score is a transparent, tunable weighting of four signals.\n\n**Mechanism.** Four constants define the mix: `SkipWeight = 0.30`, `FrictionWeight = 0.30`, `TokenWeight = 0.20`, `FrequencyWeight = 0.20` (lines 32–35), documented in the class summary above them.\n\n**Implication.** Weights favor *actionable* problems (a file agents skip, or that co-occurs with errors/deviations) over merely large or frequent files.\n\n**Gotcha.** Because the weights are named constants (not magic numbers inline), re-tuning the model is a one-line, reviewable change."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/ContextHotspotAnalyticsService.cs",
+      "line": 121,
+      "title": "The composite score",
+      "description": "**Situation.** The four normalized sub-scores must combine into a single 0–100 rank.\n\n**Mechanism.** Each sub-score is clamped to [0,1] (skip at line 115, friction at 117), then combined: `100 × (SkipWeight·skip + FrictionWeight·friction + TokenWeight·token + FrequencyWeight·frequency)` (line 121).\n\n**Implication.** Every hotspot gets a comparable score on one scale, which is what the bar chart sorts and renders.\n\n**Gotcha.** Clamping to [0,1] before weighting means a single runaway signal can't dominate past its weight — the ceiling keeps the blend honest."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Models/ContextHotspot.cs",
+      "line": 21,
+      "title": "The hotspot model",
+      "description": "**Situation.** The service and page share a record describing one scored context file.\n\n**Mechanism.** `ContextHotspot` (line 21) carries the counts, the final `HotspotScore` (line 45), and derived helpers like `SkipRate => (applied+skipped) > 0 ? ... ` (line 51).\n\n**Implication.** The page can show both the headline score and the underlying rates, so a high score is explainable (\"skipped 80% of the time\") rather than opaque.\n\n**Gotcha.** `SkipRate` guards its denominator (`> 0`), avoiding a divide-by-zero for files that were neither applied nor skipped in the window."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/ContextHotspots.razor",
+      "line": 160,
+      "title": "Ranking into a bar chart",
+      "description": "**Situation.** Users want the worst offenders first, capped to a readable number.\n\n**Mechanism.** `TopBars` (line 160) projects the top hotspots into `{ Label, Score }` bars, bound to `<RadzenBarSeries Data=\"@TopBars\" CategoryProperty=\"Label\" ValueProperty=\"Score\" />` (line 72).\n\n**Implication.** The composite score computed in the service is what orders the bars — the chart is a direct picture of the scoring model.\n\n**Gotcha.** `TopBars` truncates to the leading entries; the full set still appears in the page's table, so nothing is lost, just prioritized."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/ContextHotspotAnalyticsService.cs",
+      "line": 56,
+      "title": "Populating the repo filter",
+      "description": "**Situation.** The repository dropdown must list only repositories that actually have context-insight data.\n\n**Mechanism.** `GetRepositoriesAsync(lookback, ...)` reads the same windowed rows and returns their distinct repositories.\n\n**Implication.** The filter can never offer a repo with no data, so selecting one always yields a populated chart.\n\n**Gotcha.** Repository values here are subject to the same ingest-time validation as the main pipeline — no raw path can appear as an option."
+    },
+    {
+      "file": "schemas/context-insights-batch.schema.json",
+      "line": 4,
+      "title": "A separate privacy-safe contract",
+      "description": "**Situation.** Context insights are a distinct data family, so they have their own wire schema rather than overloading the aggregate batch.\n\n**Mechanism.** The `Context-Insights Batch (v1)` schema is `additionalProperties: false` throughout (line 72), scoped to a `pseudonymousDeveloperId` (line 40), and each row carries a `rowKey` idempotency hint (line 97) at the grain (bucket, repository, contextFile, category).\n\n**Implication.** The same privacy guarantees as the aggregate batch apply here — closed schema, opaque identity — while adding the `contextFile` dimension needed to rank files.\n\n**Gotcha.** Correctness relies on per-row upsert by `rowKey` (latest-wins), *not* on batch-id dedup — so overlapping windows converge instead of double-counting."
+    },
+    {
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Ingestion/TableContextInsightStore.cs",
+      "line": 29,
+      "title": "Idempotent per-row storage",
+      "description": "**Situation.** Like aggregates, context-insight batches may be re-sent, so storage must converge.\n\n**Mechanism.** `UpsertRowsAsync` (line 29) writes each row into the `IngestionContextInsights` table (name at line 13) keyed by `rowKey`, and `QueryRowsAsync` (line 46) reads them back for the analytics service.\n\n**Implication.** This closes the loop: extension → `/api/ingest/context-insights` → this store → `ReadRowsAsync` → scoring → chart.\n\n**Gotcha.** Because dedup is by `rowKey` upsert, re-uploading a window is safe — the store is the authority on idempotency, exactly as the schema states."
+    },
+    {
+      "title": "Series complete",
+      "description": "You've now toured the whole platform end to end. On the **producer** (extension): the split-model architecture, local telemetry ingestion (snapshot + WAL replay), the Overview/Sessions views, the flagship session-detail **token-trend** render, local workflow-deviation detection, and the single privacy-safe **aggregation + sync** path. On the **consumer** (dashboard): authenticated **ingestion**, the **analytics** pages, and this **context-hotspots** scoring surface.\n\nThroughout, one invariant held: raw content never crosses the boundary — only closed-schema, `additionalProperties: false`, pseudonymized aggregates do. To revisit the whole flow, restart from **Extension Architecture: The Split Model and Activation Wiring**."
+    }
+  ]
+}
