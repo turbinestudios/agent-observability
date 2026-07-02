@@ -363,6 +363,7 @@ export function activate(context: vscode.ExtensionContext): void {
     syncEngine,
     openSession: (sourceId, sessionKey) => detailPanels.open(sourceId, sessionKey),
     openCombinedSession: (sessionList) => detailPanels.openCombined(sessionList),
+    openRepositoryDetail: (repos) => detailPanels.openRepository(repos),
     refreshSessionDetail: () => detailPanels.refreshActive(),
     // LOCAL-ONLY preview of the outgoing aggregate payload. Builds a real batch
     // from local telemetry using the SecretStorage salt + local git identity and

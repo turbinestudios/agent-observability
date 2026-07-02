@@ -10,8 +10,13 @@ import { AcceptedMissingConfig } from '../context/contextAnalyzer';
 import {
   CombinedSessionSection,
   CostMode,
+  RepositoryDetailSection,
+  RepositoryDetailView,
+  repoShortName,
   renderCombinedSessionDetailHtml,
   renderCombinedSessionDetailContent,
+  renderRepositoryDetailHtml,
+  renderRepositoryDetailContent,
   renderSessionDetailHtml,
   renderSessionDetailContent,
 } from './sessionDetailHtml';
@@ -23,6 +28,12 @@ const VIEW_TYPE = 'agentObservability.sessionDetail';
 export interface SourceSession {
   sourceId: string;
   sessionKey: string;
+}
+
+/** A repository addressed by its source + sanitized repository name. */
+export interface SourceRepository {
+  sourceId: string;
+  repository: string;
 }
 
 /**
@@ -143,6 +154,61 @@ export class SessionDetailPanelManager {
     });
 
     this.renderCombined(panel, sourceId, keys);
+  }
+
+  /**
+   * Open (or reveal) a repository-detail panel: aggregate totals over EVERY
+   * session of one or more repositories. Selections spanning sources are narrowed
+   * to the FIRST source present (one cost basis per card, like
+   * {@link openCombined}). Both sources list only root sessions (Claude folds
+   * sub-agent transcripts into their parent; Copilot lists human-initiated UUID
+   * roots only), so a repo-wide merge sums each agent tree exactly once — up to
+   * the rare same-tree overlap documented on
+   * {@link combineSessionDetails combineSessionDetails' caveat}.
+   */
+  openRepository(repos: readonly SourceRepository[]): void {
+    const cleaned = repos.filter((r) => r.repository.length > 0);
+    if (cleaned.length === 0) {
+      return;
+    }
+    const sourceId = cleaned[0].sourceId;
+    const names = [...new Set(cleaned.filter((r) => r.sourceId === sourceId).map((r) => r.repository))].sort();
+    const dropped = cleaned.filter((r) => r.sourceId !== sourceId).length;
+    if (dropped > 0) {
+      const label = this.sources.get(sourceId)?.label ?? sourceId;
+      void vscode.window.showInformationMessage(
+        `Agent Observability: combined the ${label} repositories; ${dropped} repository(ies) from other sources were not combined (a combined view uses a single cost basis).`,
+      );
+    }
+
+    const panelKey = `repo:${sourceId}:${names.join('|')}`;
+    const existing = this.panels.get(panelKey);
+    if (existing !== undefined) {
+      existing.reveal(existing.viewColumn ?? vscode.ViewColumn.Active);
+      this.renderRepository(existing, sourceId, names);
+      return;
+    }
+
+    const title =
+      names.length === 1 ? `Repository ${repoShortName(names[0])}` : `Combined repositories (${names.length})`;
+    const panel = vscode.window.createWebviewPanel(
+      VIEW_TYPE,
+      title,
+      vscode.ViewColumn.Active,
+      // See the single-session panel: retained so live `update` messages survive
+      // the panel being hidden and re-shown.
+      { enableScripts: true, retainContextWhenHidden: true },
+    );
+    panel.iconPath = new vscode.ThemeIcon('repo');
+    this.panels.set(panelKey, panel);
+    this.rerenderers.set(panel, () => this.renderRepository(panel, sourceId, names));
+    this.trackActive(panel);
+    panel.onDidDispose(() => {
+      this.panels.delete(panelKey);
+      this.forget(panel);
+    });
+
+    this.renderRepository(panel, sourceId, names);
   }
 
   /**
@@ -314,6 +380,70 @@ export class SessionDetailPanelManager {
       return;
     }
     panel.webview.html = renderCombinedSessionDetailHtml({ combined, sections }, makeNonce(), costMode);
+    this.mounted.add(panel);
+  }
+
+  /**
+   * Render (or live-update) the REPOSITORY view: every listed session of each
+   * repository loaded and merged into one aggregate. Failed session loads are
+   * counted and surfaced in the header (never dropped silently), as is the
+   * source's truncation note. No per-turn deviations are computed — the view
+   * renders no timeline — so this stays cheap even for large repositories.
+   */
+  private renderRepository(panel: vscode.WebviewPanel, sourceId: string, repositories: readonly string[]): void {
+    const source = this.sources.get(sourceId);
+    if (source === undefined) {
+      this.renderMessage(panel, `Unknown telemetry source "${sourceId}".`);
+      return;
+    }
+    const details: SessionDetail[] = [];
+    const sections: RepositoryDetailSection[] = [];
+    let failed = 0;
+    let firstError: string | undefined;
+    const seen = new Set<string>();
+    for (const repository of repositories) {
+      const listed = source.listSessions(repository);
+      if (!listed.ok) {
+        firstError ??= listed.message;
+        sections.push({ repository, sessionCount: 0 });
+        continue;
+      }
+      let count = 0;
+      for (const summary of listed.value) {
+        if (seen.has(summary.sessionId)) {
+          continue; // defensive — a session belongs to exactly one repository
+        }
+        seen.add(summary.sessionId);
+        const detail = source.getSessionDetail(summary.sessionId);
+        if (detail.ok) {
+          details.push(detail.value);
+          count += 1;
+        } else {
+          failed += 1;
+        }
+      }
+      sections.push({ repository, sessionCount: count });
+    }
+    if (details.length === 0) {
+      this.renderMessage(panel, firstError ?? 'No sessions could be loaded for the selected repository(ies).');
+      return;
+    }
+    const view: RepositoryDetailView = {
+      combined: combineSessionDetails(details),
+      repositories: sections,
+      failedSessions: failed,
+      truncationNote: source.truncationNote?.(),
+    };
+    const costMode: CostMode = source.id === 'claude' ? 'usd' : 'aiu';
+
+    if (this.mounted.has(panel)) {
+      void panel.webview.postMessage({
+        type: 'update',
+        html: renderRepositoryDetailContent(view, costMode),
+      });
+      return;
+    }
+    panel.webview.html = renderRepositoryDetailHtml(view, makeNonce(), costMode);
     this.mounted.add(panel);
   }
 

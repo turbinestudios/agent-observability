@@ -56,6 +56,7 @@ const EXPECTED_COMMANDS = [
   'agentObservability.previewPayload',
   'agentObservability.openSession',
   'agentObservability.openCombinedSession',
+  'agentObservability.openRepository',
   'agentObservability.refreshSessionDetail',
   'agentObservability.openAssistant',
   'agentObservability.newChat',

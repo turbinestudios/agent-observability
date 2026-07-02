@@ -127,6 +127,12 @@
         "icon": "$(layers)"
       },
       {
+        "command": "agentObservability.openRepository",
+        "title": "Open Repository Details",
+        "category": "Agent Observability",
+        "icon": "$(graph)"
+      },
+      {
         "command": "agentObservability.refreshSessionDetail",
         "title": "Refresh Session Detail",
         "category": "Agent Observability",
@@ -173,6 +179,10 @@
           "when": "false"
         },
         {
+          "command": "agentObservability.openRepository",
+          "when": "false"
+        },
+        {
           "command": "agentObservability.refreshSessionDetail",
           "when": "false"
         }
@@ -181,6 +191,16 @@
         {
           "command": "agentObservability.openCombinedSession",
           "when": "view == agentObservability.sessions && viewItem == agentObservability.sessionItem",
+          "group": "navigation"
+        },
+        {
+          "command": "agentObservability.openRepository",
+          "when": "view == agentObservability.sessions && viewItem == agentObservability.repositoryItem",
+          "group": "inline"
+        },
+        {
+          "command": "agentObservability.openRepository",
+          "when": "view == agentObservability.sessions && viewItem == agentObservability.repositoryItem",
           "group": "navigation"
         }
       ],

@@ -11,6 +11,7 @@ import {
 import { WorkflowDeviation } from '../deviation/models';
 import { SessionContextAnalysis, AgentContextAnalysis } from '../context/models';
 import { aiuToUsd } from '../telemetry/pricing';
+import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 import { escapeHtml } from './escapeHtml';
 
 /**
@@ -242,6 +243,139 @@ function renderCombinedHeader(summary: CombinedSummary): string {
   </header>`;
 }
 
+/** One covered repository and how many of its sessions loaded into the aggregate. */
+export interface RepositoryDetailSection {
+  /** Sanitized repository URL (`https://host/owner/repo`) or the `unknown` bucket. */
+  repository: string;
+  /** Sessions of this repository successfully included in the merged totals. */
+  sessionCount: number;
+}
+
+/**
+ * Everything the repository-detail renderer needs, assembled by the panel: the
+ * merged whole-tree rollups over EVERY session of the selected repository(ies),
+ * plus which repositories are covered (so the combined view can say what it
+ * aggregates) and what was left out — failed session loads and a source's
+ * session cap are surfaced in the header, never dropped silently.
+ */
+export interface RepositoryDetailView {
+  combined: CombinedSessionDetail;
+  repositories: readonly RepositoryDetailSection[];
+  /** Sessions that failed to load and are excluded from the totals. */
+  failedSessions: number;
+  /** The owning source's truncation note (e.g. Claude's most-recent-N cap). */
+  truncationNote?: string;
+}
+
+/**
+ * Pure HTML renderer for the LOCAL repository-detail webview: aggregate totals
+ * over every session of one or more repositories. Same security model and live
+ * shell as {@link renderSessionDetailHtml} (strict nonce-only CSP, everything
+ * escaped, `#live-root` + controller for non-disruptive `update` messages).
+ */
+export function renderRepositoryDetailHtml(
+  view: RepositoryDetailView,
+  nonce: string,
+  costMode: CostMode = 'aiu',
+): string {
+  const csp = [
+    "default-src 'none'",
+    `style-src 'nonce-${nonce}'`,
+    `script-src 'nonce-${nonce}'`,
+    "img-src 'none'",
+    "font-src 'none'",
+  ].join('; ');
+  const title =
+    view.repositories.length === 1
+      ? `Repository ${repoShortName(view.repositories[0].repository)}`
+      : `Combined repositories (${view.repositories.length})`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(title)}</title>
+  <style nonce="${nonce}">${STYLE}</style>
+</head>
+<body>
+  <div id="live-root">${renderRepositoryDetailContent(view, costMode)}</div>
+  <script nonce="${nonce}">${WEBVIEW_CONTROLLER}</script>
+</body>
+</html>`;
+}
+
+/**
+ * The mutable BODY of the repository view: header (which repositories, session
+ * counts, exclusion notes) + the "Agent run totals" tiles + the merged main/sub-
+ * agent tables. Deliberately NO token trend, dates/duration, timeline, or context
+ * analysis — a repository aggregate is a totals card, not a run narrative. Posted
+ * as an `update` message on live/refresh re-renders, like the session views.
+ */
+export function renderRepositoryDetailContent(view: RepositoryDetailView, costMode: CostMode = 'aiu'): string {
+  return `${renderRepositoryHeader(view)}
+  ${renderTreeSummaryTiles(view.combined.treeStats, costMode)}
+  ${renderMainAgentUsage(view.combined.agentUsage, costMode)}
+  ${renderSubAgentUsage(view.combined.agentUsage, costMode)}`;
+}
+
+/**
+ * Repository-view header. The single-repo form names the repository; the combined
+ * form counts them — and then lists every covered repository's full sanitized URL
+ * with its included-session count, so a combined card always says exactly what it
+ * aggregates. Exclusions (failed loads, source caps) are noted here too.
+ */
+function renderRepositoryHeader(view: RepositoryDetailView): string {
+  const repos = view.repositories;
+  const single = repos.length === 1;
+  const sessions = (n: number): string => `${formatInt(n)} session${n === 1 ? '' : 's'}`;
+  const rows = repos
+    .map(
+      (r) =>
+        `<div><dt>${escapeHtml(r.repository)}</dt><dd>${sessions(r.sessionCount)}${single ? ' included' : ''}</dd></div>`,
+    )
+    .join('\n');
+  const notes: string[] = [];
+  if (view.failedSessions > 0) {
+    notes.push(
+      `<p class="muted">${formatInt(view.failedSessions)} session(s) could not be loaded and are excluded from these totals.</p>`,
+    );
+  }
+  if (view.truncationNote !== undefined && view.truncationNote.length > 0) {
+    notes.push(`<p class="muted">${escapeHtml(view.truncationNote)}</p>`);
+  }
+  return `<header class="header">
+    <p class="eyebrow">${single ? 'Repository' : 'Combined repositories'}</p>
+    <h1>${single ? escapeHtml(repoShortName(repos[0].repository)) : `${num(repos.length)} repositories`}</h1>
+    <dl class="meta repo-list">
+      ${rows}
+    </dl>
+    ${notes.join('\n')}
+  </header>`;
+}
+
+/**
+ * Compact display name for a sanitized repository URL: `https://host/owner/repo`
+ * → `owner/repo` (last two path segments; the last one alone when there are
+ * fewer). The `unknown` bucket gets a readable label. Display-only — the full URL
+ * stays visible in the header's meta list (exported so the panel can title its
+ * editor tab with the same name). Callers escape the result.
+ */
+export function repoShortName(repository: string): string {
+  if (repository === UNKNOWN_REPOSITORY) {
+    return 'Unknown repository';
+  }
+  const segments = repository
+    .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, '')
+    .split('/')
+    .filter((s) => s.length > 0);
+  if (segments.length === 0) {
+    return repository;
+  }
+  return segments.slice(-2).join('/');
+}
+
 /**
  * One session's section in the combined view: a `<details>` (open when `open`)
  * whose summary is the session's id/title and headline counts, and whose body is
@@ -326,6 +460,22 @@ function renderTreeSummary(
   trendSessions?: readonly TrendSession[],
   costMode: CostMode = 'aiu',
 ): string {
+  return `<section class="panel">
+    <div class="panel-heading"><h2>Agent run totals</h2><span>incl. spawned sub-agents</span></div>
+    <div class="tree-row">
+      ${renderTokenTrend(modelTurns, trendSessions)}
+      <dl class="tree-totals">
+        ${treeTotalsRows(stats, costMode)}
+      </dl>
+    </div>
+  </section>`;
+}
+
+/**
+ * The stat-tile rows of the "Agent run totals" card, shared by the session views
+ * (beside the token trend) and the repository view (tiles only, no trend).
+ */
+function treeTotalsRows(stats: SessionTreeStats, costMode: CostMode): string {
   // Cost basis differs by source: Copilot shows AIU (with derived $); Claude
   // shows the token-priced USD estimate. Exactly one tile is rendered.
   const costTile =
@@ -349,21 +499,26 @@ function renderTreeSummary(
     { acr: 'nLOC', label: 'Lines of Code (removed)', value: formatInt(stats.linesOfCodeRemoved) },
     { acr: 'nLOD', label: 'Lines of Documentation (removed)', value: formatInt(stats.linesOfDocRemoved) },
   ];
-  const rows = totals
+  return totals
     .map(
       (t) =>
         `<div class="tt-row"><dt title="${escapeHtml(t.label)}">${escapeHtml(t.acr)}</dt><dd>${t.value}</dd></div>`,
     )
     .join('\n');
+}
 
+/**
+ * "Agent run totals" card without the token trend: just the stat tiles, spread
+ * across the panel's width. Used by the repository view, which aggregates entire
+ * repositories — a per-model-turn trend has no meaning there, so the tiles stand
+ * alone rather than beside a plot.
+ */
+function renderTreeSummaryTiles(stats: SessionTreeStats, costMode: CostMode): string {
   return `<section class="panel">
-    <div class="panel-heading"><h2>Agent run totals</h2><span>incl. spawned sub-agents</span></div>
-    <div class="tree-row">
-      ${renderTokenTrend(modelTurns, trendSessions)}
-      <dl class="tree-totals">
-        ${rows}
-      </dl>
-    </div>
+    <div class="panel-heading"><h2>Agent run totals</h2><span>all sessions, incl. spawned sub-agents</span></div>
+    <dl class="tree-totals tree-totals-grid">
+      ${treeTotalsRows(stats, costMode)}
+    </dl>
   </section>`;
 }
 
@@ -1392,6 +1547,7 @@ const STYLE = `
   .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .35rem .9rem; margin: .75rem 0 0; }
   .meta dt { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); }
   .meta dd { margin: 0; word-break: break-word; }
+  .repo-list dt { text-transform: none; letter-spacing: normal; }
   .panel { border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); border-radius: 6px; padding: .75rem .9rem; margin-bottom: 1rem; background: var(--vscode-editorWidget-background); }
   .panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .5rem; }
   .panel-heading span { color: var(--vscode-descriptionForeground); font-size: .8rem; }
@@ -1461,6 +1617,7 @@ const STYLE = `
   .tree-totals .tt-row:last-child { border-bottom: none; }
   .tree-totals dt { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); }
   .tree-totals dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .tree-totals-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .3rem 1.2rem; margin-top: .5rem; }
   .deviation-list { display: flex; flex-direction: column; gap: .6rem; }
   .deviation { border-left: 3px solid var(--vscode-editorWarning-foreground, #c90); padding: .4rem .6rem; background: var(--vscode-inputValidation-warningBackground, transparent); border-radius: 0 4px 4px 0; }
   .deviation p { margin: .3rem 0; }
