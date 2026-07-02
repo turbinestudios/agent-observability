@@ -1,0 +1,11 @@
+{
+  "theme": "default",
+  "sequence": {
+    "mirrorActors": false,
+    "actorMargin": 46,
+    "boxMargin": 8
+  },
+  "themeVariables": {
+    "fontSize": "15px"
+  }
+}

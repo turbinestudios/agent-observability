@@ -1,0 +1,62 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "2: Session detail & token trend",
+  "description": "End-to-end: one click on a session, through the ONE method that reads raw content, to the inline SVG token-trend graph. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
+  "nextTour": "3: Live updates",
+  "steps": [
+    {
+      "title": "Step 1 — Click a session",
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
+      "line": 253,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-10.svg)\n\n**▶ Step 1 of 9 in the sequence diagram — `Dev → sessionDetailPanel: Click a session`**\n\nClicking a session invokes the panel's `render(panel, sourceId, sessionKey)`. The first render mounts the full webview document; later renders live-update just the body (see step 9)."
+    },
+    {
+      "title": "Step 2 — Ask the source for detail",
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
+      "line": 258,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-11.svg)\n\n**▶ Step 2 of 9 in the sequence diagram — `sessionDetailPanel → TelemetryService: getSessionDetail(key)`**\n\n`render` asks the owning source for the full detail with `source.getSessionDetail(sessionKey)`. This is the click-to-data hop; the panel itself stores nothing."
+    },
+    {
+      "title": "Step 3 — Service delegates to the DB",
+      "file": "src/extension/agent-observability-vscode/src/telemetry/telemetryService.ts",
+      "line": 426,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-12.svg)\n\n**▶ Step 3 of 9 in the sequence diagram — `TelemetryService → TelemetryDatabase: getSessionDetail()`**\n\nThe Copilot source forwards to `TelemetryService.getSessionDetail`, which opens a read-only snapshot and delegates down to the database layer."
+    },
+    {
+      "title": "Step 4 — The ONLY raw-content read",
+      "file": "src/extension/agent-observability-vscode/src/telemetry/database.ts",
+      "line": 639,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-13.svg)\n\n**▶ Step 4 of 9 in the sequence diagram — `TelemetryDatabase → TelemetryService: SessionDetail (turns, tokens)`**\n\n`TelemetryDatabase.getSessionDetail` is, per its own comment just above (line 630), the ONLY method that reads raw content — prompts, completions, tool I/O. It assembles a `SessionDetail` that stays in-process and never reaches aggregation or sync."
+    },
+    {
+      "title": "Step 5 — Detail lands in the panel",
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
+      "line": 263,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-14.svg)\n\n**▶ Step 5 of 9 in the sequence diagram — `TelemetryService → sessionDetailPanel: SessionDetail`**\n\nBack in the panel, `const detail = result.value` holds the assembled turns, token counts, and turn tree. From here on everything is pure, local rendering."
+    },
+    {
+      "title": "Step 6 — Render the document",
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
+      "line": 279,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-15.svg)\n\n**▶ Step 6 of 9 in the sequence diagram — `sessionDetailPanel → sessionDetailHtml: renderSessionDetailHtml()`**\n\nOn first mount the panel sets `panel.webview.html = renderSessionDetailHtml(detail, ...)`, building the whole document — styles, tabs, and a per-render nonce for the content security policy."
+    },
+    {
+      "title": "Step 7 — Call renderTokenTrend",
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailHtml.ts",
+      "line": 362,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-16.svg)\n\n**▶ Step 7 of 9 in the sequence diagram — `sessionDetailHtml → sessionDetailHtml: renderTokenTrend(modelTurns)`**\n\nInside the content, `renderSessionDetailContent` calls `renderTokenTrend(modelTurns, trendSessions)` to draw the per-turn token trend graph."
+    },
+    {
+      "title": "Step 8 — Build the inline SVG",
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailHtml.ts",
+      "line": 472,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-17.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `sessionDetailHtml → sessionDetailPanel: HTML + SVG trend graph`**\n\n`renderTokenTrend` (defined here) buckets the model turns and emits an inline SVG — input, cached, and output token polylines — with an empty state when there are fewer than two points. No client-side JS or chart library is involved."
+    },
+    {
+      "title": "Step 9 — Mount or live-update the webview",
+      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
+      "line": 273,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-18.svg)\n\n**▶ Step 9 of 9 in the sequence diagram — `sessionDetailPanel → Dev: webview shows detail`**\n\nThe rendered HTML reaches the webview. On the first render the document is mounted; on later renders the panel posts a `{ type: 'update' }` message so the in-page controller swaps the body without a reload — preserving open collapsibles, the active tab, and scroll."
+    }
+  ]
+}

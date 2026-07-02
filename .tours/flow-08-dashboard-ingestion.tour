@@ -1,0 +1,56 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "8: Dashboard ingestion",
+  "description": "End-to-end: the server side of the sync — authenticate the key, derive the org, validate the strict aggregate contract, and upsert buckets idempotently. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
+  "nextTour": "9: Dashboard analytics",
+  "steps": [
+    {
+      "title": "Step 1 — The ingest endpoint",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Ingestion/IngestionEndpoints.cs",
+      "line": 29,
+      "description": "![8: Dashboard ingestion](.tours/diagrams/d-54.svg)\n\n**▶ Step 1 of 8 in the sequence diagram — `Extension (syncClient) → IngestionEndpoints: POST /api/ingest/aggregate`**\n\nThe dashboard exposes `POST /api/ingest/aggregate`. This minimal-API handler is the server side of flow 7's upload."
+    },
+    {
+      "title": "Step 2 — Authenticate the key",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Ingestion/IngestionAuthenticator.cs",
+      "line": 86,
+      "description": "![8: Dashboard ingestion](.tours/diagrams/d-55.svg)\n\n**▶ Step 2 of 8 in the sequence diagram — `IngestionEndpoints → IngestionAuthenticator: AuthenticateAsync(key)`**\n\n`AuthenticateAsync` hashes the presented Bearer key and compares it in constant time against stored key records. A dummy comparison runs even when the key is unknown, so timing can't reveal validity."
+    },
+    {
+      "title": "Step 3 — Org from the key, or 401",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Ingestion/IngestionEndpoints.cs",
+      "line": 109,
+      "description": "![8: Dashboard ingestion](.tours/diagrams/d-56.svg)\n\n**▶ Step 3 of 8 in the sequence diagram — `IngestionAuthenticator → IngestionEndpoints: OrgId or 401`**\n\nA failed key returns 401. On success the handler carries the `OrgId` from the KEY RECORD — never from the payload — so a batch can't claim another org."
+    },
+    {
+      "title": "Step 4 — Validate the strict contract",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Ingestion/AggregateBatchValidator.cs",
+      "line": 58,
+      "description": "![8: Dashboard ingestion](.tours/diagrams/d-57.svg)\n\n**▶ Step 4 of 8 in the sequence diagram — `IngestionEndpoints → AggregateBatchValidator: Validate(batch)`**\n\n`Validate` enforces the aggregate contract: the batch and every bucket are `additionalProperties:false`, so any unexpected (potentially raw) field is rejected, plus range and shape checks."
+    },
+    {
+      "title": "Step 5 — Reject on any error",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Ingestion/IngestionEndpoints.cs",
+      "line": 139,
+      "description": "![8: Dashboard ingestion](.tours/diagrams/d-58.svg)\n\n**▶ Step 5 of 8 in the sequence diagram — `AggregateBatchValidator → IngestionEndpoints: ok or rejected`**\n\nAny validation error returns a 400 ValidationProblem and the batch is dropped — nothing partially valid is stored."
+    },
+    {
+      "title": "Step 6 — Upsert, scoped to the org",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Ingestion/IngestionEndpoints.cs",
+      "line": 146,
+      "description": "![8: Dashboard ingestion](.tours/diagrams/d-59.svg)\n\n**▶ Step 6 of 8 in the sequence diagram — `IngestionEndpoints → TableAggregateStore: UpsertBucketsAsync(orgId)`**\n\nA clean batch is persisted with `store.UpsertBucketsAsync(auth.OrgId!, batch)` — again scoped to the authenticated org, never the payload."
+    },
+    {
+      "title": "Step 7 — Idempotent storage write",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Ingestion/TableAggregateStore.cs",
+      "line": 29,
+      "description": "![8: Dashboard ingestion](.tours/diagrams/d-60.svg)\n\n**▶ Step 7 of 8 in the sequence diagram — `TableAggregateStore → IngestionEndpoints: stored`**\n\n`TableAggregateStore.UpsertBucketsAsync` writes each bucket to Azure Table Storage under a deterministic key, so re-sending the same window is idempotent (upsert, not duplicate)."
+    },
+    {
+      "title": "Step 8 — 200 accepted",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Ingestion/IngestionEndpoints.cs",
+      "line": 148,
+      "description": "![8: Dashboard ingestion](.tours/diagrams/d-61.svg)\n\n**▶ Step 8 of 8 in the sequence diagram — `IngestionEndpoints → Extension (syncClient): 200 accepted`**\n\nThe handler returns `200 Ok` with the accepted bucket count and batch id — the success flow 7 waits for before advancing its watermark."
+    }
+  ]
+}

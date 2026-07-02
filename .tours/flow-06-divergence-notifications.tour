@@ -1,0 +1,44 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "6: Divergence notifications",
+  "description": "End-to-end: how the notifier turns newly-detected workflow divergences into capped warning toasts with an Open-session action, without re-alerting on a startup backlog. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
+  "nextTour": "7: Aggregate sync (producer)",
+  "steps": [
+    {
+      "title": "Step 1 — Hook the refresh fan-out",
+      "file": "src/extension/agent-observability-vscode/src/notify/workflowDivergenceNotifier.ts",
+      "line": 75,
+      "description": "![6: Divergence notifications](.tours/diagrams/d-40.svg)\n\n**▶ Step 1 of 6 in the sequence diagram — `Live update → DivergenceNotifier: refresh() after new data`**\n\n`WorkflowDivergenceNotifier.refresh` is wired into the same live refresh fan-out as the views (flow 3). After every refresh it calls `scan()`."
+    },
+    {
+      "title": "Step 2 — Scan settled turns",
+      "file": "src/extension/agent-observability-vscode/src/notify/workflowDivergenceNotifier.ts",
+      "line": 90,
+      "description": "![6: Divergence notifications](.tours/diagrams/d-41.svg)\n\n**▶ Step 2 of 6 in the sequence diagram — `DivergenceNotifier → LocalDeviationDetector: scan() for divergences`**\n\n`scan` is a no-op unless notify-on-divergence is enabled and workflows are configured. It collects divergences only from SETTLED turns of recent sessions in configured repos — so an in-flight task isn't reported as \"missing later steps\"."
+    },
+    {
+      "title": "Step 3 — Diff against the baseline",
+      "file": "src/extension/agent-observability-vscode/src/notify/workflowDivergenceNotifier.ts",
+      "line": 106,
+      "description": "![6: Divergence notifications](.tours/diagrams/d-42.svg)\n\n**▶ Step 3 of 6 in the sequence diagram — `LocalDeviationDetector → DivergenceNotifier: new deviations vs baseline`**\n\n`selectNewDivergences` diffs the located set against the `seen` baseline, so only genuinely NEW divergences surface. The first scan primes the baseline silently — no backlog of toasts on startup."
+    },
+    {
+      "title": "Step 4 — Present the warnings",
+      "file": "src/extension/agent-observability-vscode/src/notify/workflowDivergenceNotifier.ts",
+      "line": 190,
+      "description": "![6: Divergence notifications](.tours/diagrams/d-43.svg)\n\n**▶ Step 4 of 6 in the sequence diagram — `DivergenceNotifier → VS Code UI: showWarningMessage()`**\n\n`notify` shows at most a capped number of toasts per scan, each describing one new divergence (workflow name, type, description), with a single overflow summary for the rest."
+    },
+    {
+      "title": "Step 5 — Warning + Open session action",
+      "file": "src/extension/agent-observability-vscode/src/notify/workflowDivergenceNotifier.ts",
+      "line": 196,
+      "description": "![6: Divergence notifications](.tours/diagrams/d-44.svg)\n\n**▶ Step 5 of 6 in the sequence diagram — `VS Code UI → Dev: notification + Open session`**\n\nEach toast is `showWarning(message, 'Open session')` — a VS Code warning with one action button. The message is built from local metadata only."
+    },
+    {
+      "title": "Step 6 — Open the session",
+      "file": "src/extension/agent-observability-vscode/src/notify/workflowDivergenceNotifier.ts",
+      "line": 198,
+      "description": "![6: Divergence notifications](.tours/diagrams/d-45.svg)\n\n**▶ Step 6 of 6 in the sequence diagram — `Dev → DivergenceNotifier: openSession() → detail panel`**\n\nIf the user clicks Open session, `openSession(sourceId, sessionKey)` opens the detail panel (flow 2) for that session — closing the loop from alert to evidence."
+    }
+  ]
+}

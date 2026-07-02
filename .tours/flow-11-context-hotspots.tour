@@ -1,0 +1,62 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "11: Context hotspots",
+  "description": "End-to-end: how per-file context-insight rows are scored by a transparent four-signal composite and ranked into the hotspots view. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
+  "nextTour": "12: AI Helper chat",
+  "steps": [
+    {
+      "title": "Step 1 — Open the hotspots page",
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/ContextHotspots.razor",
+      "line": 1,
+      "description": "![11: Context hotspots](.tours/diagrams/d-77.svg)\n\n**▶ Step 1 of 9 in the sequence diagram — `Viewer → ContextHotspots.razor: Open \"/context-hotspots\"`**\n\nThe `/context-hotspots` page ranks which customization files (instructions, prompts, agents, hooks) most deserve attention — from aggregate signals only, never file contents."
+    },
+    {
+      "title": "Step 2 — Load repositories",
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/ContextHotspots.razor",
+      "line": 170,
+      "description": "![11: Context hotspots](.tours/diagrams/d-78.svg)\n\n**▶ Step 2 of 9 in the sequence diagram — `ContextHotspots.razor → ContextHotspotService: GetRepositoriesAsync(lookback)`**\n\nOn load, `ReloadAsync` calls `Hotspots.GetRepositoriesAsync(Lookback)` to populate the repository filter for the selected sprint window."
+    },
+    {
+      "title": "Step 3 — Request the hotspots",
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/ContextHotspots.razor",
+      "line": 172,
+      "description": "![11: Context hotspots](.tours/diagrams/d-79.svg)\n\n**▶ Step 3 of 9 in the sequence diagram — `ContextHotspots.razor → ContextHotspotService: GetHotspotsAsync(repo, lookback)`**\n\nIt then calls `GetHotspotsAsync(repo, Lookback)` for the ranked files — optionally scoped to one repository."
+    },
+    {
+      "title": "Step 4 — Query context-insight rows",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Ingestion/TableContextInsightStore.cs",
+      "line": 46,
+      "description": "![11: Context hotspots](.tours/diagrams/d-80.svg)\n\n**▶ Step 4 of 9 in the sequence diagram — `ContextHotspotService → TableContextInsightStore: QueryRowsAsync(range)`**\n\nThe service reads the org's context-insight rows for the window via `QueryRowsAsync(orgId, from, to)`. These rows are per-file aggregate counts, not content."
+    },
+    {
+      "title": "Step 5 — Group by file",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/ContextHotspotAnalyticsService.cs",
+      "line": 75,
+      "description": "![11: Context hotspots](.tours/diagrams/d-81.svg)\n\n**▶ Step 5 of 9 in the sequence diagram — `TableContextInsightStore → ContextHotspotService: context-insight rows`**\n\n`GetHotspotsAsync` pulls those rows into memory and groups them by repository + context file, summing applied / skipped / token / error / deviation counts."
+    },
+    {
+      "title": "Step 6 — Composite hotspot score",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/ContextHotspotAnalyticsService.cs",
+      "line": 121,
+      "description": "![11: Context hotspots](.tours/diagrams/d-82.svg)\n\n**▶ Step 6 of 9 in the sequence diagram — `ContextHotspotService → ContextHotspotService: composite HotspotScore`**\n\nEach file gets four sub-scores normalized to 0–1 — skip rate, friction, token weight, frequency — combined into a transparent 0–100 `composite` (weights 30 / 30 / 20 / 20)."
+    },
+    {
+      "title": "Step 7 — Rank the hotspots",
+      "file": "src/dashboard/AgentObservability.Dashboard/Services/Analytics/ContextHotspotAnalyticsService.cs",
+      "line": 149,
+      "description": "![11: Context hotspots](.tours/diagrams/d-83.svg)\n\n**▶ Step 7 of 9 in the sequence diagram — `ContextHotspotService → ContextHotspots.razor: ContextHotspot[]`**\n\nFiles are ordered by descending `HotspotScore` (with deterministic tie-breakers) into the `ContextHotspot[]` returned to the page."
+    },
+    {
+      "title": "Step 8 — Project the top bars",
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/ContextHotspots.razor",
+      "line": 160,
+      "description": "![11: Context hotspots](.tours/diagrams/d-84.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `ContextHotspots.razor → Radzen bars: bind TopBars`**\n\nThe page projects the top 10 hotspots into `TopBars` for the chart."
+    },
+    {
+      "title": "Step 9 — Render the ranked bars",
+      "file": "src/dashboard/AgentObservability.Dashboard/Pages/ContextHotspots.razor",
+      "line": 72,
+      "description": "![11: Context hotspots](.tours/diagrams/d-85.svg)\n\n**▶ Step 9 of 9 in the sequence diagram — `Radzen bars → Viewer: ranked hotspot bars`**\n\n`RadzenBarSeries Data=@TopBars` renders the ranked hotspot bars, and the table below lists every file with its sub-scores — explicitly framed as co-occurrence, a prompt to investigate, not a claim of cause."
+    }
+  ]
+}

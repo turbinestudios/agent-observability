@@ -1,0 +1,13 @@
+# Coherence Check — Key Files
+#
+# Files and folders the PM agent must review after every implementation
+# task. Each entry specifies a path (file or directory glob) and a
+# purpose describing what to check for.
+#
+# To add new entries, append to the list below.
+
+files:
+  - path: ".tours"
+    purpose: >
+      Verify that any new tours are added to the `.tours` directory and that existing tours are updated as needed.
+      Ensure that tour files are coherent with the current state of the codebase and reflect any recent changes or additions.

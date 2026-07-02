@@ -1,0 +1,56 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "4: Telemetry archiving",
+  "description": "End-to-end: the single-writer background sweep that copies new Copilot spans into a durable local archive before Copilot rotates them away, then prunes to the retention window. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
+  "nextTour": "5: Workflow deviation markers",
+  "steps": [
+    {
+      "title": "Step 1 — Schedule the sweep",
+      "file": "src/extension/agent-observability-vscode/src/otel/copilotArchiver.ts",
+      "line": 92,
+      "description": "![4: Telemetry archiving](.tours/diagrams/d-25.svg)\n\n**▶ Step 1 of 8 in the sequence diagram — `Sweep timer → CopilotArchiver: start() / tick()`**\n\n`CopilotArchiver.start` schedules a periodic `tick`. Copilot rotates its telemetry databases and prunes old rows, so the archiver's job is to copy new spans into a durable local archive before they vanish."
+    },
+    {
+      "title": "Step 2 — Elect a single writer",
+      "file": "src/extension/agent-observability-vscode/src/otel/copilotArchiver.ts",
+      "line": 125,
+      "description": "![4: Telemetry archiving](.tours/diagrams/d-26.svg)\n\n**▶ Step 2 of 8 in the sequence diagram — `CopilotArchiver → WriterLease: tryAcquire() elect writer`**\n\nEach tick first calls `lease.tryAcquire()`. A `WriterLease` elects ONE writer across all open VS Code windows, so several windows never archive the same spans concurrently."
+    },
+    {
+      "title": "Step 3 — Writer or reader",
+      "file": "src/extension/agent-observability-vscode/src/otel/copilotArchiver.ts",
+      "line": 127,
+      "description": "![4: Telemetry archiving](.tours/diagrams/d-27.svg)\n\n**▶ Step 3 of 8 in the sequence diagram — `WriterLease → CopilotArchiver: writer or reader`**\n\nIf another window holds the lease, this instance is a pure reader — it drops its store and returns. Only the elected writer falls through to sweep."
+    },
+    {
+      "title": "Step 4 — Open the archive store",
+      "file": "src/extension/agent-observability-vscode/src/otel/copilotArchiver.ts",
+      "line": 132,
+      "description": "![4: Telemetry archiving](.tours/diagrams/d-28.svg)\n\n**▶ Step 4 of 8 in the sequence diagram — `CopilotArchiver → Archive DB: open IngestStore(archive)`**\n\nThe writer lazily opens the archive database (`new IngestStore(archiveDbPath)`) — the append-only local store that outlives Copilot's own rotation."
+    },
+    {
+      "title": "Step 5 — Snapshot each source",
+      "file": "src/extension/agent-observability-vscode/src/otel/copilotArchiver.ts",
+      "line": 172,
+      "description": "![4: Telemetry archiving](.tours/diagrams/d-29.svg)\n\n**▶ Step 5 of 8 in the sequence diagram — `CopilotArchiver → readonly snapshot: snapshot each Copilot source`**\n\nFor every Copilot source (never the archive itself), `sweepOnce` takes a read-only snapshot via `snapshotFactory` — the same WAL-replaying copy the views use, so archiving never mutates or races Copilot's live DB."
+    },
+    {
+      "title": "Step 6 — Read only new spans",
+      "file": "src/extension/agent-observability-vscode/src/otel/copilotArchiver.ts",
+      "line": 181,
+      "description": "![4: Telemetry archiving](.tours/diagrams/d-30.svg)\n\n**▶ Step 6 of 8 in the sequence diagram — `readonly snapshot → CopilotArchiver: new spans above watermark`**\n\nUsing the per-source watermark, `readSpansSince(reader, since)` reads only spans newer than the last sweep — incremental, so a large DB is never re-copied every tick."
+    },
+    {
+      "title": "Step 7 — Append and advance the watermark",
+      "file": "src/extension/agent-observability-vscode/src/otel/copilotArchiver.ts",
+      "line": 183,
+      "description": "![4: Telemetry archiving](.tours/diagrams/d-31.svg)\n\n**▶ Step 7 of 8 in the sequence diagram — `CopilotArchiver → Archive DB: write new spans`**\n\nNew spans are appended with `store.writeSpans(rows)`, and the watermark advances (minus a small grace) so the next sweep resumes exactly where this one stopped."
+    },
+    {
+      "title": "Step 8 — Prune to retention",
+      "file": "src/extension/agent-observability-vscode/src/otel/copilotArchiver.ts",
+      "line": 143,
+      "description": "![4: Telemetry archiving](.tours/diagrams/d-32.svg)\n\n**▶ Step 8 of 8 in the sequence diagram — `CopilotArchiver → Archive DB: prune(retention)`**\n\nAfter sweeping, `store.prune(retentionMs, now)` drops spans older than the retention window. Pruned rows sit below the watermark, so pruning never triggers a re-ingest loop."
+    }
+  ]
+}
