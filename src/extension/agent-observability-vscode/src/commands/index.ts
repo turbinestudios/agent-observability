@@ -20,6 +20,7 @@ export const Commands = {
   previewPayload: 'agentObservability.previewPayload',
   openSession: 'agentObservability.openSession',
   openCombinedSession: 'agentObservability.openCombinedSession',
+  openRepository: 'agentObservability.openRepository',
   refreshSessionDetail: 'agentObservability.refreshSessionDetail',
   openAssistant: 'agentObservability.openAssistant',
   newChat: 'agentObservability.newChat',
@@ -54,6 +55,8 @@ export interface CommandDeps {
   openSession: (sourceId: string, sessionKey: string) => void;
   /** Open a single LOCAL combined-detail webview over several sessions. */
   openCombinedSession: (sessions: Array<{ sourceId: string; sessionKey: string }>) => void;
+  /** Open a LOCAL repository-details webview over one or more repositories. */
+  openRepositoryDetail: (repos: Array<{ sourceId: string; repository: string }>) => void;
   /** Re-fetch local telemetry and redraw the focused session-detail webview. */
   refreshSessionDetail: () => void;
   /** Open the LOCAL aggregate-payload preview (Phase 5 surfaces real content). */
@@ -98,6 +101,7 @@ export function registerCommands(
     syncEngine,
     openSession,
     openCombinedSession,
+    openRepositoryDetail,
     refreshSessionDetail,
     previewPayload,
     configureSyncRepositories,
@@ -178,6 +182,16 @@ export function registerCommands(
     }
   });
 
+  // Open Repository Details — the inline (hover) button / context-menu action on
+  // repository rows in the Sessions view. A multi-selection of repository rows
+  // opens ONE combined repository view. All detail stays on-machine.
+  register(Commands.openRepository, (...args: unknown[]) => {
+    const repos = sourceRepositoriesFromCommandArgs(args);
+    if (repos.length > 0) {
+      openRepositoryDetail(repos);
+    }
+  });
+
   // Refresh Session Detail — title-bar button on the LOCAL session-detail webview
   // (single or combined). Re-snapshots local telemetry and redraws the focused
   // panel, the same fresh data a navigation click would load after a refresh.
@@ -226,6 +240,31 @@ function sourceSessionsFromCommandArgs(args: unknown[]): Array<{ sourceId: strin
     if (typeof n?.sessionKey === 'string' && n.sessionKey.length > 0) {
       const sourceId = typeof n.sourceId === 'string' && n.sourceId.length > 0 ? n.sourceId : 'copilot';
       out.push({ sourceId, sessionKey: n.sessionKey });
+    }
+  }
+  return out;
+}
+
+/**
+ * Extract (sourceId, repository) pairs from a tree invocation — the repository
+ * counterpart to {@link sourceSessionsFromCommandArgs}. Only repository rows carry
+ * `repository` (session rows carry `sessionKey` instead), so a mixed selection is
+ * filtered to repository rows; duplicates are collapsed.
+ */
+function sourceRepositoriesFromCommandArgs(args: unknown[]): Array<{ sourceId: string; repository: string }> {
+  const selection = Array.isArray(args[1]) ? (args[1] as unknown[]) : [args[0]];
+  const out: Array<{ sourceId: string; repository: string }> = [];
+  const seen = new Set<string>();
+  for (const node of selection) {
+    const n = node as { sourceId?: unknown; repository?: unknown; sessionKey?: unknown } | undefined;
+    if (typeof n?.repository !== 'string' || n.repository.length === 0 || typeof n?.sessionKey === 'string') {
+      continue;
+    }
+    const sourceId = typeof n.sourceId === 'string' && n.sourceId.length > 0 ? n.sourceId : 'copilot';
+    const key = `${sourceId}::${n.repository}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push({ sourceId, repository: n.repository });
     }
   }
   return out;
