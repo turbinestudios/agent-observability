@@ -261,6 +261,11 @@ export class SessionDetailPanelManager {
       return;
     }
     const detail = result.value;
+    // Rename the editor tab from the placeholder id to the session's name (the
+    // same LOCAL-ONLY title the Sessions list shows) once the detail is known.
+    if (detail.summary.title !== undefined && detail.summary.title.length > 0) {
+      panel.title = tabLabel(detail.summary.title);
+    }
     const turnDeviations = this.detectTurnDeviations(source, sessionKey, detail);
     const costMode: CostMode = source.id === 'claude' ? 'usd' : 'aiu';
 
@@ -387,6 +392,12 @@ function shortLabel(sessionKey: string): string {
     return sessionKey.slice(0, dash);
   }
   return sessionKey.length > 12 ? `${sessionKey.slice(0, 12)}…` : sessionKey;
+}
+
+/** Editor-tab label for a titled session, kept short enough for a tab. */
+function tabLabel(title: string): string {
+  const collapsed = title.replace(/\s+/g, ' ').trim();
+  return collapsed.length > 40 ? `${collapsed.slice(0, 40)}…` : collapsed;
 }
 
 /** Per-render CSP nonce, CSPRNG-backed (node:crypto), per VS Code convention. */

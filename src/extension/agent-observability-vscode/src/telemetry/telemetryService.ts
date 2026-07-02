@@ -433,7 +433,10 @@ export class TelemetryService {
       for (const handle of handles) {
         const detail = handle.db.getSessionDetail(sessionKey, codeExts, docExts);
         if (detail !== undefined) {
-          return detail;
+          // Same LOCAL-ONLY title stitching as listSessions, so the detail
+          // header shows the session's name, not just its id.
+          const [summary] = this.applyTitles([detail.summary], handle);
+          return { ...detail, summary };
         }
       }
       throw sessionNotFoundError(sessionKey);

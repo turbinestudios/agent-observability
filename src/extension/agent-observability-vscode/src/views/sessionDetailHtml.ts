@@ -107,7 +107,11 @@ export function renderSessionDetailHtml(
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Session ${escapeHtml(shortId(summary.sessionId))}</title>
+  <title>${escapeHtml(
+    summary.title !== undefined && summary.title.length > 0
+      ? truncate(summary.title, 60)
+      : `Session ${shortId(summary.sessionId)}`,
+  )}</title>
   <style nonce="${nonce}">${STYLE}</style>
 </head>
 <body>
@@ -293,16 +297,21 @@ function renderSessionSection(
 }
 
 /**
- * Sanitized session header: just the session id and WHEN it ran (start / end /
- * duration). The richer per-thread breakdown (models, counts, tokens, cost) lives
- * in the "By model" table and "Agent run totals" card below, so the header stays
- * a thin temporal overview.
+ * Sanitized session header: the session's name (same LOCAL-ONLY title the
+ * Sessions list shows, falling back to the short id when no title is known)
+ * and WHEN it ran (start / end / duration). The richer per-thread breakdown
+ * (models, counts, tokens, cost) lives in the "By model" table and "Agent run
+ * totals" card below, so the header stays a thin temporal overview.
  */
 function renderHeader(detail: SessionDetail): string {
   const s = detail.summary;
+  const title = s.title !== undefined && s.title.length > 0 ? s.title : undefined;
+  // When titled, the id moves up into the eyebrow so it stays discoverable.
+  const eyebrow = title !== undefined ? `Session · ${shortId(s.sessionId)}` : 'Session';
+  const heading = title !== undefined ? truncate(title, 80) : shortId(s.sessionId);
   return `<header class="header">
-    <p class="eyebrow">Session</p>
-    <h1>${escapeHtml(shortId(s.sessionId))}</h1>
+    <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+    <h1>${escapeHtml(heading)}</h1>
     <dl class="meta">
       <div><dt>Started</dt><dd>${escapeHtml(formatLocal(s.startedAtMs))}</dd></div>
       <div><dt>Ended</dt><dd>${escapeHtml(formatLocal(s.endedAtMs))}</dd></div>

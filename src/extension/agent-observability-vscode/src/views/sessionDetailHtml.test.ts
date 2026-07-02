@@ -92,6 +92,36 @@ function deviation(overrides: Partial<WorkflowDeviation>): WorkflowDeviation {
   };
 }
 
+describe('renderSessionDetailHtml — header title', () => {
+  it('shows the session title as the heading with the short id in the eyebrow', () => {
+    const titled: SessionDetail = {
+      ...detail,
+      summary: { ...detail.summary, title: 'Fix the <login> bug', titleDerived: false },
+    };
+    const html = renderSessionDetailHtml(titled, [], NONCE);
+    expect(html).toContain('<h1>Fix the &lt;login&gt; bug</h1>');
+    expect(html).toContain('<p class="eyebrow">Session · abc</p>');
+    expect(html).toContain('<title>Fix the &lt;login&gt; bug</title>');
+  });
+
+  it('falls back to the short session id when no title is known', () => {
+    const html = renderSessionDetailHtml(detail, [], NONCE);
+    expect(html).toContain('<h1>abc</h1>');
+    expect(html).toContain('<p class="eyebrow">Session</p>');
+    expect(html).toContain('<title>Session abc</title>');
+  });
+
+  it('truncates an over-long title in the heading', () => {
+    const long = 'x'.repeat(120);
+    const titled: SessionDetail = {
+      ...detail,
+      summary: { ...detail.summary, title: long, titleDerived: true },
+    };
+    const html = renderSessionDetailHtml(titled, [], NONCE);
+    expect(html).toContain(`<h1>${'x'.repeat(80)}…</h1>`);
+  });
+});
+
 describe('renderSessionDetailHtml — local-only badge', () => {
   // The `.badge-local` CSS rule is always in the <style> block, so assert on the
   // rendered badge ELEMENT (class attribute + visible text), not the bare class.
