@@ -85,19 +85,26 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Local-only workflow deviation detection for the session-detail webview.
   const deviations = new LocalDeviationDetector(config);
-  const detailPanels = new SessionDetailPanelManager(registry, telemetry, deviations);
+  const detailPanels = new SessionDetailPanelManager(registry, deviations);
   sessionDetailPanels = detailPanels;
 
   // Proactive per-turn workflow-divergence notifications (off by default). After a
   // refresh it scans settled turns of recently-active sessions in repositories
-  // with configured workflows and toasts NEW divergences, opening the
-  // session-detail panel on click. Local-only — nothing is uploaded.
+  // with configured workflows — across EVERY enabled source (Copilot + Claude
+  // Code) — and toasts NEW divergences, opening the owning source's session-detail
+  // panel on click. Local-only — nothing is uploaded. The lone `vscode` call is
+  // injected so the notifier itself stays source-agnostic and headless-testable.
   const divergenceNotifier = new WorkflowDivergenceNotifier(
     config,
-    telemetry,
+    registry,
     deviations,
-    // The divergence notifier is Copilot-only (it reads the SQLite telemetry).
-    (sessionKey) => detailPanels.open('copilot', sessionKey),
+    (sourceId, sessionKey) => detailPanels.open(sourceId, sessionKey),
+    (message, action) =>
+      Promise.resolve(
+        action === undefined
+          ? vscode.window.showWarningMessage(message)
+          : vscode.window.showWarningMessage(message, action),
+      ),
   );
 
   // The real-time OTLP receiver is wired further below, once the views + notifier

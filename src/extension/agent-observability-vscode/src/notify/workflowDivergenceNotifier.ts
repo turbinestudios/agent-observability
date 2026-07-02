@@ -1,6 +1,4 @@
-import * as vscode from 'vscode';
-import { Configuration } from '../config/configuration';
-import { TelemetryService } from '../telemetry/telemetryService';
+import type { Configuration } from '../config/configuration';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
 import { groupInteractionsByTurn } from '../deviation/turnGrouping';
 import {
@@ -9,28 +7,54 @@ import {
   selectNewDivergences,
   settledTurnIndices,
 } from '../deviation/divergenceNotices';
+import type { SessionDataSource, SourceRegistry } from '../sources/sessionSource';
 
 /** How long after a turn ends before a divergence in it is reportable (anti-mid-task). */
 const SETTLE_MS = 30_000;
-/** How many recent sessions to scan per pass (the source DB is a short rolling window). */
+/** How many recent sessions to scan per SOURCE per pass (each source is a short rolling window). */
 const SCAN_SESSION_LIMIT = 50;
 /** Cap individual toasts per scan; the remainder collapses into one summary toast. */
 const MAX_NOTICES_PER_SCAN = 4;
 
 /**
+ * Shows one workflow-divergence warning to the user. `action`, when given, is an
+ * actionable button label; the returned promise resolves to the chosen label (or
+ * `undefined` when dismissed). Injected so the scanner carries no `vscode` import
+ * and stays headless-testable — the production adapter wraps
+ * `vscode.window.showWarningMessage`.
+ */
+export type ShowDivergenceWarning = (
+  message: string,
+  action?: string,
+) => PromiseLike<string | undefined>;
+
+/**
  * Proactive workflow-divergence notifier.
  *
  * After local telemetry refreshes, this scans the SETTLED user-request turns of
- * recently-active sessions in repositories that have configured workflows, and
- * raises a VS Code notification for each NEW divergence (a step skipped or out of
- * order). It is the `vscode`-bound glue around the per-turn detector and the pure
- * {@link ../deviation/divergenceNotices} dedup/settle helpers; gated by
- * `agentObservability.deviation.notifyOnDivergence` (off by default).
+ * recently-active sessions — across ALL ENABLED {@link SessionDataSource}s
+ * (Copilot SQLite + Claude Code transcripts) — in repositories that have
+ * configured workflows, and raises a notification for each NEW divergence (a step
+ * skipped or out of order). It is the source-agnostic glue around the per-turn
+ * detector and the pure {@link ../deviation/divergenceNotices} dedup/settle
+ * helpers; gated by `agentObservability.deviation.notifyOnDivergence` (off by
+ * default). Its sole `vscode` dependency — showing the toast — is injected as
+ * {@link ShowDivergenceWarning}, so the scan/dedup logic is unit-testable headless.
+ *
+ * Per source, workflow content predicates read raw content through that source's
+ * own LOCAL-ONLY {@link SessionDataSource.getSessionContent} (Copilot from span
+ * attributes, Claude reconstructed from the transcript); a source that supplies
+ * none leaves content predicates inert (the sequence/missing/timeout checks still
+ * run over metadata). Matched content is never stored on a deviation and never
+ * synced — content-derived deviations stay local, and these notifications are
+ * local UI, so surfacing them keeps that boundary intact.
  *
  * De-dup + baseline: the FIRST scan only records the current divergences as a
  * silent baseline (so a fresh window — or newly-changed workflows — never floods
  * the user with toasts for pre-existing history); subsequent scans notify only
- * divergences not seen before. SETTLED-turn filtering avoids reporting an
+ * divergences not seen before. The {@link divergenceKey} incorporates the source
+ * id, so a Claude session and a Copilot session with the same key can never
+ * collide in the {@link seen} set. SETTLED-turn filtering avoids reporting an
  * in-flight task as "missing later steps".
  */
 export class WorkflowDivergenceNotifier {
@@ -38,10 +62,13 @@ export class WorkflowDivergenceNotifier {
   private primed = false;
 
   constructor(
-    private readonly config: Configuration,
-    private readonly telemetry: TelemetryService,
+    private readonly config: Pick<Configuration, 'isNotifyOnDivergenceEnabled' | 'getWorkflowConfigs'>,
+    // Only `enabled()` is used; narrowing keeps the notifier off the full registry
+    // (and its context-analysis/database import chain) so it stays headless-testable.
+    private readonly sources: Pick<SourceRegistry, 'enabled'>,
     private readonly deviations: LocalDeviationDetector,
-    private readonly openSession: (sessionKey: string) => void,
+    private readonly openSession: (sourceId: string, sessionKey: string) => void,
+    private readonly showWarning: ShowDivergenceWarning,
   ) {}
 
   /** Refreshable hook: invoked after each telemetry refresh fan-out. */
@@ -81,34 +108,44 @@ export class WorkflowDivergenceNotifier {
     this.notify(toNotify);
   }
 
-  /** Collect divergences from settled turns of recent sessions in configured repos. */
+  /**
+   * Collect divergences from settled turns of recent sessions in configured repos,
+   * across every ENABLED source. Each source bounds its own session list
+   * ({@link SCAN_SESSION_LIMIT}); a source whose listing fails is skipped so one
+   * unreadable source never blanks the others.
+   */
   private collectSettledDivergences(configuredRepos: ReadonlySet<string>): LocatedDivergence[] {
-    const sessions = this.telemetry.listSessions(undefined, SCAN_SESSION_LIMIT);
-    if (!sessions.ok) {
-      return [];
-    }
     const now = Date.now();
     const located: LocatedDivergence[] = [];
-    for (const summary of sessions.value) {
-      if (!configuredRepos.has(summary.repository.toLowerCase())) {
+    for (const source of this.sources.enabled()) {
+      const sessions = source.listSessions(undefined, SCAN_SESSION_LIMIT);
+      if (!sessions.ok) {
         continue;
       }
-      located.push(...this.divergencesForSession(summary.sessionId, summary.endedAtMs, now));
+      for (const summary of sessions.value) {
+        if (!configuredRepos.has(summary.repository.toLowerCase())) {
+          continue;
+        }
+        located.push(
+          ...this.divergencesForSession(source, summary.sessionId, summary.endedAtMs, now),
+        );
+      }
     }
     return located;
   }
 
-  /** Per-turn divergences for one session, restricted to SETTLED turns. */
+  /** Per-turn divergences for one session of one source, restricted to SETTLED turns. */
   private divergencesForSession(
+    source: SessionDataSource,
     sessionKey: string,
     sessionEndMs: number,
     nowMs: number,
   ): LocatedDivergence[] {
-    const detailResult = this.telemetry.getSessionDetail(sessionKey);
+    const detailResult = source.getSessionDetail(sessionKey);
     if (!detailResult.ok) {
       return [];
     }
-    const interactionsResult = this.telemetry.getSessionInteractions(sessionKey);
+    const interactionsResult = source.getSessionInteractions(sessionKey);
     if (!interactionsResult.ok) {
       return [];
     }
@@ -118,12 +155,16 @@ export class WorkflowDivergenceNotifier {
       return [];
     }
 
+    // Memoized LOCAL-ONLY content lookup, mirroring the detail panel: each source
+    // supplies its own content (Copilot from span attributes, Claude reconstructed
+    // from the transcript); a source that implements no lookup — or returns a
+    // failure — leaves content predicates inert (metadata-only matching).
     const attributeCache = new Map<string, ReadonlyMap<string, string>>();
     const contentLookup = (attribute: string): ReadonlyMap<string, string> => {
       let values = attributeCache.get(attribute);
       if (values === undefined) {
-        const result = this.telemetry.getSpanAttributes(sessionKey, attribute);
-        values = result.ok ? result.value : new Map<string, string>();
+        const result = source.getSessionContent?.(sessionKey, attribute);
+        values = result?.ok ? result.value : new Map<string, string>();
         attributeCache.set(attribute, values);
       }
       return values;
@@ -139,7 +180,7 @@ export class WorkflowDivergenceNotifier {
         return;
       }
       for (const deviation of list) {
-        located.push({ sessionKey, turnStartMs: turnStarts[i], deviation });
+        located.push({ sourceId: source.id, sessionKey, turnStartMs: turnStarts[i], deviation });
       }
     });
     return located;
@@ -152,15 +193,15 @@ export class WorkflowDivergenceNotifier {
       const message =
         `Workflow “${item.deviation.workflowName}” diverged ` +
         `(${item.deviation.type}): ${item.deviation.description}`;
-      void vscode.window.showWarningMessage(message, 'Open session').then((choice) => {
+      void this.showWarning(message, 'Open session').then((choice) => {
         if (choice === 'Open session') {
-          this.openSession(item.sessionKey);
+          this.openSession(item.sourceId, item.sessionKey);
         }
       });
     }
     const extra = toNotify.length - shown.length;
     if (extra > 0) {
-      void vscode.window.showWarningMessage(
+      void this.showWarning(
         `+${extra} more workflow divergence(s) detected. Open Agent Observability to review them.`,
       );
     }

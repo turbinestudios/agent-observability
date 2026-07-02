@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import * as crypto from 'node:crypto';
-import { TelemetryService } from '../telemetry/telemetryService';
 import { LocalDeviationDetector } from '../deviation/localDeviations';
 import { WorkflowDeviation } from '../deviation/models';
 import { groupInteractionsByTurn } from '../deviation/turnGrouping';
@@ -54,7 +53,6 @@ export class SessionDetailPanelManager {
 
   constructor(
     private readonly sources: SourceRegistry,
-    private readonly telemetry: TelemetryService,
     private readonly deviations: LocalDeviationDetector,
   ) {}
 
