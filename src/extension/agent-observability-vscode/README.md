@@ -114,6 +114,12 @@ uploaded. Because Copilot reads its OTel settings at **application startup**, yo
 fully **quit and reopen VS Code** after enabling — a window reload is not enough. Use
 **Disable Live Updates** to revert.
 
+With **multiple VS Code windows** open, exactly one window runs the receiver (Copilot
+exports to a single machine-wide endpoint): the first window to bind the port wins and
+writes the shared ingest DB; every other window automatically follows it as a reader —
+same data, refreshed on the receiver's push — and takes the port over if the receiver's
+window is closed. No configuration is needed; the election is automatic.
+
 ## Workflow predicate DSL
 
 `agentObservability.workflows` lets you describe the agent workflows you expect

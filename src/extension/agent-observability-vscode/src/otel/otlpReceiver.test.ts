@@ -68,6 +68,34 @@ function post(port: number, path: string, body: Buffer): Promise<number> {
   });
 }
 
+/** Open a raw `/events` subscription and collect everything the server pushes. */
+function openEvents(port: number): Promise<{ chunks: string[]; req: ReturnType<typeof request> }> {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      { host: '127.0.0.1', port, path: '/events', method: 'GET' },
+      (res) => {
+        res.setEncoding('utf8');
+        const chunks: string[] = [];
+        res.on('data', (c: string) => chunks.push(c));
+        resolve({ chunks, req });
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/** Poll `check` until it holds (or fail after `timeoutMs`). */
+async function waitFor(check: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) {
+      throw new Error('waitFor timed out');
+    }
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 describe('OtlpReceiver (real HTTP on 127.0.0.1)', () => {
   it('routes /v1/traces to onSpans and acks 200; ignores /v1/metrics', async () => {
     const received: SpanRows[] = [];
@@ -83,5 +111,47 @@ describe('OtlpReceiver (real HTTP on 127.0.0.1)', () => {
     } finally {
       receiver.stop();
     }
+  });
+
+  it('serves /events as SSE: hello (with identity) first, broadcast() pushes events', async () => {
+    const receiver = new OtlpReceiver({
+      port: 0,
+      hello: { service: 'test-svc', ingestDbPath: 'x' },
+      onSpans: () => {},
+    });
+    const port = await receiver.start();
+    try {
+      const { chunks } = await openEvents(port);
+      await waitFor(() => chunks.join('').includes('event: hello'));
+      expect(chunks.join('')).toContain('"service":"test-svc"');
+      receiver.broadcast();
+      receiver.broadcast();
+      await waitFor(() => chunks.join('').split('\n\n').filter((f) => f.trim().length > 0).length >= 3);
+    } finally {
+      receiver.stop();
+    }
+  });
+
+  it('stop() frees the port even while /events subscribers are connected', async () => {
+    const first = new OtlpReceiver({ port: 0, onSpans: () => {} });
+    const port = await first.start();
+    await openEvents(port); // an open SSE response would pin the socket past close()
+    first.stop();
+
+    // Takeover depends on an immediate rebind; retry briefly to absorb the close.
+    const second = new OtlpReceiver({ port, onSpans: () => {} });
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      try {
+        expect(await second.start()).toBe(port);
+        break;
+      } catch (err) {
+        if (Date.now() > deadline) {
+          throw err;
+        }
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    }
+    second.stop();
   });
 });

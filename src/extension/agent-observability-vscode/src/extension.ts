@@ -317,7 +317,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // Copilot: localhost OTLP receiver. Copilot must be pointed here via "Enable
     // Live Updates", which also needs a FULL VS Code restart for Copilot to switch
-    // exporters; the receiver itself is harmless to run before that.
+    // exporters; the receiver itself is harmless to run before that. The port is a
+    // USER setting shared by every VS Code window, so only ONE window can own the
+    // receiver: the winner binds and writes the shared ingest DB; every other
+    // window follows it as a READER of its `/events` stream and races to take the
+    // port over when the receiver's window closes.
     controller.register(
       new LiveOtlpService({
         ingestDbPath,
@@ -330,11 +334,24 @@ export function activate(context: vscode.ExtensionContext): void {
           logger.info(`Live OTLP receiver listening on 127.0.0.1:${boundPort}.`);
           renderAllViews();
         },
+        onReading: () => {
+          // Reader window: the same shared ingest DB (written by the receiver's
+          // window) becomes the Copilot source; the receiver's pushes arrive as
+          // `signal()` calls through the event stream.
+          telemetry.setIngestDbPath(ingestDbPath);
+          logger.info(
+            'Another VS Code window owns the live OTLP receiver on ' +
+              `127.0.0.1:${config.getLiveOtelPort()} — following it for live updates.`,
+          );
+          renderAllViews();
+        },
+        // NOT fired when a sibling window owns the port (that is the reader
+        // path above) — only for real conflicts, where a fresh port helps.
         onStartError: (err) => {
           logger.error('Could not start the live OTLP receiver', err);
           void vscode.window.showErrorMessage(
             'Agent Observability: could not start the real-time OTLP receiver on port ' +
-              `${config.getLiveOtelPort()}. Re-run “Enable Live Updates”.`,
+              `${config.getLiveOtelPort()}. Re-run “Enable Live Updates” to pick a fresh port.`,
           );
         },
         onError: (err) => logger.error('Live OTLP pipeline error', err),
@@ -504,6 +521,17 @@ export function activate(context: vscode.ExtensionContext): void {
         event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotArchivePath}`)
       ) {
         startArchiver();
+      }
+      // The live-update settings are USER-scoped and shared by every window, so
+      // the Enable/Disable commands run in ONE window reach the others through
+      // this event: re-arm the pipeline so each window re-runs the port election
+      // (one becomes the receiver, the rest follow it as readers) instead of
+      // staying on a stale port — or staying up after a disable — until restart.
+      if (
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.liveUpdatesEnabled}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.liveOtelPort}`)
+      ) {
+        startLive();
       }
     }),
   );

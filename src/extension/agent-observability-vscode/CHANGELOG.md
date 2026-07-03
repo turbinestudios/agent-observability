@@ -4,10 +4,26 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.6.0] - 2026-07-03
 
 ### Fixed
 
+- **Live updates now work with multiple VS Code windows.** The live-OTLP port is
+  a user-level setting shared by every window, so each window's receiver raced to
+  bind it: the first won and every other window logged
+  `EADDRINUSE: address already in use`, showed a misleading error toast, never
+  attached the live ingest DB, and — worse — still opened the single-writer
+  ingest store read-write. Windows now run a port election: the winner runs the
+  receiver and writes the shared ingest DB; every other window follows it as a
+  reader over a localhost `/events` stream (Server-Sent Events), refreshing on
+  the receiver's persist-then-notify pings, and races to take the port over the
+  moment the receiver's window closes — so live updates survive closing the
+  original window. A window only opens the ingest store after winning the
+  election. The error toast is reserved for genuine conflicts (a foreign process
+  owning the port, or a receiver from a different VS Code profile), where
+  re-running **Enable Live Updates** to pick a fresh port actually helps.
+  Enabling/disabling live updates in one window now also re-arms the pipeline in
+  every other window via the shared settings, instead of requiring a restart.
 - **Copilot session names are back when reading from the durable archive.** The
   0.5.0 archive became the sole read source, but the title lookup only knew how
   to find the `workspaceStorage` title stores beside a NATIVE

@@ -11,6 +11,14 @@ import { otlpSpansToRows, SpanRows } from './otlpToRows';
  * to Copilot-schema rows ({@link otlpSpansToRows}) and hand them to `onSpans`.
  * Bound to 127.0.0.1 ONLY — never exposed to the network; the enable command sets
  * Copilot's endpoint to an explicit `http://127.0.0.1:<port>` so loopback is exact.
+ *
+ * The same server also serves `GET /events`, a Server-Sent-Events stream for the
+ * OTHER VS Code windows: the port is a user-level setting shared by every window,
+ * so only one window can own this receiver — the rest subscribe here and are
+ * pinged by {@link OtlpReceiver.broadcast} after each persisted batch (see
+ * {@link ./liveOtlpService.LiveOtlpService} for the election). The stream opens
+ * with a `hello` event carrying {@link OtlpReceiverOptions.hello} so a subscriber
+ * can tell our receiver apart from an unrelated process squatting the port.
  */
 
 /** Guard against an absurd body (real exports are KBs–low MBs). */
@@ -47,12 +55,18 @@ export interface OtlpReceiverOptions {
   port: number;
   /** Called with the decoded rows of each `/v1/traces` request (never empty). */
   onSpans: (rows: SpanRows) => void;
+  /**
+   * JSON payload of the `hello` event opening each `/events` subscription —
+   * the receiver's identity, so a subscriber can verify the port is ours.
+   */
+  hello?: unknown;
   /** Optional error sink (decode/socket errors); the request is still acked 200. */
   onError?: (err: unknown) => void;
 }
 
 export class OtlpReceiver {
   private server: Server | undefined;
+  private readonly subscribers = new Set<ServerResponse>();
 
   constructor(private readonly opts: OtlpReceiverOptions) {}
 
@@ -73,12 +87,31 @@ export class OtlpReceiver {
   }
 
   stop(): void {
+    for (const res of this.subscribers) {
+      res.destroy();
+    }
+    this.subscribers.clear();
     this.server?.close();
+    // Open SSE responses and idle keep-alive sockets would otherwise hold the
+    // port bound after close(); takeover by another window depends on the port
+    // freeing the moment this receiver stops.
+    this.server?.closeAllConnections();
     this.server = undefined;
+  }
+
+  /** Ping every `/events` subscriber: "a batch was persisted — re-read the DB". */
+  broadcast(): void {
+    for (const res of this.subscribers) {
+      res.write('data: {}\n\n');
+    }
   }
 
   private handle(req: IncomingMessage, res: ServerResponse): void {
     const url = req.url ?? '';
+    if (req.method === 'GET' && /\/events\/?$/.test(url)) {
+      this.subscribe(res);
+      return;
+    }
     const isTraces = req.method === 'POST' && /\/v1\/traces\/?$/.test(url);
     const chunks: Buffer[] = [];
     let size = 0;
@@ -111,6 +144,22 @@ export class OtlpReceiver {
       // Always ack 200 so the exporter never errors/retries (logs/metrics included).
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end('{}');
+    });
+  }
+
+  /** `GET /events`: open a never-ending SSE response, `hello` first. */
+  private subscribe(res: ServerResponse): void {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.write(`event: hello\ndata: ${JSON.stringify(this.opts.hello ?? {})}\n\n`);
+    this.subscribers.add(res);
+    res.on('close', () => this.subscribers.delete(res));
+    res.on('error', (err) => {
+      this.subscribers.delete(res);
+      this.opts.onError?.(err);
     });
   }
 }
