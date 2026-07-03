@@ -3,6 +3,7 @@ import {
   buildRepoSyncPolicy,
   isRepositoryIncluded,
   filterRowsByPolicy,
+  normalizeRepositoryList,
   ALL_REPOSITORIES_POLICY,
 } from './repoSyncPolicy';
 
@@ -50,6 +51,20 @@ describe('buildRepoSyncPolicy', () => {
   it('ignores empty / whitespace-only entries', () => {
     const policy = buildRepoSyncPolicy('include', ['', '   ', REPO_A]);
     expect(policy.repositories.size).toBe(1);
+  });
+});
+
+describe('normalizeRepositoryList', () => {
+  it('canonicalizes entries, preserves "unknown", and skips blanks', () => {
+    // The same normalization backs both the sync scope and the local
+    // `excludedRepositories` filter, so shorthand entries match row values.
+    const set = normalizeRepositoryList([
+      'git@github.com:example-org/repo-a.git',
+      ' unknown ',
+      '',
+      '   ',
+    ]);
+    expect(set).toEqual(new Set([REPO_A, 'unknown']));
   });
 });
 

@@ -52,6 +52,7 @@ const EXPECTED_COMMANDS = [
   'agentObservability.openSettings',
   'agentObservability.setApiKey',
   'agentObservability.configureSyncRepositories',
+  'agentObservability.configureExcludedRepositories',
   'agentObservability.toggleConsent',
   'agentObservability.previewPayload',
   'agentObservability.openSession',
@@ -77,6 +78,7 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.sync.intervalMinutes',
   'agentObservability.sync.repositoryMode',
   'agentObservability.sync.repositories',
+  'agentObservability.excludedRepositories',
   'agentObservability.localTelemetry.enabled',
   'agentObservability.sqlitePath',
   'agentObservability.deviation.maxSessionMinutes',
@@ -178,6 +180,14 @@ describe('manifest contract is stable', () => {
     // Scope is inherently cross-workspace, so it must be user-level only.
     expect(mode.scope).toBe('application');
     expect(repos.scope).toBe('application');
+  });
+
+  it('declares the hide-repositories setting, empty by default and application-scoped', () => {
+    const props = manifest.contributes.configuration.properties;
+    const excluded = props['agentObservability.excludedRepositories'];
+    // Default is show-everything: nothing is hidden until the user opts repos out.
+    expect(excluded.default).toEqual([]);
+    expect(excluded.scope).toBe('application');
   });
 });
 

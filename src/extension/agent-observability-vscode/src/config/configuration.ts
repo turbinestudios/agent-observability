@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { WorkflowConfig } from '../deviation/models';
 import { normalizeExtensions } from '../telemetry/locAnalysis';
-import { buildRepoSyncPolicy, RepoSyncPolicy } from '../aggregate/repoSyncPolicy';
+import { buildRepoSyncPolicy, normalizeRepositoryList, RepoSyncPolicy } from '../aggregate/repoSyncPolicy';
 import { MIN_SESSION_MINUTES, parseWorkflowConfigs } from './workflowParsing';
 import { ClaudeEffort, DEFAULT_CLAUDE_MODEL, parseClaudeEffort } from '../chat/backends/claudeCliArgs';
 import type { BackendId } from '../chat/backends/chatBackend';
@@ -37,6 +37,7 @@ export const ConfigKeys = {
   syncIntervalMinutes: 'sync.intervalMinutes',
   syncRepositoryMode: 'sync.repositoryMode',
   syncRepositories: 'sync.repositories',
+  excludedRepositories: 'excludedRepositories',
   localTelemetryEnabled: 'localTelemetry.enabled',
   sqlitePath: 'sqlitePath',
   maxSessionMinutes: 'deviation.maxSessionMinutes',
@@ -68,6 +69,7 @@ export const ConfigDefaults = {
   syncIntervalMinutes: 60,
   syncRepositoryMode: 'include',
   syncRepositories: [] as readonly string[],
+  excludedRepositories: [] as readonly string[],
   localTelemetryEnabled: true,
   sqlitePath: '',
   maxSessionMinutes: 60,
@@ -173,6 +175,26 @@ export class Configuration {
     );
     const list = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [];
     return buildRepoSyncPolicy(mode, list);
+  }
+
+  /**
+   * Repositories hidden from the WHOLE extension, as a normalized set. Unlike
+   * the sync scope (which only narrows what uploads), an excluded repository's
+   * sessions disappear from the local views (Overview, Sessions tree, pickers)
+   * AND from the aggregate rows the sync engine / payload preview read — as if
+   * the repository did not exist. Entries are normalized through the SAME
+   * chokepoint as `sync.repositories` (so `org/repo` shorthand or a trailing
+   * `.git` still match); the literal `unknown` hides sessions with no detected
+   * git remote. Purely a read-time filter: the underlying local telemetry is
+   * untouched, so removing an entry brings a repository straight back.
+   */
+  getExcludedRepositories(): ReadonlySet<string> {
+    const raw = this.config().get<unknown>(
+      ConfigKeys.excludedRepositories,
+      ConfigDefaults.excludedRepositories as unknown as string[],
+    );
+    const list = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [];
+    return normalizeRepositoryList(list);
   }
 
   /** Feature flag: whether the local telemetry view is enabled. */

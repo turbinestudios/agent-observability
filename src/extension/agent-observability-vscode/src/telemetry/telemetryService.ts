@@ -59,7 +59,18 @@ export interface ServiceConfig extends PathConfig {
   getCodeFileExtensions(): string[];
   /** Extensions classified as documentation for the LoD/nLoD metric. */
   getDocFileExtensions(): string[];
+  /**
+   * Sanitized repositories hidden from the whole extension (see
+   * `Configuration.getExcludedRepositories`). Their sessions are filtered out
+   * of every listing, the overview, and the aggregation rows — so they reach
+   * neither the views nor the sync/preview path. Optional so narrow test
+   * configs need not supply it; absent means no exclusions.
+   */
+  getExcludedRepositories?(): ReadonlySet<string>;
 }
+
+/** Shared empty exclusion set so the no-filter default never allocates. */
+const NO_EXCLUSIONS: ReadonlySet<string> = new Set();
 
 interface CacheEntry {
   overview?: OverviewMetrics;
@@ -158,13 +169,23 @@ export class TelemetryService {
     this.refresh();
   }
 
+  /**
+   * Sanitized repositories hidden from every query (empty when the config does
+   * not supply the accessor). Read fresh per query; the query caches are safe
+   * because they are dropped on every configuration change (see the config-change
+   * wiring in `extension.ts`, which calls {@link refresh}).
+   */
+  private excludedRepositories(): ReadonlySet<string> {
+    return this.config.getExcludedRepositories?.() ?? NO_EXCLUSIONS;
+  }
+
   /** Overview metrics, merged across every open source database. */
   getOverview(sinceMs?: number): Result<OverviewMetrics> {
     return this.withDatabases((handles) => {
       if (sinceMs === undefined && this.cache.overview !== undefined) {
         return this.cache.overview;
       }
-      const value = mergeOverviews(handles, sinceMs);
+      const value = mergeOverviews(handles, this.excludedRepositories(), sinceMs);
       if (sinceMs === undefined) {
         this.cache.overview = value;
       }
@@ -182,9 +203,13 @@ export class TelemetryService {
       if (this.cache.repositories !== undefined) {
         return this.cache.repositories;
       }
+      const excluded = this.excludedRepositories();
       const merged = new Map<string, RepositorySummary>();
       for (const handle of handles) {
         for (const repo of handle.db.listRepositories()) {
+          if (excluded.has(repo.repository)) {
+            continue;
+          }
           const acc = merged.get(repo.repository);
           if (acc === undefined) {
             merged.set(repo.repository, { ...repo, models: [...repo.models] });
@@ -210,18 +235,25 @@ export class TelemetryService {
    */
   listSessions(repository?: string, limit?: number): Result<SessionSummary[]> {
     return this.withDatabases((handles) => {
+      const excluded = this.excludedRepositories();
+      if (repository !== undefined && excluded.has(repository)) {
+        return [];
+      }
       const key = `${repository ?? '*'}::${limit ?? '*'}`;
       const cached = this.cache.sessions.get(key);
       if (cached !== undefined) {
         return cached;
       }
+      // Each source is capped at `limit` too: after the merged sort, no row
+      // beyond a single source's newest `limit` can make the final cut. With
+      // exclusions and no repository scope the per-source cap must be lifted,
+      // or an excluded session could consume a slot a visible one deserves.
+      const perSourceLimit = excluded.size > 0 && repository === undefined ? undefined : limit;
       const seen = new Set<string>();
       const all: SessionSummary[] = [];
       for (const handle of handles) {
-        // Each source is capped at `limit` too: after the merged sort, no row
-        // beyond a single source's newest `limit` can make the final cut.
-        for (const session of this.applyTitles(handle.db.listSessions(repository, limit), handle)) {
-          if (!seen.has(session.sessionId)) {
+        for (const session of this.applyTitles(handle.db.listSessions(repository, perSourceLimit), handle)) {
+          if (!seen.has(session.sessionId) && !excluded.has(session.repository)) {
             seen.add(session.sessionId);
             all.push(session);
           }
@@ -384,12 +416,17 @@ export class TelemetryService {
    * concatenation never double-counts a span). Carries ONLY non-sensitive
    * metadata (sanitized repository, mapped mode/tool, counts, tokens); never
    * any raw-content attribute. Not cached — aggregation is an on-demand
-   * operation (preview / scheduled sync).
+   * operation (preview / scheduled sync). Excluded repositories' rows are
+   * dropped HERE, upstream of the sync engine, the payload preview, and
+   * {@link getDistinctRepositories} — a hidden repository can never upload,
+   * regardless of the sync scope settings.
    */
   getAggregationRows(sinceMs?: number, untilMs?: number): Result<AggregationRow[]> {
-    return this.withDatabases((handles) =>
-      handles.flatMap((handle) => handle.db.getAggregationRows(sinceMs, untilMs)),
-    );
+    return this.withDatabases((handles) => {
+      const excluded = this.excludedRepositories();
+      const rows = handles.flatMap((handle) => handle.db.getAggregationRows(sinceMs, untilMs));
+      return excluded.size === 0 ? rows : rows.filter((r) => !excluded.has(r.repository));
+    });
   }
 
   /**
@@ -657,11 +694,16 @@ function ensureChatSessionIds(handle: OpenHandle): Map<string, string> {
  * counters (sessions/spans are disjoint across environments), an
  * interaction-weighted mean for the average duration, and a NAME-level union
  * for the distinct repository/model counts so an environment-spanning
- * repository or model is counted once.
+ * repository or model is counted once. `excluded` repositories are filtered out
+ * per source, before any measure is summed.
  */
-function mergeOverviews(handles: OpenHandle[], sinceMs?: number): OverviewMetrics {
+function mergeOverviews(
+  handles: OpenHandle[],
+  excluded: ReadonlySet<string>,
+  sinceMs?: number,
+): OverviewMetrics {
   if (handles.length === 1) {
-    return handles[0].db.getOverviewMetrics(sinceMs);
+    return handles[0].db.getOverviewMetrics(sinceMs, excluded);
   }
 
   const merged: OverviewMetrics = {
@@ -680,7 +722,7 @@ function mergeOverviews(handles: OpenHandle[], sinceMs?: number): OverviewMetric
   let durationWeightedSum = 0;
 
   for (const handle of handles) {
-    const overview = handle.db.getOverviewMetrics(sinceMs);
+    const overview = handle.db.getOverviewMetrics(sinceMs, excluded);
     merged.totalInteractions += overview.totalInteractions;
     merged.totalSessions += overview.totalSessions;
     merged.inputTokens += overview.inputTokens;
@@ -689,7 +731,7 @@ function mergeOverviews(handles: OpenHandle[], sinceMs?: number): OverviewMetric
     merged.errorCount += overview.errorCount;
     durationWeightedSum += overview.avgDurationMs * overview.totalInteractions;
 
-    const dimensions = handle.db.getOverviewDimensions(sinceMs);
+    const dimensions = handle.db.getOverviewDimensions(sinceMs, excluded);
     for (const model of dimensions.models) {
       models.add(model);
     }

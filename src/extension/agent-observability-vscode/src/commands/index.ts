@@ -16,6 +16,7 @@ export const Commands = {
   openSettings: 'agentObservability.openSettings',
   setApiKey: 'agentObservability.setApiKey',
   configureSyncRepositories: 'agentObservability.configureSyncRepositories',
+  configureExcludedRepositories: 'agentObservability.configureExcludedRepositories',
   toggleConsent: 'agentObservability.toggleConsent',
   previewPayload: 'agentObservability.previewPayload',
   openSession: 'agentObservability.openSession',
@@ -63,6 +64,8 @@ export interface CommandDeps {
   previewPayload: () => void;
   /** Pick which repositories are included in cloud sync (writes user settings). */
   configureSyncRepositories: () => void;
+  /** Pick which repositories the extension hides entirely (writes user settings). */
+  configureExcludedRepositories: () => void;
   /** Reveal/focus the AI Helper webview view. */
   openAssistant: () => void;
   /** Clear the AI Helper conversation (start a new chat). */
@@ -105,6 +108,7 @@ export function registerCommands(
     refreshSessionDetail,
     previewPayload,
     configureSyncRepositories,
+    configureExcludedRepositories,
     openAssistant,
     newChat,
     enableLiveUpdates,
@@ -159,6 +163,13 @@ export function registerCommands(
   // settings. Never uploads — it only narrows what a later sync would send.
   register(Commands.configureSyncRepositories, () => {
     configureSyncRepositories();
+  });
+
+  // Choose which repositories the extension HIDES everywhere — the local views
+  // AND the sync/preview aggregate rows. Writes USER settings only; the local
+  // data is untouched, so re-checking a repository brings it straight back.
+  register(Commands.configureExcludedRepositories, () => {
+    configureExcludedRepositories();
   });
 
   // Open Session Detail — invoked by a session TreeItem with (sourceId, key),

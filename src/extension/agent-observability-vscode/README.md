@@ -73,6 +73,8 @@ All under the **Agent Observability** category:
 - `Agent Observability: Sync Now`
 - `Agent Observability: Open Settings`
 - `Agent Observability: Set Organization API Key`
+- `Agent Observability: Choose Repositories to Sync`
+- `Agent Observability: Choose Repositories to Hide`
 - `Agent Observability: Toggle Cloud Sharing`
 - `Agent Observability: Open AI Helper`
 - `Agent Observability: New AI Helper Chat`
@@ -85,6 +87,7 @@ All under the **Agent Observability** category:
 | `agentObservability.sync.intervalMinutes` | `60` | Background sync interval (minimum 5). |
 | `agentObservability.sync.repositoryMode` | `"include"` | Which repositories cloud sync includes: `include` (only those listed — the default), `all`, or `exclude`. User-level only. |
 | `agentObservability.sync.repositories` | `[]` | Repository URLs the mode applies to. With the default `include` mode and this list empty, nothing uploads until you pick at least one. Use **Choose Repositories to Sync** to pick from local telemetry. `unknown` matches sessions with no git remote. |
+| `agentObservability.excludedRepositories` | `[]` | Repositories hidden from the WHOLE extension: their sessions disappear from the local views AND are excluded from sync/preview, regardless of the sync scope. Use **Choose Repositories to Hide** to pick interactively. `unknown` hides sessions with no git remote. Local data is untouched — removing an entry brings the repository back. |
 | `agentObservability.localTelemetry.enabled` | `true` | Feature flag for the local telemetry view. |
 | `agentObservability.sqlitePath` | `""` | Override path to `agent-traces.db` (blank = auto-detect). |
 | `agentObservability.deviation.maxSessionMinutes` | `60` | Local deviation detector: max expected session/turn duration. |

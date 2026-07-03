@@ -46,6 +46,9 @@ export class SchemaMismatchError extends Error {
 /** Default agent name when a span carries none. */
 const DEFAULT_AGENT = 'copilot';
 
+/** Shared empty exclusion set so the no-filter default never allocates. */
+const NO_EXCLUSIONS: ReadonlySet<string> = new Set();
+
 /**
  * A whole-string UUID. Distinguishes a real chat-session id (joinable to the
  * LOCAL title store) from a `call_…` sub-agent spawn id in `chat_session_id`.
@@ -258,8 +261,13 @@ export class TelemetryDatabase {
    * Overview metrics across all spans (optionally since `sinceMs`, inclusive
    * on `start_time_ms`). Distinct repositories/models are computed in JS using
    * the resolver so the sanitized repository (not the raw URL) is the dimension.
+   * A non-empty `excludedRepositories` removes those repositories' sessions from
+   * every measure (see {@link overviewMetricsExcluding}).
    */
-  getOverviewMetrics(sinceMs?: number): OverviewMetrics {
+  getOverviewMetrics(sinceMs?: number, excludedRepositories?: ReadonlySet<string>): OverviewMetrics {
+    if (excludedRepositories !== undefined && excludedRepositories.size > 0) {
+      return this.overviewMetricsExcluding(excludedRepositories, sinceMs);
+    }
     const where = sinceMs !== undefined ? 'WHERE start_time_ms >= ?' : '';
     const params = sinceMs !== undefined ? [sinceMs] : [];
 
@@ -301,26 +309,127 @@ export class TelemetryDatabase {
   }
 
   /**
+   * {@link getOverviewMetrics} with hidden repositories removed. The repository
+   * is not a `spans` column (it is resolved per session key in JS), so the same
+   * measures are aggregated GROUPED per session key and only the groups whose
+   * resolved repository is not excluded are folded in — the totals equal what
+   * the unfiltered query would report over the remaining repositories. Bounded
+   * by one row per session, not per span.
+   */
+  private overviewMetricsExcluding(
+    excluded: ReadonlySet<string>,
+    sinceMs?: number,
+  ): OverviewMetrics {
+    const where = sinceMs !== undefined ? 'WHERE start_time_ms >= ?' : '';
+    const params = sinceMs !== undefined ? [sinceMs] : [];
+
+    const groups = this.allRows<{
+      sk: string | null;
+      total_interactions: number;
+      duration_sum: number | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      cached_tokens: number | null;
+      error_count: number | null;
+    }>(
+      `SELECT
+           COALESCE(conversation_id, chat_session_id) AS sk,
+           COUNT(*) AS total_interactions,
+           SUM(end_time_ms - start_time_ms) AS duration_sum,
+           SUM(CASE WHEN operation_name = 'chat' THEN COALESCE(input_tokens, 0) ELSE 0 END) AS input_tokens,
+           SUM(CASE WHEN operation_name = 'chat' THEN COALESCE(output_tokens, 0) ELSE 0 END) AS output_tokens,
+           SUM(CASE WHEN operation_name = 'chat' THEN COALESCE(cached_tokens, 0) ELSE 0 END) AS cached_tokens,
+           SUM(CASE WHEN status_code = 2 THEN 1 ELSE 0 END) AS error_count
+         FROM spans ${where}
+         GROUP BY COALESCE(conversation_id, chat_session_id)`,
+      params,
+    );
+
+    const resolver = this.resolver();
+    let totalInteractions = 0;
+    let totalSessions = 0;
+    let durationSum = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cachedTokens = 0;
+    let errorCount = 0;
+    for (const g of groups) {
+      if (excluded.has(resolver.resolve(g.sk))) {
+        continue;
+      }
+      totalInteractions += g.total_interactions;
+      // A NULL key group has no session identity: it contributes interactions
+      // (like the unfiltered COUNT(*)) but no session (COUNT DISTINCT skips NULL).
+      if (g.sk !== null) {
+        totalSessions += 1;
+      }
+      durationSum += g.duration_sum ?? 0;
+      inputTokens += g.input_tokens ?? 0;
+      outputTokens += g.output_tokens ?? 0;
+      cachedTokens += g.cached_tokens ?? 0;
+      errorCount += g.error_count ?? 0;
+    }
+
+    const dimensions = this.getOverviewDimensions(sinceMs, excluded);
+
+    return {
+      totalInteractions,
+      totalSessions,
+      totalRepositories: dimensions.repositories.length,
+      totalModels: dimensions.models.length,
+      avgDurationMs: totalInteractions > 0 ? Math.round(durationSum / totalInteractions) : 0,
+      // TIN = fresh (non-cache-read) input; cache reads live in `cachedTokens`.
+      inputTokens: freshInput(inputTokens, cachedTokens),
+      outputTokens,
+      cachedTokens,
+      errorCount,
+    };
+  }
+
+  /**
    * The distinct resolved model ids and sanitized repositories across all
    * spans (optionally since `sinceMs`, inclusive on `start_time_ms`), as the
    * NAMES rather than counts — so the service layer can union them across
    * several merged databases without double-counting a model or repository
-   * active in more than one environment. Safe metadata only.
+   * active in more than one environment. Safe metadata only. A non-empty
+   * `excludedRepositories` removes those repositories and any model seen ONLY
+   * in their sessions.
    */
-  getOverviewDimensions(sinceMs?: number): { models: string[]; repositories: string[] } {
+  getOverviewDimensions(
+    sinceMs?: number,
+    excludedRepositories?: ReadonlySet<string>,
+  ): { models: string[]; repositories: string[] } {
+    const excluded = excludedRepositories ?? NO_EXCLUSIONS;
     const where = sinceMs !== undefined ? 'WHERE start_time_ms >= ?' : '';
     const params = sinceMs !== undefined ? [sinceMs] : [];
+    const resolver = this.resolver();
 
-    // Distinct models from the typed columns (safe metadata).
-    const modelRows = this.allRows<{ model: string | null }>(
-      `SELECT DISTINCT COALESCE(response_model, request_model) AS model
-         FROM spans ${where}`,
-      params,
-    );
+    // Distinct models from the typed columns (safe metadata). When repositories
+    // are excluded, take DISTINCT (session, model) pairs so a model seen only in
+    // hidden sessions does not count.
     const models = new Set<string>();
-    for (const r of modelRows) {
-      if (r.model !== null && r.model.length > 0) {
-        models.add(r.model);
+    if (excluded.size === 0) {
+      const modelRows = this.allRows<{ model: string | null }>(
+        `SELECT DISTINCT COALESCE(response_model, request_model) AS model
+           FROM spans ${where}`,
+        params,
+      );
+      for (const r of modelRows) {
+        if (r.model !== null && r.model.length > 0) {
+          models.add(r.model);
+        }
+      }
+    } else {
+      const modelRows = this.allRows<{ sk: string | null; model: string | null }>(
+        `SELECT DISTINCT COALESCE(conversation_id, chat_session_id) AS sk,
+                COALESCE(response_model, request_model) AS model
+           FROM spans ${where}`,
+        params,
+      );
+      for (const r of modelRows) {
+        if (r.model !== null && r.model.length > 0 && !excluded.has(resolver.resolve(r.sk))) {
+          models.add(r.model);
+        }
       }
     }
 
@@ -330,10 +439,12 @@ export class TelemetryDatabase {
          FROM spans ${where}`,
       params,
     );
-    const resolver = this.resolver();
     const repositories = new Set<string>();
     for (const r of sessionRows) {
-      repositories.add(resolver.resolve(r.sk));
+      const repository = resolver.resolve(r.sk);
+      if (!excluded.has(repository)) {
+        repositories.add(repository);
+      }
     }
 
     return { models: [...models], repositories: [...repositories] };

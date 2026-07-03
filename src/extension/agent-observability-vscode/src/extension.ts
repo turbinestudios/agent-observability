@@ -389,6 +389,15 @@ export function activate(context: vscode.ExtensionContext): void {
     configureSyncRepositories: () => {
       void runConfigureSyncRepositories(config, telemetry);
     },
+    // LOCAL-ONLY: pick which repositories the extension hides entirely (from
+    // the local views AND the sync/preview aggregate rows). Reads the repos
+    // visible across every enabled source, writes the unchecked ones to USER
+    // settings, and never uploads anything. The config-change listener below
+    // re-renders the views and rewinds the sync watermark (an un-hidden
+    // repository must backfill).
+    configureExcludedRepositories: () => {
+      void runConfigureExcludedRepositories(config, registry);
+    },
     // Focus the AI Helper view; `<viewId>.focus` is auto-registered by VS Code.
     openAssistant: () => {
       void vscode.commands.executeCommand(`${ASSISTANT_VIEW_ID}.focus`);
@@ -475,12 +484,14 @@ export function activate(context: vscode.ExtensionContext): void {
   // re-scans the full local window — newly-included repositories backfill rather
   // than being skipped because their window was already marked sent. Re-sending
   // is idempotent (server upserts by rowKey) and the local DB is a short rolling
-  // window, so the catch-up is bounded.
+  // window, so the catch-up is bounded. `excludedRepositories` is part of the
+  // effective scope too: un-hiding a repository must backfill it the same way.
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
         event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.syncRepositoryMode}`) ||
-        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.syncRepositories}`)
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.syncRepositories}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.excludedRepositories}`)
       ) {
         void syncState.clearWatermark().then(() => sync.refresh());
       }
@@ -738,6 +749,81 @@ async function runConfigureSyncRepositories(
     nextMode === 'all'
       ? `Agent Observability: cloud sync now includes all ${allRepos.length} repositories.`
       : `Agent Observability: cloud sync now includes ${selected.length} of ${allRepos.length} repositories.`,
+  );
+}
+
+/**
+ * `configureExcludedRepositories` handler. Presents a checklist of every
+ * repository visible across the enabled sources — plus the already-hidden ones
+ * (which the filtered listings no longer report), so a hidden repository can
+ * always be un-hidden even after it ages out of local telemetry. Checked =
+ * shown; the UNCHECKED repositories are written to `excludedRepositories` in
+ * USER settings and disappear from the local views and the sync/preview
+ * aggregate rows. LOCAL-ONLY — the underlying telemetry is untouched, so
+ * re-checking a repository brings it straight back.
+ */
+async function runConfigureExcludedRepositories(
+  config: Configuration,
+  registry: SourceRegistry,
+): Promise<void> {
+  const excluded = config.getExcludedRepositories();
+
+  // Visible repositories across every enabled source. The Copilot tree shows
+  // no-remote sessions ungrouped rather than as a repository row, so probe for
+  // them explicitly — `unknown` must be offered when such sessions exist.
+  const visible = new Set<string>();
+  for (const source of registry.enabled()) {
+    const repos = source.listRepositories();
+    if (repos.ok) {
+      for (const repo of repos.value) {
+        visible.add(repo.repository);
+      }
+    }
+    const ungrouped = source.listSessions(UNKNOWN_REPOSITORY, 1);
+    if (ungrouped.ok && ungrouped.value.length > 0) {
+      visible.add(UNKNOWN_REPOSITORY);
+    }
+  }
+
+  const allRepos = [...new Set([...visible, ...excluded])].sort();
+  if (allRepos.length === 0) {
+    void vscode.window.showInformationMessage(
+      'Agent Observability: no repositories found in local telemetry yet. Use an agent in a repository, then try again.',
+    );
+    return;
+  }
+
+  interface RepoPick extends vscode.QuickPickItem {
+    repository: string;
+  }
+  const items: RepoPick[] = allRepos.map((repository) => ({
+    repository,
+    label: repository === UNKNOWN_REPOSITORY ? '$(question) No detected git remote' : repository,
+    description: repository === UNKNOWN_REPOSITORY ? 'unknown' : undefined,
+    picked: !excluded.has(repository),
+  }));
+
+  const picked = await vscode.window.showQuickPick(items, {
+    canPickMany: true,
+    title: 'Choose Repositories to Hide',
+    placeHolder:
+      'Check the repositories to show. Unchecked repositories are hidden from the extension and excluded from sync.',
+    ignoreFocusOut: true,
+  });
+  if (picked === undefined) {
+    return; // dismissed — no change
+  }
+
+  const shown = new Set(picked.map((p) => p.repository));
+  const hidden = allRepos.filter((repository) => !shown.has(repository));
+
+  const ao = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  await ao.update(ConfigKeys.excludedRepositories, hidden, vscode.ConfigurationTarget.Global);
+
+  void vscode.window.showInformationMessage(
+    hidden.length === 0
+      ? `Agent Observability: showing all ${allRepos.length} repositories.`
+      : `Agent Observability: hiding ${hidden.length} of ${allRepos.length} repositories. Local data is untouched — re-run this command to bring them back.`,
   );
 }
 

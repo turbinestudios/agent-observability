@@ -57,7 +57,18 @@ export interface ClaudeServiceConfig extends ClaudePathConfig {
   getDocFileExtensions(): string[];
   /** Max most-recent sessions to surface in the list / aggregate by default. */
   getClaudeMaxSessions(): number;
+  /**
+   * Sanitized repositories hidden from the whole extension (see
+   * `Configuration.getExcludedRepositories`). Their sessions are filtered out
+   * of every listing, the overview, and the aggregation rows — so they reach
+   * neither the views nor the sync/preview path. Optional so narrow test
+   * configs need not supply it; absent means no exclusions.
+   */
+  getExcludedRepositories?(): ReadonlySet<string>;
 }
+
+/** Shared empty exclusion set so the no-filter default never allocates. */
+const NO_EXCLUSIONS: ReadonlySet<string> = new Set();
 
 /** A parsed file held with the mtime it was parsed at (cache key). */
 interface ParsedFile {
@@ -273,6 +284,7 @@ export class ClaudeCodeService implements SessionDataSource {
     return this.guard(() => {
       const sessions = this.ensureDiscovered();
       const cap = this.maxSessions();
+      const excluded = this.excludedRepositories();
       const rows: AggregationRow[] = [];
       let count = 0;
       for (const session of sessions) {
@@ -286,6 +298,10 @@ export class ClaudeCodeService implements SessionDataSource {
         count += 1;
         const input = this.buildInput(session, true);
         if (input === undefined) {
+          continue;
+        }
+        // A hidden repository's rows never reach the sync engine / preview.
+        if (excluded.has(input.repository)) {
           continue;
         }
         for (const row of buildAggregationRows(input)) {
@@ -316,15 +332,30 @@ export class ClaudeCodeService implements SessionDataSource {
     }
   }
 
-  /** Build summaries for the most-recent (capped) sessions, memoized by mtime. */
+  /**
+   * Sanitized repositories hidden from every query (empty when the config does
+   * not supply the accessor). Applied on top of the mtime-keyed caches, which
+   * deliberately keep the hidden sessions — un-hiding is then instant.
+   */
+  private excludedRepositories(): ReadonlySet<string> {
+    return this.config.getExcludedRepositories?.() ?? NO_EXCLUSIONS;
+  }
+
+  /**
+   * Build summaries for the most-recent (capped) sessions, memoized by mtime.
+   * Sessions of excluded repositories are dropped AFTER the recency cap — the
+   * single chokepoint that hides them from the overview, the repository list,
+   * and the session list alike.
+   */
   private listSummaries(): SessionSummary[] {
     const sessions = this.ensureDiscovered();
     const cap = this.maxSessions();
+    const excluded = this.excludedRepositories();
     this.truncatedCount = Math.max(0, sessions.length - cap);
     const out: SessionSummary[] = [];
     for (const session of sessions.slice(0, cap)) {
       const summary = this.summaryFor(session);
-      if (summary !== undefined) {
+      if (summary !== undefined && !excluded.has(summary.repository)) {
         out.push(summary);
       }
     }

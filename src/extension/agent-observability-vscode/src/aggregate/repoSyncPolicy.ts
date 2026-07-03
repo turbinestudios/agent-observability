@@ -41,13 +41,29 @@ export const ALL_REPOSITORIES_POLICY: RepoSyncPolicy = {
 };
 
 /**
+ * Normalize a raw (possibly hand-edited) repository list into the canonical set
+ * membership tests use. Every entry passes through {@link sanitizeRepositoryUrl}
+ * — the SAME chokepoint the row values pass through — so a hand-typed
+ * `org/repo`, a trailing `.git`, an SCP-style remote, or odd casing all converge
+ * with the canonical row form and match as expected. The literal `unknown` token
+ * is passed through verbatim so users can scope sessions with no detected git
+ * remote. Shared by the sync scope and the local `excludedRepositories` filter.
+ */
+export function normalizeRepositoryList(raw: readonly string[]): Set<string> {
+  const repositories = new Set<string>();
+  for (const entry of raw) {
+    if (typeof entry === 'string' && entry.trim().length > 0) {
+      repositories.add(entry.trim() === 'unknown' ? 'unknown' : sanitizeRepositoryUrl(entry));
+    }
+  }
+  return repositories;
+}
+
+/**
  * Build a policy from a (possibly hand-edited) settings value.
  *
- * The raw list is normalized through {@link sanitizeRepositoryUrl} — the SAME
- * chokepoint the row values pass through — so a hand-typed `org/repo`, a
- * trailing `.git`, an SCP-style remote, or odd casing all converge with the
- * canonical row form and match as expected. An unrecognized mode falls back to
- * `all` rather than silently dropping uploads.
+ * The raw list is normalized through {@link normalizeRepositoryList}. An
+ * unrecognized mode falls back to `all` rather than silently dropping uploads.
  */
 export function buildRepoSyncPolicy(mode: string, raw: readonly string[]): RepoSyncPolicy {
   const resolvedMode: RepoSyncMode = (REPO_SYNC_MODES as readonly string[]).includes(mode)
@@ -56,15 +72,7 @@ export function buildRepoSyncPolicy(mode: string, raw: readonly string[]): RepoS
   if (resolvedMode === 'all') {
     return ALL_REPOSITORIES_POLICY;
   }
-  const repositories = new Set<string>();
-  for (const entry of raw) {
-    if (typeof entry === 'string' && entry.trim().length > 0) {
-      // The literal `unknown` token is passed through verbatim so users can
-      // scope sessions with no detected git remote; everything else sanitizes.
-      repositories.add(entry.trim() === 'unknown' ? 'unknown' : sanitizeRepositoryUrl(entry));
-    }
-  }
-  return { mode: resolvedMode, repositories };
+  return { mode: resolvedMode, repositories: normalizeRepositoryList(raw) };
 }
 
 /**

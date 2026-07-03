@@ -105,6 +105,12 @@
         "icon": "$(filter)"
       },
       {
+        "command": "agentObservability.configureExcludedRepositories",
+        "title": "Choose Repositories to Hide",
+        "category": "Agent Observability",
+        "icon": "$(eye-closed)"
+      },
+      {
         "command": "agentObservability.toggleConsent",
         "title": "Toggle Cloud Sharing",
         "category": "Agent Observability"
@@ -216,6 +222,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "agentObservability.configureExcludedRepositories",
+          "when": "view == agentObservability.sessions",
+          "group": "navigation@2"
+        },
+        {
           "command": "agentObservability.syncNow",
           "when": "view == agentObservability.sync",
           "group": "navigation@1"
@@ -307,6 +318,15 @@
           "default": [],
           "scope": "application",
           "markdownDescription": "Sanitized repository URLs (e.g. `https://github.com/org/repo`) that `#agentObservability.sync.repositoryMode#` applies to. Run **Agent Observability: Choose Repositories to Sync** to pick from the repositories found in your local telemetry instead of typing URLs by hand. The special value `unknown` matches sessions with no detected git remote. Hand-typed entries are normalized to canonical form, so `org/repo` shorthand and a trailing `.git` still match."
+        },
+        "agentObservability.excludedRepositories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "Repositories to hide from the WHOLE extension. Unlike `#agentObservability.sync.repositoryMode#` (which only narrows what uploads), a repository listed here disappears from the local Overview and Sessions views AND is excluded from cloud sync and the payload preview. Run **Agent Observability: Choose Repositories to Hide** to pick from the repositories found in your local telemetry instead of typing URLs by hand. The special value `unknown` hides sessions with no detected git remote. Hand-typed entries are normalized to canonical form, so `org/repo` shorthand and a trailing `.git` still match. Local data is untouched — removing an entry brings the repository straight back."
         },
         "agentObservability.localTelemetry.enabled": {
           "type": "boolean",

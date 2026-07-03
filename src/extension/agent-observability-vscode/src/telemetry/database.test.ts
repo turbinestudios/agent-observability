@@ -152,4 +152,67 @@ describe('TelemetryDatabase against the fixture', () => {
   it('returns undefined from getSessionTreeStats for an unknown session', () => {
     expect(db.getSessionTreeStats('does-not-exist-0000')).toBeUndefined();
   });
+
+  // Repository exclusion (`agentObservability.excludedRepositories`): the
+  // filtered overview must be exactly the unfiltered totals over the remaining
+  // repositories — verified via a partition check, since the filtered path uses
+  // a different (per-session grouped) query than the unfiltered fast path.
+  describe('overview repository exclusion', () => {
+    it('an empty exclusion set reproduces the unfiltered overview exactly', () => {
+      expect(db.getOverviewMetrics(undefined, new Set())).toEqual(db.getOverviewMetrics());
+    });
+
+    it('excluding the sample repo removes it from every measure and dimension', () => {
+      const full = db.getOverviewMetrics();
+      const filtered = db.getOverviewMetrics(undefined, new Set([SAMPLE_REPO]));
+      expect(filtered.totalRepositories).toBe(full.totalRepositories - 1);
+      expect(filtered.totalInteractions).toBeLessThan(full.totalInteractions);
+      expect(filtered.totalSessions).toBeLessThan(full.totalSessions);
+      const dims = db.getOverviewDimensions(undefined, new Set([SAMPLE_REPO]));
+      expect(dims.repositories).not.toContain(SAMPLE_REPO);
+      // Models can only shrink — never gain — under an exclusion.
+      const fullDims = db.getOverviewDimensions();
+      expect(dims.models.every((m) => fullDims.models.includes(m))).toBe(true);
+    });
+
+    it('complementary exclusions partition the additive totals exactly', () => {
+      const full = db.getOverviewMetrics();
+      const allRepos = db.getOverviewDimensions().repositories;
+      const withoutSample = db.getOverviewMetrics(undefined, new Set([SAMPLE_REPO]));
+      const onlySample = db.getOverviewMetrics(
+        undefined,
+        new Set(allRepos.filter((r) => r !== SAMPLE_REPO)),
+      );
+      // Raw additive counters split cleanly across the two halves. (inputTokens
+      // is excluded: freshInput clamps per half, so it is not strictly additive.)
+      for (const key of [
+        'totalInteractions',
+        'totalSessions',
+        'outputTokens',
+        'cachedTokens',
+        'errorCount',
+      ] as const) {
+        expect(withoutSample[key] + onlySample[key]).toBe(full[key]);
+      }
+      expect(withoutSample.totalRepositories + onlySample.totalRepositories).toBe(
+        full.totalRepositories,
+      );
+    });
+
+    it('excluding every repository empties the overview', () => {
+      const allRepos = db.getOverviewDimensions().repositories;
+      const empty = db.getOverviewMetrics(undefined, new Set(allRepos));
+      expect(empty).toEqual({
+        totalInteractions: 0,
+        totalSessions: 0,
+        totalRepositories: 0,
+        totalModels: 0,
+        avgDurationMs: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        errorCount: 0,
+      });
+    });
+  });
 });

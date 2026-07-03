@@ -6,6 +6,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Hide repositories from the whole extension.** The new
+  `agentObservability.excludedRepositories` setting (empty by default,
+  user-level) hides listed repositories everywhere: their sessions disappear
+  from the Local Overview and Sessions views, and their aggregate rows are
+  dropped upstream of cloud sync, the payload preview, and the repository
+  pickers — regardless of the `sync.repositoryMode` scope. This is the local
+  counterpart to the existing per-repository sync scoping. Entries are
+  normalized through the same sanitizer as `sync.repositories` (so `org/repo`
+  shorthand or a trailing `.git` still match) and the literal `unknown` hides
+  sessions with no detected git remote. The new **Agent Observability: Choose
+  Repositories to Hide** command (also on the Sessions view title bar) offers a
+  checklist of the repositories found across both sources — checked = shown.
+  Purely a read-time filter: local telemetry is untouched, so removing an entry
+  (or re-checking it in the picker) brings the repository straight back, and
+  un-hiding rewinds the sync watermark so the repository backfills on the next
+  sync.
+
 ### Changed
 
 - **Workflow `triggerPredicate` is now a pure applicability gate everywhere — it
