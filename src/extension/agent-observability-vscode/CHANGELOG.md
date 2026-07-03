@@ -4,6 +4,24 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Workflow `triggerPredicate` is now a pure applicability gate everywhere — it
+  never filters interactions.** All workflow analysis is scoped to one
+  user-request turn: a workflow applies to a turn when at least one of the turn's
+  interactions matches the trigger, and every check (sequence, missing-step,
+  timeout, tool-usage) then runs over the WHOLE turn. A trigger may therefore be
+  narrower than — or disjoint from — its steps (e.g. trigger on a signature
+  `toolName` while steps assert agents); the old "trigger must be a superset of
+  every step" rule is gone, and the AI Helper's workflow-generation guidance no
+  longer imposes it. The last session-scoped consumer (the sync path's
+  context-insights deviation flagging) now buckets interactions into the same
+  user-request turns as the session-detail view and the divergence notifier, and
+  content-derived deviations are excluded from that flagging so raw local-only
+  content can never influence what is uploaded.
+
 ## [0.5.0] - 2026-07-02
 
 ### Added

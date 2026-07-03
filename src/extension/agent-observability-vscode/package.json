@@ -402,7 +402,7 @@
                     "triggerPredicate": {
                       "type": "object",
                       "additionalProperties": false,
-                      "markdownDescription": "Optional metadata filter scoping which interactions belong to this workflow (the local equivalent of the cloud `TriggerKqlQuery`). When set, every check runs over only the matching interactions. All fields are optional; an absent field matches any value; string fields compare case-insensitively.",
+                      "markdownDescription": "Optional metadata applicability gate: the workflow applies to a user-request turn only when at least one of the turn's interactions matches. It never filters interactions — every check runs over the whole turn, so the trigger may be narrower than the steps. All fields are optional; an absent field matches any value; string fields compare case-insensitively.",
                       "properties": {
                         "operation": {
                           "type": "string",

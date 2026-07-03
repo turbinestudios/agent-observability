@@ -4,7 +4,13 @@ import {
   matchesPredicate,
   WorkflowDeviationDetector,
 } from './deviationDetector';
-import { DeviationType, WorkflowConfig, WorkflowDefinition, WorkflowStep } from './models';
+import {
+  DeviationType,
+  WorkflowConfig,
+  WorkflowDefinition,
+  WorkflowDeviation,
+  WorkflowStep,
+} from './models';
 import { Interaction } from '../telemetry/models';
 
 /**
@@ -12,10 +18,20 @@ import { Interaction } from '../telemetry/models';
  * The legacy agent-name `expectedSequence` path is covered by
  * `deviationDetector.test.ts`; these exercise `triggerPredicate`, `steps`, and
  * `contentPredicate` wiring (the latter via an injected, local-only lookup).
+ * Detection is per-TURN; each test analyzes its interactions as one turn.
  */
 
 const REPO = 'https://github.com/example-org/sample-repo';
 const detector = new WorkflowDeviationDetector();
+
+/** Analyze the interactions as a single user-request turn. */
+function detect(
+  interactions: readonly Interaction[],
+  configs: readonly WorkflowConfig[],
+  contentLookup?: ContentLookup,
+): WorkflowDeviation[] {
+  return detector.detectForTurns([[...interactions]], configs, contentLookup)[0];
+}
 
 let counter = 0;
 /** Build an Interaction; defaults are a successful agent-mode chat span. */
@@ -117,7 +133,7 @@ describe('steps-based sequence + missing detection', () => {
       mk({ agentName: 'coder' }),
       mk({ agentName: 'reviewer' }),
     ];
-    const result = detector.detectDeviations(interactions, [cfg(wf({ steps }))]);
+    const result = detect(interactions, [cfg(wf({ steps }))]);
     expect(result).toHaveLength(0);
   });
 
@@ -127,7 +143,7 @@ describe('steps-based sequence + missing detection', () => {
       mk({ agentName: 'planner' }),
       mk({ agentName: 'reviewer' }),
     ];
-    const result = detector.detectDeviations(interactions, [cfg(wf({ steps }))]);
+    const result = detect(interactions, [cfg(wf({ steps }))]);
     const seq = result.filter((d) => d.type === DeviationType.SequenceDeviation);
     expect(seq).toHaveLength(1);
     expect(seq[0].expectedSequence).toEqual(['plan', 'code', 'review']);
@@ -137,7 +153,7 @@ describe('steps-based sequence + missing detection', () => {
 
   it('flags MissingSteps (not SequenceDeviation) when a step never appears', () => {
     const interactions = [mk({ agentName: 'planner' }), mk({ agentName: 'coder' })];
-    const result = detector.detectDeviations(interactions, [cfg(wf({ steps }))]);
+    const result = detect(interactions, [cfg(wf({ steps }))]);
     expect(result.filter((d) => d.type === DeviationType.SequenceDeviation)).toHaveLength(0);
     const missing = result.filter((d) => d.type === DeviationType.MissingSteps);
     expect(missing).toHaveLength(1);
@@ -150,10 +166,10 @@ describe('steps-based sequence + missing detection', () => {
       step('edit-ok', { operation: 'execute_tool', toolName: 'edit_file', success: true }),
     ];
     const passing = [mk({ operation: 'execute_tool', toolName: 'edit_file', success: true })];
-    expect(detector.detectDeviations(passing, [cfg(wf({ steps: combined }))])).toHaveLength(0);
+    expect(detect(passing, [cfg(wf({ steps: combined }))])).toHaveLength(0);
 
     const failing = [mk({ operation: 'execute_tool', toolName: 'edit_file', success: false })];
-    const result = detector.detectDeviations(failing, [cfg(wf({ steps: combined }))]);
+    const result = detect(failing, [cfg(wf({ steps: combined }))]);
     expect(result.filter((d) => d.type === DeviationType.MissingSteps)).toHaveLength(1);
   });
 
@@ -165,7 +181,7 @@ describe('steps-based sequence + missing detection', () => {
       mk({ agentName: 'planner' }),
       mk({ agentName: 'planner' }),
     ];
-    const result = detector.detectDeviations(interactions, [cfg(wf({ steps }))]);
+    const result = detect(interactions, [cfg(wf({ steps }))]);
     expect(result.filter((d) => d.type === DeviationType.SequenceDeviation)).toHaveLength(0);
     const missing = result.filter((d) => d.type === DeviationType.MissingSteps);
     expect(missing).toHaveLength(1);
@@ -186,7 +202,7 @@ describe('steps-based sequence + missing detection', () => {
       mk({ operation: 'chat' }),
       mk({ operation: 'execute_tool', toolName: 'run_tests' }),
     ];
-    const result = detector.detectDeviations(interactions, [cfg(wf({ steps: opSteps }))]);
+    const result = detect(interactions, [cfg(wf({ steps: opSteps }))]);
     expect(result.filter((d) => d.type === DeviationType.SequenceDeviation)).toHaveLength(1);
     // Every step occurred, so nothing is missing.
     expect(result.filter((d) => d.type === DeviationType.MissingSteps)).toHaveLength(0);
@@ -204,7 +220,7 @@ describe('steps-based sequence + missing detection', () => {
       mk({ agentName: 'beta', operation: 'chat' }),
       mk({ agentName: 'gamma', operation: 'chat' }),
     ];
-    const result = detector.detectDeviations(interactions, [cfg(wf({ steps: opSteps }))]);
+    const result = detect(interactions, [cfg(wf({ steps: opSteps }))]);
     expect(result.filter((d) => d.type === DeviationType.SequenceDeviation)).toHaveLength(0);
     const missing = result.filter((d) => d.type === DeviationType.MissingSteps);
     expect(missing).toHaveLength(1);
@@ -212,41 +228,65 @@ describe('steps-based sequence + missing detection', () => {
   });
 });
 
-describe('triggerPredicate scoping', () => {
+describe('triggerPredicate gating (never filtering)', () => {
   const steps: WorkflowStep[] = [step('review', { agentName: 'reviewer' })];
 
-  it('does not apply the workflow when the trigger matches nothing in the session', () => {
-    // Trigger scopes to execute_tool, but the session is all chat → out of scope.
+  it('does not apply the workflow when the trigger matches nothing in the turn', () => {
+    // Trigger requires an execute_tool, but the turn is all chat → not relevant.
     const interactions = [mk({ agentName: 'planner', operation: 'chat' })];
-    const result = detector.detectDeviations(interactions, [
+    const result = detect(interactions, [
       cfg(wf({ triggerPredicate: { operation: 'execute_tool' }, steps })),
     ]);
     expect(result).toHaveLength(0);
   });
 
-  it('excludes out-of-scope interactions so an otherwise-present step is missing', () => {
-    // reviewer ran, but in ask mode; the trigger scopes to agent mode only.
+  it('never filters: a step is satisfied by an interaction the trigger does not match', () => {
+    // The trigger matches only the agent-mode planner interaction; the reviewer
+    // ran in ask mode. Under the old filter semantics the reviewer would be
+    // dropped and 'review' falsely reported missing — gating analyzes the WHOLE
+    // turn, so the step is satisfied.
     const interactions = [
       mk({ agentName: 'planner', agentMode: 'agent' }),
       mk({ agentName: 'reviewer', agentMode: 'ask' }),
     ];
-    const result = detector.detectDeviations(interactions, [
+    const result = detect(interactions, [
+      cfg(wf({ triggerPredicate: { agentMode: 'agent' }, steps })),
+    ]);
+    expect(result).toHaveLength(0);
+  });
+
+  it('allows a trigger disjoint from every step predicate', () => {
+    // Relevance keyed on a signature tool; the steps assert agents the trigger
+    // could never match. No step may be starved by the trigger.
+    const interactions = [
+      mk({ operation: 'execute_tool', toolName: 'db_migrate' }),
+      mk({ agentName: 'reviewer' }),
+    ];
+    const result = detect(interactions, [
+      cfg(wf({ triggerPredicate: { toolName: 'db_migrate' }, steps })),
+    ]);
+    expect(result).toHaveLength(0);
+  });
+
+  it('applies to the whole turn when the trigger matches', () => {
+    const interactions = [
+      mk({ agentName: 'planner', agentMode: 'agent' }),
+      mk({ agentName: 'reviewer', agentMode: 'agent' }),
+    ];
+    const result = detect(interactions, [
+      cfg(wf({ triggerPredicate: { agentMode: 'agent' }, steps })),
+    ]);
+    expect(result).toHaveLength(0);
+  });
+
+  it('still reports a genuinely missing step in a relevant turn', () => {
+    const interactions = [mk({ agentName: 'planner', agentMode: 'agent' })];
+    const result = detect(interactions, [
       cfg(wf({ triggerPredicate: { agentMode: 'agent' }, steps })),
     ]);
     const missing = result.filter((d) => d.type === DeviationType.MissingSteps);
     expect(missing).toHaveLength(1);
     expect(missing[0].description).toContain('review');
-  });
-
-  it('applies normally to the scoped subset when the trigger matches', () => {
-    const interactions = [
-      mk({ agentName: 'planner', agentMode: 'agent' }),
-      mk({ agentName: 'reviewer', agentMode: 'agent' }),
-    ];
-    const result = detector.detectDeviations(interactions, [
-      cfg(wf({ triggerPredicate: { agentMode: 'agent' }, steps })),
-    ]);
-    expect(result).toHaveLength(0);
   });
 });
 
@@ -265,7 +305,7 @@ describe('content predicates (local-only, via injected lookup)', () => {
       }),
     ];
     const lookup = lookupFor('copilot_chat.user_request', { 'chat-1': 'Please fix the BUG now' });
-    const result = detector.detectDeviations([it1], [cfg(wf({ steps }))], lookup);
+    const result = detect([it1], [cfg(wf({ steps }))], lookup);
     expect(result).toHaveLength(0);
   });
 
@@ -281,7 +321,7 @@ describe('content predicates (local-only, via injected lookup)', () => {
     // user_request DOES contain a secret → negate makes the condition fail.
     const secret = 'my key is AKIAIOSFODNN7EXAMPLE and more';
     const lookup = lookupFor('copilot_chat.user_request', { 'chat-1': secret });
-    const result = detector.detectDeviations([it1], [cfg(wf({ steps }))], lookup);
+    const result = detect([it1], [cfg(wf({ steps }))], lookup);
 
     const missing = result.filter((d) => d.type === DeviationType.MissingSteps);
     expect(missing).toHaveLength(1);
@@ -305,10 +345,10 @@ describe('content predicates (local-only, via injected lookup)', () => {
       }),
     ];
     const ok = lookupFor('gen_ai.tool.call.arguments', { 'tool-1': 'src/extension/foo.ts' });
-    expect(detector.detectDeviations([tool], [cfg(wf({ steps }))], ok)).toHaveLength(0);
+    expect(detect([tool], [cfg(wf({ steps }))], ok)).toHaveLength(0);
 
     const bad = lookupFor('gen_ai.tool.call.arguments', { 'tool-1': 'README.md' });
-    const result = detector.detectDeviations([tool], [cfg(wf({ steps }))], bad);
+    const result = detect([tool], [cfg(wf({ steps }))], bad);
     expect(result.filter((d) => d.type === DeviationType.MissingSteps)).toHaveLength(1);
   });
 
@@ -322,7 +362,7 @@ describe('content predicates (local-only, via injected lookup)', () => {
     ];
     // No contentLookup passed → content is inert, so the step is satisfied on
     // metadata alone and no content-derived deviation appears.
-    const result = detector.detectDeviations([it1], [cfg(wf({ steps }))]);
+    const result = detect([it1], [cfg(wf({ steps }))]);
     expect(result).toHaveLength(0);
   });
 
@@ -342,7 +382,7 @@ describe('content predicates (local-only, via injected lookup)', () => {
     // metadata reorder (coder before planner). The sequence walk is metadata-only,
     // so the deviation is NOT content-derived.
     const lookup = lookupFor('copilot_chat.user_request', { s1: 'please plan', s2: 'please plan' });
-    const result = detector.detectDeviations(interactions, [cfg(wf({ steps }))], lookup);
+    const result = detect(interactions, [cfg(wf({ steps }))], lookup);
     const seq = result.filter((d) => d.type === DeviationType.SequenceDeviation);
     expect(seq).toHaveLength(1);
     expect(seq[0].contentDerived).toBeUndefined();
@@ -363,7 +403,7 @@ describe('content predicates (local-only, via injected lookup)', () => {
       step('code', { agentName: 'coder' }),
     ];
     const lookup = lookupFor('copilot_chat.user_request', { s1: 'do the thing', s2: 'write code' });
-    const result = detector.detectDeviations(interactions, [cfg(wf({ steps }))], lookup);
+    const result = detect(interactions, [cfg(wf({ steps }))], lookup);
     expect(result.filter((d) => d.type === DeviationType.SequenceDeviation)).toHaveLength(0);
     const missing = result.filter((d) => d.type === DeviationType.MissingSteps);
     expect(missing).toHaveLength(1);
@@ -382,13 +422,13 @@ describe('steps-path count-starvation guard (no phantom reorder)', () => {
   it('does not flag a reorder for duplicate identical step predicates with one interaction', () => {
     // One event cannot satisfy two sequential identical steps — incomplete, not a reorder.
     const steps = [step('a1', { agentName: 'planner' }), step('a2', { agentName: 'planner' })];
-    const result = detector.detectDeviations([mk({ agentName: 'planner' })], [cfg(wf({ steps }))]);
+    const result = detect([mk({ agentName: 'planner' })], [cfg(wf({ steps }))]);
     expect(result.filter((d) => d.type === DeviationType.SequenceDeviation)).toHaveLength(0);
   });
 
   it('does not flag a reorder for empty (match-any) step predicates with too few interactions', () => {
     const steps = [step('any1', {}), step('any2', {})];
-    const result = detector.detectDeviations([mk({})], [cfg(wf({ steps }))]);
+    const result = detect([mk({})], [cfg(wf({ steps }))]);
     expect(result.filter((d) => d.type === DeviationType.SequenceDeviation)).toHaveLength(0);
   });
 
@@ -399,7 +439,7 @@ describe('steps-path count-starvation guard (no phantom reorder)', () => {
       step('s-model', { model: 'gpt-test' }),
     ];
     // A single span matches all three predicates; there is nothing to reorder.
-    const result = detector.detectDeviations(
+    const result = detect(
       [mk({ operation: 'chat', agentName: 'copilot', model: 'gpt-test' })],
       [cfg(wf({ steps }))],
     );
@@ -417,7 +457,7 @@ describe('steps-path count-starvation guard (no phantom reorder)', () => {
       mk({ agentName: 'coder', operation: 'chat', spanId: 's2' }),
     ];
     const lookup = lookupFor('copilot_chat.user_request', { s1: 'aaa', s2: 'bbb' });
-    const result = detector.detectDeviations(interactions, [cfg(wf({ steps }))], lookup);
+    const result = detect(interactions, [cfg(wf({ steps }))], lookup);
     expect(result.filter((d) => d.type === DeviationType.SequenceDeviation)).toHaveLength(0);
     const missing = result.filter((d) => d.type === DeviationType.MissingSteps);
     expect(missing).toHaveLength(1);

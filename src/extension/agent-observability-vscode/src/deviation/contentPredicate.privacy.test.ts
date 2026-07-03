@@ -68,7 +68,7 @@ describe('content-predicate deviation privacy', () => {
     const lookup: ContentLookup = (attr) =>
       attr === 'copilot_chat.user_request' ? new Map([['chat-1', SECRET]]) : new Map();
 
-    const deviations = detector.detectDeviations([span], [config], lookup);
+    const deviations = detector.detectForTurns([[span]], [config], lookup)[0];
     const missing = deviations.filter((d) => d.type === DeviationType.MissingSteps);
     expect(missing).toHaveLength(1);
 

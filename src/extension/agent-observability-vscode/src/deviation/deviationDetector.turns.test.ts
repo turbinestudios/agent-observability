@@ -176,10 +176,4 @@ describe('detectForTurns — content-gated trigger (intent-based relevance)', ()
     const [deviations] = detector.detectForTurns([turn], [contentConfig]);
     expect(deviations).toEqual([]);
   });
-
-  it('is skipped entirely on the session/sync path', () => {
-    const interactions = [ix('planner', 1000, { spanId: 'anchor' })];
-    const result = detector.detectDeviations(interactions, [contentConfig], lookupFor('migrate the db'));
-    expect(result).toEqual([]);
-  });
 });

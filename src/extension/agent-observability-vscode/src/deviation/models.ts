@@ -148,13 +148,11 @@ export interface WorkflowDefinition {
   /** Emit a {@link DeviationType.ToolUsageAnomaly} on a high failure rate. */
   toolUsageAnomalyAlert: boolean;
   /**
-   * Optional metadata trigger predicate.
-   *
-   * On the per-turn LOCAL path it is a pure applicability GATE — the workflow
+   * Optional metadata trigger predicate: a pure applicability GATE. The workflow
    * applies to a user-request turn iff at least one of the turn's interactions
-   * matches it, and the trigger does NOT filter the analyzed interactions. On the
-   * legacy session/sync path it additionally SCOPES the checked subset (the local
-   * analog of the cloud `TriggerKqlQuery`). Absent → applies everywhere.
+   * matches it, and the trigger NEVER filters the analyzed interactions — every
+   * check runs over the whole turn, so the trigger may be narrower than (or
+   * disjoint from) the step predicates. Absent → applies to every turn.
    */
   triggerPredicate?: StepPredicate;
   /**
@@ -164,10 +162,10 @@ export interface WorkflowDefinition {
    * what the request is ABOUT (e.g. `copilot_chat.user_request` contains "migrate
    * the database"), which metadata alone cannot express.
    *
-   * Evaluated ONLY on the per-turn local path — the session/sync path skips any
-   * content-triggered workflow entirely — and every deviation from a
-   * content-triggered workflow is flagged {@link WorkflowDeviation.contentDerived},
-   * so it is local-only by construction and never eligible for sync.
+   * Evaluated only on-machine, and every deviation from a content-triggered
+   * workflow is flagged {@link WorkflowDeviation.contentDerived}, so it is
+   * local-only by construction and never eligible for sync (sync-adjacent
+   * consumers exclude content-derived deviations).
    */
   triggerContentPredicate?: ContentPredicate;
   /**

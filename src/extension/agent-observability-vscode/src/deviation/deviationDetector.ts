@@ -29,7 +29,7 @@ export type ContentLookup = (attribute: string) => ReadonlyMap<string, string>;
  * Detects deviations from expected multi-agent workflow patterns by comparing
  * actual agent interaction sequences against configured workflows.
  *
- * Originally a faithful TypeScript port of the cloud dashboard's
+ * The check logic descends from a TypeScript port of the cloud dashboard's
  * `Services/WorkflowDeviationDetector.cs`, operating on the local
  * {@link Interaction} model:
  * - C# `AgentInteraction.Agent`     → {@link Interaction.agentName}
@@ -37,12 +37,17 @@ export type ContentLookup = (attribute: string) => ReadonlyMap<string, string>;
  * - C# `AgentInteraction.Success`   → {@link Interaction.success}
  * - C# `AgentInteraction.Repository`→ {@link Interaction.repository}
  *
- * It now also supports a structured predicate DSL ({@link WorkflowDefinition.steps}
+ * It supports a structured predicate DSL ({@link WorkflowDefinition.steps}
  * + {@link WorkflowDefinition.triggerPredicate}). When a workflow has `steps`,
  * predicate-based matching supersedes the legacy `expectedSequence` agent-name
- * subsequence logic; absent `steps`, the original path runs unchanged. An
- * optional {@link WorkflowDefinition.triggerPredicate} scopes which interactions
- * are considered, and every check runs over that scoped subset.
+ * subsequence logic; absent `steps`, the original path runs unchanged.
+ *
+ * ALL analysis is scoped to one user-request TURN ({@link detectForTurns}); the
+ * old session-scoped path (which additionally FILTERED interactions by the
+ * trigger) is gone. An optional {@link WorkflowDefinition.triggerPredicate} is a
+ * pure applicability GATE: it decides whether a workflow applies to a turn and
+ * never removes interactions from the analyzed set, so a trigger may be narrower
+ * than — or disjoint from — the step predicates.
  *
  * Thresholds are preserved exactly: >50% failure over >=3 interactions =>
  * ToolUsageAnomaly; duration > maxDuration => TimeoutExceeded; in-order
@@ -52,57 +57,13 @@ export type ContentLookup = (attribute: string) => ReadonlyMap<string, string>;
  */
 export class WorkflowDeviationDetector {
   /**
-   * Analyze interactions against all configured workflows and return any
-   * deviations found. Mirrors C# `DetectDeviations`.
-   *
-   * @param contentLookup optional LOCAL-ONLY span-content provider; required only
-   *   for steps that carry a {@link ContentPredicate}. Absent → content predicates
-   *   are inert (metadata-only matching).
-   */
-  detectDeviations(
-    interactions: readonly Interaction[],
-    configs: readonly WorkflowConfig[],
-    contentLookup?: ContentLookup,
-  ): WorkflowDeviation[] {
-    const deviations: WorkflowDeviation[] = [];
-
-    for (const config of configs) {
-      const repoInteractions = interactions
-        .filter((i) => equalsIgnoreCase(i.repository, config.repository))
-        .slice()
-        .sort((a, b) => a.timestampMs - b.timestampMs);
-
-      if (repoInteractions.length === 0) {
-        continue;
-      }
-
-      for (const workflow of config.workflows) {
-        const sessions = groupIntoSessions(repoInteractions, workflow.maxDurationMs);
-        for (const session of sessions) {
-          for (const deviation of this.analyzeSession(
-            session,
-            workflow,
-            config.repository,
-            contentLookup,
-          )) {
-            deviations.push(deviation);
-          }
-        }
-      }
-    }
-
-    return deviations;
-  }
-
-  /**
-   * Per-TURN detection for the LOCAL session-detail view + notifications.
+   * Per-TURN detection — the ONLY detection path.
    *
    * Each turn (one user request plus everything it spawned) is analyzed
    * independently against the configured workflows for its repository; results
-   * are aligned BY INDEX to `turns`. Unlike {@link detectDeviations} there is no
-   * time-gap session grouping and no synthesized default workflow — the caller
-   * supplies the turns and only explicitly configured workflows produce
-   * deviations. `triggerPredicate` gates applicability per turn (see
+   * are aligned BY INDEX to `turns`. There is no time-gap session grouping and
+   * no synthesized default workflow — the caller supplies the turns and the
+   * workflow configs. `triggerPredicate` gates applicability per turn (see
    * {@link analyzeTurn}).
    */
   detectForTurns(
@@ -129,48 +90,15 @@ export class WorkflowDeviationDetector {
   }
 
   /**
-   * Mirrors C# `AnalyzeSession`, generalized for the predicate DSL.
-   *
-   * A {@link WorkflowDefinition.triggerPredicate} (when present) scopes the
-   * session to the matching interactions before any check runs; a workflow whose
-   * trigger matches nothing in the session simply does not apply. The check
-   * ORDER is preserved exactly (Sequence, Timeout, Missing, ToolUsage) for parity
-   * with the C# port and the existing tests.
-   */
-  private analyzeSession(
-    session: Interaction[],
-    workflow: WorkflowDefinition,
-    repository: string,
-    contentLookup: ContentLookup | undefined,
-  ): WorkflowDeviation[] {
-    // Content-triggered workflows are LOCAL-ONLY per-turn concerns; the
-    // session/sync path never evaluates content for applicability, so skip them.
-    if (workflow.triggerContentPredicate !== undefined) {
-      return [];
-    }
-
-    const scoped =
-      workflow.triggerPredicate !== undefined
-        ? session.filter((i) => matchesPredicate(i, workflow.triggerPredicate!))
-        : session;
-
-    // A trigger that matches nothing means this workflow does not apply here.
-    if (workflow.triggerPredicate !== undefined && scoped.length === 0) {
-      return [];
-    }
-
-    return runWorkflowChecks(scoped, workflow, repository, contentLookup);
-  }
-
-  /**
-   * Per-TURN analysis for the LOCAL view + notifications.
+   * Per-TURN analysis.
    *
    * Here {@link WorkflowDefinition.triggerPredicate} is a pure applicability GATE:
    * the workflow applies to this turn iff at least one of the turn's interactions
-   * matches it, and — unlike {@link analyzeSession} — the trigger does NOT filter
-   * the analyzed set. Every check then runs over the WHOLE turn, so a step may be
-   * satisfied by any interaction in the task, in definition order, not necessarily
-   * adjacent to the trigger. A turn the trigger does not match is not analyzed.
+   * matches it, and the trigger does NOT filter the analyzed set. Every check
+   * then runs over the WHOLE turn, so a step may be satisfied by any interaction
+   * in the task, in definition order, not necessarily adjacent to the trigger. A
+   * turn the trigger does not match is not analyzed. The check ORDER (Sequence,
+   * Timeout, Missing, ToolUsage) is preserved from the original C# port.
    */
   private analyzeTurn(
     turn: readonly Interaction[],
@@ -233,11 +161,10 @@ function turnMatchesTrigger(
 }
 
 /**
- * Run the four workflow checks over a set of interactions already determined to
- * be IN SCOPE for the workflow. Shared by the session-scoped path
- * ({@link WorkflowDeviationDetector} `analyzeSession`, where `set` is the
- * trigger-filtered subset) and the per-turn path (`analyzeTurn`, where `set` is
- * the whole turn). The set is time-ordered here so callers need not pre-sort.
+ * Run the four workflow checks over the interactions of one turn already
+ * determined to be IN SCOPE for the workflow ({@link WorkflowDeviationDetector}
+ * `analyzeTurn` — `set` is always the WHOLE turn, never a trigger-filtered
+ * subset). The set is time-ordered here so callers need not pre-sort.
  */
 function runWorkflowChecks(
   set: readonly Interaction[],
@@ -643,40 +570,6 @@ function checkToolUsageAnomaly(
   }
 
   return undefined;
-}
-
-/**
- * Group interactions into logical sessions. A new session starts when there's a
- * gap larger than `maxGapMs` between consecutive interactions. Mirrors C#
- * `GroupIntoSessions`. Input is assumed sorted ascending by timestamp.
- */
-export function groupIntoSessions(
-  interactions: readonly Interaction[],
-  maxGapMs: number,
-): Interaction[][] {
-  const sessions: Interaction[][] = [];
-  if (interactions.length === 0) {
-    return sessions;
-  }
-
-  let currentSession: Interaction[] = [interactions[0]];
-
-  for (let i = 1; i < interactions.length; i++) {
-    const gap = interactions[i].timestampMs - interactions[i - 1].timestampMs;
-
-    if (gap > maxGapMs) {
-      sessions.push(currentSession);
-      currentSession = [];
-    }
-
-    currentSession.push(interactions[i]);
-  }
-
-  if (currentSession.length > 0) {
-    sessions.push(currentSession);
-  }
-
-  return sessions;
 }
 
 /** Case-insensitive ordinal string equality (C# StringComparison.OrdinalIgnoreCase). */

@@ -135,6 +135,14 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!interactions.ok) {
           continue;
         }
+        // Detection is per user-request TURN (like the detail view and the
+        // notifier), so bucket by the session's turn anchors; a session whose
+        // detail cannot be read has no turn boundaries and is skipped.
+        const detail = telemetry.getSessionDetail(sessionKey);
+        if (!detail.ok) {
+          continue;
+        }
+        const turnStarts = detail.value.turns.map((t) => t.timestampMs);
         // Memoized LOCAL-ONLY content lookup for content-predicate workflows;
         // the raw text is evaluated on-machine only and never transmitted.
         const attributeCache = new Map<string, ReadonlyMap<string, string>>();
@@ -147,7 +155,7 @@ export function activate(context: vscode.ExtensionContext): void {
           }
           return values;
         };
-        if (deviations.detectForSession(interactions.value, contentLookup).length > 0) {
+        if (deviations.detectForSession(interactions.value, turnStarts, contentLookup).length > 0) {
           flagged.add(sessionKey);
         }
       }

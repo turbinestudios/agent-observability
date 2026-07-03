@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { WorkflowDeviationDetector } from './deviationDetector';
-import { DeviationType, WorkflowConfig, WorkflowDefinition } from './models';
+import { DeviationType, WorkflowConfig, WorkflowDefinition, WorkflowDeviation } from './models';
 import { Interaction } from '../telemetry/models';
 
 /**
- * Port-fidelity tests for the TypeScript port of WorkflowDeviationDetector.cs.
- * The thresholds mirror the C# exactly:
+ * Check-fidelity tests for the detector's four checks (descended from the C#
+ * WorkflowDeviationDetector.cs port). Detection is per-TURN; each test analyzes
+ * its interactions as ONE user-request turn. The thresholds mirror the C#
+ * exactly:
  * - ToolUsageAnomaly: >=3 interactions AND failureRate > 0.5
  * - TimeoutExceeded: >=2 interactions AND duration > maxDuration
  * - SequenceDeviation: in-order subsequence not fully matched AND
@@ -15,6 +17,14 @@ import { Interaction } from '../telemetry/models';
 
 const REPO = 'https://github.com/example-org/sample-repo';
 const detector = new WorkflowDeviationDetector();
+
+/** Analyze the interactions as a single user-request turn. */
+function detect(
+  interactions: readonly Interaction[],
+  configs: readonly WorkflowConfig[],
+): WorkflowDeviation[] {
+  return detector.detectForTurns([[...interactions]], configs)[0];
+}
 
 /** Build a synthetic Interaction with only the fields the detector reads. */
 function interaction(
@@ -60,14 +70,14 @@ function config(def: WorkflowDefinition): WorkflowConfig {
 describe('WorkflowDeviationDetector port fidelity', () => {
   it('(a) flags ToolUsageAnomaly when >=3 interactions and >50% fail', () => {
     // 3 interactions, 2 failures => 66% > 50%. All within the max window so no
-    // session split, no timeout. Sequence check disabled (no expectedSequence).
+    // timeout. Sequence check disabled (no expectedSequence).
     const base = 1_000_000;
     const interactions = [
       interaction('coder', base, false),
       interaction('coder', base + 1000, false),
       interaction('coder', base + 2000, true),
     ];
-    const result = detector.detectDeviations(
+    const result = detect(
       interactions,
       [config(workflow({ sequenceDeviationAlert: false }))],
     );
@@ -87,7 +97,7 @@ describe('WorkflowDeviationDetector port fidelity', () => {
       interaction('coder', base + 1000, true),
       interaction('coder', base + 1500, true),
     ];
-    const result = detector.detectDeviations(
+    const result = detect(
       interactions,
       [config(workflow({ sequenceDeviationAlert: false }))],
     );
@@ -100,19 +110,15 @@ describe('WorkflowDeviationDetector port fidelity', () => {
       interaction('coder', base, false),
       interaction('coder', base + 500, false),
     ];
-    const result = detector.detectDeviations(
+    const result = detect(
       interactions,
       [config(workflow({ sequenceDeviationAlert: false }))],
     );
     expect(result.filter((d) => d.type === DeviationType.ToolUsageAnomaly)).toHaveLength(0);
   });
 
-  it('(b) flags TimeoutExceeded when session duration > maxDurationMs', () => {
-    // maxDuration 30 min. Two interactions 31 min apart. The gap (31 min) is
-    // also > maxDuration, so GroupIntoSessions normally splits them — to keep
-    // them in ONE session for the timeout check, use a larger gap window via a
-    // higher maxDuration would defeat the test. Instead place 3 interactions
-    // where consecutive gaps stay under max but total spans over it.
+  it('(b) flags TimeoutExceeded when turn duration > maxDurationMs', () => {
+    // maxDuration 30 min; three interactions spanning 31 min in one turn.
     const base = 4_000_000;
     const max = 30 * 60_000;
     const interactions = [
@@ -120,7 +126,7 @@ describe('WorkflowDeviationDetector port fidelity', () => {
       interaction('coder', base + 20 * 60_000, true),
       interaction('coder', base + 31 * 60_000, true),
     ];
-    const result = detector.detectDeviations(
+    const result = detect(
       interactions,
       [config(workflow({ maxDurationMs: max, sequenceDeviationAlert: false }))],
     );
@@ -145,7 +151,7 @@ describe('WorkflowDeviationDetector port fidelity', () => {
       interaction('planner', base + 1000, true),
       interaction('reviewer', base + 2000, true),
     ];
-    const result = detector.detectDeviations(
+    const result = detect(
       interactions,
       [config(workflow({ expectedSequence: ['planner', 'coder', 'reviewer'] }))],
     );
@@ -164,7 +170,7 @@ describe('WorkflowDeviationDetector port fidelity', () => {
       interaction('coder', base + 1000, true),
       interaction('reviewer', base + 2000, true),
     ];
-    const result = detector.detectDeviations(
+    const result = detect(
       interactions,
       [config(workflow({ expectedSequence: ['planner', 'coder'] }))],
     );
@@ -179,7 +185,7 @@ describe('WorkflowDeviationDetector port fidelity', () => {
       interaction('planner', base, true),
       interaction('coder', base + 1000, true),
     ];
-    const result = detector.detectDeviations(
+    const result = detect(
       interactions,
       [config(workflow({ expectedSequence: ['planner', 'coder', 'reviewer'] }))],
     );
@@ -195,7 +201,7 @@ describe('WorkflowDeviationDetector port fidelity', () => {
       interaction('coder', base + 60_000, true),
       interaction('reviewer', base + 120_000, true),
     ];
-    const result = detector.detectDeviations(
+    const result = detect(
       interactions,
       [config(workflow({ expectedSequence: ['planner', 'coder', 'reviewer'] }))],
     );
@@ -208,22 +214,22 @@ describe('WorkflowDeviationDetector port fidelity', () => {
       interaction('Planner', base, true),
       interaction('CODER', base + 1000, true),
     ];
-    const result = detector.detectDeviations(
+    const result = detect(
       interactions,
       [config(workflow({ expectedSequence: ['planner', 'coder'] }))],
     );
     expect(result).toHaveLength(0);
   });
 
-  it('skips configs whose repository has no interactions', () => {
+  it('skips a turn whose repository has no configured workflows', () => {
     const base = 10_000_000;
     const interactions = [interaction('coder', base, true, 'https://github.com/other/repo')];
-    const result = detector.detectDeviations(interactions, [config(workflow())]);
+    const result = detect(interactions, [config(workflow())]);
     expect(result).toHaveLength(0);
   });
 
-  it('emits multiple deviations in the C# AnalyzeSession order (Sequence, Timeout, Missing, ToolUsage)', () => {
-    // One session that trips three checks at once:
+  it('emits multiple deviations in the original check order (Sequence, Timeout, Missing, ToolUsage)', () => {
+    // One turn that trips three checks at once:
     // - distinct order [coder, planner, tester] vs expected [planner, coder,
     //   reviewer] with actual.length(3) >= expected.length(3) => SequenceDeviation
     // - 'reviewer' never appears => MissingSteps
@@ -235,7 +241,7 @@ describe('WorkflowDeviationDetector port fidelity', () => {
       interaction('planner', base + 1000, false),
       interaction('tester', base + 2000, true),
     ];
-    const result = detector.detectDeviations(
+    const result = detect(
       interactions,
       [config(workflow({ expectedSequence: ['planner', 'coder', 'reviewer'] }))],
     );

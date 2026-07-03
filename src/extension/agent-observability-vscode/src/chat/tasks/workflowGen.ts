@@ -51,10 +51,11 @@ export function buildWorkflowGenPreamble(contextText: string, digest: string): s
     'neither can tell one flow from another. To separate one skill/task from the others the SAME agent',
     'can run, key on what the request is ABOUT with a `triggerContentPredicate` on `copilot_chat.user_request`,',
     'or on a signature `toolName` / pinned `model` unique to that flow. For a flow that spawns sub-agents,',
-    '`{"operation":"invoke_agent"}` with steps matching each sub-agent `agentName` works. The trigger must',
-    'be a SUPERSET of the steps — never narrower than any step, or that step can never match and is',
-    'reported missing. If the context exposes no discriminator AND no guaranteed step, prefer ONE',
-    'repo-wide workflow with no sequence over a speculative one.',
+    '`{"operation":"invoke_agent"}` with steps matching each sub-agent `agentName` works. The trigger is a',
+    'pure applicability GATE over the whole user-request turn — it never filters interactions, so it may',
+    'be narrower than (or disjoint from) the steps; a step can be satisfied by ANY interaction in the',
+    'turn. If the context exposes no discriminator AND no guaranteed step, prefer ONE repo-wide workflow',
+    'with no sequence over a speculative one.',
     '',
     'Emit EXACTLY ONE fenced code block tagged `' + WORKFLOWS_FENCE_LANG + '` containing a JSON array',
     '(the value of `agentObservability.workflows`) and nothing the user must fix by hand. A short',
@@ -117,12 +118,11 @@ export function validateWorkflowsJson(jsonText: string, defaultMaxMs: number): W
  * The first workflow whose `triggerPredicate` is present but too broad to scope
  * anything: it sets only non-discriminating fields (`agentMode` / `success`) and
  * none of `operation` / `agentName` / `toolName` / `model`. Because the trigger
- * is the sole applicability gate AND scopes the interactions every check runs
- * over, such a trigger matches (nearly) every session and turns ordinary work
- * into false deviations — the exact failure a vague `{"agentMode":"agent"}`
- * causes. Returns the offending workflow name, or `undefined` when every present
- * trigger carries a real discriminator (absent triggers are left to the
- * backward-compatible whole-session default).
+ * is the applicability gate, such a trigger matches (nearly) every turn and
+ * turns ordinary work into false deviations — the exact failure a vague
+ * `{"agentMode":"agent"}` causes. Returns the offending workflow name, or
+ * `undefined` when every present trigger carries a real discriminator (an
+ * absent trigger simply applies the workflow to every turn).
  */
 function findTooBroadTrigger(configs: readonly WorkflowConfig[]): string | undefined {
   for (const config of configs) {
