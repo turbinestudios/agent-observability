@@ -163,6 +163,64 @@ describe('sessionDetailHtml — context analysis tab', () => {
     expect(html).toContain('ctx-status-skipped');
   });
 
+  it('renders a file name with a known path as an open-file link', () => {
+    const analysis = minimalContextAnalysis();
+    analysis.total.loadedFiles.push({
+      name: 'linked.instructions.md',
+      filePath: 'c:/Users/x/.github/instructions/linked.instructions.md',
+      category: 'instruction',
+      status: 'applied',
+    });
+
+    const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', analysis);
+    expect(html).toContain('class="ctx-file-link"');
+    expect(html).toContain('data-path="c:/Users/x/.github/instructions/linked.instructions.md"');
+    expect(html).toContain('>linked.instructions.md</a>');
+  });
+
+  it('renders a file name without a path as plain text (no link)', () => {
+    const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', minimalContextAnalysis());
+    // None of the minimal entries carry a filePath, so no link element is
+    // rendered (the class still appears in the shared CSS/script).
+    expect(html).not.toContain('<a href="#" class="ctx-file-link"');
+  });
+
+  it('escapes HTML in linked file paths', () => {
+    const analysis = minimalContextAnalysis();
+    analysis.total.loadedFiles.push({
+      name: 'evil.md',
+      filePath: 'c:/x/"onclick="alert(1)/evil.md',
+      category: 'instruction',
+      status: 'applied',
+    });
+
+    const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', analysis);
+    expect(html).not.toContain('"onclick="');
+    expect(html).toContain('&quot;onclick=&quot;');
+  });
+
+  it('links oversized file names when their path is known', () => {
+    const analysis = minimalContextAnalysis();
+    const entry = {
+      name: 'huge.instructions.md',
+      filePath: 'c:/x/huge.instructions.md',
+      category: 'instruction' as const,
+      status: 'applied' as const,
+      estimatedTokens: 5000,
+      charCount: 20000,
+    };
+    analysis.total.oversizedFiles = [entry];
+    analysis.total.loadedFiles.push(entry);
+
+    const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', analysis);
+    expect(html).toContain('<strong><a href="#" class="ctx-file-link" data-path="c:/x/huge.instructions.md"');
+  });
+
+  it('includes the open-file link script when context is provided', () => {
+    const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', minimalContextAnalysis());
+    expect(html).toContain("vscode.postMessage({ type: 'open-context-file', path: p })");
+  });
+
   it('escapes HTML in file names', () => {
     const analysis = minimalContextAnalysis();
     analysis.total.loadedFiles.push({

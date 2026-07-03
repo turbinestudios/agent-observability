@@ -65,6 +65,7 @@ describe('discoveryParser', () => {
         category: 'skill',
         status: 'skipped',
         skipReason: 'duplicate-name',
+        filePath: 'c:/Users/.claude/skills/reflect/SKILL.md',
       });
     });
 
@@ -150,13 +151,35 @@ describe('discoveryParser', () => {
         category: 'hook',
         status: 'skipped',
         skipReason: 'claude-hooks-disabled',
+        filePath: 'c:/Users/.claude/settings.json',
       });
       expect(result[2]).toEqual({
         name: 'settings.local.json',
         category: 'hook',
         status: 'skipped',
         skipReason: 'claude-hooks-disabled',
+        filePath: 'c:/Projekt/.claude/settings.local.json',
       });
+    });
+
+    it('restores the POSIX root slash when extracting a skipped file path', () => {
+      const events: DiscoveryEventRow[] = [
+        {
+          spanName: 'Skill Discovery',
+          eventDetails:
+            'Resolved 1 skills in 5.0ms | loaded: [] | skipped: [file:///home/user/.claude/skills/reflect/SKILL.md (duplicate-name)] | folders: [/home/user/.copilot/skills]',
+          eventCategory: 'discovery',
+          conversationId: 'conv-1',
+          chatSessionId: 'chat-1',
+          agentName: null,
+          debugLabel: null,
+        },
+      ];
+
+      const result = parseDiscoveryEvents(events);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].filePath).toBe('/home/user/.claude/skills/reflect/SKILL.md');
     });
 
     it('returns empty array for empty input', () => {

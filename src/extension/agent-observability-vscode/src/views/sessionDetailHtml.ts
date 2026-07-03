@@ -9,7 +9,7 @@ import {
   SessionModelTurnPoint,
 } from '../telemetry/models';
 import { WorkflowDeviation } from '../deviation/models';
-import { SessionContextAnalysis, AgentContextAnalysis } from '../context/models';
+import { SessionContextAnalysis, AgentContextAnalysis, ContextFileEntry } from '../context/models';
 import { aiuToUsd } from '../telemetry/pricing';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 import { escapeHtml } from './escapeHtml';
@@ -1439,6 +1439,18 @@ function renderContextBudget(agent: AgentContextAnalysis): string {
 }
 
 /**
+ * Render a context file's display name: a link that opens the file in the editor
+ * when its on-disk path is known, plain text otherwise (some Copilot discovery
+ * events carry names only).
+ */
+function ctxFileName(f: ContextFileEntry): string {
+  if (f.filePath === undefined || f.filePath.length === 0) {
+    return escapeHtml(f.name);
+  }
+  return `<a href="#" class="ctx-file-link" data-path="${escapeHtml(f.filePath)}" title="${escapeHtml(f.filePath)}">${escapeHtml(f.name)}</a>`;
+}
+
+/**
  * Render the loaded files table.
  */
 function renderLoadedFilesTable(agent: AgentContextAnalysis): string {
@@ -1463,7 +1475,7 @@ function renderLoadedFilesTable(agent: AgentContextAnalysis): string {
     const skipInfo = f.skipReason ? ` <span class="muted ctx-skip-reason">(${escapeHtml(truncate(f.skipReason, 60))})</span>` : '';
 
     return `<tr>
-      <td>${escapeHtml(f.name)}${indicator}${skipInfo}</td>
+      <td>${ctxFileName(f)}${indicator}${skipInfo}</td>
       <td><span class="ctx-category">${escapeHtml(f.category)}</span></td>
       <td class="n">${tokensStr}</td>
       <td><span class="${statusClass}">${escapeHtml(f.status)}</span></td>
@@ -1526,7 +1538,7 @@ function renderOversizedCallouts(agent: AgentContextAnalysis): string {
     return `<div class="ctx-oversized-card">
       <span class="ctx-oversized-icon">⚠️</span>
       <div class="ctx-oversized-info">
-        <strong>${escapeHtml(f.name)}</strong>
+        <strong>${ctxFileName(f)}</strong>
         <span class="muted">~${formatInt(tokens)} tokens — consider splitting or trimming this file</span>
       </div>
     </div>`;
@@ -1714,6 +1726,8 @@ const STYLE = `
   .ctx-category { font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; padding: .08rem .3rem; border-radius: 3px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
   .ctx-warn { cursor: help; }
   .ctx-skip-reason { font-size: .75rem; }
+  .ctx-file-link { color: var(--vscode-textLink-foreground, #4e94ce); text-decoration: none; }
+  .ctx-file-link:hover { color: var(--vscode-textLink-activeForeground, #4e94ce); text-decoration: underline; }
   .ctx-ref-type { font-size: .72rem; font-family: var(--vscode-editor-font-family, monospace); }
   .ctx-missing-section p { font-size: .8rem; margin: .2rem 0 .4rem; }
   .ctx-accept-btn { background: none; border: 1px solid var(--vscode-button-secondaryBackground, #555); color: var(--vscode-button-secondaryForeground, #ccc); border-radius: 3px; padding: .1rem .4rem; cursor: pointer; font-size: .75rem; }
@@ -2046,7 +2060,22 @@ const WEBVIEW_CONTROLLER = `
   });
   }
 
-  function initAll() { initTrend(); initTabs(); initAcceptMissing(); }
+  // ── Open-file links (Context Analysis tab) ───────────────────────────────────
+  // File names carrying a data-path open the actual file in the editor via the
+  // extension host (webviews cannot open documents themselves).
+  function initCtxFileLinks() {
+  (root || document).querySelectorAll('.ctx-file-link').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+      e.preventDefault();
+      var p = el.getAttribute('data-path');
+      if (p) {
+        vscode.postMessage({ type: 'open-context-file', path: p });
+      }
+    });
+  });
+  }
+
+  function initAll() { initTrend(); initTabs(); initAcceptMissing(); initCtxFileLinks(); }
 
   // ── Volatile UI state, preserved across a content swap ───────────────────────
   // Snapshot which collapsibles are open (by their stable data-k) and the active

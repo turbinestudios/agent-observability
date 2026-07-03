@@ -109,11 +109,13 @@ function parseDiscoveryEvent(event: DiscoveryEventRow): ContextFileEntry[] {
         const reason = reasonMatch[2].trim();
         // Extract just the filename from a URI if present
         const name = extractNameFromUri(rawName);
+        const filePath = extractPathFromUri(rawName);
         entries.push({
           name,
           category,
           status: 'skipped',
           skipReason: reason,
+          ...(filePath !== undefined ? { filePath } : {}),
         });
       } else {
         entries.push({
@@ -221,4 +223,22 @@ function extractNameFromUri(raw: string): string {
     return segments[segments.length - 1] || raw;
   }
   return raw;
+}
+
+/**
+ * Extract the decoded filesystem path from a file:// URI, or undefined when the
+ * raw value is not a file URI.
+ * "file:///c%3A/Users/x/foo.md" → "c:/Users/x/foo.md" (Windows drive path);
+ * "file:///home/x/foo.md" → "/home/x/foo.md" (POSIX root restored).
+ */
+function extractPathFromUri(raw: string): string | undefined {
+  if (!raw.startsWith('file:///')) {
+    return undefined;
+  }
+  try {
+    const decoded = decodeURIComponent(raw.slice('file:///'.length));
+    return /^[a-zA-Z]:/.test(decoded) ? decoded : `/${decoded}`;
+  } catch {
+    return undefined;
+  }
 }

@@ -274,17 +274,26 @@ export class SessionDetailPanelManager {
   }
 
   /**
-   * Register a message handler for webview → extension messages (accept-missing
-   * actions). When a message arrives, the handler updates the workspace
-   * configuration and re-renders.
+   * Register a message handler for webview → extension messages: accept-missing
+   * actions (update the workspace configuration and re-render) and
+   * open-context-file links (open the file in an editor).
    */
   private registerMessageHandler(panel: vscode.WebviewPanel, sourceId: string, sessionKey: string): void {
     panel.webview.onDidReceiveMessage(async (msg: unknown) => {
       if (typeof msg !== 'object' || msg === null) return;
-      const message = msg as { type?: string; file?: string; source?: string };
+      const message = msg as { type?: string; file?: string; source?: string; path?: string };
       const config = vscode.workspace.getConfiguration('agentObservability.context');
 
-      if (message.type === 'accept-missing-file' && typeof message.file === 'string') {
+      if (message.type === 'open-context-file' && typeof message.path === 'string') {
+        try {
+          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(message.path));
+          await vscode.window.showTextDocument(doc, { preview: true });
+        } catch {
+          void vscode.window.showWarningMessage(
+            `Agent Observability: could not open "${message.path}" — the file may have been moved or deleted.`,
+          );
+        }
+      } else if (message.type === 'accept-missing-file' && typeof message.file === 'string') {
         const current: string[] = config.get('acceptedMissingFiles', []);
         if (!current.includes(message.file)) {
           await config.update('acceptedMissingFiles', [...current, message.file], vscode.ConfigurationTarget.Workspace);
