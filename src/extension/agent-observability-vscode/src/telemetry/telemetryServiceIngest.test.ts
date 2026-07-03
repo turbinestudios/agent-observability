@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { Database } from 'node-sqlite3-wasm';
 import { TelemetryService, ServiceConfig } from './telemetryService';
 import { PathEnvironment } from './paths';
 import { IngestStore } from '../otel/ingestStore';
@@ -158,6 +159,139 @@ describe('TelemetryService with a durable archive source', () => {
     expect(live.ok && live.value.length > 0).toBe(true);
     const arch = service.getSessionInteractions('arch-only');
     expect(arch.ok && arch.value.length === 0).toBe(true);
+    service.dispose();
+  });
+});
+
+const UUID_A = 'aaaaaaaa-1111-2222-3333-444444444444';
+
+/**
+ * A one-chat-span envelope shaped like a HUMAN-INITIATED Copilot session: a
+ * UUID `chat_session_id`, a `copilot_chat.user_request` span, and a real chat
+ * model — the shape `listSessions` requires a session to have.
+ */
+function titledEnvelopeFor(uuid: string) {
+  return {
+    resourceSpans: [
+      {
+        resource: { attributes: [] },
+        scopeSpans: [
+          {
+            spans: [
+              {
+                name: 'chat',
+                spanId: `c-${uuid}`,
+                traceId: `tr-${uuid}`,
+                startTimeUnixNano: '1700000000000000000',
+                endTimeUnixNano: '1700000001000000000',
+                status: { code: 1 },
+                attributes: [
+                  { key: 'gen_ai.operation.name', value: sv('chat') },
+                  { key: 'gen_ai.conversation.id', value: sv(uuid) },
+                  { key: 'copilot_chat.chat_session_id', value: sv(uuid) },
+                  { key: 'gen_ai.response.model', value: sv('gpt-x') },
+                  { key: 'copilot_chat.user_request', value: sv('hello there') },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** Write a minimal `state.vscdb` with the chat-session index row. */
+function writeStateDb(wsDir: string, entries: Record<string, string>): void {
+  const built: Record<string, unknown> = {};
+  for (const [key, title] of Object.entries(entries)) {
+    built[key] = { sessionId: key, title, isEmpty: false };
+  }
+  mkdirSync(wsDir, { recursive: true });
+  const db = new Database(path.join(wsDir, 'state.vscdb'));
+  db.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)');
+  db.run('INSERT INTO ItemTable (key, value) VALUES (?, ?)', [
+    'chat.ChatSessionStore.index',
+    JSON.stringify({ version: 1, entries: built }),
+  ]);
+  db.close();
+}
+
+/** The session summary listed for `id`, or undefined. */
+function listedSession(service: TelemetryService, id: string) {
+  const result = service.listSessions();
+  expect(result.ok).toBe(true);
+  return result.ok ? result.value.find((s) => s.sessionId === id) : undefined;
+}
+
+describe('session titles when the archive is the read source', () => {
+  it('resolves titles from the NATIVE workspaceStorage even though the archive has no sibling store', () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), 'agent-obs-title-'));
+    // The native candidate layout — only the TITLE stores exist; the native
+    // telemetry DB itself is gone (rotated out), which must not matter.
+    const appData = path.join(tmp, 'Roaming');
+    writeStateDb(path.join(appData, 'Code', 'User', 'workspaceStorage', 'hashA'), {
+      [UUID_A]: 'Fix the login flow',
+    });
+    const archivePath = path.join(tmp, 'archive.db');
+    const store = new IngestStore(archivePath);
+    store.writeSpans(otlpSpansToRows(flattenSpans(titledEnvelopeFor(UUID_A))));
+    store.close();
+
+    const env: PathEnvironment = {
+      platform: 'win32',
+      env: { APPDATA: appData },
+      homedir: () => '',
+      statKind: () => 'absent', // no native DB anywhere → archive stays the sole source
+    };
+    const service = new TelemetryService(config, env);
+    service.setArchiveDbPath(archivePath);
+
+    const session = listedSession(service, UUID_A);
+    expect(session?.title).toBe('Fix the login flow');
+    expect(session?.titleDerived).toBe(false);
+    service.dispose();
+  });
+
+  it('falls back to titles ARCHIVED in the session_titles sidecar when no native store remains', () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), 'agent-obs-title-'));
+    const archivePath = path.join(tmp, 'archive.db');
+    const store = new IngestStore(archivePath);
+    store.writeSpans(otlpSpansToRows(flattenSpans(titledEnvelopeFor(UUID_A))));
+    store.writeSessionTitles(new Map([[UUID_A, { title: 'Archived name', derived: false }]]), 1);
+    store.close();
+
+    const service = new TelemetryService(config, noCopilotEnv); // no candidates at all
+    service.setArchiveDbPath(archivePath);
+
+    const session = listedSession(service, UUID_A);
+    expect(session?.title).toBe('Archived name');
+    expect(session?.titleDerived).toBe(false);
+    service.dispose();
+  });
+
+  it('a live native title (e.g. a rename) overrides the archived one', () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), 'agent-obs-title-'));
+    const appData = path.join(tmp, 'Roaming');
+    writeStateDb(path.join(appData, 'Code', 'User', 'workspaceStorage', 'hashA'), {
+      [UUID_A]: 'Renamed by the user',
+    });
+    const archivePath = path.join(tmp, 'archive.db');
+    const store = new IngestStore(archivePath);
+    store.writeSpans(otlpSpansToRows(flattenSpans(titledEnvelopeFor(UUID_A))));
+    store.writeSessionTitles(new Map([[UUID_A, { title: 'Stale archived name', derived: false }]]), 1);
+    store.close();
+
+    const env: PathEnvironment = {
+      platform: 'win32',
+      env: { APPDATA: appData },
+      homedir: () => '',
+      statKind: () => 'absent',
+    };
+    const service = new TelemetryService(config, env);
+    service.setArchiveDbPath(archivePath);
+
+    expect(listedSession(service, UUID_A)?.title).toBe('Renamed by the user');
     service.dispose();
   });
 });

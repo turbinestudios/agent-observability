@@ -6,6 +6,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Copilot session names are back when reading from the durable archive.** The
+  0.5.0 archive became the sole read source, but the title lookup only knew how
+  to find the `workspaceStorage` title stores beside a NATIVE
+  `github.copilot-chat` database — so every Copilot session lost its
+  auto-generated name. Titles for archive- and live-ingest-sourced sessions are
+  now resolved from the native candidate locations (all editions, whether or
+  not the native telemetry DB still exists).
+- **Session names now survive Copilot's rolling retention.** The archiver
+  additionally copies each archived session's resolved title into a local-only
+  `session_titles` sidecar table in the archive (only new/changed rows are
+  written, an authoritative title is never downgraded to a first-request
+  fallback, and titles are pruned with their sessions). The read layer layers
+  live native titles over the archived ones, so renames still propagate while
+  sessions older than the native stores' retention keep their names. Titles
+  remain local-only — they are never uploaded.
+
 ### Added
 
 - **Hide repositories from the whole extension.** The new

@@ -174,6 +174,25 @@ export function resolveDatabasePaths(
 }
 
 /**
+ * Every native candidate DB path — the override as sole candidate when set,
+ * else ALL platform candidates, WITHOUT checking on-disk existence. Used to
+ * locate the sibling `workspaceStorage` session-title stores when telemetry is
+ * read from a non-native source (the durable archive / live-ingest DB): a
+ * title store can outlive its rolling telemetry DB, so the DB file's existence
+ * must not gate title resolution.
+ */
+export function candidateDatabasePaths(
+  config: PathConfig,
+  environment: PathEnvironment = defaultEnvironment,
+): string[] {
+  const override = config.getSqlitePathOverride();
+  if (override !== undefined && override.length > 0) {
+    return [override];
+  }
+  return platformCandidates(environment).map((candidate) => candidate.path);
+}
+
+/**
  * Single-database view of {@link resolveDatabasePaths} (its `primary`), for
  * callers and tests that only need the best candidate.
  */

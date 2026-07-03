@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Database } from 'node-sqlite3-wasm';
@@ -221,6 +221,75 @@ describe('CopilotArchiver.sweep', () => {
     const arc = readArchive(archivePath);
     expect(arc.spanCount).toBe(1); // the aged span was pruned in the same tick
     expect(arc.sessions).toEqual(['NEW']);
+  });
+
+  it('archives session titles from the native workspaceStorage stores', () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), 'arch-'));
+    const S1 = 'aaaaaaaa-1111-2222-3333-444444444444';
+    // A REAL native layout: the DB inside globalStorage/github.copilot-chat with
+    // a sibling workspaceStorage carrying the state.vscdb chat-session index.
+    const globalDir = path.join(tmp, 'User', 'globalStorage', 'github.copilot-chat');
+    mkdirSync(globalDir, { recursive: true });
+    const native = makeNativeDb(globalDir, 'agent-traces.db', [span('c0', T, S1)], 1_000_000);
+    const wsDir = path.join(tmp, 'User', 'workspaceStorage', 'hashA');
+    mkdirSync(wsDir, { recursive: true });
+    const stateDb = new Database(path.join(wsDir, 'state.vscdb'));
+    stateDb.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)');
+    stateDb.run('INSERT INTO ItemTable (key, value) VALUES (?, ?)', [
+      'chat.ChatSessionStore.index',
+      JSON.stringify({
+        version: 1,
+        entries: {
+          [S1]: { sessionId: S1, title: 'Fix the login flow', isEmpty: false },
+          // Known upstream but NOT in the archive's spans → must not be stored.
+          'bbbbbbbb-1111-2222-3333-444444444444': { title: 'Unrelated', isEmpty: false },
+        },
+      }),
+    ]);
+    stateDb.close();
+
+    const archivePath = path.join(tmp, 'archive', 'agent-traces.db');
+    const archiver = new CopilotArchiver({
+      archiveDbPath: archivePath,
+      config: cfg(native),
+      retentionMs: 999 * 24 * 60 * 60 * 1000,
+      sweepIntervalMs: 60_000,
+      signal: () => undefined,
+      now: () => T,
+    });
+    archiver.start(); // sweeps spans, then titles
+    // A second title sweep with nothing changed writes nothing (mtime stays cold).
+    expect(archiver.sweepTitles()).toBe(0);
+    archiver.stop();
+
+    const db = new Database(archivePath, { readOnly: true, fileMustExist: true });
+    try {
+      const rows = db.all('SELECT chat_session_id, title, derived FROM session_titles') as {
+        chat_session_id: string;
+        title: string;
+        derived: number;
+      }[];
+      expect(rows).toEqual([{ chat_session_id: S1, title: 'Fix the login flow', derived: 0 }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('sweeps no titles for a source outside the native copilot layout', () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), 'arch-'));
+    const native = makeNativeDb(tmp, 'native.db', [span('c0', T, 'S')], 1_000_000);
+    const archivePath = path.join(tmp, 'archive', 'agent-traces.db');
+    const archiver = new CopilotArchiver({
+      archiveDbPath: archivePath,
+      config: cfg(native),
+      retentionMs: 999 * 24 * 60 * 60 * 1000,
+      sweepIntervalMs: 60_000,
+      signal: () => undefined,
+      now: () => T,
+    });
+    archiver.start();
+    expect(archiver.sweepTitles()).toBe(0); // no workspaceStorage beside a bare fixture
+    archiver.stop();
   });
 
   it('fires signal only when a sweep writes new rows', () => {

@@ -4,7 +4,14 @@ import { Database } from 'node-sqlite3-wasm';
 import { IngestStore, SPAN_COLUMNS } from './ingestStore';
 import { AttrRow, SpanRow, SpanRows } from './otlpToRows';
 import { createReadonlySnapshot, ReadonlySnapshot, sourceMtime } from '../telemetry/snapshot';
-import { resolveDatabasePaths, PathConfig, PathEnvironment } from '../telemetry/paths';
+import {
+  candidateDatabasePaths,
+  resolveDatabasePaths,
+  PathConfig,
+  PathEnvironment,
+} from '../telemetry/paths';
+import { SessionTitleInfo } from '../telemetry/sessionTitles';
+import { readMergedSessionTitles, titleStorageDirs } from '../telemetry/titleStore';
 import { WriterLease } from './writerLease';
 
 /**
@@ -21,7 +28,10 @@ import { WriterLease } from './writerLease';
  *      handles Copilot's WAL), reads spans newer than the per-source watermark,
  *   4. upserts them into the archive (idempotent by `span_id`) and advances the
  *      watermark to `max(end_time_ms) - GRACE_MS` so boundary spans are re-read
- *      next time without being double-counted.
+ *      next time without being double-counted,
+ *   5. archives the LOCAL-ONLY session titles the native workspaceStorage
+ *      stores currently carry ({@link CopilotArchiver.sweepTitles}), so names
+ *      outlive the rolling native stores the way the spans do.
  *
  * Only ONE instance across all windows writes the shared archive — the
  * {@link ./writerLease.WriterLease} elects it; the others stay pure readers (the
@@ -136,6 +146,7 @@ export class CopilotArchiver {
       }
     }
     this.sweepOnce();
+    this.sweepTitles();
     // Prune AFTER sweeping so any freshly-swept spans already older than the
     // retention window are dropped this tick (not left until the next one). They
     // sit below the watermark, so pruning them never causes a re-ingest loop.
@@ -198,6 +209,53 @@ export class CopilotArchiver {
         reader?.close();
         snap.dispose();
       }
+    }
+    if (wrote > 0) {
+      try {
+        this.deps.signal();
+      } catch (err) {
+        this.deps.onError?.(err);
+      }
+    }
+    return wrote;
+  }
+
+  /**
+   * Copy the LOCAL-ONLY session titles from the native workspaceStorage stores
+   * into the archive's `session_titles` sidecar, restricted to sessions the
+   * archive actually holds. The native stores are rolling windows — archiving
+   * the resolved title alongside the spans is what keeps a session named after
+   * its native entry expires. Runs independently of the span watermark because
+   * Copilot bakes the auto-generated title in AFTER the session's spans exist
+   * (often only on close/reload), when the telemetry DB may not change again.
+   * Returns the number of title rows written; no-op when not the writer.
+   */
+  sweepTitles(): number {
+    const store = this.store;
+    if (store === undefined) {
+      return 0;
+    }
+    let wrote = 0;
+    try {
+      const dirs = titleStorageDirs(candidateDatabasePaths(this.deps.config, this.deps.environment));
+      if (dirs.length === 0) {
+        return 0;
+      }
+      const titles = readMergedSessionTitles(dirs);
+      if (titles.size === 0) {
+        return 0;
+      }
+      const known = store.knownChatSessionIds();
+      const relevant = new Map<string, SessionTitleInfo>();
+      for (const [id, info] of titles) {
+        if (known.has(id)) {
+          relevant.set(id, info);
+        }
+      }
+      wrote = store.writeSessionTitles(relevant, this.now());
+    } catch (err) {
+      this.deps.onError?.(err);
+      return 0;
     }
     if (wrote > 0) {
       try {

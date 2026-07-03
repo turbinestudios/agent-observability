@@ -24,6 +24,7 @@ import {
 } from './models';
 import { extractResponseText } from './responseText';
 import { countWrittenLines, sumWrittenLines, WriteLineDelta } from './locAnalysis';
+import { SessionTitleInfo } from './sessionTitles';
 
 /** Span attribute key holding a tool call's raw arguments (file path + content/diff). */
 const TOOL_ARGUMENTS_KEY = 'gen_ai.tool.call.arguments';
@@ -1684,6 +1685,31 @@ export class TelemetryDatabase {
       }
     }
     return map;
+  }
+
+  /**
+   * LOCAL-ONLY session titles archived into this store's `session_titles`
+   * sidecar at sweep time (see {@link ../otel/copilotArchiver.CopilotArchiver})
+   * — present only in the extension's durable archive; Copilot's native DB has
+   * no such table, so this returns an empty map there. Like every other title
+   * surface, the values never reach the aggregate/sync path.
+   */
+  readArchivedSessionTitles(): Map<string, SessionTitleInfo> {
+    const titles = new Map<string, SessionTitleInfo>();
+    let rows: Array<{ id: string; title: string; derived: number }>;
+    try {
+      rows = this.allRows<{ id: string; title: string; derived: number }>(
+        'SELECT chat_session_id AS id, title, derived FROM session_titles',
+      );
+    } catch {
+      return titles; // no sidecar table — a native Copilot DB
+    }
+    for (const row of rows) {
+      if (typeof row.id === 'string' && typeof row.title === 'string' && row.title.length > 0) {
+        titles.set(row.id, { title: row.title, derived: row.derived !== 0 });
+      }
+    }
+    return titles;
   }
 
   /**

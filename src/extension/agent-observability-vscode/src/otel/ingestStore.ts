@@ -1,5 +1,6 @@
 import { Database } from 'node-sqlite3-wasm';
 import { SpanRows } from './otlpToRows';
+import { SessionTitleInfo } from '../telemetry/sessionTitles';
 
 /**
  * The extension's OWN telemetry store, written from the OTLP receiver.
@@ -100,6 +101,27 @@ const UPSERT_WATERMARK_SQL =
   'INSERT OR REPLACE INTO archive_watermark ' +
   '(source_path, last_end_ms, source_mtime_ms, updated_ms) VALUES (?, ?, ?, ?)';
 
+/**
+ * Sidecar table (NOT part of Copilot's schema) holding the LOCAL-ONLY session
+ * titles the archiver resolves from the native workspaceStorage stores at
+ * sweep time. Those stores are rolling windows, so without this the archive's
+ * older sessions would lose their names once the native entries expire. Like
+ * `archive_watermark`, the table is invisible to read-layer schema validation;
+ * it is read only by `TelemetryDatabase.readArchivedSessionTitles` for the
+ * LOCAL Sessions view — never on the aggregate/sync path.
+ */
+const SESSION_TITLES_DDL = `
+CREATE TABLE IF NOT EXISTS session_titles (
+  chat_session_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  derived INTEGER NOT NULL DEFAULT 0,
+  updated_ms INTEGER NOT NULL
+);`;
+
+const UPSERT_TITLE_SQL =
+  'INSERT OR REPLACE INTO session_titles ' +
+  '(chat_session_id, title, derived, updated_ms) VALUES (?, ?, ?, ?)';
+
 /** A sweep watermark for one source DB (see {@link WATERMARK_DDL}). */
 export interface SweepWatermark {
   /** Highest `end_time_ms` already ingested from the source (minus a grace overlap). */
@@ -121,6 +143,7 @@ export class IngestStore {
     this.db.exec('PRAGMA busy_timeout = 5000;');
     this.db.exec(SCHEMA_DDL);
     this.db.exec(WATERMARK_DDL);
+    this.db.exec(SESSION_TITLES_DDL);
     if (this.getRow<{ version: number }>('SELECT version FROM schema_version LIMIT 1') === undefined) {
       this.db.run('INSERT INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]);
     }
@@ -169,12 +192,79 @@ export class IngestStore {
   /**
    * Delete spans whose start time is older than `nowMs - maxAgeMs` (FK cascade
    * removes their attributes + events), keeping the store small so the snapshot
-   * copy stays cheap. Returns the number of spans removed.
+   * copy stays cheap. Session titles whose spans are all gone are removed with
+   * them. Returns the number of spans removed.
    */
   prune(maxAgeMs: number, nowMs: number): number {
     const cutoff = nowMs - maxAgeMs;
     this.db.run('DELETE FROM spans WHERE start_time_ms < ?', [cutoff]);
-    return this.db.get('SELECT changes() AS n')?.n as number ?? 0;
+    const removed = this.db.get('SELECT changes() AS n')?.n as number ?? 0;
+    if (removed > 0) {
+      this.db.run(
+        `DELETE FROM session_titles WHERE chat_session_id NOT IN
+           (SELECT DISTINCT chat_session_id FROM spans WHERE chat_session_id IS NOT NULL)`,
+      );
+    }
+    return removed;
+  }
+
+  /** Distinct `chat_session_id`s present in this store's spans. */
+  knownChatSessionIds(): Set<string> {
+    const rows = this.db.all(
+      'SELECT DISTINCT chat_session_id AS id FROM spans WHERE chat_session_id IS NOT NULL',
+    ) as { id: string }[];
+    return new Set(rows.map((row) => row.id));
+  }
+
+  /**
+   * Upsert session titles into the `session_titles` sidecar. Only NEW or
+   * CHANGED rows are written — an unchanged tick leaves the file untouched, so
+   * the read layer's mtime-based skip stays effective — and a stored
+   * authoritative (non-derived) title is never downgraded to a derived
+   * fallback (the native store it came from may have rotated out). Returns the
+   * number of rows written.
+   */
+  writeSessionTitles(titles: ReadonlyMap<string, SessionTitleInfo>, nowMs: number): number {
+    if (titles.size === 0) {
+      return 0;
+    }
+    const existing = new Map<string, { title: string; derived: boolean }>();
+    const rows = this.db.all(
+      'SELECT chat_session_id AS id, title, derived FROM session_titles',
+    ) as { id: string; title: string; derived: number }[];
+    for (const row of rows) {
+      existing.set(row.id, { title: row.title, derived: row.derived !== 0 });
+    }
+
+    const changes: Array<[string, SessionTitleInfo]> = [];
+    for (const [id, info] of titles) {
+      const current = existing.get(id);
+      if (current !== undefined && !current.derived && info.derived) {
+        continue; // never downgrade an authoritative title
+      }
+      if (current !== undefined && current.title === info.title && current.derived === info.derived) {
+        continue; // unchanged
+      }
+      changes.push([id, info]);
+    }
+    if (changes.length === 0) {
+      return 0;
+    }
+    this.db.exec('BEGIN');
+    try {
+      for (const [id, info] of changes) {
+        this.db.run(UPSERT_TITLE_SQL, [id, info.title, info.derived ? 1 : 0, nowMs]);
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // ignore: rollback best-effort
+      }
+      throw err;
+    }
+    return changes.length;
   }
 
   /** Read the sweep watermark for a source DB, or `undefined` if never swept. */

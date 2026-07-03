@@ -1,13 +1,15 @@
 import { Configuration } from '../config/configuration';
-import { resolveDatabasePaths, DatabaseSource, PathConfig, PathEnvironment } from './paths';
+import {
+  candidateDatabasePaths,
+  resolveDatabasePaths,
+  DatabaseSource,
+  PathConfig,
+  PathEnvironment,
+} from './paths';
 import { createReadonlySnapshot, ReadonlySnapshot, sourceMtime } from './snapshot';
 import { TelemetryDatabase, SchemaMismatchError } from './database';
-import {
-  SessionTitleInfo,
-  readSessionTitles,
-  workspaceStorageDirFor,
-} from './sessionTitles';
-import { readChatSessionIndexTitles } from './chatSessionIndex';
+import { SessionTitleInfo, workspaceStorageDirFor } from './sessionTitles';
+import { overlayTitle, readMergedSessionTitles, titleStorageDirs } from './titleStore';
 import { AggregationRow } from '../aggregate/aggregator';
 import {
   Interaction,
@@ -277,7 +279,7 @@ export class TelemetryService {
    * `chat_session_id`, which is what the title store is keyed by.
    */
   private applyTitles(sessions: SessionSummary[], handle: OpenHandle): SessionSummary[] {
-    const titles = ensureSessionTitles(handle);
+    const titles = this.sessionTitlesFor(handle);
     if (titles.size === 0) {
       return sessions;
     }
@@ -290,6 +292,41 @@ export class TelemetryService {
         ? session
         : { ...session, title: info.title, titleDerived: info.derived };
     });
+  }
+
+  /**
+   * Build (once per snapshot) a handle's sessionId → title lookup, cached.
+   *
+   * Layered, weakest first: titles ARCHIVED into the source DB's
+   * `session_titles` sidecar at sweep time (durable archive only — they cover
+   * sessions the rolling native stores no longer name), then the live
+   * workspaceStorage stores merged by {@link readMergedSessionTitles}
+   * (`state.vscdb` index > JSONL `customTitle` > derived first-request
+   * fallback). A live title overrides an archived one of equal or higher
+   * authority, so renames propagate; a derived fallback never displaces an
+   * authoritative title ({@link overlayTitle}).
+   *
+   * A NATIVE source finds its title stores beside its own DB. The durable
+   * archive and live-ingest DBs live outside the `github.copilot-chat` layout,
+   * so their stores are located via the native candidate paths instead —
+   * previously they resolved NO titles at all, which blanked every session
+   * name once the archive became the read source.
+   */
+  private sessionTitlesFor(handle: OpenHandle): Map<string, SessionTitleInfo> {
+    if (handle.titles !== undefined) {
+      return handle.titles;
+    }
+    const own = workspaceStorageDirFor(handle.sourcePath);
+    const dirs =
+      own !== undefined
+        ? [own]
+        : titleStorageDirs(candidateDatabasePaths(this.config, this.environment));
+    const titles = handle.db.readArchivedSessionTitles();
+    for (const [id, info] of readMergedSessionTitles(dirs)) {
+      overlayTitle(titles, id, info);
+    }
+    handle.titles = titles;
+    return titles;
   }
 
   /** Ordered interactions for a session (Phase 3 detail). Not cached. */
@@ -654,31 +691,6 @@ export class TelemetryService {
 function disposeHandle(handle: OpenHandle): void {
   handle.db.close();
   handle.snapshot.dispose();
-}
-
-/** Build (once per snapshot) a handle's sessionId → title lookup, cached.
- *
- * The authoritative auto-generated title lives in each workspace's
- * `state.vscdb` chat-session index; the per-session JSONL `customTitle` /
- * first-request fallback ({@link readSessionTitles}) is layered UNDER it,
- * covering older sessions the rolling index no longer lists. Precedence on a
- * clash: `state.vscdb` index title (non-derived) > JSONL `customTitle` >
- * derived.
- */
-function ensureSessionTitles(handle: OpenHandle): Map<string, SessionTitleInfo> {
-  if (handle.titles !== undefined) {
-    return handle.titles;
-  }
-  const dir = workspaceStorageDirFor(handle.sourcePath);
-  const titles = dir !== undefined ? readSessionTitles(dir) : new Map<string, SessionTitleInfo>();
-  if (dir !== undefined) {
-    // Override JSONL entries with the authoritative index title (non-derived).
-    for (const [id, title] of readChatSessionIndexTitles(dir)) {
-      titles.set(id, { title, derived: false });
-    }
-  }
-  handle.titles = titles;
-  return titles;
 }
 
 /** Build (once per snapshot) a handle's session-key → chat-session-id lookup, cached. */

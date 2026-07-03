@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'node:path';
 import {
+  candidateDatabasePaths,
   resolveDatabasePath,
   resolveDatabasePaths,
   PathConfig,
@@ -150,5 +151,30 @@ describe('resolveDatabasePath(s) overrides and macOS', () => {
     const env = makeEnv({ platform: 'darwin', home: LINUX_HOME, files: [serverDb] });
     const r = resolveDatabasePath(makeConfig(), env);
     expect(r.exists).toBe(false);
+  });
+});
+
+describe('candidateDatabasePaths', () => {
+  it('returns every platform candidate even when no database file exists', () => {
+    // Title stores can outlive the rolling telemetry DB, so candidates must
+    // not be gated on the DB file's existence (statKind is 'absent' for all).
+    const env = makeEnv({ platform: 'linux', home: LINUX_HOME });
+    expect(candidateDatabasePaths(makeConfig(), env)).toEqual([
+      linuxDesktopDb,
+      path.join(LINUX_HOME, '.config', 'Code - Insiders', DB_RELATIVE),
+      linuxServerDb,
+      linuxServerInsidersDb,
+    ]);
+  });
+
+  it('an explicit override is the sole candidate, existing or not', () => {
+    const override = path.join('D:', 'custom', 'agent-traces.db');
+    const env = makeEnv({ platform: 'win32', env: { APPDATA } });
+    expect(candidateDatabasePaths(makeConfig(override), env)).toEqual([override]);
+  });
+
+  it('returns no candidates when the platform yields none', () => {
+    const env = makeEnv({ platform: 'win32', env: {} }); // no APPDATA
+    expect(candidateDatabasePaths(makeConfig(), env)).toEqual([]);
   });
 });
