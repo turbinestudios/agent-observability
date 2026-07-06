@@ -4,6 +4,25 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-07-03
+
+### Added
+
+- **The cloud "context-insights" upload is now visible in the log.** The
+  dashboard's **Context Hotspots** page is fed by a separate, best-effort upload
+  from your aggregate sync — and until now it produced no feedback, so an empty
+  page was impossible to diagnose. Each sync that reaches this step now writes one
+  content-free line to the **Agent Observability** output channel summarizing why
+  nothing was sent or that a batch was uploaded: the reason
+  (`no-context-source` / `no-rows-in-window` / `no-observations` / `error` /
+  `sent`) plus counts for sessions considered, sessions with discovery events,
+  indexed customization files, extracted observations, rows built, and the send
+  outcome. This makes it clear when Context Hotspots stays empty because no
+  in-repo customization files resolved (e.g. no discovery telemetry for the synced
+  sessions, or no workspace open at sync time) versus a genuine send failure. The
+  line carries only counts and a fixed reason code — never file paths, session
+  keys, or any content.
+
 ## [0.6.0] - 2026-07-03
 
 ### Fixed

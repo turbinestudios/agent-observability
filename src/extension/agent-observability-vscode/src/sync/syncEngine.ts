@@ -1,7 +1,7 @@
 import { AggregateBatch } from '../aggregate/models';
 import { AggregationRow, buildBatch } from '../aggregate/aggregator';
 import { computeDeveloperId, getIdentityInput } from '../aggregate/pseudonymizer';
-import { buildRepoCustomizationIndex } from '../aggregate/customizationFilter';
+import { buildRepoCustomizationIndex, type RepoCustomizationIndex } from '../aggregate/customizationFilter';
 import {
   extractContextObservations,
   sessionsFromAggregationRows,
@@ -106,6 +106,50 @@ export interface SyncEngineOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Deterministic jitter source in [0,1). Defaults to `Math.random`. */
   random?: () => number;
+  /**
+   * Optional content-free diagnostics sink for the secondary context-insights
+   * upload. Invoked once per sync run that reaches the context-insights step
+   * (i.e. after a successful aggregate upload), so the otherwise-silent path
+   * becomes observable (e.g. in the extension log). It receives ONLY counts, a
+   * closed-set reason, and the send-outcome kind — never file paths, session
+   * keys, or any raw content.
+   */
+  onContextInsights?: (diagnostics: ContextInsightsDiagnostics) => void;
+}
+
+/**
+ * Content-free diagnostics for ONE context-insights sync attempt. Emitted via
+ * {@link SyncEngineOptions.onContextInsights} so the secondary upload — which is
+ * best-effort and silent by design — can be diagnosed when the dashboard's
+ * Context Hotspots page stays empty. Carries ONLY counts, a closed-set reason,
+ * and the send-outcome kind; NEVER a file path, session key, or raw content.
+ */
+export interface ContextInsightsDiagnostics {
+  /** True once extraction ran (a source was present AND the window had rows). */
+  attempted: boolean;
+  /**
+   * Why no rows were sent, or `'sent'` when a batch was POSTed. Closed set:
+   *  - `'no-context-source'` — no context-insights source is wired (feature off).
+   *  - `'no-rows-in-window'`  — the aggregate window had no rows to derive from.
+   *  - `'no-observations'`    — nothing resolved to an in-repo customization file
+   *    (no discovery events for the sessions, empty workspace index, or every
+   *    candidate dropped as ambiguous / out-of-repo).
+   *  - `'error'`             — the local index walk / detector threw (swallowed).
+   *  - `'sent'`              — a batch was built and POSTed (see {@link sendOutcome}).
+   */
+  reason: 'no-context-source' | 'no-rows-in-window' | 'no-observations' | 'error' | 'sent';
+  /** Distinct sessions in the window considered for context extraction. */
+  sessionsConsidered: number;
+  /** Of those, how many carried ≥1 local discovery/customization event. */
+  sessionsWithDiscoveryEvents: number;
+  /** Distinct customization files found in the open workspace index. */
+  indexedCustomizationFiles: number;
+  /** Repo-scoped observations extracted (the input grain to aggregation). */
+  observations: number;
+  /** Rows in the built batch (0 when nothing was sent). */
+  rowsBuilt: number;
+  /** The send-outcome kind when a batch was POSTed; undefined otherwise. */
+  sendOutcome?: SyncOutcome['kind'];
 }
 
 /** The 30-minute bin width (ms), matching the aggregate engine's bucket width. */
@@ -361,20 +405,53 @@ export class SyncEngine {
   ): Promise<void> {
     const source = this.contextInsights;
     if (source === undefined || rows.length === 0) {
+      this.emitContextInsights({
+        attempted: false,
+        reason: source === undefined ? 'no-context-source' : 'no-rows-in-window',
+        sessionsConsidered: 0,
+        sessionsWithDiscoveryEvents: 0,
+        indexedCustomizationFiles: 0,
+        observations: 0,
+        rowsBuilt: 0,
+      });
       return;
     }
+    // Mutable accumulator so a throw still reports how far extraction got. Starts
+    // as an 'error' so the catch reports the partial counts filled in below.
+    const diag: ContextInsightsDiagnostics = {
+      attempted: true,
+      reason: 'error',
+      sessionsConsidered: 0,
+      sessionsWithDiscoveryEvents: 0,
+      indexedCustomizationFiles: 0,
+      observations: 0,
+      rowsBuilt: 0,
+    };
     try {
       const sessionKeys = distinctSessionKeys(rows);
       const deviationSessions = source.getDeviationSessionKeys(sessionKeys);
       const sessions = sessionsFromAggregationRows(rows, deviationSessions);
+      diag.sessionsConsidered = sessions.length;
       const index = buildRepoCustomizationIndex(this.options.workspaceCwd);
+      diag.indexedCustomizationFiles = countIndexedFiles(index);
       const observations = extractContextObservations(
         sessions,
-        (key) => source.getDiscoveryEvents(key),
+        (key) => {
+          // Count sessions that actually carried events so a "no telemetry"
+          // cause is distinguishable from a "no in-repo match" one.
+          const events = source.getDiscoveryEvents(key);
+          if (events.length > 0) {
+            diag.sessionsWithDiscoveryEvents += 1;
+          }
+          return events;
+        },
         this.options.workspaceCwd,
         index,
       );
+      diag.observations = observations.length;
       if (observations.length === 0) {
+        diag.reason = 'no-observations';
+        this.emitContextInsights(diag);
         return; // nothing repo-scoped to report — skip an empty upload.
       }
       const batch = buildContextInsightsBatch({
@@ -385,9 +462,28 @@ export class SyncEngine {
         windowEndMs: end,
         generatedAtMs: this.clock.nowMs(),
       });
-      await this.sendWithRetry(() => this.client.sendContextInsights(batch));
+      diag.rowsBuilt = batch.rows.length;
+      const outcome = await this.sendWithRetry(() => this.client.sendContextInsights(batch));
+      diag.reason = 'sent';
+      diag.sendOutcome = outcome.kind;
+      this.emitContextInsights(diag);
     } catch {
       // Best-effort: a context-insights failure must never break aggregate sync.
+      // `diag.reason` is still 'error' with whatever partial counts we filled in.
+      this.emitContextInsights(diag);
+    }
+  }
+
+  /** Hand diagnostics to the optional sink, never throwing (or affecting sync). */
+  private emitContextInsights(diagnostics: ContextInsightsDiagnostics): void {
+    const sink = this.options.onContextInsights;
+    if (sink === undefined) {
+      return;
+    }
+    try {
+      sink(diagnostics);
+    } catch {
+      // A misbehaving diagnostics sink must never affect the sync result.
     }
   }
 
@@ -450,6 +546,29 @@ function distinctSessionKeys(rows: readonly AggregationRow[]): string[] {
     }
   }
   return keys;
+}
+
+/** Count the distinct customization-file paths held in a repo index. */
+function countIndexedFiles(index: RepoCustomizationIndex): number {
+  const paths = new Set<string>();
+  for (const list of index.byKey.values()) {
+    for (const p of list) {
+      paths.add(p);
+    }
+  }
+  return paths.size;
+}
+
+/**
+ * Render {@link ContextInsightsDiagnostics} as ONE content-free log line so the
+ * secondary upload's outcome is visible without exposing any path or content.
+ */
+export function formatContextInsightsDiagnostics(d: ContextInsightsDiagnostics): string {
+  const detail =
+    `sessions=${d.sessionsConsidered} withDiscovery=${d.sessionsWithDiscoveryEvents} ` +
+    `indexedFiles=${d.indexedCustomizationFiles} observations=${d.observations} rows=${d.rowsBuilt}` +
+    (d.sendOutcome !== undefined ? ` send=${d.sendOutcome}` : '');
+  return `Context-insights sync: ${d.reason} (${detail}).`;
 }
 
 /** A short, key-free message describing a failure outcome for the history/UI. */

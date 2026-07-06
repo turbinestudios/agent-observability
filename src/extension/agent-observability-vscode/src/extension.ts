@@ -17,7 +17,7 @@ import { getIdentityInput, computeDeveloperId } from './aggregate/pseudonymizer'
 import { FetchHttpPoster } from './sync/httpPoster';
 import { SyncClient } from './sync/syncClient';
 import { GlobalStateSyncStateStore } from './sync/syncState';
-import { SyncEngine, SyncContextInsightsSource, SyncTelemetry, systemClock } from './sync/syncEngine';
+import { SyncEngine, SyncContextInsightsSource, SyncTelemetry, formatContextInsightsDiagnostics, systemClock } from './sync/syncEngine';
 import { SyncScheduler } from './sync/scheduler';
 import { registerObservabilityChatParticipant } from './chat/observabilityChat';
 import { ChatViewProvider, ASSISTANT_VIEW_ID } from './chat/webview/chatViewProvider';
@@ -179,6 +179,9 @@ export function activate(context: vscode.ExtensionContext): void {
       toolVersion,
       workspaceCwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
       machineId: vscode.env.machineId,
+      // Surface the otherwise-silent context-insights upload in the extension log
+      // so an empty Context Hotspots page can be diagnosed (counts only, no paths).
+      onContextInsights: (d) => logger.info(formatContextInsightsDiagnostics(d)),
     },
     contextInsightsSource,
   );

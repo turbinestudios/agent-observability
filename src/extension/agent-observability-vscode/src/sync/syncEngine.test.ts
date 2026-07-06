@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   SyncEngine,
   Clock,
@@ -6,10 +9,13 @@ import {
   SyncConsent,
   SyncSecrets,
   SyncTelemetry,
+  SyncContextInsightsSource,
+  ContextInsightsDiagnostics,
 } from './syncEngine';
 import { SyncClient, SyncOutcome, SyncStatusReport } from './syncClient';
 import { HttpPoster, HttpResponse } from './httpPoster';
 import { InMemorySyncStateStore } from './syncState';
+import type { DiscoveryEventRow } from '../context/discoveryParser';
 import { AggregationRow } from '../aggregate/aggregator';
 import { buildBatch } from '../aggregate/aggregator';
 import { computeDeveloperId, getIdentityInput } from '../aggregate/pseudonymizer';
@@ -147,6 +153,9 @@ function buildEngine(opts: {
   clock?: number;
   dashboardUrl?: string;
   repoPolicy?: RepoSyncPolicy;
+  workspaceCwd?: string;
+  contextInsights?: SyncContextInsightsSource;
+  onContextInsights?: (d: ContextInsightsDiagnostics) => void;
 }): Built {
   const poster = new ScriptedPoster(opts.responses ?? [aggregateResponse()]);
   const config = new FakeConfig(
@@ -170,16 +179,28 @@ function buildEngine(opts: {
   };
 
   const sleeps: number[] = [];
-  const engine = new SyncEngine(config, consent, secrets, telemetry, client, state, clock, {
-    toolVersion: TOOL_VERSION,
-    maxAttempts: 4,
-    baseBackoffMs: 100,
-    maxBackoffMs: 1000,
-    sleep: async (ms) => {
-      sleeps.push(ms);
+  const engine = new SyncEngine(
+    config,
+    consent,
+    secrets,
+    telemetry,
+    client,
+    state,
+    clock,
+    {
+      toolVersion: TOOL_VERSION,
+      workspaceCwd: opts.workspaceCwd,
+      maxAttempts: 4,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1000,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      random: () => 0.5, // deterministic jitter
+      onContextInsights: opts.onContextInsights,
     },
-    random: () => 0.5, // deterministic jitter
-  });
+    opts.contextInsights,
+  );
 
   return { engine, poster, state, client, statusReports, sleeps };
 }
@@ -235,6 +256,121 @@ describe('SyncEngine happy path', () => {
     expect(state.getHistory()[0].outcome).toBe('success');
     expect(statusReports).toHaveLength(1);
     expect(statusReports[0].lastOutcome).toBe('success');
+  });
+});
+
+describe('SyncEngine context-insights diagnostics', () => {
+  function discoveryEvent(): DiscoveryEventRow {
+    return {
+      spanName: 'Instructions Discovery',
+      eventDetails:
+        'Resolved 1 instructions in 8.0ms | loaded: [security.instructions.md] | folders: [.github]',
+      eventCategory: 'discovery',
+      conversationId: null,
+      chatSessionId: null,
+      agentName: null,
+      debugLabel: null,
+    };
+  }
+
+  it('emits a content-free "no-context-source" diagnostic when no source is wired', async () => {
+    const diags: ContextInsightsDiagnostics[] = [];
+    const { engine } = buildEngine({ onContextInsights: (d) => diags.push(d) });
+
+    const result = await engine.runSync({ manual: true });
+    expect(result.status).toBe('success');
+    expect(diags).toEqual([
+      {
+        attempted: false,
+        reason: 'no-context-source',
+        sessionsConsidered: 0,
+        sessionsWithDiscoveryEvents: 0,
+        indexedCustomizationFiles: 0,
+        observations: 0,
+        rowsBuilt: 0,
+      },
+    ]);
+  });
+
+  it('reports stage counts and the send outcome on the sent path', async () => {
+    const tmp = mkdtempSync(path.join(os.tmpdir(), 'ao-sync-ci-'));
+    mkdirSync(path.join(tmp, '.github', 'instructions'), { recursive: true });
+    writeFileSync(
+      path.join(tmp, '.github', 'instructions', 'security.instructions.md'),
+      '# security\n'.repeat(10),
+    );
+    try {
+      const source: SyncContextInsightsSource = {
+        getDiscoveryEvents: (key) => (key === 's1' ? [discoveryEvent()] : []),
+        getDeviationSessionKeys: () => new Set<string>(),
+      };
+      const diags: ContextInsightsDiagnostics[] = [];
+      const { engine, poster } = buildEngine({
+        rows: [row({ sessionKey: 's1' })],
+        workspaceCwd: tmp,
+        contextInsights: source,
+        onContextInsights: (d) => diags.push(d),
+      });
+
+      const result = await engine.runSync({ manual: true });
+      expect(result.status).toBe('success');
+
+      // A separate context-insights batch was POSTed to its own endpoint.
+      const ciPosts = poster.posts.filter((p) => p.url.includes('/api/ingest/context-insights'));
+      expect(ciPosts).toHaveLength(1);
+
+      expect(diags).toEqual([
+        {
+          attempted: true,
+          reason: 'sent',
+          sessionsConsidered: 1,
+          sessionsWithDiscoveryEvents: 1,
+          indexedCustomizationFiles: 1,
+          observations: 1,
+          rowsBuilt: 1,
+          sendOutcome: 'success',
+        },
+      ]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('reports "no-observations" when discovery events resolve to no in-repo file', async () => {
+    // An empty workspace dir: the customization index is empty, so the discovery
+    // event cannot resolve to any in-repo customization path and nothing is sent.
+    const tmp = mkdtempSync(path.join(os.tmpdir(), 'ao-sync-ci-empty-'));
+    try {
+      const source: SyncContextInsightsSource = {
+        getDiscoveryEvents: (key) => (key === 's1' ? [discoveryEvent()] : []),
+        getDeviationSessionKeys: () => new Set<string>(),
+      };
+      const diags: ContextInsightsDiagnostics[] = [];
+      const { engine, poster } = buildEngine({
+        rows: [row({ sessionKey: 's1' })],
+        workspaceCwd: tmp,
+        contextInsights: source,
+        onContextInsights: (d) => diags.push(d),
+      });
+
+      await engine.runSync({ manual: true });
+
+      const ciPosts = poster.posts.filter((p) => p.url.includes('/api/ingest/context-insights'));
+      expect(ciPosts).toHaveLength(0);
+      expect(diags).toHaveLength(1);
+      expect(diags[0]).toMatchObject({
+        attempted: true,
+        reason: 'no-observations',
+        sessionsConsidered: 1,
+        sessionsWithDiscoveryEvents: 1,
+        indexedCustomizationFiles: 0,
+        observations: 0,
+        rowsBuilt: 0,
+      });
+      expect(diags[0].sendOutcome).toBeUndefined();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 
