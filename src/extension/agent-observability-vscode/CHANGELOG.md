@@ -4,6 +4,32 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-07-06
+
+### Added
+
+- **New "Context Hotspots" view — see which customization files your recent
+  sessions actually used, and drill down to them.** The view lists the
+  instruction, skill, prompt, agent, and hook files that appeared in your recent
+  local sessions, busiest first, with a contributing-session count and an
+  estimated token weight per file. Expand a file to see the individual sessions
+  that had it in context and click one to open its local session detail — the
+  on-machine companion to the organization dashboard's aggregate hotspots page,
+  which cannot show session identities. Everything in this view is read locally
+  and never leaves your machine.
+
+### Fixed
+
+- **Context-engineering hotspots now populate on the organization dashboard.**
+  The aggregate that feeds the dashboard's Context Hotspots previously depended
+  solely on customization "discovery" events, which the live telemetry stream the
+  extension consumes never emits — so the page stayed empty. Context observations
+  are now derived by fusing three signals the extension already captures: the
+  system prompt's applied-file listing, `read_file` tool calls that target
+  customization paths, and discovery events when present. As before, only
+  repository-relative customization paths and counts are shared — never file
+  contents, session identities, or any raw content.
+
 ## [0.7.0] - 2026-07-06
 
 ### Changed

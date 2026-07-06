@@ -12,7 +12,7 @@ import {
   extractContextObservations,
   type ContextFileObservation,
   type SessionContext,
-  type DiscoveryEventsProvider,
+  type ContextSignalsProvider,
 } from './contextInsightsExtractor';
 import { buildContextInsightsBatch } from './contextInsightsAggregator';
 import type { ContextInsightsBatch } from './contextInsightsModels';
@@ -163,14 +163,18 @@ describe('context-insights batch privacy contract (adversarial producer pipeline
         ],
       ],
     ]);
-    const getDiscoveryEvents: DiscoveryEventsProvider = (k) => eventsByKey.get(k) ?? [];
+    const getSignals: ContextSignalsProvider = (k) => ({
+      discoveryEvents: eventsByKey.get(k) ?? [],
+      toolReads: [],
+      systemInstructions: [],
+    });
 
     const sessions: SessionContext[] = [
       { sessionKey: 'sess-A', repository: REPO, startTimeMs: T0, hadError: true, hadDeviation: false },
       { sessionKey: 'sess-B', repository: REPO, startTimeMs: T0 + 60_000, hadError: false, hadDeviation: true },
     ];
 
-    observations = extractContextObservations(sessions, getDiscoveryEvents, tmpDir, index);
+    observations = extractContextObservations(sessions, getSignals, tmpDir, index);
     batch = buildContextInsightsBatch({
       observations,
       pseudonymousDeveloperId: DEV_ID,

@@ -70,6 +70,7 @@ const EXPECTED_VIEWS = [
   'agentObservability.overview',
   'agentObservability.sessions',
   'agentObservability.sync',
+  'agentObservability.contextHotspots',
   'agentObservability.assistant',
 ] as const;
 
@@ -128,7 +129,7 @@ describe('manifest contract is stable', () => {
     expect(container.map((v) => v.id)).toContain('agentObservability');
 
     const views = manifest.contributes.views.agentObservability.map((v) => v.id);
-    // Order matters: Overview, Sessions, Sync.
+    // Order matters: Overview, Sessions, Sync, Context Hotspots, AI Helper.
     expect(views).toEqual([...EXPECTED_VIEWS]);
   });
 

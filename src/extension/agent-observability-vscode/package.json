@@ -2,7 +2,7 @@
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
   "description": "Privacy-first local view of GitHub Copilot and Claude Code agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "turbinestudios",
   "license": "UNLICENSED",
   "engines": {
@@ -44,6 +44,10 @@
           "name": "Sync"
         },
         {
+          "id": "agentObservability.contextHotspots",
+          "name": "Context Hotspots"
+        },
+        {
           "id": "agentObservability.assistant",
           "name": "AI Helper",
           "type": "webview"
@@ -62,6 +66,10 @@
       {
         "view": "agentObservability.sync",
         "contents": "Sync uploads only opt-in, aggregated, non-sensitive statistics to your organization dashboard. Raw prompts, completions, tool I/O, source-file paths and file contents never leave your machine.\n\nWhen enabled, the only paths shared are repository-relative paths of customization files (instructions, skills, prompts, agents, hooks) — with counts, never contents — so your team can review context-engineering hotspots.\n\nCloud sharing is OFF by default.\n\n[Set Organization API Key](command:agentObservability.setApiKey)\n[Open Settings](command:agentObservability.openSettings)"
+      },
+      {
+        "view": "agentObservability.contextHotspots",
+        "contents": "Context Hotspots shows which customization files (instructions, skills, prompts, agents, hooks) appeared in your recent local sessions — busiest first — so you can drill down from a file to the concrete sessions that used it.\n\nThis is the LOCAL companion to the organization dashboard's aggregate hotspots. All detail stays on this machine.\n\n[Refresh](command:agentObservability.refresh)"
       }
     ],
     "chatParticipants": [
@@ -219,6 +227,11 @@
         {
           "command": "agentObservability.refresh",
           "when": "view == agentObservability.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentObservability.refresh",
+          "when": "view == agentObservability.contextHotspots",
           "group": "navigation@1"
         },
         {

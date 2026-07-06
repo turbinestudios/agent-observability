@@ -7,6 +7,7 @@ import { registerCommands, Refreshable } from './commands';
 import { OverviewViewProvider, OVERVIEW_VIEW_ID } from './views/overviewView';
 import { SessionsViewProvider, SESSIONS_VIEW_ID } from './views/sessionsView';
 import { SyncViewProvider, SYNC_VIEW_ID } from './views/syncView';
+import { ContextHotspotsViewProvider, CONTEXT_HOTSPOTS_VIEW_ID } from './views/contextHotspotsView';
 import { SessionDetailPanelManager } from './views/sessionDetailPanel';
 import { TelemetryService } from './telemetry/telemetryService';
 import { LocalDeviationDetector } from './deviation/localDeviations';
@@ -34,6 +35,7 @@ import { resolveClaudeProjectsDirs } from './claude/paths';
 import { CopilotSource, SourceRegistry } from './sources/sessionSource';
 import { readWorkspaceStoreSessions } from './telemetry/workspaceStore';
 import { CompositeAggregationSource } from './sync/compositeAggregationSource';
+import { CopilotContextHotspotsProvider } from './context/contextHotspotsProvider';
 import { OutputChannelLogger } from './log/outputChannelLogger';
 import { Logger } from './log/logger';
 
@@ -122,13 +124,20 @@ export function activate(context: vscode.ExtensionContext): void {
     () => secrets.getApiKey(),
   );
   // LOCAL-ONLY source for the secondary context-insights upload. Supplies the
-  // engine with per-session discovery events and the subset of sessions the
+  // engine with each session's fused context signals (discovery events, tool
+  // reads, and system-prompt file listings) and the subset of sessions the
   // on-machine deviation detector flagged. Both read local telemetry only; raw
   // content never leaves the machine (only counts/categories are aggregated).
   const contextInsightsSource: SyncContextInsightsSource = {
-    getDiscoveryEvents: (sessionKey) => {
-      const result = telemetry.getContextDiscoveryEvents(sessionKey);
-      return result.ok ? result.value : [];
+    getContextSignals: (sessionKey) => {
+      const discovery = telemetry.getContextDiscoveryEvents(sessionKey);
+      const toolReads = telemetry.getContextToolReads(sessionKey);
+      const systemInstr = telemetry.getSystemInstructionsBySpan(sessionKey);
+      return {
+        discoveryEvents: discovery.ok ? discovery.value : [],
+        toolReads: toolReads.ok ? toolReads.value.map((r) => ({ filePath: r.filePath })) : [],
+        systemInstructions: systemInstr.ok ? [...systemInstr.value.values()].map((s) => s.value) : [],
+      };
     },
     getDeviationSessionKeys: (sessionKeys) => {
       const flagged = new Set<string>();
@@ -194,6 +203,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const sessions = new SessionsViewProvider(registry);
   const sync = new SyncViewProvider(config, telemetry, consent, secrets, syncState);
 
+  // Context Hotspots — the LOCAL twin of the dashboard's aggregate hotspots page.
+  // It reuses the SAME extractor as the cloud sync path but retains the on-machine
+  // session ids (barred from upload), so a busy customization file drills down to
+  // the concrete sessions to investigate. All reads and drill-downs stay local.
+  const hotspotsProvider = new CopilotContextHotspotsProvider(
+    telemetry,
+    () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    () => config.isLocalTelemetryEnabled(),
+  );
+  const contextHotspots = new ContextHotspotsViewProvider(hotspotsProvider);
+
   // AI Helper — a Copilot-backed chat webview grounded in baked-in context files
   // and the user's LOCAL telemetry. Sends only safe metadata to the user's own
   // Copilot model (gated by a one-time disclosure); never raw content or the key.
@@ -214,6 +234,7 @@ export function activate(context: vscode.ExtensionContext): void {
       canSelectMany: true,
     }),
     vscode.window.registerTreeDataProvider(SYNC_VIEW_ID, sync),
+    vscode.window.registerTreeDataProvider(CONTEXT_HOTSPOTS_VIEW_ID, contextHotspots),
   );
 
   // ── Current-workspace chat-session context ──────────────────────────────────
@@ -291,6 +312,7 @@ export function activate(context: vscode.ExtensionContext): void {
     overview,
     sessions,
     sync,
+    contextHotspots,
     divergenceNotifier,
   ];
 
@@ -330,6 +352,7 @@ export function activate(context: vscode.ExtensionContext): void {
     overview.refresh();
     sessions.refresh();
     sync.refresh();
+    contextHotspots.refresh();
     divergenceNotifier.refresh();
     detailPanels.rerenderActive();
   };

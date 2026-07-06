@@ -2,10 +2,15 @@
  * Context-insights extractor — turns local per-session telemetry into safe,
  * repo-scoped {@link ContextFileObservation}s ready for aggregation.
  *
- * For each session it parses discovery/customization events into context-file
- * entries, resolves each to a unique repo-relative customization path (dropping
- * anything that is not an in-repo allowlisted file), and folds the per-agent
- * entries into ONE observation per (session, file) carrying the session's
+ * For each session it fuses THREE local signals into context-file entries:
+ *  1. Copilot discovery/customization `core_event` spans (when present — the
+ *     otlp-http live-updates stream never emits these, so this is a bonus);
+ *  2. the customization files Copilot listed as `<file>…</file>` inside the
+ *     `gen_ai.system_instructions` blob (the primary applied-file signal); and
+ *  3. `read_file` tool calls that targeted customization paths.
+ * Each candidate is resolved to a unique repo-relative customization path
+ * (dropping anything that is not an in-repo allowlisted file), and the entries
+ * are folded into ONE observation per (session, file) carrying the session's
  * friction flags (error / workflow-deviation co-occurrence).
  *
  * Pure + headless: imports only `node:fs`/`node:path` and sibling modules, never
@@ -22,6 +27,7 @@ import {
   categoryForCustomizationFile,
   resolveRepoRelativePath,
 } from './customizationFilter';
+import { parseSystemPromptContextFiles } from './systemPromptParser';
 
 /** Approximate characters per token, matching the size estimator's heuristic. */
 const CHARS_PER_TOKEN = 4;
@@ -58,8 +64,28 @@ export interface ContextFileObservation {
   hadDeviation: boolean;
 }
 
-/** Supplies the LOCAL-ONLY discovery/customization events for a session. */
-export type DiscoveryEventsProvider = (sessionKey: string) => readonly DiscoveryEventRow[];
+/** A `read_file` tool call that targeted a customization path (LOCAL-ONLY). */
+export interface ContextToolRead {
+  /** Absolute path from the tool-call arguments; resolved + dropped downstream. */
+  filePath: string;
+}
+
+/**
+ * The LOCAL-ONLY context signals for ONE session, fused by the extractor into
+ * per-file observations. All three are read on-machine; only the resolved,
+ * repo-relative, allowlisted file paths + counts ever leave via aggregation.
+ */
+export interface SessionContextSignals {
+  /** Discovery/customization `core_event` details (empty on the otlp-http path). */
+  discoveryEvents: readonly DiscoveryEventRow[];
+  /** `read_file` calls targeting customization paths. */
+  toolReads: readonly ContextToolRead[];
+  /** Raw `gen_ai.system_instructions` blobs (one per LLM span) for `<file>` parsing. */
+  systemInstructions: readonly string[];
+}
+
+/** Supplies the LOCAL-ONLY fused context signals for a session. */
+export type ContextSignalsProvider = (sessionKey: string) => SessionContextSignals;
 
 /**
  * Fold safe per-span aggregation rows into per-session contexts (repository,
@@ -110,31 +136,28 @@ interface FileFold {
 }
 
 /**
- * Extract one {@link ContextFileObservation} per (session, resolved file). Tool
- * reads (`status === 'read'`, i.e. source files) and files that do not resolve to
- * a unique in-repo customization path are dropped.
+ * Extract one {@link ContextFileObservation} per (session, resolved file) by
+ * fusing the session's three local context signals. A file is `applied` when it
+ * was discovered-and-applied, listed in the system prompt, or read via a tool
+ * call; it is `skipped` only when a discovery event says so AND no signal applied
+ * it. Files that do not resolve to a unique in-repo customization path are dropped.
  */
 export function extractContextObservations(
   sessions: readonly SessionContext[],
-  getDiscoveryEvents: DiscoveryEventsProvider,
+  getSignals: ContextSignalsProvider,
   workspaceCwd: string | undefined,
   index: RepoCustomizationIndex,
 ): ContextFileObservation[] {
   const observations: ContextFileObservation[] = [];
 
   for (const session of sessions) {
-    const events = getDiscoveryEvents(session.sessionKey);
-    if (events.length === 0) {
-      continue;
-    }
-    const entries = parseDiscoveryEvents(events);
-    if (entries.length === 0) {
-      continue;
-    }
-
+    const signals = getSignals(session.sessionKey);
     const perFile = new Map<string, FileFold>();
-    for (const entry of entries) {
-      // Tool-read entries are source/doc files — explicitly out of scope.
+
+    // 1. Discovery/customization events (additive; empty on the otlp-http path).
+    for (const entry of parseDiscoveryEvents(signals.discoveryEvents)) {
+      // Tool-read entries here are source/doc files — the dedicated tool-read
+      // signal below handles customization reads with their absolute path.
       if (entry.status === 'read') {
         continue;
       }
@@ -146,23 +169,24 @@ export function extractContextObservations(
       if (category === 'unknown') {
         continue;
       }
-
-      let fold = perFile.get(rel);
-      if (fold === undefined) {
-        fold = { category: category as ContextInsightCategory, applied: false, estTokens: 0 };
-        perFile.set(rel, fold);
-      }
-
+      const fold = getOrCreateFold(perFile, rel, category as ContextInsightCategory);
       if (entry.status === 'applied') {
-        fold.applied = true;
-        const est = entry.estimatedTokens ?? estimateTokensForRepoFile(workspaceCwd, rel);
-        if (est > fold.estTokens) {
-          fold.estTokens = est;
-        }
+        markApplied(fold, entry.estimatedTokens ?? estimateTokensForRepoFile(workspaceCwd, rel));
       } else {
-        // skipped
         fold.skipReason = fold.skipReason ?? classifySkipReason(entry.skipReason);
       }
+    }
+
+    // 2. Customization files listed in the system prompt (the primary signal).
+    for (const text of signals.systemInstructions) {
+      for (const listed of parseSystemPromptContextFiles(text)) {
+        foldAppliedFile(perFile, listed.name, listed.filePath, workspaceCwd, index);
+      }
+    }
+
+    // 3. `read_file` tool calls that targeted customization paths.
+    for (const read of signals.toolReads) {
+      foldAppliedFile(perFile, baseNameOf(read.filePath), read.filePath, workspaceCwd, index);
     }
 
     for (const [rel, fold] of perFile) {
@@ -182,6 +206,58 @@ export function extractContextObservations(
   }
 
   return observations;
+}
+
+/** Get (or create) the per-file fold for a resolved repo-relative path. */
+function getOrCreateFold(
+  perFile: Map<string, FileFold>,
+  rel: string,
+  category: ContextInsightCategory,
+): FileFold {
+  let fold = perFile.get(rel);
+  if (fold === undefined) {
+    fold = { category, applied: false, estTokens: 0 };
+    perFile.set(rel, fold);
+  }
+  return fold;
+}
+
+/** Mark a fold applied, keeping the largest seen token estimate. */
+function markApplied(fold: FileFold, estTokens: number): void {
+  fold.applied = true;
+  if (estTokens > fold.estTokens) {
+    fold.estTokens = estTokens;
+  }
+}
+
+/**
+ * Resolve a listed/read customization file to its repo-relative path and fold it
+ * in as `applied` (its content entered the session's context envelope). Files
+ * that do not resolve to a unique in-repo allowlisted path are dropped.
+ */
+function foldAppliedFile(
+  perFile: Map<string, FileFold>,
+  name: string,
+  filePath: string | undefined,
+  workspaceCwd: string | undefined,
+  index: RepoCustomizationIndex,
+): void {
+  const rel = resolveRepoRelativePath(name, filePath, workspaceCwd, index);
+  if (rel === undefined) {
+    return;
+  }
+  const category = categoryForCustomizationFile(rel);
+  if (category === 'unknown') {
+    return;
+  }
+  const fold = getOrCreateFold(perFile, rel, category as ContextInsightCategory);
+  markApplied(fold, estimateTokensForRepoFile(workspaceCwd, rel));
+}
+
+/** Last path segment, treating both `/` and `\` as separators. */
+function baseNameOf(p: string): string {
+  const segments = p.replace(/\\/g, '/').split('/');
+  return segments[segments.length - 1] ?? p;
 }
 
 /** Map a free-text skip reason into the closed taxonomy (never transmits the text). */

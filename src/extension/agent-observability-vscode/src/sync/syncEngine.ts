@@ -5,11 +5,11 @@ import { buildRepoCustomizationIndex, type RepoCustomizationIndex } from '../agg
 import {
   extractContextObservations,
   sessionsFromAggregationRows,
+  type SessionContextSignals,
 } from '../aggregate/contextInsightsExtractor';
 import { buildContextInsightsBatch } from '../aggregate/contextInsightsAggregator';
 import { computeCanSync, describeSyncBlock } from '../consent/syncGate';
 import { RepoSyncPolicy, isRepositoryIncluded } from '../aggregate/repoSyncPolicy';
-import { DiscoveryEventRow } from '../context/discoveryParser';
 import { SyncClient, SyncOutcome, isTransient } from './syncClient';
 import { SyncRun, SyncRunOutcome, SyncStateStore } from './syncState';
 
@@ -75,8 +75,13 @@ export interface SyncTelemetry {
  * read on-machine data only and never emit raw content.
  */
 export interface SyncContextInsightsSource {
-  /** Discovery/customization events for one session (empty when none/unavailable). */
-  getDiscoveryEvents(sessionKey: string): readonly DiscoveryEventRow[];
+  /**
+   * The fused LOCAL-ONLY context signals for one session: discovery/customization
+   * events, `read_file` calls targeting customization paths, and the raw
+   * `gen_ai.system_instructions` blobs. All are read on-machine; only resolved
+   * repo-relative paths + counts ever leave via aggregation.
+   */
+  getContextSignals(sessionKey: string): SessionContextSignals;
   /**
    * The subset of `sessionKeys` the LOCAL workflow-deviation detector flagged.
    * Returns an empty set when no workflows are configured. Used ONLY to count
@@ -132,7 +137,7 @@ export interface ContextInsightsDiagnostics {
    *  - `'no-context-source'` — no context-insights source is wired (feature off).
    *  - `'no-rows-in-window'`  — the aggregate window had no rows to derive from.
    *  - `'no-observations'`    — nothing resolved to an in-repo customization file
-   *    (no discovery events for the sessions, empty workspace index, or every
+   *    (no context signals for the sessions, empty workspace index, or every
    *    candidate dropped as ambiguous / out-of-repo).
    *  - `'error'`             — the local index walk / detector threw (swallowed).
    *  - `'sent'`              — a batch was built and POSTed (see {@link sendOutcome}).
@@ -140,8 +145,8 @@ export interface ContextInsightsDiagnostics {
   reason: 'no-context-source' | 'no-rows-in-window' | 'no-observations' | 'error' | 'sent';
   /** Distinct sessions in the window considered for context extraction. */
   sessionsConsidered: number;
-  /** Of those, how many carried ≥1 local discovery/customization event. */
-  sessionsWithDiscoveryEvents: number;
+  /** Of those, how many carried ≥1 local context signal (discovery / listing / read). */
+  sessionsWithContextSignals: number;
   /** Distinct customization files found in the open workspace index. */
   indexedCustomizationFiles: number;
   /** Repo-scoped observations extracted (the input grain to aggregation). */
@@ -409,7 +414,7 @@ export class SyncEngine {
         attempted: false,
         reason: source === undefined ? 'no-context-source' : 'no-rows-in-window',
         sessionsConsidered: 0,
-        sessionsWithDiscoveryEvents: 0,
+        sessionsWithContextSignals: 0,
         indexedCustomizationFiles: 0,
         observations: 0,
         rowsBuilt: 0,
@@ -422,7 +427,7 @@ export class SyncEngine {
       attempted: true,
       reason: 'error',
       sessionsConsidered: 0,
-      sessionsWithDiscoveryEvents: 0,
+      sessionsWithContextSignals: 0,
       indexedCustomizationFiles: 0,
       observations: 0,
       rowsBuilt: 0,
@@ -437,13 +442,17 @@ export class SyncEngine {
       const observations = extractContextObservations(
         sessions,
         (key) => {
-          // Count sessions that actually carried events so a "no telemetry"
+          const signals = source.getContextSignals(key);
+          // Count sessions that carried ANY context signal so a "no telemetry"
           // cause is distinguishable from a "no in-repo match" one.
-          const events = source.getDiscoveryEvents(key);
-          if (events.length > 0) {
-            diag.sessionsWithDiscoveryEvents += 1;
+          if (
+            signals.discoveryEvents.length > 0 ||
+            signals.toolReads.length > 0 ||
+            signals.systemInstructions.length > 0
+          ) {
+            diag.sessionsWithContextSignals += 1;
           }
-          return events;
+          return signals;
         },
         this.options.workspaceCwd,
         index,
@@ -565,7 +574,7 @@ function countIndexedFiles(index: RepoCustomizationIndex): number {
  */
 export function formatContextInsightsDiagnostics(d: ContextInsightsDiagnostics): string {
   const detail =
-    `sessions=${d.sessionsConsidered} withDiscovery=${d.sessionsWithDiscoveryEvents} ` +
+    `sessions=${d.sessionsConsidered} withSignals=${d.sessionsWithContextSignals} ` +
     `indexedFiles=${d.indexedCustomizationFiles} observations=${d.observations} rows=${d.rowsBuilt}` +
     (d.sendOutcome !== undefined ? ` send=${d.sendOutcome}` : '');
   return `Context-insights sync: ${d.reason} (${detail}).`;

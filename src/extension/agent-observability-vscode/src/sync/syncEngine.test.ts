@@ -16,6 +16,7 @@ import { SyncClient, SyncOutcome, SyncStatusReport } from './syncClient';
 import { HttpPoster, HttpResponse } from './httpPoster';
 import { InMemorySyncStateStore } from './syncState';
 import type { DiscoveryEventRow } from '../context/discoveryParser';
+import type { SessionContextSignals } from '../aggregate/contextInsightsExtractor';
 import { AggregationRow } from '../aggregate/aggregator';
 import { buildBatch } from '../aggregate/aggregator';
 import { computeDeveloperId, getIdentityInput } from '../aggregate/pseudonymizer';
@@ -273,6 +274,15 @@ describe('SyncEngine context-insights diagnostics', () => {
     };
   }
 
+  /** Fused context signals carrying a single discovery event for `s1`. */
+  function discoverySignals(key: string): SessionContextSignals {
+    return {
+      discoveryEvents: key === 's1' ? [discoveryEvent()] : [],
+      toolReads: [],
+      systemInstructions: [],
+    };
+  }
+
   it('emits a content-free "no-context-source" diagnostic when no source is wired', async () => {
     const diags: ContextInsightsDiagnostics[] = [];
     const { engine } = buildEngine({ onContextInsights: (d) => diags.push(d) });
@@ -284,7 +294,7 @@ describe('SyncEngine context-insights diagnostics', () => {
         attempted: false,
         reason: 'no-context-source',
         sessionsConsidered: 0,
-        sessionsWithDiscoveryEvents: 0,
+        sessionsWithContextSignals: 0,
         indexedCustomizationFiles: 0,
         observations: 0,
         rowsBuilt: 0,
@@ -301,7 +311,7 @@ describe('SyncEngine context-insights diagnostics', () => {
     );
     try {
       const source: SyncContextInsightsSource = {
-        getDiscoveryEvents: (key) => (key === 's1' ? [discoveryEvent()] : []),
+        getContextSignals: (key) => discoverySignals(key),
         getDeviationSessionKeys: () => new Set<string>(),
       };
       const diags: ContextInsightsDiagnostics[] = [];
@@ -324,7 +334,7 @@ describe('SyncEngine context-insights diagnostics', () => {
           attempted: true,
           reason: 'sent',
           sessionsConsidered: 1,
-          sessionsWithDiscoveryEvents: 1,
+          sessionsWithContextSignals: 1,
           indexedCustomizationFiles: 1,
           observations: 1,
           rowsBuilt: 1,
@@ -342,7 +352,7 @@ describe('SyncEngine context-insights diagnostics', () => {
     const tmp = mkdtempSync(path.join(os.tmpdir(), 'ao-sync-ci-empty-'));
     try {
       const source: SyncContextInsightsSource = {
-        getDiscoveryEvents: (key) => (key === 's1' ? [discoveryEvent()] : []),
+        getContextSignals: (key) => discoverySignals(key),
         getDeviationSessionKeys: () => new Set<string>(),
       };
       const diags: ContextInsightsDiagnostics[] = [];
@@ -362,7 +372,7 @@ describe('SyncEngine context-insights diagnostics', () => {
         attempted: true,
         reason: 'no-observations',
         sessionsConsidered: 1,
-        sessionsWithDiscoveryEvents: 1,
+        sessionsWithContextSignals: 1,
         indexedCustomizationFiles: 0,
         observations: 0,
         rowsBuilt: 0,
