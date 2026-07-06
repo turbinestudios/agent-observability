@@ -295,3 +295,153 @@ describe('session titles when the archive is the read source', () => {
     service.dispose();
   });
 });
+
+const UUID_TOOL = 'a1111111-1111-2222-3333-444444444444';
+const UUID_SUGG = 'b1111111-1111-2222-3333-444444444444';
+const UUID_FALLBACK = 'c1111111-1111-2222-3333-444444444444';
+const UUID_SYNTH = 'd1111111-1111-2222-3333-444444444444';
+const WS_REPO = 'https://github.com/org/workspace-repo';
+
+/**
+ * A session whose ONLY span is a tool call — a UUID `chat_session_id`, no
+ * `conversation.id`, no `user_request`, no repo. This is the shape the FIRST
+ * span of a fresh chat typically has, arriving seconds before the first
+ * `user_request`. The relaxed gate must surface it.
+ */
+function toolOnlyEnvelopeFor(uuid: string) {
+  return {
+    resourceSpans: [
+      {
+        resource: { attributes: [] },
+        scopeSpans: [
+          {
+            spans: [
+              {
+                name: 'execute_tool',
+                spanId: `x-${uuid}`,
+                traceId: `tr-${uuid}`,
+                startTimeUnixNano: '1700000000000000000',
+                endTimeUnixNano: '1700000001000000000',
+                status: { code: 1 },
+                attributes: [
+                  { key: 'gen_ai.operation.name', value: sv('execute_tool') },
+                  { key: 'copilot_chat.chat_session_id', value: sv(uuid) },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** A session whose only chat span is an inline SUGGESTION — must stay excluded. */
+function suggestionOnlyEnvelopeFor(uuid: string) {
+  return {
+    resourceSpans: [
+      {
+        resource: { attributes: [] },
+        scopeSpans: [
+          {
+            spans: [
+              {
+                name: 'chat',
+                spanId: `s-${uuid}`,
+                traceId: `tr-${uuid}`,
+                startTimeUnixNano: '1700000000000000000',
+                endTimeUnixNano: '1700000001000000000',
+                status: { code: 1 },
+                attributes: [
+                  { key: 'gen_ai.operation.name', value: sv('chat') },
+                  { key: 'copilot_chat.chat_session_id', value: sv(uuid) },
+                  { key: 'gen_ai.response.model', value: sv('copilot-suggestions') },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** Build a service backed solely by an ingest DB holding the given envelope. */
+function serviceForIngest(env: object): TelemetryService {
+  tmp = mkdtempSync(path.join(os.tmpdir(), 'agent-obs-gate-'));
+  const dbPath = path.join(tmp, 'agent-traces.db');
+  const store = new IngestStore(dbPath);
+  store.writeSpans(otlpSpansToRows(flattenSpans(env)));
+  store.close();
+  const service = new TelemetryService(config, noCopilotEnv);
+  service.setIngestDbPath(dbPath);
+  return service;
+}
+
+describe('relaxed session gate + workspace-scoped context', () => {
+  it('surfaces a started session that has a span but NO user_request', () => {
+    const service = serviceForIngest(toolOnlyEnvelopeFor(UUID_TOOL));
+    const session = listedSession(service, UUID_TOOL);
+    expect(session).toBeDefined();
+    expect(session?.toolCalls).toBe(1);
+    expect(session?.llmCalls).toBe(0);
+    service.dispose();
+  });
+
+  it('still excludes a suggestion-only session under the relaxed gate', () => {
+    const service = serviceForIngest(suggestionOnlyEnvelopeFor(UUID_SUGG));
+    expect(listedSession(service, UUID_SUGG)).toBeUndefined();
+    service.dispose();
+  });
+
+  it('groups a repo-less started session under the workspace repo via the scoped fallback', () => {
+    const service = serviceForIngest(toolOnlyEnvelopeFor(UUID_FALLBACK));
+
+    // Before any context is supplied, the session has no discoverable repo.
+    expect(listedSession(service, UUID_FALLBACK)?.repository).toBe('unknown');
+
+    service.setWorkspaceSessionContext({
+      repository: WS_REPO,
+      sessionIds: new Set([UUID_FALLBACK]),
+      recent: [],
+    });
+
+    expect(listedSession(service, UUID_FALLBACK)?.repository).toBe(WS_REPO);
+
+    // The workspace repo is now a filterable node, and the session lands under it.
+    const repos = service.listRepositories();
+    expect(repos.ok && repos.value.some((r) => r.repository === WS_REPO)).toBe(true);
+    const scoped = service.listSessions(WS_REPO);
+    expect(scoped.ok && scoped.value.some((s) => s.sessionId === UUID_FALLBACK)).toBe(true);
+    service.dispose();
+  });
+
+  it('synthesizes a spanless store session, and a real telemetry row is not duplicated', () => {
+    const service = serviceForIngest(toolOnlyEnvelopeFor(UUID_FALLBACK));
+    service.setWorkspaceSessionContext({
+      repository: WS_REPO,
+      sessionIds: new Set([UUID_FALLBACK, UUID_SYNTH]),
+      recent: [
+        { sessionId: UUID_SYNTH, startedAtMs: 1_700_000_500_000, title: 'Draft chat', titleDerived: true },
+        { sessionId: UUID_FALLBACK, startedAtMs: 1_700_000_400_000, title: 'Has telemetry', titleDerived: true },
+      ],
+    });
+
+    // The spanless store session appears as a zero-metric placeholder with its
+    // store title, grouped under the workspace repo.
+    const synth = listedSession(service, UUID_SYNTH);
+    expect(synth).toBeDefined();
+    expect(synth?.repository).toBe(WS_REPO);
+    expect(synth?.interactionCount).toBe(0);
+    expect(synth?.toolCalls).toBe(0);
+    expect(synth?.title).toBe('Draft chat');
+
+    // The session that DOES have telemetry keeps its real row (toolCalls === 1)
+    // and is not duplicated by a synthetic placeholder.
+    const result = service.listSessions();
+    const fallbackRows = result.ok ? result.value.filter((s) => s.sessionId === UUID_FALLBACK) : [];
+    expect(fallbackRows).toHaveLength(1);
+    expect(fallbackRows[0].toolCalls).toBe(1);
+    service.dispose();
+  });
+});

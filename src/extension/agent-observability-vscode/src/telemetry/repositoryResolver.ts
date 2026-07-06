@@ -44,9 +44,28 @@ const REPO_BY_SESSION_SQL = `
  */
 export class RepositoryResolver {
   private readonly map: ReadonlyMap<string, string>;
+  /**
+   * Optional SCOPED fallback consulted only when a session recorded no
+   * `repo.remote_url` of its own. Lets a just-started session — whose repo
+   * attribute lands late, on an `invoke_agent` span 7-33s in — group under the
+   * current workspace's repository immediately, instead of sitting in the
+   * `unknown` bucket until then. The fallback must be scoped (e.g. to the
+   * current workspace's chat-session ids) so it never mislabels an unrelated
+   * session; it returns `undefined` for any session it does not own.
+   */
+  private fallback?: (sessionId: string) => string | undefined;
 
   private constructor(map: ReadonlyMap<string, string>) {
     this.map = map;
+  }
+
+  /**
+   * Install (or clear with `undefined`) the scoped repository fallback. Applied
+   * on top of the sparse attribute map — a session that DID record its own
+   * remote always keeps that value; the fallback only fills genuine gaps.
+   */
+  setFallback(fallback: ((sessionId: string) => string | undefined) | undefined): void {
+    this.fallback = fallback;
   }
 
   /** Build the resolver by reading the sparse repo attributes from `db`. */
@@ -70,12 +89,22 @@ export class RepositoryResolver {
 
   /**
    * Resolve a session key to its sanitized repository. Returns `unknown` when
-   * the session never recorded a remote URL (or the key is null/empty).
+   * the session never recorded a remote URL (or the key is null/empty), unless
+   * a scoped {@link setFallback} claims the session — then its (already
+   * sanitized) repository is used.
    */
   resolve(sessionId: string | null | undefined): string {
     if (sessionId === null || sessionId === undefined || sessionId.length === 0) {
       return UNKNOWN_REPOSITORY;
     }
-    return this.map.get(sessionId) ?? UNKNOWN_REPOSITORY;
+    const mapped = this.map.get(sessionId);
+    if (mapped !== undefined) {
+      return mapped;
+    }
+    const fallback = this.fallback?.(sessionId);
+    if (fallback !== undefined && fallback.length > 0 && fallback !== UNKNOWN_REPOSITORY) {
+      return fallback;
+    }
+    return UNKNOWN_REPOSITORY;
   }
 }

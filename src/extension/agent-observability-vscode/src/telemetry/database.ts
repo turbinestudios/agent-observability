@@ -93,7 +93,9 @@ export class TelemetryDatabase {
   private readonly db: Database;
   private resolverCache: RepositoryResolver | undefined;
   private spansColumnsCache: ReadonlySet<string> | undefined;
-  private humanSessionsCache: ReadonlySet<string> | undefined;
+  private startedSessionsCache: ReadonlySet<string> | undefined;
+  /** Scoped repository fallback threaded into the {@link RepositoryResolver}. */
+  private repositoryFallback: ((sessionId: string) => string | undefined) | undefined;
 
   private constructor(db: Database) {
     this.db = db;
@@ -241,7 +243,21 @@ export class TelemetryDatabase {
     if (this.resolverCache === undefined) {
       this.resolverCache = RepositoryResolver.fromDatabase(this.db);
     }
+    // Re-apply each call so a fallback set after the resolver was first built
+    // (the workspace context is wired after open) still takes effect.
+    this.resolverCache.setFallback(this.repositoryFallback);
     return this.resolverCache;
+  }
+
+  /**
+   * Install a SCOPED repository fallback used when a session recorded no remote
+   * URL of its own (see {@link RepositoryResolver.setFallback}). The fallback
+   * must return values that are ALREADY sanitized — it bypasses the raw-URL
+   * chokepoint in {@link RepositoryResolver.fromDatabase}. Pass `undefined` to
+   * clear it.
+   */
+  setRepositoryFallback(fallback: ((sessionId: string) => string | undefined) | undefined): void {
+    this.repositoryFallback = fallback;
   }
 
   /**
@@ -458,6 +474,7 @@ export class TelemetryDatabase {
   listRepositories(): RepositorySummary[] {
     const resolver = this.resolver();
     const modelBySession = this.modelBySession();
+    const startedSessions = this.startedSessionIds();
 
     interface Acc {
       repository: string;
@@ -467,8 +484,6 @@ export class TelemetryDatabase {
       lastActivityMs: number;
     }
     const byRepo = new Map<string, Acc>();
-
-    const humanSessions = this.humanInitiatedSessionIds();
 
     const rows = this.allRows<{
       session_id: string;
@@ -480,8 +495,8 @@ export class TelemetryDatabase {
     );
 
     for (const row of rows) {
-      // Only include human-initiated sessions (has at least one chat/invoke_agent span).
-      if (!humanSessions.has(row.session_id)) {
+      // Only include started sessions (carry at least one span).
+      if (!startedSessions.has(row.session_id)) {
         continue;
       }
       const repository = resolver.resolve(row.session_id);
@@ -528,7 +543,7 @@ export class TelemetryDatabase {
    */
   listSessions(repository?: string, limit?: number): SessionSummary[] {
     const resolver = this.resolver();
-    const humanSessions = this.humanInitiatedSessionIds();
+    const startedSessions = this.startedSessionIds();
 
     const rows = this.allRows<{
       session_id: string;
@@ -556,8 +571,8 @@ export class TelemetryDatabase {
 
     const summaries: SessionSummary[] = [];
     for (const row of rows) {
-      // Only include human-initiated sessions (has at least one chat/invoke_agent span).
-      if (!humanSessions.has(row.session_id)) {
+      // Only include started sessions (carry at least one span).
+      if (!startedSessions.has(row.session_id)) {
         continue;
       }
       const repo = resolver.resolve(row.session_id);
@@ -2110,29 +2125,33 @@ export class TelemetryDatabase {
   }
 
   /**
-   * Set of `chat_session_id` UUIDs that correspond to entries in Copilot's chat
-   * history — i.e. human-initiated chat sessions. Only UUID-shaped ids with at
-   * least one `copilot_chat.user_request` span qualify, excluding sessions that
-   * used only inline-suggestion models.
+   * Set of `chat_session_id` UUIDs that have STARTED — i.e. carry at least one
+   * span — excluding sessions that used only inline-suggestion models.
+   *
+   * Unlike a stricter "human-initiated" gate, this deliberately does NOT require a
+   * `copilot_chat.user_request` span. A just-started session emits an
+   * `execute_tool`/`execute_hook` span first and only lands its user-request span
+   * 7-33s later; keying presence on "any span" surfaces the session in the list
+   * that much sooner. Suggestion-only (inline completion) sessions have no real
+   * chat model and are still excluded — a session with no chat spans yet is absent
+   * from that exclusion set and thus admitted.
    *
    * Because the `sessions` view groups by `COALESCE(conversation_id,
    * chat_session_id)`, only rows where that key equals the bare `chat_session_id`
-   * will match this set — per-turn `conversation_id` fragments are naturally
+   * will match this set — per-turn `conversation_id` fragments (including spawned
+   * sub-agents, whose spans carry the parent's `chat_session_id`) are naturally
    * excluded.
    */
-  private humanInitiatedSessionIds(): ReadonlySet<string> {
-    if (this.humanSessionsCache !== undefined) {
-      return this.humanSessionsCache;
+  private startedSessionIds(): ReadonlySet<string> {
+    if (this.startedSessionsCache !== undefined) {
+      return this.startedSessionsCache;
     }
-    // Distinct UUID chat_session_ids with at least one user_request span.
+    // Distinct UUID chat_session_ids that carry at least one span of any kind.
     const rows = this.allRows<{ csid: string }>(
-      `SELECT DISTINCT s.chat_session_id AS csid
-         FROM spans s
-         JOIN span_attributes a
-           ON a.span_id = s.span_id
-          AND a.key = 'copilot_chat.user_request'
-         WHERE s.chat_session_id IS NOT NULL
-           AND LENGTH(s.chat_session_id) = 36`,
+      `SELECT DISTINCT chat_session_id AS csid
+         FROM spans
+         WHERE chat_session_id IS NOT NULL
+           AND LENGTH(chat_session_id) = 36`,
     );
 
     // Keep only UUID-shaped ids (excludes tool-call ids like `toolu_bdrk_*`).
@@ -2140,7 +2159,8 @@ export class TelemetryDatabase {
       .filter((r) => UUID_RE.test(r.csid))
       .map((r) => r.csid);
 
-    // Sessions whose spans use ONLY inline-suggestion models (no real chat model).
+    // Sessions whose CHAT spans use ONLY inline-suggestion models (no real chat
+    // model). Sessions with no chat spans yet are absent here and thus admitted.
     const suggestionOnlySessions = new Set(
       this.allRows<{ sk: string }>(
         `SELECT chat_session_id AS sk
@@ -2152,10 +2172,10 @@ export class TelemetryDatabase {
       ).map((r) => r.sk),
     );
 
-    this.humanSessionsCache = new Set(
+    this.startedSessionsCache = new Set(
       uuidCandidates.filter((id) => !suggestionOnlySessions.has(id)),
     );
-    return this.humanSessionsCache;
+    return this.startedSessionsCache;
   }
 }
 

@@ -4,6 +4,37 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-07-06
+
+### Changed
+
+- **A new chat now appears in the Sessions list right away — with the right
+  repository — instead of after a delay.** Previously a session only showed up
+  once it had emitted its first `user_request` span, which lands 7-33 seconds
+  after the chat actually starts, and it sat under **unknown** until a later span
+  happened to carry the repo URL. Three local-only changes close that gap:
+  - **Surfaces at the first span.** The Sessions view now lists any started chat
+    session (one that has emitted *any* span) rather than waiting for a
+    `user_request`, so a session appears seconds sooner. Inline-suggestion-only
+    sessions are still excluded, so the list is unchanged for those.
+  - **Groups under the workspace repo immediately.** A just-started session with
+    no repo attribute of its own is grouped under the current workspace's
+    repository (resolved from its git remote), scoped to this workspace's own
+    chat sessions so it can never mislabel activity from another window. Once the
+    session's real repo span lands, that value takes over.
+  - **Shows sessions that have no telemetry yet.** A chat that has been opened in
+    this workspace but hasn't exported a single span is shown as a placeholder
+    row (with its store title, under the workspace repo) and fills in with real
+    metrics as soon as its first span arrives.
+- **The Sessions list refreshes live when you open or continue a chat.** The
+  extension now watches the current workspace's chat-session store and re-renders
+  the list when a session is created or advances, so a new session pops in without
+  a manual refresh. (Detail panels continue to update from the live span stream;
+  the list refresh is deliberately driven only by the store to avoid flicker.)
+
+All of the above reads only local, on-disk state; session titles and repository
+names stay on your machine and are never added to the opt-in aggregate upload.
+
 ## [0.6.1] - 2026-07-03
 
 ### Added

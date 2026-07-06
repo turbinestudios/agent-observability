@@ -10,6 +10,8 @@ import { createReadonlySnapshot, ReadonlySnapshot, sourceMtime } from './snapsho
 import { TelemetryDatabase, SchemaMismatchError } from './database';
 import { SessionTitleInfo, workspaceStorageDirFor } from './sessionTitles';
 import { overlayTitle, readMergedSessionTitles, titleStorageDirs } from './titleStore';
+import { UNKNOWN_REPOSITORY } from './repositoryUrl';
+import { WorkspaceStoreSession } from './workspaceStore';
 import { AggregationRow } from '../aggregate/aggregator';
 import {
   Interaction,
@@ -108,11 +110,47 @@ interface OpenHandle {
   chatSessionIds?: Map<string, string>;
 }
 
+/**
+ * The CURRENT workspace's chat-session context, supplied by the extension host
+ * (which alone knows the open folder + its `workspaceStorage/<hash>` dir). Lets
+ * the read layer group a just-started session under its repository and surface
+ * it before its first telemetry span — without any raw content leaving the box.
+ */
+export interface WorkspaceSessionContext {
+  /** Sanitized repository for the current workspace ('unknown' when none). */
+  repository: string;
+  /**
+   * Every chat-session UUID that belongs to the current workspace. Scopes the
+   * repository fallback so it only ever claims THIS workspace's sessions.
+   */
+  sessionIds: ReadonlySet<string>;
+  /**
+   * Recent, titled sessions with no telemetry span yet, synthesized into the
+   * list as placeholder rows (newest first, already bounded/capped by the
+   * reader). Empty when none apply.
+   */
+  recent: readonly WorkspaceStoreSession[];
+}
+
 export class TelemetryService {
   private readonly config: ServiceConfig;
   private readonly environment: PathEnvironment | undefined;
   private handles: OpenHandle[] = [];
   private cache: CacheEntry = { sessions: new Map() };
+  /** CURRENT workspace context for repo grouping + spanless synthesis. */
+  private workspaceContext: WorkspaceSessionContext | undefined;
+  /**
+   * Stable scoped repository fallback handed to every open {@link TelemetryDatabase}.
+   * Reads the LIVE {@link workspaceContext}, so a context change only needs a
+   * cache drop — the installed function itself never has to be replaced.
+   */
+  private readonly repositoryFallbackFn = (sessionId: string): string | undefined => {
+    const ctx = this.workspaceContext;
+    if (ctx === undefined || ctx.repository === UNKNOWN_REPOSITORY) {
+      return undefined;
+    }
+    return ctx.sessionIds.has(sessionId) ? ctx.repository : undefined;
+  };
   /** When set + present, the extension's OWN live-OTLP ingest DB (the sink). */
   private ingestDbPath: string | undefined;
   /**
@@ -172,6 +210,28 @@ export class TelemetryService {
   }
 
   /**
+   * Supply (or clear with `undefined`) the CURRENT workspace's chat-session
+   * context. Drives two early-surfacing behaviours, both LOCAL-only:
+   *
+   * - the scoped repository fallback, so a just-started session groups under the
+   *   workspace's repo before its `repo.remote_url` span lands;
+   * - spanless synthesis, so a session that has no telemetry span yet still
+   *   appears (with its store title) in {@link listSessions}.
+   *
+   * Cheap to call often (on a store-file watch): it re-applies the stable
+   * fallback to open handles and drops only the session/repository caches — the
+   * snapshots and the gate-agnostic overview are left untouched.
+   */
+  setWorkspaceSessionContext(context: WorkspaceSessionContext | undefined): void {
+    this.workspaceContext = context;
+    this.cache.repositories = undefined;
+    this.cache.sessions.clear();
+    for (const handle of this.handles) {
+      handle.db.setRepositoryFallback(this.repositoryFallbackFn);
+    }
+  }
+
+  /**
    * Sanitized repositories hidden from every query (empty when the config does
    * not supply the accessor). Read fresh per query; the query caches are safe
    * because they are dropped on every configuration change (see the config-change
@@ -223,9 +283,41 @@ export class TelemetryService {
           }
         }
       }
+      this.ensureWorkspaceRepositoryNode(merged, excluded);
       const value = [...merged.values()].sort((a, b) => b.lastActivityMs - a.lastActivityMs);
       this.cache.repositories = value;
       return value;
+    });
+  }
+
+  /**
+   * Guarantee the current workspace's repository NODE exists when it has ONLY
+   * spanless (synthesized) sessions — else those rows would nest under no
+   * parent. When telemetry sessions already produced the node it is left
+   * untouched (the authoritative aggregate owns its counts); the spanless rows
+   * fold into it the moment their first span lands.
+   */
+  private ensureWorkspaceRepositoryNode(
+    merged: Map<string, RepositorySummary>,
+    excluded: ReadonlySet<string>,
+  ): void {
+    const ctx = this.workspaceContext;
+    if (
+      ctx === undefined ||
+      ctx.repository === UNKNOWN_REPOSITORY ||
+      excluded.has(ctx.repository) ||
+      ctx.recent.length === 0 ||
+      merged.has(ctx.repository)
+    ) {
+      return;
+    }
+    const lastActivityMs = ctx.recent.reduce((max, s) => Math.max(max, s.startedAtMs), 0);
+    merged.set(ctx.repository, {
+      repository: ctx.repository,
+      sessionCount: ctx.recent.length,
+      interactionCount: 0,
+      models: [],
+      lastActivityMs,
     });
   }
 
@@ -261,11 +353,63 @@ export class TelemetryService {
           }
         }
       }
+      // Add CURRENT-workspace sessions that have no telemetry span yet (a chat
+      // just opened, nothing exported): placeholder rows deduped against real
+      // telemetry rows (which always win) by chat-session id.
+      for (const session of this.synthesizedWorkspaceSessions(seen, repository, excluded)) {
+        all.push(session);
+      }
       all.sort((a, b) => b.startedAtMs - a.startedAtMs);
       const value = limit !== undefined ? all.slice(0, limit) : all;
       this.cache.sessions.set(key, value);
       return value;
     });
+  }
+
+  /**
+   * Placeholder {@link SessionSummary} rows for CURRENT-workspace chat sessions
+   * that exist in the store but have not exported a telemetry span yet, so the
+   * list shows them immediately (with their store title, under the workspace's
+   * repo). Skipped when a real telemetry row already covers the id (`seen`), the
+   * repo is filtered out, or a repository scope other than the workspace's is
+   * requested. Zero metrics — the row fills in once its first span lands.
+   */
+  private synthesizedWorkspaceSessions(
+    seen: ReadonlySet<string>,
+    repository: string | undefined,
+    excluded: ReadonlySet<string>,
+  ): SessionSummary[] {
+    const ctx = this.workspaceContext;
+    if (ctx === undefined || ctx.repository === UNKNOWN_REPOSITORY || excluded.has(ctx.repository)) {
+      return [];
+    }
+    if (repository !== undefined && repository !== ctx.repository) {
+      return [];
+    }
+    const rows: SessionSummary[] = [];
+    for (const s of ctx.recent) {
+      if (seen.has(s.sessionId)) {
+        continue; // a real telemetry row exists — it wins
+      }
+      rows.push({
+        sessionId: s.sessionId,
+        repository: ctx.repository,
+        startedAtMs: s.startedAtMs,
+        endedAtMs: s.startedAtMs,
+        durationMs: 0,
+        interactionCount: 0,
+        llmCalls: 0,
+        toolCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        model: 'unknown',
+        agentModes: ['default'],
+        title: s.title,
+        titleDerived: s.titleDerived,
+      });
+    }
+    return rows;
   }
 
   /**
@@ -632,6 +776,11 @@ export class TelemetryService {
     this.handles = next;
     if (next.length === 0) {
       throw firstError ?? missingDbError(resolved.primary.path);
+    }
+    // Every open handle resolves repositories through the SAME scoped fallback,
+    // so a just-started session groups under the current workspace's repo.
+    for (const handle of next) {
+      handle.db.setRepositoryFallback(this.repositoryFallbackFn);
     }
     if (changed) {
       // A fresh / dropped snapshot invalidates the merged query cache.

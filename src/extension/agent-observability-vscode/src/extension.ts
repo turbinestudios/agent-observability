@@ -26,11 +26,13 @@ import { LiveOtlpService } from './otel/liveOtlpService';
 import { CopilotArchiver } from './otel/copilotArchiver';
 import { resolveArchiveDbPath } from './otel/archivePaths';
 import { LiveUpdateController } from './live/liveUpdateController';
-import { ClaudeWatcher } from './live/claudeWatcher';
+import { ClaudeWatcher, WatchHandle } from './live/claudeWatcher';
 import { vscodeFileWatchFactory } from './live/vscodeFileWatchFactory';
 import { ClaudeCodeService } from './claude/claudeCodeService';
+import { GitRemoteResolver } from './claude/gitRemote';
 import { resolveClaudeProjectsDirs } from './claude/paths';
 import { CopilotSource, SourceRegistry } from './sources/sessionSource';
+import { readWorkspaceStoreSessions } from './telemetry/workspaceStore';
 import { CompositeAggregationSource } from './sync/compositeAggregationSource';
 import { OutputChannelLogger } from './log/outputChannelLogger';
 import { Logger } from './log/logger';
@@ -214,10 +216,83 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerTreeDataProvider(SYNC_VIEW_ID, sync),
   );
 
+  // ── Current-workspace chat-session context ──────────────────────────────────
+  // The extension host alone knows the open folder and its workspaceStorage
+  // `<hash>` directory (the parent of this extension's own storageUri). From it
+  // we resolve the workspace's SANITIZED repository (its git remote) and
+  // enumerate its chat sessions, so a JUST-STARTED session groups under the
+  // right repo and can surface BEFORE its first telemetry span lands. All reads
+  // are LOCAL; the repo is sanitized at the git-remote chokepoint and nothing is
+  // uploaded.
+  const gitRemote = new GitRemoteResolver();
+  const workspaceHashDir =
+    context.storageUri !== undefined ? path.dirname(context.storageUri.fsPath) : undefined;
+  const refreshWorkspaceContext = (): void => {
+    if (workspaceHashDir === undefined) {
+      telemetry.setWorkspaceSessionContext(undefined);
+      return;
+    }
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const repository = folder !== undefined ? gitRemote.resolve(folder) : UNKNOWN_REPOSITORY;
+    const store = readWorkspaceStoreSessions(workspaceHashDir);
+    telemetry.setWorkspaceSessionContext({
+      repository,
+      sessionIds: store.sessionIds,
+      recent: store.recent,
+    });
+  };
+  refreshWorkspaceContext();
+
+  // Watch THIS workspace's chat-session store: a created/updated `<id>.jsonl`
+  // means a chat was opened or advanced, so re-read the context and re-render the
+  // session list. This is the ONE place the list refreshes on live activity — the
+  // OTLP/span poll deliberately refreshes only detail panels (see `refreshLive`)
+  // to avoid flickering the tree, so the store watch is what makes a new session
+  // POP IN without a manual refresh. Debounced; watches a path OUTSIDE the
+  // workspace (globalStorage), which vscode's file watcher supports.
+  let storeWatch: WatchHandle | undefined;
+  let storeDebounce: ReturnType<typeof setTimeout> | undefined;
+  const onStoreChanged = (): void => {
+    if (storeDebounce !== undefined) {
+      clearTimeout(storeDebounce);
+    }
+    storeDebounce = setTimeout(() => {
+      storeDebounce = undefined;
+      refreshWorkspaceContext();
+      sessions.refresh();
+    }, 400);
+  };
+  if (workspaceHashDir !== undefined) {
+    try {
+      storeWatch = vscodeFileWatchFactory.watch(
+        path.join(workspaceHashDir, 'chatSessions'),
+        onStoreChanged,
+      );
+    } catch (err) {
+      logger.error('Chat-session store watcher failed to start', err);
+    }
+  }
+  context.subscriptions.push({
+    dispose: () => {
+      storeWatch?.dispose();
+      if (storeDebounce !== undefined) {
+        clearTimeout(storeDebounce);
+      }
+    },
+  });
+
   // Refresh re-reads every source (re-snapshots Copilot, re-discovers Claude),
-  // then fans out to every view.
+  // re-reads the workspace chat-session context, then fans out to every view.
   const sourcesRefresh: Refreshable = { refresh: () => registry.refresh() };
-  const refreshables: Refreshable[] = [sourcesRefresh, overview, sessions, sync, divergenceNotifier];
+  const workspaceContextRefresh: Refreshable = { refresh: () => refreshWorkspaceContext() };
+  const refreshables: Refreshable[] = [
+    sourcesRefresh,
+    workspaceContextRefresh,
+    overview,
+    sessions,
+    sync,
+    divergenceNotifier,
+  ];
 
   // ── Real-time live updates ──────────────────────────────────────────────────
   // Both live sources (the Copilot OTLP receiver + the Claude transcript watcher)
