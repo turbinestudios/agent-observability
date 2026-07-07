@@ -11,6 +11,7 @@ shared with an organization dashboard.
 | --- | --- |
 | Activity Bar container, three views, commands, settings | Shipped |
 | Read-only local SQLite (`agent-traces.db`) ingestion (snapshot + read-only connection) | Shipped |
+| **Copilot (Cloud)** coding-agent sessions as a first-class source (background poller → local sink → source; local-only) | Shipped |
 | Local session detail timeline + per-request workflow deviation detection (with optional notifications) | Shipped |
 | Real-time updates via a localhost OTLP receiver (Copilot `otlp-http` → extension sink) | Shipped |
 | Workflow predicate DSL (metadata + local-only content predicates) | Shipped |
@@ -24,7 +25,9 @@ All raw content stays on the machine; only opt-in aggregate batches are uploaded
 ## Views
 
 - **Local Overview** — summary of local Copilot agent activity.
-- **Sessions** — list and drill into local agent sessions (local-only detail).
+- **Sessions** — list and drill into agent sessions (local-only detail), grouped
+  by source: **Copilot**, **Claude Code**, and — when enabled — **Copilot
+  (Cloud)** coding-agent sessions pulled from the GitHub API into a local sink.
 - **Sync** — consent status and upload of opt-in aggregate batches.
 - **AI Helper** — a chat assistant backed by your own GitHub Copilot license (see below).
 
@@ -73,6 +76,7 @@ All under the **Agent Observability** category:
 - `Agent Observability: Sync Now`
 - `Agent Observability: Open Settings`
 - `Agent Observability: Set Organization API Key`
+- `Copilot (Cloud): Set account token` (`agentObservability.setCloudAccountToken`) — store a per-account token for the Copilot (Cloud) source in SecretStorage (an alternative to signing in with `gh`)
 - `Agent Observability: Choose Repositories to Sync`
 - `Agent Observability: Choose Repositories to Hide`
 - `Agent Observability: Toggle Cloud Sharing`
@@ -96,6 +100,14 @@ All under the **Agent Observability** category:
 | `agentObservability.liveUpdates.enabled` | `false` | Run a localhost OTLP receiver and use the extension's own ingested DB as the live source. Turn on via **Enable Live Updates (Copilot OTel)** (requires a full VS Code restart). |
 | `agentObservability.liveUpdates.otelPort` | `0` | Localhost port the OTLP receiver listens on (set automatically by the enable command). |
 | `agentObservability.liveUpdates.debounceMs` | `400` | Coalescing window between ingesting spans and refreshing the views (minimum 100). |
+| `agentObservability.copilotCloud.enabled` | `false` | Opt in to the **Copilot (Cloud)** source: a background poller pulls GitHub Copilot cloud coding-agent sessions into a local sink and shows them beside Copilot and Claude Code. Local-only; never uploaded. |
+| `agentObservability.copilotCloud.accounts` | `[]` | GitHub CLI usernames whose cloud-agent tasks to poll. Empty = capture the active `gh` login once on enable; list several to poll multiple accounts. Identities are pinned (a `gh auth switch` won't change them). Application-scoped. |
+| `agentObservability.copilotCloud.ghCliPath` | `""` | Path to the `gh` executable used to mint per-account tokens (blank = `gh` from PATH; on Windows `gh.exe`/`gh.cmd` are also tried). Not needed for accounts whose token is set via **Copilot (Cloud): Set account token**. |
+| `agentObservability.copilotCloud.scope` | `"my-tasks"` | Which tasks to fetch: `my-tasks` (personal, default) or `repos` (also the workspace repositories' tasks — teammates' runs, same access as github.com; their prompts become visible locally). |
+| `agentObservability.copilotCloud.idlePollSeconds` | `300` | Poll cadence (seconds) while no task is running (minimum 60). A single window polls, elected via a lease. |
+| `agentObservability.copilotCloud.activePollSeconds` | `60` | Faster poll cadence (seconds) while a task is actively running (minimum 30). |
+| `agentObservability.copilotCloud.retentionDays` | `180` | Days of polled cloud-agent tasks (and their raw logs) the local sink retains before pruning. |
+| `agentObservability.copilotCloud.maxTasks` | `100` | Maximum most-recent cloud-agent tasks fetched and surfaced per account. |
 
 ## Real-time updates (Copilot OTLP)
 
@@ -236,6 +248,15 @@ opt-in. See `docs/architecture/` for the locked contracts and
 `docs/privacy-validation.md` for the privacy checklist and how it is enforced
 and tested.
 
+**Copilot (Cloud) sessions are local-only.** The Copilot (Cloud) source *pulls*
+cloud coding-agent logs **down** from the GitHub API and stores raw prompts,
+tool I/O, and assistant text in a local sink under your home directory — it
+never uploads them. Its `getAggregationRows` returns `[]`, so nothing
+cloud-agent-related enters the aggregate batch in the current phases. Note that
+with `copilotCloud.scope` set to `repos`, you can see teammates' prompts locally
+(the same access github.com grants you); the default `my-tasks` keeps it
+personal.
+
 The organization API key (format `aoa_<keyId>_<secret>`, provided by the
 platform team) is set via **Agent Observability: Set Organization API Key** and
 stored only in VS Code **SecretStorage** — never in `settings.json` or any
@@ -292,3 +313,12 @@ Packaging notes:
 - `src/telemetry/*` — read-only SQLite snapshot + safe-metadata queries.
 - `src/aggregate/*` — aggregate engine, pseudonymizer, and the privacy contract test.
 - `src/consent/*`, `src/secrets/*`, `src/sync/*` — consent gating, SecretStorage key, and upload.
+- `src/cloud/*` — the **Copilot (Cloud)** source, built on the proven
+  materialize-then-read pattern: `cloudAgentPoller.ts` (lease-gated background
+  loop, idle/active cadence) uses `ghAuth.ts` (per-account token + `capiBase`,
+  via `gh` or a SecretStorage token) and `cloudApiClient.ts` (GitHub REST tasks +
+  CAPI SSE logs, raw-preserving) to write raw task JSON and SSE logs into a
+  home-dir **sink** (`cloudSink.ts`); `copilotCloudSource.ts` is the synchronous
+  `SessionDataSource` that reads the sink back, with `cloudMapper.ts` /
+  `sseParser.ts` turning the raw payloads into the shared session model. Nothing
+  here uploads — `getAggregationRows` returns `[]`.

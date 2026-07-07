@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { Commands } from '../commands';
-import { TelemetryService } from '../telemetry/telemetryService';
+import type { SessionSummary } from '../telemetry/models';
+import type { Result } from '../telemetry/telemetryService';
+import { SourceRegistry } from '../sources/sessionSource';
 import { planChatResponse } from './chatResponsePlan';
 
 /**
@@ -33,7 +35,7 @@ export const CHAT_PARTICIPANT_ID = 'agentObservability.chat';
  */
 export function registerObservabilityChatParticipant(
   context: vscode.ExtensionContext,
-  telemetry: TelemetryService,
+  sources: SourceRegistry,
 ): void {
   if (typeof vscode.chat?.createChatParticipant !== 'function') {
     return;
@@ -43,17 +45,19 @@ export function registerObservabilityChatParticipant(
     const query = request.prompt.trim();
     // @obs is an explicit, on-demand action: re-snapshot so sessions the user
     // just worked in are visible (and titles for new sessions are picked up).
-    telemetry.refresh();
-    // Fetch all sessions so the query path can filter across everything; the
-    // plan picks the most recent titled ones and caps the button count.
-    const result = telemetry.listSessions(undefined);
+    sources.refresh();
+    // Merge sessions across every enabled source (Copilot, Claude Code, Copilot
+    // Cloud) so the query path can filter across everything; the plan picks the
+    // most recent titled ones and caps the button count. Each summary carries its
+    // `source`, so the button routes `openSession` to the right source.
+    const result = mergeSessions(sources);
 
     const plan = planChatResponse(result, query);
     stream.markdown(plan.markdown);
     for (const button of plan.buttons) {
       stream.button({
         command: Commands.openSession,
-        arguments: [button.sessionId],
+        arguments: [button.sourceId, button.sessionId],
         title: button.title,
       });
     }
@@ -63,4 +67,31 @@ export function registerObservabilityChatParticipant(
   const participant = vscode.chat.createChatParticipant(CHAT_PARTICIPANT_ID, handler);
   participant.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'activity-bar.svg');
   context.subscriptions.push(participant);
+}
+
+/**
+ * Concatenate `listSessions()` across every enabled source into one result,
+ * tagging each summary with its `source`. Fails only when EVERY enabled source
+ * fails (mirroring the composite-aggregation semantics); an empty-but-ok source
+ * never masks another's data.
+ */
+function mergeSessions(sources: SourceRegistry): Result<SessionSummary[]> {
+  const merged: SessionSummary[] = [];
+  let anyOk = false;
+  let firstFailure: Result<SessionSummary[]> | undefined;
+  for (const source of sources.enabled()) {
+    const result = source.listSessions(undefined);
+    if (result.ok) {
+      anyOk = true;
+      for (const summary of result.value) {
+        merged.push(summary.source === undefined ? { ...summary, source: source.id } : summary);
+      }
+    } else if (firstFailure === undefined) {
+      firstFailure = result;
+    }
+  }
+  if (!anyOk && firstFailure !== undefined) {
+    return firstFailure;
+  }
+  return { ok: true, value: merged };
 }

@@ -33,8 +33,12 @@ export interface HttpResponse {
 export interface HttpPoster {
   /** POST `body` (already-serialized string) with `headers` to `url`. */
   post(url: string, headers: Record<string, string>, body: string): Promise<HttpResponse>;
-  /** Anonymous GET to `url` (used for the health endpoint). */
-  get(url: string): Promise<HttpResponse>;
+  /**
+   * GET `url`, optionally with request `headers`. Anonymous when `headers` is
+   * omitted (the sync health endpoint); the Copilot (Cloud) source passes an
+   * `Authorization` header to read the GitHub REST/CAPI endpoints.
+   */
+  get(url: string, headers?: Record<string, string>): Promise<HttpResponse>;
 }
 
 /**
@@ -54,8 +58,8 @@ export class FetchHttpPoster implements HttpPoster {
     return this.toResponse(res);
   }
 
-  async get(url: string): Promise<HttpResponse> {
-    const res = await fetch(url, { method: 'GET' });
+  async get(url: string, headers?: Record<string, string>): Promise<HttpResponse> {
+    const res = await fetch(url, headers === undefined ? { method: 'GET' } : { method: 'GET', headers });
     return this.toResponse(res);
   }
 

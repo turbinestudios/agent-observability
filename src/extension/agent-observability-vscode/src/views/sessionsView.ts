@@ -91,11 +91,11 @@ export class SessionsViewProvider implements vscode.TreeDataProvider<SessionTree
   }
 }
 
-/** A collapsible source row (Copilot / Claude Code). */
+/** A collapsible source row (Copilot / Claude Code / Copilot Cloud). */
 function sourceItem(source: SessionDataSource): SessionTreeItem {
   const item = new SessionTreeItem(source.label, vscode.TreeItemCollapsibleState.Expanded, 'source');
   item.sourceId = source.id;
-  item.iconPath = new vscode.ThemeIcon(source.id === 'claude' ? 'sparkle' : 'copilot');
+  item.iconPath = new vscode.ThemeIcon(source.iconId);
   item.tooltip = `${source.label} agent sessions`;
   item.id = `source:${source.id}`;
   return item;
@@ -120,9 +120,13 @@ function sessionItem(sourceId: string, session: SessionSummary): SessionTreeItem
   const label = session.title !== undefined ? truncate(session.title, 60) : shortId(session.sessionId);
   const item = new SessionTreeItem(label, vscode.TreeItemCollapsibleState.None, 'session');
   const idHint = session.title !== undefined ? `${shortId(session.sessionId)} · ` : '';
-  item.description = `${idHint}${session.interactionCount} call${session.interactionCount === 1 ? '' : 's'} · ${session.model}`;
+  // A lifecycle badge (cloud agent: queued/in progress/waiting/failed/…) is
+  // appended only when the source supplies one; local sessions leave it absent.
+  const stateSuffix =
+    session.stateLabel !== undefined && session.stateLabel.length > 0 ? ` · ${session.stateLabel}` : '';
+  item.description = `${idHint}${session.interactionCount} call${session.interactionCount === 1 ? '' : 's'} · ${session.model}${stateSuffix}`;
   item.tooltip = sessionTooltip(session);
-  item.iconPath = new vscode.ThemeIcon('comment-discussion');
+  item.iconPath = sessionStateIcon(session.stateLabel);
   item.sessionKey = session.sessionId;
   item.sourceId = sourceId;
   item.id = `session:${sourceId}:${session.sessionId}`;
@@ -141,16 +145,46 @@ function sessionTooltip(s: SessionSummary): string {
     s.title !== undefined
       ? [s.titleDerived === true ? `Title (from first message): ${s.title}` : `Title: ${s.title}`]
       : [];
+  const stateLine = s.stateLabel !== undefined && s.stateLabel.length > 0 ? [`State: ${s.stateLabel}`] : [];
   return [
     ...titleLine,
     `Session ${s.sessionId}`,
     `Repository: ${s.repository}`,
+    ...stateLine,
     `Started: ${start}`,
     `Duration: ${s.durationMs} ms`,
     `LLM calls: ${s.llmCalls} · Tool calls: ${s.toolCalls}`,
     `Tokens in/out: ${s.inputTokens} / ${s.outputTokens} (cached ${s.cachedTokens})`,
     `Modes: ${modes}`,
   ].join('\n');
+}
+
+/**
+ * Pick a session-row icon from an optional lifecycle badge. Local sessions (no
+ * `stateLabel`) keep the neutral chat icon; cloud sessions get a state-coloured
+ * glyph (failed/timed-out in red, running/queued a spinner, waiting a question).
+ */
+function sessionStateIcon(stateLabel: string | undefined): vscode.ThemeIcon {
+  if (stateLabel === undefined || stateLabel.length === 0) {
+    return new vscode.ThemeIcon('comment-discussion');
+  }
+  const s = stateLabel.toLowerCase();
+  if (s.includes('fail') || s.includes('timed') || s.includes('cancel')) {
+    return new vscode.ThemeIcon('error', new vscode.ThemeColor('charts.red'));
+  }
+  if (s.includes('progress') || s.includes('running')) {
+    return new vscode.ThemeIcon('sync~spin');
+  }
+  if (s.includes('queued')) {
+    return new vscode.ThemeIcon('watch');
+  }
+  if (s.includes('waiting')) {
+    return new vscode.ThemeIcon('question', new vscode.ThemeColor('charts.yellow'));
+  }
+  if (s.includes('complete')) {
+    return new vscode.ThemeIcon('pass', new vscode.ThemeColor('charts.green'));
+  }
+  return new vscode.ThemeIcon('comment-discussion');
 }
 
 /** Short, human-friendly session id (first segment of a UUID, else truncated). */
@@ -179,6 +213,16 @@ function explanatoryItem(reason: string, message: string): SessionTreeItem {
       return infoItem('Unsupported telemetry schema', message, 'warning');
     case 'permission':
       return infoItem('Cannot read telemetry', message, 'lock');
+    case 'cliMissing':
+      return infoItem('GitHub CLI not found', message, 'terminal');
+    case 'unauthenticated':
+      return infoItem('Sign-in required', message, 'key');
+    case 'featureUnavailable':
+      return infoItem('Cloud agent unavailable', message, 'cloud');
+    case 'rateLimited':
+      return infoItem('Rate limited — retrying', message, 'clock');
+    case 'network':
+      return infoItem('Network unavailable', message, 'cloud-offline');
     default:
       return infoItem('Sessions unavailable', message, 'error');
   }

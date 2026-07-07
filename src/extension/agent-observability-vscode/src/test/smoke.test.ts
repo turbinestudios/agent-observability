@@ -64,6 +64,7 @@ const EXPECTED_COMMANDS = [
   'agentObservability.enableLiveUpdates',
   'agentObservability.disableLiveUpdates',
   'agentObservability.showLogs',
+  'agentObservability.setCloudAccountToken',
 ] as const;
 
 const EXPECTED_VIEWS = [
@@ -105,6 +106,14 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.aiHelper.claudeModel',
   'agentObservability.aiHelper.claudeEffort',
   'agentObservability.aiHelper.claudeCliPath',
+  'agentObservability.copilotCloud.enabled',
+  'agentObservability.copilotCloud.accounts',
+  'agentObservability.copilotCloud.ghCliPath',
+  'agentObservability.copilotCloud.idlePollSeconds',
+  'agentObservability.copilotCloud.activePollSeconds',
+  'agentObservability.copilotCloud.scope',
+  'agentObservability.copilotCloud.retentionDays',
+  'agentObservability.copilotCloud.maxTasks',
 ] as const;
 
 describe('manifest contract is stable', () => {
@@ -144,6 +153,35 @@ describe('manifest contract is stable', () => {
     expect(props['agentObservability.sqlitePath'].default).toBe('');
     expect(props['agentObservability.claudeCode.enabled'].default).toBe(true);
     expect(props['agentObservability.claudeCode.maxSessions'].default).toBe(150);
+  });
+
+  it('locks the Copilot (Cloud) source off-by-default and privacy-scoped', () => {
+    const props = manifest.contributes.configuration.properties;
+    // Privacy-relevant default: the cloud source is opt-in (off) — it pulls
+    // org-visible data down and stores raw prompts/tool I/O locally.
+    expect(props['agentObservability.copilotCloud.enabled'].default).toBe(false);
+    expect(props['agentObservability.copilotCloud.accounts'].default).toEqual([]);
+    expect(props['agentObservability.copilotCloud.scope'].default).toBe('my-tasks');
+    expect(props['agentObservability.copilotCloud.scope'].enum).toEqual(['my-tasks', 'repos']);
+    expect(props['agentObservability.copilotCloud.idlePollSeconds'].default).toBe(300);
+    expect(props['agentObservability.copilotCloud.idlePollSeconds'].minimum).toBe(60);
+    expect(props['agentObservability.copilotCloud.activePollSeconds'].default).toBe(60);
+    expect(props['agentObservability.copilotCloud.activePollSeconds'].minimum).toBe(30);
+    expect(props['agentObservability.copilotCloud.retentionDays'].default).toBe(180);
+    expect(props['agentObservability.copilotCloud.maxTasks'].default).toBe(100);
+    // Home-anchored sink = machine-wide, like copilotArchive.* — application scope.
+    for (const key of [
+      'agentObservability.copilotCloud.enabled',
+      'agentObservability.copilotCloud.accounts',
+      'agentObservability.copilotCloud.ghCliPath',
+      'agentObservability.copilotCloud.idlePollSeconds',
+      'agentObservability.copilotCloud.activePollSeconds',
+      'agentObservability.copilotCloud.scope',
+      'agentObservability.copilotCloud.retentionDays',
+      'agentObservability.copilotCloud.maxTasks',
+    ]) {
+      expect(props[key].scope).toBe('application');
+    }
   });
 
   it('declares the AI Helper backend/model/effort settings, application-scoped', () => {

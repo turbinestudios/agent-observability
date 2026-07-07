@@ -18,12 +18,26 @@ export type Operation = 'chat' | 'execute_tool' | 'execute_hook' | 'invoke_agent
 /**
  * Which agent tool produced a session. `copilot` reads the local SQLite
  * `agent-traces.db`; `claude` reads Claude Code's JSONL transcripts under
- * `~/.claude/projects`. Defaults to `copilot` when absent (the Copilot producer
- * predates this field). Used to group the Sessions tree by source and to switch
- * the detail panel's cost basis (Copilot bills in AIU; Claude is priced by
- * tokens — see {@link SessionTreeStats.costUsdMicros}).
+ * `~/.claude/projects`; `copilot-cloud` reads GitHub Copilot **cloud
+ * coding-agent** task/session logs pulled down into a local sink
+ * (`~/.agent-observability/copilot-cloud/`). Defaults to `copilot` when absent
+ * (the Copilot producer predates this field). Used to group the Sessions tree by
+ * source and to switch the detail panel's cost basis (Copilot bills in AIU;
+ * Claude is priced by tokens — see {@link SessionTreeStats.costUsdMicros}; the
+ * cloud agent bills in AI credits — see {@link SessionTreeStats.creditsNano}).
  */
-export type AgentSourceId = 'copilot' | 'claude';
+export type AgentSourceId = 'copilot' | 'claude' | 'copilot-cloud';
+
+/**
+ * Cost basis a source is priced in, used by the detail panel to render the right
+ * cost tile/column. Promoted from a per-source `id` ternary to the
+ * `SessionDataSource` contract so a new source declares its basis directly:
+ * - `aiu` — GitHub Copilot premium-request units (with a derived $ at $0.01/AIU);
+ * - `usd` — a token×rate USD estimate (Claude Code), carried in `costUsdMicros`;
+ * - `credits` — GitHub cloud coding-agent AI credits, carried in `creditsNano`.
+ *   Credits are shown as their own unit and are NEVER converted to the AIU $ rate.
+ */
+export type CostMode = 'aiu' | 'usd' | 'credits';
 
 /**
  * The fixed set of agent modes the cloud aggregate schema permits. Any
@@ -117,6 +131,20 @@ export interface SessionSummary {
    * source so the unified Sessions tree can group by source.
    */
   source?: AgentSourceId;
+  /**
+   * Optional short lifecycle badge for sources whose sessions are not always
+   * terminal (e.g. the Copilot cloud agent: `queued` / `in progress` /
+   * `waiting for user` / `failed` / `timed out`). Rendered on the session row
+   * only when present; local-only, never uploaded.
+   */
+  stateLabel?: string;
+  /**
+   * Optional external URL for an "Open on GitHub" header link (e.g. the cloud
+   * agent's agents-hub or PR/session page). Absent for local sources. Opened via
+   * `vscode.env.openExternal` from the detail panel (the webview CSP blocks a
+   * bare `href`).
+   */
+  externalUrl?: string;
 }
 
 /**
@@ -293,6 +321,14 @@ export interface SessionModelUsage {
    * instead of "AIU" when this is present.
    */
   costUsdMicros?: number;
+  /**
+   * GitHub cloud coding-agent AI-credit usage in INTEGER NANO-CREDITS (1 credit =
+   * 1e9), summed for this model. Set ONLY by the Copilot (Cloud) source; absent
+   * for the local sources (which use {@link aiuNano} / {@link costUsdMicros}).
+   * Kept as its own unit — never mapped onto {@link aiuNano} (whose $0.01/AIU
+   * derivation would be a lie for credits).
+   */
+  creditsNano?: number;
 }
 
 /**
@@ -340,6 +376,12 @@ export interface SessionAgentUsage {
    * {@link aiuNano}). See {@link SessionModelUsage.costUsdMicros}.
    */
   costUsdMicros?: number;
+  /**
+   * GitHub cloud coding-agent AI-credit usage in INTEGER NANO-CREDITS (1 credit =
+   * 1e9) for this (agent, model, kind). Set ONLY by the Copilot (Cloud) source.
+   * See {@link SessionModelUsage.creditsNano}.
+   */
+  creditsNano?: number;
   /**
    * LOCAL-ONLY lines this (agent, model, kind)'s file-writing tool calls added to /
    * removed from source-code vs documentation files (LoC / LoD / nLoC / nLoD). Each
@@ -425,6 +467,15 @@ export interface SessionTreeStats {
    * the sum of the per-model / per-agent `costUsdMicros` rollups.
    */
   costUsdMicros?: number;
+  /**
+   * Whole-tree GitHub cloud coding-agent AI-credit usage in INTEGER NANO-CREDITS
+   * (1 credit = 1e9). Set ONLY by the Copilot (Cloud) source (from the REST
+   * session's `usage.credits`); absent for the local sources. The "Agent run
+   * totals" card shows an "AI Credits" tile in place of "AIU"/"Cost" when the
+   * source's cost basis is `credits`. Equals the sum of the per-model / per-agent
+   * `creditsNano` rollups.
+   */
+  creditsNano?: number;
   /**
    * LOCAL-ONLY lines the whole agent tree's file-writing tool calls added to /
    * removed from source-code vs documentation files, classified by file

@@ -1,8 +1,8 @@
 {
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
-  "description": "Privacy-first local view of GitHub Copilot and Claude Code agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
-  "version": "0.8.0",
+  "description": "Privacy-first local view of GitHub Copilot, GitHub Copilot cloud coding-agent, and Claude Code agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
+  "version": "0.9.0",
   "publisher": "turbinestudios",
   "license": "UNLICENSED",
   "engines": {
@@ -57,11 +57,11 @@
     "viewsWelcome": [
       {
         "view": "agentObservability.overview",
-        "contents": "Local Overview summarizes your GitHub Copilot and Claude Code agent activity, read on-disk from this machine.\n\nNothing is uploaded unless you opt in to aggregate sharing.\n\n[Open Settings](command:agentObservability.openSettings)"
+        "contents": "Local Overview summarizes your GitHub Copilot, Copilot cloud coding-agent, and Claude Code agent activity, read on-disk from this machine.\n\nNothing is uploaded unless you opt in to aggregate sharing.\n\n[Open Settings](command:agentObservability.openSettings)"
       },
       {
         "view": "agentObservability.sessions",
-        "contents": "Sessions lists your local Copilot and Claude Code agent sessions — grouped by source and repository — with prompt, tool, model, duration and cost detail.\n\nAll session detail stays on this machine.\n\n[Refresh](command:agentObservability.refresh)"
+        "contents": "Sessions lists your Copilot, Copilot cloud coding-agent, and Claude Code agent sessions — grouped by source and repository — with prompt, tool, model, duration and cost detail.\n\nAll session detail stays on this machine.\n\n[Refresh](command:agentObservability.refresh)"
       },
       {
         "view": "agentObservability.sync",
@@ -180,6 +180,12 @@
         "title": "Show Logs",
         "category": "Agent Observability",
         "icon": "$(output)"
+      },
+      {
+        "command": "agentObservability.setCloudAccountToken",
+        "title": "Copilot (Cloud): Set account token",
+        "category": "Agent Observability",
+        "icon": "$(key)"
       }
     ],
     "menus": {
@@ -810,6 +816,69 @@
           "default": "",
           "scope": "application",
           "markdownDescription": "Path to the Claude Code CLI executable. Leave blank to use `claude` from your PATH (on Windows, `claude.cmd` is also tried automatically). Set this only if the CLI is installed somewhere unusual."
+        },
+        "agentObservability.copilotCloud.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Capture **GitHub Copilot cloud coding-agent** sessions. When on, a background poller pulls your cloud-agent task/session logs (via the GitHub API, authenticated through the `gh` CLI or a per-account token) into a local sink under your home directory and shows them alongside Copilot and Claude Code under a **Copilot (Cloud)** source node. Off by default (opt-in). Raw prompts, tool I/O, and assistant text are stored locally and never uploaded — cloud sessions are local-only (org sharing is a separate, future decision)."
+        },
+        "agentObservability.copilotCloud.accounts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "GitHub CLI usernames whose cloud-agent tasks to poll. Identities are pinned here (rather than following `gh auth switch`) so the polled account never changes unexpectedly. Leave empty and the extension captures the currently-active `gh` login once when you enable the source; edit the list to poll multiple accounts. Each account uses `gh auth token --user <name>` (or a token set via **Copilot (Cloud): Set account token**)."
+        },
+        "agentObservability.copilotCloud.ghCliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Path to the GitHub CLI (`gh`) executable used to mint per-account tokens. Leave blank to use `gh` from your PATH (on Windows, `gh.exe`/`gh.cmd` are also tried). Set this only if `gh` is installed somewhere unusual. Accounts with a token set via **Copilot (Cloud): Set account token** do not require `gh`."
+        },
+        "agentObservability.copilotCloud.idlePollSeconds": {
+          "type": "number",
+          "default": 300,
+          "minimum": 60,
+          "scope": "application",
+          "markdownDescription": "How often (seconds) to poll the GitHub API for cloud-agent tasks while none is actively running. Minimum 60. A single window polls (elected via a lease); the poll cadence speeds up automatically while a task is in progress (see `#agentObservability.copilotCloud.activePollSeconds#`)."
+        },
+        "agentObservability.copilotCloud.activePollSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 30,
+          "scope": "application",
+          "markdownDescription": "How often (seconds) to poll while a cloud-agent task is actively running (queued / in progress / waiting for user), so state and logs update sooner. Minimum 30."
+        },
+        "agentObservability.copilotCloud.scope": {
+          "type": "string",
+          "enum": [
+            "my-tasks",
+            "repos"
+          ],
+          "enumDescriptions": [
+            "Poll only the authenticated user's own cloud-agent tasks (privacy-first default).",
+            "Also poll the workspace repositories' tasks, surfacing teammates' cloud-agent runs (with creator attribution)."
+          ],
+          "default": "my-tasks",
+          "scope": "application",
+          "markdownDescription": "Which cloud-agent tasks to fetch. `my-tasks` (default) is personal — only your own tasks. `repos` also surfaces teammates' tasks in the workspace repositories (same GitHub access as github.com); their prompts are then visible locally."
+        },
+        "agentObservability.copilotCloud.retentionDays": {
+          "type": "number",
+          "default": 180,
+          "minimum": 1,
+          "scope": "application",
+          "markdownDescription": "How many days of polled cloud-agent tasks the local sink retains. Older tasks (and their raw logs) are pruned on each poll. Defaults to 180 days."
+        },
+        "agentObservability.copilotCloud.maxTasks": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "scope": "application",
+          "markdownDescription": "Maximum number of most-recent cloud-agent tasks to fetch and surface per account, bounding request and parse cost."
         }
       }
     }

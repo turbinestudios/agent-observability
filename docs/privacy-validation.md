@@ -40,6 +40,7 @@ and rejects raw/free-text fields even though it does not trust the client.
 | 13 | **Context-insights** batch carries customization-file paths **only** (allowlisted, repo-relative, no `..`/drive/`@`), never source/doc paths or contents | extension `aggregate/customizationFilter.ts` (`SAFE_CONTEXT_FILE_PATTERN`, repo-scoped resolver) + `schemas/context-insights-batch.schema.json` | `aggregate/contextInsightsPrivacy.test.ts` (adversarial inputs; scans every string) |
 | 14 | Skip reasons reduced to a **closed taxonomy** (`applyToNoMatch`/`other`) — raw reason text never transmitted | `aggregate/contextInsightsExtractor.ts` (`classifySkipReason`) | `aggregate/contextInsightsPrivacy.test.ts` (raw reason absent) |
 | 15 | Server re-validates the context-insights batch and **rejects absolute/traversal/non-allowlisted paths** and unknown fields | `Services/Ingestion/ContextInsightsBatchValidator.cs` | `ContextInsightsValidatorTests.cs`, `ContextInsightsIngestionTests.cs` |
+| 16 | **Copilot (Cloud)** source is **pull-only**: raw cloud prompts / tool I/O / assistant text land on **local disk only** (home-dir sink) and the source uploads **nothing** — `getAggregationRows` returns `[]` in the current phases | `src/cloud/cloudSink.ts` (local sink), `src/cloud/copilotCloudSource.ts` (`getAggregationRows` → `[]`) | `src/cloud/copilotCloudSource.test.ts → getAggregationRows returns [] (cloud sessions are local-only through Phase 3)` |
 
 ## Client-side enforcement (VS Code extension)
 
@@ -56,6 +57,27 @@ keyed by a pseudonymous developer id. The forbidden raw-content attribute keys
 (authoritative list in
 [`docs/architecture/aggregate-payload-schema-v1.md`](architecture/aggregate-payload-schema-v1.md)
 §7) are never copied into a batch.
+
+### The Copilot (Cloud) source: pull-based, local-only
+
+The **Copilot (Cloud)** source *pulls* GitHub Copilot cloud coding-agent
+sessions **down** from the GitHub API into a local sink under the home directory
+(`src/cloud/cloudSink.ts`) and renders them like any other session. Like the
+local Copilot content read, the sink stores **raw prompts, tool input/output,
+and assistant text on local disk only** — the same sensitivity class as
+Copilot's local `span_attributes`. This source uploads **nothing**: its
+`getAggregationRows` returns `[]`, so nothing cloud-agent-related enters the
+aggregate batch in the current phases. Enforced in
+`src/cloud/copilotCloudSource.ts` and locked by
+**`src/cloud/copilotCloudSource.test.ts → getAggregationRows returns [] (cloud
+sessions are local-only through Phase 3)`**.
+
+One nuance is inherent to pulling org-visible data down rather than reading only
+your own machine: with `agentObservability.copilotCloud.scope` set to `'repos'`,
+the source also fetches the workspace repositories' tasks, so a user can see
+**teammates' prompts locally** — exactly the same access control github.com
+already grants that user, and still nothing is uploaded. The default scope
+`'my-tasks'` keeps it **personal** (only the authenticated user's own tasks).
 
 ### The critical regression test: `aggregate/privacy.test.ts`
 

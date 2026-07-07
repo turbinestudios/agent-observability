@@ -77,7 +77,7 @@ describe('planChatResponse', () => {
   it('reports the empty state when there are no sessions', () => {
     const plan = planChatResponse(ok([]), '');
     expect(plan.buttons).toHaveLength(0);
-    expect(plan.markdown).toMatch(/no local copilot agent sessions/i);
+    expect(plan.markdown).toMatch(/no local agent sessions/i);
   });
 
   it('reports the empty state when every session has an unknown repository', () => {
@@ -103,9 +103,25 @@ describe('planChatResponse', () => {
     );
     expect(plan.markdown).toMatch(/most recent/i);
     expect(plan.buttons).toEqual([
-      { sessionId: 'newest', title: 'Open: Newest' },
-      { sessionId: 'mid', title: 'Open: Mid' },
-      { sessionId: 'oldest', title: 'Open: Oldest' },
+      { sourceId: 'copilot', sessionId: 'newest', title: 'Open: Newest' },
+      { sourceId: 'copilot', sessionId: 'mid', title: 'Open: Mid' },
+      { sourceId: 'copilot', sessionId: 'oldest', title: 'Open: Oldest' },
+    ]);
+  });
+
+  it('routes each button to its owning source (falling back to copilot)', () => {
+    const plan = planChatResponse(
+      ok([
+        session({ sessionId: 'cloud-1', title: 'Cloud run', source: 'copilot-cloud', endedAtMs: 300 }),
+        session({ sessionId: 'claude-1', title: 'Claude run', source: 'claude', endedAtMs: 200 }),
+        session({ sessionId: 'copilot-1', title: 'Copilot run', endedAtMs: 100 }),
+      ]),
+      '',
+    );
+    expect(plan.buttons.map((b) => [b.sourceId, b.sessionId])).toEqual([
+      ['copilot-cloud', 'cloud-1'],
+      ['claude', 'claude-1'],
+      ['copilot', 'copilot-1'],
     ]);
   });
 
@@ -129,7 +145,7 @@ describe('planChatResponse', () => {
       'login',
     );
     expect(plan.buttons).toHaveLength(1);
-    expect(plan.buttons[0]).toEqual({ sessionId: 'a-1', title: 'Open: Fix login' });
+    expect(plan.buttons[0]).toEqual({ sourceId: 'copilot', sessionId: 'a-1', title: 'Open: Fix login' });
     expect(plan.markdown).toMatch(/matching/i);
   });
 

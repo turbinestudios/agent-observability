@@ -7,6 +7,7 @@ import { Commands } from '../commands';
 import { isRepositoryIncluded } from '../aggregate/repoSyncPolicy';
 import { WHAT_IS_SHARED, WHAT_IS_NOT_SHARED, DISCLOSURE_SUMMARY } from '../consent/consentDisclosure';
 import { SyncStateStore, SyncRun, SyncRunOutcome } from '../sync/syncState';
+import { CloudSink } from '../cloud/cloudSink';
 
 /** Stable view id; referenced by package.json and the syncNow command wiring. */
 export const SYNC_VIEW_ID = 'agentObservability.sync';
@@ -31,6 +32,8 @@ export class SyncViewProvider implements vscode.TreeDataProvider<SyncItem> {
     private readonly consent: ConsentManager,
     private readonly secrets: SecretManager,
     private readonly state: SyncStateStore,
+    /** The Copilot (Cloud) sink, for the local-only disclosure + per-account status. */
+    private readonly cloudSink?: CloudSink,
   ) {}
 
   /** Fired by the `agentObservability.syncNow` command, consent + config changes. */
@@ -118,6 +121,8 @@ export class SyncViewProvider implements vscode.TreeDataProvider<SyncItem> {
       ),
       // Local-data availability row.
       this.localDataRow(),
+      // Copilot (Cloud): local-only disclosure + per-account auth status.
+      ...this.cloudRows(),
     ];
 
     // Recent run history (most recent first), capped for readability.
@@ -197,6 +202,58 @@ export class SyncViewProvider implements vscode.TreeDataProvider<SyncItem> {
       );
     }
     return new SyncItem('Local data: unavailable', result.message, new vscode.ThemeIcon('circle-slash'));
+  }
+
+  /**
+   * Copilot (Cloud) rows: a local-only disclosure (cloud sessions are pulled DOWN
+   * but never uploaded) plus per-account auth status so an expired token surfaces
+   * here without touching the aggregate path. Only shown when the source is on.
+   */
+  private cloudRows(): SyncItem[] {
+    if (!this.config.isCopilotCloudEnabled()) {
+      return [];
+    }
+    const rows: SyncItem[] = [
+      new SyncItem(
+        'Copilot (Cloud): local-only (never uploaded)',
+        'Copilot cloud coding-agent sessions are pulled down to this machine and rendered locally. Their prompts, tool I/O, and assistant text are NEVER uploaded to the organization dashboard (org sharing for cloud sessions is a separate, future decision).',
+        new vscode.ThemeIcon('shield'),
+      ),
+    ];
+    const accounts = this.config.getCopilotCloudAccounts();
+    const poller = this.cloudSink?.readIndex().poller;
+    const statusByLogin = new Map((poller?.accounts ?? []).map((a) => [a.login, a]));
+    if (accounts.length === 0) {
+      rows.push(
+        new SyncItem(
+          'Cloud accounts: none pinned yet',
+          'The active gh account is captured automatically on first enable; edit copilotCloud.accounts to poll more.',
+          new vscode.ThemeIcon('account'),
+        ),
+      );
+    }
+    for (const login of accounts) {
+      const status = statusByLogin.get(login);
+      const outcome =
+        status === undefined
+          ? poller?.firstPollCompleted
+            ? 'no data yet'
+            : 'polling…'
+          : status.lastOutcome === 'ok'
+            ? 'ok'
+            : status.lastOutcome;
+      const healthy = outcome === 'ok' || outcome === 'polling…' || outcome === 'no data yet';
+      rows.push(
+        new SyncItem(
+          `${login}: ${outcome}`,
+          status?.lastErrorMessage ??
+            'Per-account Copilot (Cloud) poll status. Set a token via “Copilot (Cloud): Set account token” if sign-in is required.',
+          new vscode.ThemeIcon(healthy ? 'cloud' : 'warning'),
+          healthy ? undefined : { command: Commands.setCloudAccountToken, title: 'Set account token' },
+        ),
+      );
+    }
+    return rows;
   }
 }
 

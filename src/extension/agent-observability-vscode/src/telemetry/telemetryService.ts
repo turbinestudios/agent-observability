@@ -49,7 +49,18 @@ export type FailureReason =
   | 'missingDb'
   | 'permission'
   | 'schemaMismatch'
-  | 'error';
+  | 'error'
+  // Cloud-source (Copilot Cloud) failure modes — see the Copilot (Cloud) source.
+  /** The GitHub CLI (`gh`) could not be found and no PAT-backed account exists. */
+  | 'cliMissing'
+  /** An account is not signed in / its token expired (per-account detail in the message). */
+  | 'unauthenticated'
+  /** The feature/endpoint is unavailable (org-disabled or a preview 404) — degrade gracefully. */
+  | 'featureUnavailable'
+  /** The GitHub API rate-limited us; the poller backs off and retries. */
+  | 'rateLimited'
+  /** Offline / host unreachable. */
+  | 'network';
 
 /** Discriminated result the views consume without try/catch. */
 export type Result<T> =

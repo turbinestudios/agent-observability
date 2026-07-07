@@ -61,6 +61,14 @@ export const ConfigKeys = {
   aiHelperClaudeModel: 'aiHelper.claudeModel',
   aiHelperClaudeEffort: 'aiHelper.claudeEffort',
   aiHelperClaudeCliPath: 'aiHelper.claudeCliPath',
+  copilotCloudEnabled: 'copilotCloud.enabled',
+  copilotCloudAccounts: 'copilotCloud.accounts',
+  copilotCloudGhCliPath: 'copilotCloud.ghCliPath',
+  copilotCloudIdlePollSeconds: 'copilotCloud.idlePollSeconds',
+  copilotCloudActivePollSeconds: 'copilotCloud.activePollSeconds',
+  copilotCloudScope: 'copilotCloud.scope',
+  copilotCloudRetentionDays: 'copilotCloud.retentionDays',
+  copilotCloudMaxTasks: 'copilotCloud.maxTasks',
 } as const;
 
 /** Default values mirroring the package.json contribution defaults. */
@@ -100,6 +108,14 @@ export const ConfigDefaults = {
   aiHelperClaudeModel: 'sonnet',
   aiHelperClaudeEffort: 'high',
   aiHelperClaudeCliPath: '',
+  copilotCloudEnabled: false,
+  copilotCloudAccounts: [] as readonly string[],
+  copilotCloudGhCliPath: '',
+  copilotCloudIdlePollSeconds: 300,
+  copilotCloudActivePollSeconds: 60,
+  copilotCloudScope: 'my-tasks',
+  copilotCloudRetentionDays: 180,
+  copilotCloudMaxTasks: 100,
 } as const;
 
 /** Minimum allowed sync interval, mirroring the package.json `minimum`. */
@@ -111,6 +127,11 @@ export const MIN_LIVE_DEBOUNCE_MS = 100;
 /** Minimum archive retention (days) + sweep interval (seconds), mirroring package.json. */
 export const MIN_ARCHIVE_RETENTION_DAYS = 1;
 export const MIN_ARCHIVE_SWEEP_SECONDS = 10;
+
+/** Minimum Copilot (Cloud) poll intervals (seconds) + retention (days), mirroring package.json. */
+export const MIN_COPILOT_CLOUD_IDLE_POLL_SECONDS = 60;
+export const MIN_COPILOT_CLOUD_ACTIVE_POLL_SECONDS = 30;
+export const MIN_COPILOT_CLOUD_RETENTION_DAYS = 1;
 
 /** Milliseconds per day, for the retention conversion. */
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -461,6 +482,115 @@ export class Configuration {
       .get<string>(ConfigKeys.aiHelperClaudeCliPath, ConfigDefaults.aiHelperClaudeCliPath)
       .trim();
     return value.length > 0 ? value : 'claude';
+  }
+
+  /**
+   * Feature flag: whether the Copilot **cloud** coding-agent source is enabled.
+   * Opt-in (off by default). When on, a background poller pulls cloud-agent
+   * task/session logs (via the `gh` CLI or a per-account PAT) into a local sink
+   * and folds them into the unified views as the **Copilot (Cloud)** source.
+   */
+  isCopilotCloudEnabled(): boolean {
+    return this.config().get<boolean>(
+      ConfigKeys.copilotCloudEnabled,
+      ConfigDefaults.copilotCloudEnabled,
+    );
+  }
+
+  /**
+   * The gh usernames whose cloud-agent tasks to poll — a trimmed, de-duplicated,
+   * non-empty list. Empty means "no accounts pinned yet" (nothing is polled; the
+   * source captures the active login on first enable). Identities are pinned here
+   * rather than following `gh auth switch`.
+   */
+  getCopilotCloudAccounts(): string[] {
+    const raw = this.config().get<unknown>(
+      ConfigKeys.copilotCloudAccounts,
+      ConfigDefaults.copilotCloudAccounts as unknown as string[],
+    );
+    const list = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const entry of list) {
+      const trimmed = entry.trim();
+      if (trimmed.length > 0 && !seen.has(trimmed)) {
+        seen.add(trimmed);
+        out.push(trimmed);
+      }
+    }
+    return out;
+  }
+
+  /** GitHub CLI executable used to mint account tokens; blank falls back to `gh` on PATH. */
+  getCopilotCloudGhCliPath(): string {
+    const value = this.config()
+      .get<string>(ConfigKeys.copilotCloudGhCliPath, ConfigDefaults.copilotCloudGhCliPath)
+      .trim();
+    return value.length > 0 ? value : 'gh';
+  }
+
+  /**
+   * Poll interval (ms) while no cloud task is actively running. Clamped to the
+   * documented minimum so a hand-edited settings.json cannot drive a busy-loop.
+   */
+  getCopilotCloudIdlePollMs(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.copilotCloudIdlePollSeconds,
+      ConfigDefaults.copilotCloudIdlePollSeconds,
+    );
+    const seconds = Number.isFinite(raw)
+      ? Math.max(MIN_COPILOT_CLOUD_IDLE_POLL_SECONDS, Math.floor(raw))
+      : ConfigDefaults.copilotCloudIdlePollSeconds;
+    return seconds * 1000;
+  }
+
+  /** Poll interval (ms) while a cloud task is actively running (faster), clamped to the minimum. */
+  getCopilotCloudActivePollMs(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.copilotCloudActivePollSeconds,
+      ConfigDefaults.copilotCloudActivePollSeconds,
+    );
+    const seconds = Number.isFinite(raw)
+      ? Math.max(MIN_COPILOT_CLOUD_ACTIVE_POLL_SECONDS, Math.floor(raw))
+      : ConfigDefaults.copilotCloudActivePollSeconds;
+    return seconds * 1000;
+  }
+
+  /**
+   * Which cloud tasks to fetch: `my-tasks` (only the authenticated user's own
+   * tasks — privacy-first default) or `repos` (teammates' tasks in the workspace
+   * repos, Phase 3). A hand-edited invalid value falls back to `my-tasks`.
+   */
+  getCopilotCloudScope(): 'my-tasks' | 'repos' {
+    const raw = this.config().get<string>(
+      ConfigKeys.copilotCloudScope,
+      ConfigDefaults.copilotCloudScope,
+    );
+    return raw === 'repos' ? 'repos' : 'my-tasks';
+  }
+
+  /** How long polled cloud tasks are retained, as milliseconds. Clamped to the minimum. */
+  getCopilotCloudRetentionMs(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.copilotCloudRetentionDays,
+      ConfigDefaults.copilotCloudRetentionDays,
+    );
+    const days = Number.isFinite(raw)
+      ? Math.max(MIN_COPILOT_CLOUD_RETENTION_DAYS, Math.floor(raw))
+      : ConfigDefaults.copilotCloudRetentionDays;
+    return days * MS_PER_DAY;
+  }
+
+  /** Max most-recent cloud tasks to surface / poll per account (positive-int floor). */
+  getCopilotCloudMaxTasks(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.copilotCloudMaxTasks,
+      ConfigDefaults.copilotCloudMaxTasks,
+    );
+    if (!Number.isFinite(raw) || raw <= 0) {
+      return ConfigDefaults.copilotCloudMaxTasks;
+    }
+    return Math.floor(raw);
   }
 
   /**

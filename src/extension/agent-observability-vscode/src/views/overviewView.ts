@@ -66,7 +66,7 @@ export class OverviewViewProvider implements vscode.TreeDataProvider<OverviewIte
           new OverviewItem(
             `${source.label}: ${metrics.totalSessions} session${metrics.totalSessions === 1 ? '' : 's'}`,
             `${metrics.totalInteractions} interactions · tokens ${metrics.inputTokens}/${metrics.outputTokens} (cached ${metrics.cachedTokens})`,
-            source.id === 'claude' ? 'sparkle' : 'copilot',
+            source.iconId,
           ),
         );
       }
@@ -133,6 +133,16 @@ function explanatoryItem(reason: string, message: string): OverviewItem {
       return new OverviewItem('Unsupported telemetry schema', message, 'warning');
     case 'permission':
       return new OverviewItem('Cannot read telemetry', message, 'lock');
+    case 'cliMissing':
+      return new OverviewItem('GitHub CLI not found', message, 'terminal');
+    case 'unauthenticated':
+      return new OverviewItem('Sign-in required', message, 'key');
+    case 'featureUnavailable':
+      return new OverviewItem('Cloud agent unavailable', message, 'cloud');
+    case 'rateLimited':
+      return new OverviewItem('Rate limited — retrying', message, 'clock');
+    case 'network':
+      return new OverviewItem('Network unavailable', message, 'cloud-offline');
     default:
       return new OverviewItem('Telemetry unavailable', message, 'error');
   }

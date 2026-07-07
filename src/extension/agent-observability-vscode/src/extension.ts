@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import * as net from 'node:net';
+import * as fs from 'node:fs';
 import { Configuration, CONFIG_SECTION, ConfigKeys } from './config/configuration';
 import { RepoSyncMode } from './aggregate/repoSyncPolicy';
 import { registerCommands, Refreshable } from './commands';
@@ -33,6 +34,11 @@ import { ClaudeCodeService } from './claude/claudeCodeService';
 import { GitRemoteResolver } from './claude/gitRemote';
 import { resolveClaudeProjectsDirs } from './claude/paths';
 import { CopilotSource, SourceRegistry } from './sources/sessionSource';
+import { CopilotCloudSource } from './cloud/copilotCloudSource';
+import { CloudSink, resolveCloudSinkDir } from './cloud/cloudSink';
+import { CloudApiClient } from './cloud/cloudApiClient';
+import { CloudAgentPoller } from './cloud/cloudAgentPoller';
+import { GhAuth } from './cloud/ghAuth';
 import { readWorkspaceStoreSessions } from './telemetry/workspaceStore';
 import { CompositeAggregationSource } from './sync/compositeAggregationSource';
 import { CopilotContextHotspotsProvider } from './context/contextHotspotsProvider';
@@ -63,6 +69,8 @@ let consentManager: ConsentManager | undefined;
 let syncScheduler: SyncScheduler | undefined;
 let liveController: LiveUpdateController | undefined;
 let copilotArchiver: CopilotArchiver | undefined;
+let cloudPoller: CloudAgentPoller | undefined;
+let cloudIndexWatch: fs.FSWatcher | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   // Diagnostic Output channel ("Agent Observability"). Content-free by contract
@@ -74,11 +82,16 @@ export function activate(context: vscode.ExtensionContext): void {
   const config = new Configuration();
   const telemetry = new TelemetryService(config);
 
-  // Source registry: the Copilot SQLite path + the Claude Code JSONL path, both
-  // implementing the same SessionDataSource surface so the views/sync stay
-  // source-agnostic. The Claude source reads ~/.claude/projects on demand.
+  // Source registry: the Copilot SQLite path, the Claude Code JSONL path, and the
+  // Copilot cloud coding-agent path (a local sink filled by a background poller),
+  // all implementing the same SessionDataSource surface so the views/sync stay
+  // source-agnostic. The Claude source reads ~/.claude/projects on demand; the
+  // cloud source reads ~/.agent-observability/copilot-cloud/ on demand.
   const claude = new ClaudeCodeService(config);
-  const registry = new SourceRegistry([new CopilotSource(telemetry, config), claude]);
+  const cloudSinkDir = resolveCloudSinkDir();
+  const cloudSink = cloudSinkDir !== undefined ? new CloudSink(cloudSinkDir) : undefined;
+  const cloudSource = new CopilotCloudSource(config, cloudSink);
+  const registry = new SourceRegistry([new CopilotSource(telemetry, config), claude, cloudSource]);
   sources = registry;
 
   // Consent + secret management (Phase 4). Both are constructed from the
@@ -201,7 +214,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // render every enabled source); Sync stays Copilot-backed (its status view).
   const overview = new OverviewViewProvider(registry);
   const sessions = new SessionsViewProvider(registry);
-  const sync = new SyncViewProvider(config, telemetry, consent, secrets, syncState);
+  const sync = new SyncViewProvider(config, telemetry, consent, secrets, syncState, cloudSink);
 
   // Context Hotspots — the LOCAL twin of the dashboard's aggregate hotspots page.
   // It reuses the SAME extractor as the cloud sync path but retains the on-machine
@@ -217,7 +230,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // AI Helper — a Copilot-backed chat webview grounded in baked-in context files
   // and the user's LOCAL telemetry. Sends only safe metadata to the user's own
   // Copilot model (gated by a one-time disclosure); never raw content or the key.
-  const assistant = new ChatViewProvider(context, telemetry, config);
+  const assistant = new ChatViewProvider(context, registry, config);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(ASSISTANT_VIEW_ID, assistant, {
       webviewOptions: { retainContextWhenHidden: true },
@@ -306,9 +319,14 @@ export function activate(context: vscode.ExtensionContext): void {
   // re-reads the workspace chat-session context, then fans out to every view.
   const sourcesRefresh: Refreshable = { refresh: () => registry.refresh() };
   const workspaceContextRefresh: Refreshable = { refresh: () => refreshWorkspaceContext() };
+  // The Refresh command also kicks an immediate cloud poll (in addition to
+  // dropping the cloud source's cache via registry.refresh); results land when the
+  // async poll completes and fire the ingest refresh.
+  const cloudPollRefresh: Refreshable = { refresh: () => cloudPoller?.refresh() };
   const refreshables: Refreshable[] = [
     sourcesRefresh,
     workspaceContextRefresh,
+    cloudPollRefresh,
     overview,
     sessions,
     sync,
@@ -400,6 +418,84 @@ export function activate(context: vscode.ExtensionContext): void {
     copilotArchiver = archiver;
     archiver.start(); // first sweep runs synchronously
     renderAllViews(); // reflect the freshly-populated archive once
+  };
+
+  // ── Copilot (Cloud) coding-agent poller ─────────────────────────────────────
+  // Off by default (opt-in). When on, ONE window (elected via a lease) polls the
+  // GitHub agent-tasks API for cloud-agent tasks/sessions and materializes them
+  // into a home-anchored sink; the CopilotCloudSource reads that sink. The poll
+  // cadence (60–300 s) is slow enough that refreshing the trees on ingest doesn't
+  // flicker, so — unlike the OTLP live path — the poller refreshes the lists
+  // directly (and invalidates the cloud source's caches, which the shared
+  // invalidateLiveSources does not touch). Everything stays local.
+  const refreshCloudViews = (): void => {
+    cloudSource.refresh();
+    overview.refresh();
+    sessions.refresh();
+    detailPanels.rerenderActive();
+  };
+
+  const stopCloud = (): void => {
+    cloudPoller?.stop();
+    cloudPoller = undefined;
+    cloudIndexWatch?.close();
+    cloudIndexWatch = undefined;
+  };
+
+  const startCloud = (): void => {
+    stopCloud();
+    if (!config.isCopilotCloudEnabled() || cloudSink === undefined) {
+      return;
+    }
+    const http = new FetchHttpPoster();
+    const ghAuth = new GhAuth({
+      ghCliPath: () => config.getCopilotCloudGhCliPath(),
+      http,
+      patFor: (login) => secrets.getCloudAccountToken(login),
+    });
+
+    // On first enable with no pinned accounts, capture the currently-active gh
+    // login ONCE into the setting (visible, editable) — never read "active" again.
+    if (config.getCopilotCloudAccounts().length === 0) {
+      void ghAuth.resolveActiveLogin().then((login) => {
+        if (login !== undefined && config.getCopilotCloudAccounts().length === 0) {
+          void vscode.workspace
+            .getConfiguration(CONFIG_SECTION)
+            .update(ConfigKeys.copilotCloudAccounts, [login], vscode.ConfigurationTarget.Global)
+            .then(undefined, (err) => logger.error('Failed to capture active gh account', err));
+        }
+      });
+    }
+
+    const client = new CloudApiClient({ http });
+    const poller = new CloudAgentPoller({
+      config,
+      auth: ghAuth,
+      client,
+      sink: cloudSink,
+      onIngest: refreshCloudViews,
+      onError: (err) => logger.error('Copilot cloud poll error', err),
+    });
+    cloudPoller = poller;
+    poller.start();
+
+    // Reader windows (and the leader) learn of sink changes via a cheap directory
+    // watch on index.json — a plain atomic JSON rewrite, so the fs.watch-blind-to-
+    // WAL caveat does not apply. Debounced; refreshes the cloud source + trees.
+    try {
+      let watchDebounce: ReturnType<typeof setTimeout> | undefined;
+      cloudIndexWatch = fs.watch(cloudSink.dir(), (_event, filename) => {
+        if (filename !== null && filename !== 'index.json') {
+          return;
+        }
+        if (watchDebounce !== undefined) {
+          clearTimeout(watchDebounce);
+        }
+        watchDebounce = setTimeout(refreshCloudViews, 400);
+      });
+    } catch (err) {
+      logger.error('Copilot cloud index watch failed to start', err);
+    }
   };
 
   // Build + start the live pipeline for whichever sources apply. Idempotent: a
@@ -536,9 +632,10 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // `@obs` chat participant — lives in the GitHub Copilot chat window and renders
-  // buttons that open the LOCAL session-detail webview. Reads local telemetry
-  // only; nothing is uploaded. No-ops on hosts without the chat API.
-  registerObservabilityChatParticipant(context, telemetry);
+  // buttons that open the LOCAL session-detail webview, across EVERY enabled
+  // source (Copilot, Claude Code, Copilot Cloud). Reads local telemetry only;
+  // nothing is uploaded. No-ops on hosts without the chat API.
+  registerObservabilityChatParticipant(context, registry);
 
   // Background scheduler — OFF by default (sync.enabled=false). It still re-checks
   // the consent+key gate on every tick, and refreshes the Sync view after a run.
@@ -568,6 +665,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // updates; nothing is uploaded.
   startArchiver();
 
+  // Start the Copilot (Cloud) poller (off by default). Gated on copilotCloud.enabled.
+  startCloud();
+
   // Keep the Sync view live when consent flips (set-key already refreshes via
   // the command path, but consent can also change programmatically).
   context.subscriptions.push(consent.onDidChange(() => sync.refresh()));
@@ -580,6 +680,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({ dispose: () => scheduler.dispose() });
   context.subscriptions.push({ dispose: () => stopLive() });
   context.subscriptions.push({ dispose: () => stopArchiver() });
+  context.subscriptions.push({ dispose: () => stopCloud() });
 
   // On configuration change (e.g. toggling the feature flag, sqlitePath, or the
   // sync.enabled/intervalMinutes settings), drop the cached snapshot, re-arm the
@@ -633,6 +734,20 @@ export function activate(context: vscode.ExtensionContext): void {
         event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.liveOtelPort}`)
       ) {
         startLive();
+      }
+      // Re-arm the Copilot (Cloud) poller when its enable/accounts/scope/poll
+      // settings change (re-reads config; toggling off tears down the poller).
+      if (
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotCloudEnabled}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotCloudAccounts}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotCloudScope}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotCloudGhCliPath}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotCloudIdlePollSeconds}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotCloudActivePollSeconds}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotCloudMaxTasks}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotCloudRetentionDays}`)
+      ) {
+        startCloud();
       }
     }),
   );
@@ -971,4 +1086,8 @@ export function deactivate(): void {
   liveController = undefined;
   copilotArchiver?.stop();
   copilotArchiver = undefined;
+  cloudPoller?.stop();
+  cloudPoller = undefined;
+  cloudIndexWatch?.close();
+  cloudIndexWatch = undefined;
 }

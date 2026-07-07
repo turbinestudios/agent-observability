@@ -1,0 +1,31 @@
+{
+  "id": "b540b8ca-1111-2222-3333-444455556666",
+  "name": "Add retry with backoff to the API client",
+  "state": "completed",
+  "session_count": 1,
+  "created_at": "2026-07-07T10:00:00.000Z",
+  "updated_at": "2026-07-07T10:01:32.000Z",
+  "completed_at": "2026-07-07T10:01:32.000Z",
+  "repository": 987654321,
+  "owner": 12345,
+  "creator": { "id": 12345, "login": "octocat" },
+  "artifacts": [{ "provider": "github", "type": "pull_request" }],
+  "sessions": [
+    {
+      "id": "0b7c2a4e-5d1f-4e8a-9c63-2f4d8e1a7b90",
+      "name": "Add retry with backoff to the API client",
+      "prompt": "Implement the requested feature: add a retry with backoff to the API client.",
+      "model": "sweagent-capi:claude-sonnet-4.6",
+      "state": "completed",
+      "head_ref": "copilot/add-retry-backoff",
+      "base_ref": "main",
+      "created_at": "2026-07-07T10:00:00.000Z",
+      "updated_at": "2026-07-07T10:01:32.000Z",
+      "completed_at": "2026-07-07T10:01:32.000Z",
+      "error": null,
+      "usage": { "credits": 33570585000, "type": "ai_credits" },
+      "resource_type": "pull_request",
+      "resource_id": 4242
+    }
+  ]
+}

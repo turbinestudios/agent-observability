@@ -47,6 +47,18 @@ fails). It opens the file **read-only** and shows:
 - **Local Overview** — a summary of your local Copilot agent activity.
 - **Sessions** — your local agent sessions with prompt, tool, model, duration
   and success detail. **This detail is local-only** and is never uploaded.
+- **Copilot (Cloud)** *(opt-in)* — your GitHub Copilot **cloud coding-agent**
+  sessions, shown as their own source beside *Copilot* and *Claude Code*. Enable
+  it with the `agentObservability.copilotCloud.enabled` setting. A background
+  poller pulls your cloud-agent task/session logs (prompt, state, tool timeline,
+  model, AI-credit cost) via the GitHub API into a local sink and renders them
+  like any other session. Authentication uses the **`gh` CLI** (signed in via
+  `gh auth login`), or you can supply a token directly with the **Copilot
+  (Cloud): Set account token** command. Which accounts are polled is pinned via
+  `agentObservability.copilotCloud.accounts` (leave empty to capture the active
+  `gh` login once, or list usernames to poll several) — so a `gh auth switch`
+  never silently changes what you see. These sessions are **pulled down and
+  rendered locally only** and are never uploaded.
 
 Nothing is uploaded at this stage. No OTLP settings, no env vars, and no
 workspace `.vscode/settings.json` are required. (Optional: configure expected
@@ -99,6 +111,8 @@ aggregate batch (the only thing ever sent) before any upload.
 | Upload rejected (401) | Bad/expired API key | Re-run **Set Organization API Key** with a current `aoa_<keyId>_<secret>` from the platform team. |
 | Upload rejected (400) | Schema/validation failure | The server enforces the aggregate contract strictly; update the extension. See [`docs/privacy-validation.md`](privacy-validation.md). |
 | Upload rejected (503) | Ingestion disabled server-side | Platform team must set `Ingestion:Enabled=true` on the dashboard. |
+| Copilot (Cloud) empty — "GitHub CLI not found" | `gh` not on PATH | Set `agentObservability.copilotCloud.ghCliPath` to the `gh` executable, or set a token per account via **Copilot (Cloud): Set account token**. |
+| Copilot (Cloud) empty — "not signed in" / token expired | Account not authenticated | Run `gh auth login` for that account, or supply a token with **Copilot (Cloud): Set account token**. |
 
 ## What is shared vs NOT shared
 
@@ -120,6 +134,13 @@ aggregate batch (the only thing ever sent) before any upload.
 contents, **no source- or document-file paths**, no commit hashes, no branch
 names, no machine name, no OS username, and no email or personal identity. Only
 customization-file paths (above) are shared — path plus counts, never contents.
+
+**Copilot (Cloud) sessions are local-only.** When the cloud source is enabled,
+its task/session logs are *pulled DOWN* from the GitHub API and rendered on your
+machine, but they are **never uploaded** by this extension — the cloud source
+contributes nothing to the aggregate batch (its `getAggregationRows` returns an
+empty set in the current phases). Raw cloud prompts, tool I/O, and assistant
+text live only in the local sink under your home directory.
 
 Two strict contracts are the only payloads uploaded — the aggregate batch
 ([`schemas/aggregate-batch.schema.json`](../schemas/aggregate-batch.schema.json))

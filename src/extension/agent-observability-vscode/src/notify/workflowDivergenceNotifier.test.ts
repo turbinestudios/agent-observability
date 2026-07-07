@@ -95,6 +95,8 @@ function claudeSource(sessions: () => SessionSummary[]): SessionDataSource {
   return {
     id: 'claude',
     label: 'Claude Code',
+    costMode: 'usd',
+    iconId: 'sparkle',
     isEnabled: () => true,
     listSessions: () => ({ ok: true, value: sessions() }),
     getSessionDetail: () => ({

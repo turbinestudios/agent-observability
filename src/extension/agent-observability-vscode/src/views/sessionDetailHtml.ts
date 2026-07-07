@@ -14,13 +14,12 @@ import { aiuToUsd } from '../telemetry/pricing';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 import { escapeHtml } from './escapeHtml';
 
-/**
- * How a session's cost is expressed. Copilot bills in AIU (`aiu`); Claude Code is
- * priced by tokens and carries `costUsdMicros` on its rollups (`usd`). The detail
- * panel passes the cost mode matching the session's source so the "Agent run
- * totals" card and usage tables show the right unit.
- */
-export type CostMode = 'aiu' | 'usd';
+// The cost basis of a session ({@link CostMode}) now lives on the shared model
+// types (so a source declares it via the `SessionDataSource` contract). Re-export
+// it here to keep the panel's existing `import { CostMode } from './sessionDetailHtml'`
+// working.
+export type { CostMode } from '../telemetry/models';
+import type { CostMode } from '../telemetry/models';
 
 /** Format integer micro-USD (1 USD = 1e6) as `$X.XX`. Safe to inject (digits/$.). */
 function formatUsdMicros(micros: number | undefined): string {
@@ -29,6 +28,21 @@ function formatUsdMicros(micros: number | undefined): string {
     return '$0.00';
   }
   return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
+}
+
+/**
+ * Format GitHub cloud coding-agent usage held as integer NANO-CREDITS (1 credit =
+ * 1e9) as a plain credit count (e.g. `33.57`). Unlike AIU, credits are NOT
+ * converted to a dollar figure — no published unit rate exists, and the panel
+ * labels the unit ("AI Credits") separately. Zero/absent → `0`. Output is digits
+ * and `.` only, so it is safe to inject without escaping.
+ */
+function formatCredits(creditsNano: number | undefined): string {
+  const credits = (creditsNano ?? 0) / 1_000_000_000;
+  if (!(credits > 0)) {
+    return '0';
+  }
+  return credits.toFixed(credits < 1 ? 4 : 2);
 }
 
 /** One combined session, paired with the data the panel resolves per session. */
@@ -400,17 +414,21 @@ function renderSessionSection(
       ? `<span class="turn-label">${escapeHtml(truncate(s.title, 60))}</span>`
       : `<span class="turn-label">Session ${id}</span>`;
   // This session's cost: Copilot = whole-tree AIU at the fixed rate; Claude =
-  // token-priced estimate carried on the tree stats.
-  const costUsd =
-    costMode === 'usd' ? formatUsdMicros(detail.treeStats.costUsdMicros) : null;
-  const costLabel =
-    costUsd !== null
-      ? costUsd !== '$0.00'
-        ? `<span class="turn-tokens">${costUsd}</span>`
-        : ''
-      : detail.treeStats.aiuNano > 0
-        ? `<span class="turn-tokens">$${aiuToUsd(detail.treeStats.aiuNano).toFixed(2)}</span>`
+  // token-priced estimate carried on the tree stats; cloud agent = AI credits.
+  const costLabel = ((): string => {
+    if (costMode === 'usd') {
+      const costUsd = formatUsdMicros(detail.treeStats.costUsdMicros);
+      return costUsd !== '$0.00' ? `<span class="turn-tokens">${costUsd}</span>` : '';
+    }
+    if (costMode === 'credits') {
+      return (detail.treeStats.creditsNano ?? 0) > 0
+        ? `<span class="turn-tokens">${formatCredits(detail.treeStats.creditsNano)} cr</span>`
         : '';
+    }
+    return detail.treeStats.aiuNano > 0
+      ? `<span class="turn-tokens">$${aiuToUsd(detail.treeStats.aiuNano).toFixed(2)}</span>`
+      : '';
+  })();
   const summaryRow =
     `<span class="time">${escapeHtml(formatTime(s.startedAtMs))}</span>${titleLabel}` +
     `<span class="mode">${id} · ${num(detail.turns.length)} turn(s) · ${num(s.llmCalls)} LLM · ${num(s.toolCalls)} tool</span>${costLabel}`;
@@ -486,11 +504,14 @@ function renderTreeSummary(
  */
 function treeTotalsRows(stats: SessionTreeStats, costMode: CostMode): string {
   // Cost basis differs by source: Copilot shows AIU (with derived $); Claude
-  // shows the token-priced USD estimate. Exactly one tile is rendered.
+  // shows the token-priced USD estimate; the cloud agent shows AI credits (its
+  // own unit, never a $ figure). Exactly one tile is rendered.
   const costTile =
     costMode === 'usd'
       ? { acr: 'COST', label: 'Estimated Cost (USD)', value: formatUsdMicros(stats.costUsdMicros) }
-      : { acr: 'AIU', label: 'Copilot Usage (AIU)', value: formatAiu(stats.aiuNano) };
+      : costMode === 'credits'
+        ? { acr: 'CR', label: 'AI Credits', value: formatCredits(stats.creditsNano) }
+        : { acr: 'AIU', label: 'Copilot Usage (AIU)', value: formatAiu(stats.aiuNano) };
   // Flat right-aligned totals, each labelled by a short acronym (full name kept in
   // the `title` so the shorthand stays discoverable). TIN/TOUT/TCI = total
   // input/output/cached-input tokens; TT = total tokens; MT = model turns.
@@ -1075,6 +1096,7 @@ function renderAgentUsage(
       acc.cachedTokens += u.cachedTokens;
       acc.aiuNano += u.aiuNano;
       acc.costUsdMicros += u.costUsdMicros ?? 0;
+      acc.creditsNano += u.creditsNano ?? 0;
       acc.linesOfCode += u.linesOfCode;
       acc.linesOfDoc += u.linesOfDoc;
       acc.linesOfCodeRemoved += u.linesOfCodeRemoved;
@@ -1088,6 +1110,7 @@ function renderAgentUsage(
       cachedTokens: 0,
       aiuNano: 0,
       costUsdMicros: 0,
+      creditsNano: 0,
       linesOfCode: 0,
       linesOfDoc: 0,
       linesOfCodeRemoved: 0,
@@ -1095,15 +1118,25 @@ function renderAgentUsage(
     },
   );
 
-  // One cost column: AIU (Copilot) or estimated USD (Claude).
+  // One cost column: AIU (Copilot), estimated USD (Claude), or AI credits (cloud).
   const costCell = (u: SessionAgentUsage): string =>
-    costMode === 'usd' ? formatUsdMicros(u.costUsdMicros) : formatAiu(u.aiuNano);
+    costMode === 'usd'
+      ? formatUsdMicros(u.costUsdMicros)
+      : costMode === 'credits'
+        ? formatCredits(u.creditsNano)
+        : formatAiu(u.aiuNano);
   const costFooter =
-    costMode === 'usd' ? formatUsdMicros(totals.costUsdMicros) : formatAiu(totals.aiuNano);
+    costMode === 'usd'
+      ? formatUsdMicros(totals.costUsdMicros)
+      : costMode === 'credits'
+        ? formatCredits(totals.creditsNano)
+        : formatAiu(totals.aiuNano);
   const costHeader =
     costMode === 'usd'
       ? '<th class="n" title="Estimated USD cost for these model turns (token×rate)">Cost</th>'
-      : '<th class="n" title="AIU (Copilot premium-request units) recorded on these spans — the actual billed usage — with the derived cost at $0.01/AIU">AIU</th>';
+      : costMode === 'credits'
+        ? '<th class="n" title="GitHub cloud coding-agent AI credits recorded for these model turns (the billed unit; no published $ rate)">AI Credits</th>'
+        : '<th class="n" title="AIU (Copilot premium-request units) recorded on these spans — the actual billed usage — with the derived cost at $0.01/AIU">AIU</th>';
 
   const bodyRows = rows
     .map(

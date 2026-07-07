@@ -23,6 +23,8 @@ const UNKNOWN_REPOSITORY = 'unknown';
 
 /** A button to render: opens the LOCAL detail view for one session. */
 export interface ChatButton {
+  /** The owning source id, passed first to `openSession` so it routes correctly. */
+  sourceId: string;
   /** The session key passed to the `openSession` command. */
   sessionId: string;
   /** Human-readable button text (the session title). */
@@ -54,7 +56,7 @@ export function planChatResponse(result: Result<SessionSummary[]>, query: string
     return { markdown: `Couldn't read local sessions — ${result.message}`, buttons: [] };
   }
   if (result.value.length === 0) {
-    return { markdown: 'No local Copilot agent sessions recorded yet.', buttons: [] };
+    return { markdown: 'No local agent sessions recorded yet.', buttons: [] };
   }
 
   // Skip sessions whose repository couldn't be resolved, then order by recency.
@@ -106,9 +108,9 @@ function byRecentActivity(a: SessionSummary, b: SessionSummary): number {
   return b.endedAtMs - a.endedAtMs || b.startedAtMs - a.startedAtMs;
 }
 
-/** Map a session to its button descriptor. */
+/** Map a session to its button descriptor (source id defaults to Copilot when absent). */
 function toButton(session: SessionSummary): ChatButton {
-  return { sessionId: session.sessionId, title: buttonLabel(session) };
+  return { sourceId: session.source ?? 'copilot', sessionId: session.sessionId, title: buttonLabel(session) };
 }
 
 /** Button text: the LOCAL-ONLY title (falls back to a short id defensively). */

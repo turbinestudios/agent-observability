@@ -28,6 +28,7 @@ export const Commands = {
   enableLiveUpdates: 'agentObservability.enableLiveUpdates',
   disableLiveUpdates: 'agentObservability.disableLiveUpdates',
   showLogs: 'agentObservability.showLogs',
+  setCloudAccountToken: 'agentObservability.setCloudAccountToken',
 } as const;
 
 /** The required prefix of an organization API key (`aoa_<keyId>_<secret>`). */
@@ -146,6 +147,12 @@ export function registerCommands(
   // echo the key. Offer Replace/Clear when a key already exists.
   register(Commands.setApiKey, () => {
     void runSetApiKey(secrets, () => refreshAll(refreshables));
+  });
+
+  // Set a Copilot (Cloud) account token — masked input keyed by account label,
+  // stored in SecretStorage; the escape hatch for accounts not logged into gh.
+  register(Commands.setCloudAccountToken, () => {
+    void runSetCloudAccountToken(secrets, () => refreshAll(refreshables));
   });
 
   // Toggle Cloud Sharing — flip consent behind an explicit disclosure modal.
@@ -379,6 +386,49 @@ async function runSetApiKey(secrets: SecretManager, onChanged: () => void): Prom
   // Confirmation MUST NOT echo the key.
   void vscode.window.showInformationMessage(
     'Agent Observability: organization API key saved securely. It is stored only in VS Code SecretStorage and never uploaded or logged.',
+  );
+}
+
+/**
+ * `setCloudAccountToken` handler. Prompts for an account label then a masked
+ * token, stores it in SecretStorage (never echoed), and refreshes. This is the
+ * escape hatch for accounts not signed into `gh` / machines without `gh`.
+ */
+async function runSetCloudAccountToken(secrets: SecretManager, onChanged: () => void): Promise<void> {
+  const accountLabel = await vscode.window.showInputBox({
+    title: 'Copilot (Cloud): Set account token — account',
+    prompt: 'Enter the GitHub account/username this token belongs to (must match a copilotCloud.accounts entry).',
+    ignoreFocusOut: true,
+    validateInput: (value) => (value.trim().length === 0 ? 'Account label must not be empty.' : undefined),
+  });
+  if (accountLabel === undefined) {
+    return; // cancelled
+  }
+  const label = accountLabel.trim();
+  if (label.length === 0) {
+    return;
+  }
+
+  const token = await vscode.window.showInputBox({
+    title: `Copilot (Cloud): Set account token — ${label}`,
+    prompt: `Paste the GitHub token for '${label}' (a gh OAuth token or a PAT with the “Agent tasks” read permission). Stored securely in VS Code SecretStorage.`,
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (value) => (value.trim().length === 0 ? 'Token must not be empty.' : undefined),
+  });
+  if (token === undefined) {
+    return; // cancelled
+  }
+  const trimmed = token.trim();
+  if (trimmed.length === 0) {
+    return;
+  }
+
+  await secrets.setCloudAccountToken(label, trimmed);
+  onChanged();
+  // Confirmation MUST NOT echo the token.
+  void vscode.window.showInformationMessage(
+    `Agent Observability: token for '${label}' saved securely in VS Code SecretStorage. It is never uploaded or logged.`,
   );
 }
 

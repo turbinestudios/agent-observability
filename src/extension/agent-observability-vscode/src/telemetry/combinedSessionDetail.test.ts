@@ -181,6 +181,8 @@ describe('combineSessionDetails', () => {
       aiuNano: 4_000_000_000,
       // Claude token-priced cost is summed across sessions (was dropped before).
       costUsdMicros: 12_000,
+      // Cloud AI-credits summed too (0 here — neither fixture session is cloud).
+      creditsNano: 0,
       linesOfCode: 100,
       linesOfDoc: 35,
       linesOfCodeRemoved: 14,

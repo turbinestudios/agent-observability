@@ -342,7 +342,7 @@ export class SessionDetailPanelManager {
       panel.title = tabLabel(detail.summary.title);
     }
     const turnDeviations = this.detectTurnDeviations(source, sessionKey, detail);
-    const costMode: CostMode = source.id === 'claude' ? 'usd' : 'aiu';
+    const costMode: CostMode = source.costMode;
 
     // Context analysis is produced by the owning source from its own raw data
     // (Copilot from span attributes, Claude from transcript + filesystem). A source
@@ -384,7 +384,7 @@ export class SessionDetailPanelManager {
     }
     sections.sort((a, b) => a.detail.summary.startedAtMs - b.detail.summary.startedAtMs);
     const combined = combineSessionDetails(sections.map((s) => s.detail));
-    const costMode: CostMode = source.id === 'claude' ? 'usd' : 'aiu';
+    const costMode: CostMode = source.costMode;
 
     if (this.mounted.has(panel)) {
       void panel.webview.postMessage({
@@ -448,7 +448,7 @@ export class SessionDetailPanelManager {
       failedSessions: failed,
       truncationNote: source.truncationNote?.(),
     };
-    const costMode: CostMode = source.id === 'claude' ? 'usd' : 'aiu';
+    const costMode: CostMode = source.costMode;
 
     if (this.mounted.has(panel)) {
       void panel.webview.postMessage({

@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import * as crypto from 'node:crypto';
 import { CONFIG_SECTION, ConfigKeys, Configuration } from '../../config/configuration';
-import { TelemetryService } from '../../telemetry/telemetryService';
-import { OverviewMetrics } from '../../telemetry/models';
+import { SourceRegistry } from '../../sources/sessionSource';
+import { OverviewMetrics, RepositorySummary, SessionSummary } from '../../telemetry/models';
 import { Conversation, assembleMessages } from '../conversation';
 import { ContextLoader } from '../contextLoader';
 import { getQuickCommand, selectContextForFreeText } from '../quickCommands';
@@ -64,7 +64,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly telemetry: TelemetryService,
+    private readonly sources: SourceRegistry,
     private readonly config: Configuration,
   ) {
     this.contextLoader = new ContextLoader(context.extensionUri);
@@ -207,7 +207,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      this.telemetry.refresh();
+      this.sources.refresh();
       const preamble = await this.buildPreamble(userText, commandId);
       this.conversation.append('user', userText);
       const messages = assembleMessages(preamble, this.conversation.history);
@@ -281,15 +281,69 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
-  /** Gather safe overview + recent sessions + repositories for the summary task. */
+  /**
+   * Gather safe overview + recent sessions + repositories for the summary task,
+   * MERGED across every enabled source (Copilot, Copilot Cloud, Claude Code) so
+   * the AI-helper's "summarize logs" spans all of them.
+   */
   private gatherSummaryInput(): SummaryInput {
-    const overviewResult = this.telemetry.getOverview();
-    const overview = overviewResult.ok ? overviewResult.value : EMPTY_OVERVIEW;
-    const sessionsResult = this.telemetry.listSessions(undefined, SUMMARY_SESSION_LIMIT);
-    const sessions = (sessionsResult.ok ? sessionsResult.value : []).map(toSafeSessionRow);
-    const reposResult = this.telemetry.listRepositories();
-    const repositories = reposResult.ok ? reposResult.value : [];
-    return { overview, sessions, repositories };
+    let totalInteractions = 0;
+    let totalSessions = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cachedTokens = 0;
+    let errorCount = 0;
+    let durationWeighted = 0;
+    const repoRows: RepositorySummary[] = [];
+    const repoSeen = new Set<string>();
+    const models = new Set<string>();
+    const allSessions: SessionSummary[] = [];
+
+    for (const source of this.sources.enabled()) {
+      const ov = source.getOverview();
+      if (ov.ok) {
+        totalInteractions += ov.value.totalInteractions;
+        totalSessions += ov.value.totalSessions;
+        inputTokens += ov.value.inputTokens;
+        outputTokens += ov.value.outputTokens;
+        cachedTokens += ov.value.cachedTokens;
+        errorCount += ov.value.errorCount;
+        durationWeighted += ov.value.avgDurationMs * ov.value.totalSessions;
+      }
+      const sess = source.listSessions(undefined, SUMMARY_SESSION_LIMIT);
+      if (sess.ok) {
+        allSessions.push(...sess.value);
+      }
+      const repos = source.listRepositories();
+      if (repos.ok) {
+        for (const r of repos.value) {
+          if (!repoSeen.has(r.repository)) {
+            repoSeen.add(r.repository);
+            repoRows.push(r);
+          }
+          for (const m of r.models) {
+            models.add(m);
+          }
+        }
+      }
+    }
+
+    const overview: OverviewMetrics = {
+      totalInteractions,
+      totalSessions,
+      totalRepositories: repoSeen.size,
+      totalModels: models.size,
+      avgDurationMs: totalSessions > 0 ? Math.round(durationWeighted / totalSessions) : 0,
+      inputTokens,
+      outputTokens,
+      cachedTokens,
+      errorCount,
+    };
+    const sessions = allSessions
+      .sort((a, b) => b.startedAtMs - a.startedAtMs)
+      .slice(0, SUMMARY_SESSION_LIMIT)
+      .map(toSafeSessionRow);
+    return { overview, sessions, repositories: repoRows };
   }
 
   /** Validate + confirm + merge a generated config into workspace settings. */
@@ -402,16 +456,3 @@ async function confirmApply(message: string): Promise<boolean> {
 function makeNonce(): string {
   return crypto.randomBytes(16).toString('base64url');
 }
-
-/** Zeroed overview used when telemetry can't be read. */
-const EMPTY_OVERVIEW: OverviewMetrics = {
-  totalInteractions: 0,
-  totalSessions: 0,
-  totalRepositories: 0,
-  totalModels: 0,
-  avgDurationMs: 0,
-  inputTokens: 0,
-  outputTokens: 0,
-  cachedTokens: 0,
-  errorCount: 0,
-};

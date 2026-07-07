@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import type { Result } from '../telemetry/telemetryService';
 import { AggregationRow } from '../aggregate/aggregator';
 import {
+  CostMode,
   Interaction,
   OverviewMetrics,
   RepositorySummary,
@@ -85,6 +86,8 @@ interface CachedSummary {
 export class ClaudeCodeService implements SessionDataSource {
   readonly id = 'claude' as const;
   readonly label = 'Claude Code';
+  readonly costMode: CostMode = 'usd';
+  readonly iconId = 'sparkle';
 
   private discovered: ClaudeSessionFiles[] | undefined;
   private readonly fileCache = new Map<string, ParsedFile>();

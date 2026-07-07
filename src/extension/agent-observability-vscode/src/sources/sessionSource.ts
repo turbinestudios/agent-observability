@@ -4,6 +4,7 @@ import type { TelemetryService } from '../telemetry/telemetryService';
 import type { AggregationRow } from '../aggregate/aggregator';
 import type {
   AgentSourceId,
+  CostMode,
   Interaction,
   OverviewMetrics,
   RepositorySummary,
@@ -29,10 +30,22 @@ import { analyzeContext, type AcceptedMissingConfig } from '../context/contextAn
  * rather than throwing into the tree UI.
  */
 export interface SessionDataSource {
-  /** Stable source id (`copilot` | `claude`) — the Sessions tree groups by it. */
+  /** Stable source id (`copilot` | `claude` | `copilot-cloud`) — the Sessions tree groups by it. */
   readonly id: AgentSourceId;
   /** Human-readable label for the source node (e.g. `Copilot`, `Claude Code`). */
   readonly label: string;
+  /**
+   * Cost basis this source is priced in. Read by the detail panel to pick the
+   * cost tile/column ({@link CostMode}) instead of branching on {@link id} — so a
+   * new source declares its basis here rather than editing the panel.
+   */
+  readonly costMode: CostMode;
+  /**
+   * VS Code {@link ThemeIcon} id for this source's tree/overview node (e.g.
+   * `copilot`, `sparkle`, `cloud`). Read by the Sessions and Overview views
+   * instead of an `id` ternary.
+   */
+  readonly iconId: string;
   /** Whether this source is enabled (its feature flag is on). */
   isEnabled(): boolean;
 
@@ -88,6 +101,8 @@ export interface SessionDataSource {
 export class CopilotSource implements SessionDataSource {
   readonly id: AgentSourceId = 'copilot';
   readonly label = 'Copilot';
+  readonly costMode: CostMode = 'aiu';
+  readonly iconId = 'copilot';
 
   constructor(
     private readonly telemetry: TelemetryService,

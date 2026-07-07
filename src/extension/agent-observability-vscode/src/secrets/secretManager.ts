@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { createHash } from 'node:crypto';
 import { generateSaltHex } from './pseudonymize';
 
 /**
@@ -82,5 +83,40 @@ export class SecretManager {
    */
   async setPseudonymSalt(hex: string): Promise<void> {
     await this.secrets.store(SecretManager.PSEUDONYM_SALT, hex);
+  }
+
+  /** SecretStorage key prefix for per-cloud-account (Copilot Cloud) PAT overrides. */
+  static readonly CLOUD_ACCOUNT_TOKEN_PREFIX = 'agentObservability.cloudAccountToken.';
+
+  /**
+   * Derive a stable, collision-resistant SecretStorage key for a cloud account
+   * label. The label is hashed (SHA-256) so an arbitrary user string cannot alias
+   * another account's key under the dotted prefix, and the raw label never leaks
+   * into keychain entry names.
+   */
+  private static cloudAccountKey(accountLabel: string): string {
+    const digest = createHash('sha256').update(accountLabel).digest('hex');
+    return `${SecretManager.CLOUD_ACCOUNT_TOKEN_PREFIX}${digest}`;
+  }
+
+  /** The stored PAT for a cloud account, or `undefined` when none is set. */
+  async getCloudAccountToken(accountLabel: string): Promise<string | undefined> {
+    return this.secrets.get(SecretManager.cloudAccountKey(accountLabel));
+  }
+
+  /** Store a cloud account's PAT. Written verbatim — validate before calling. */
+  async setCloudAccountToken(accountLabel: string, value: string): Promise<void> {
+    await this.secrets.store(SecretManager.cloudAccountKey(accountLabel), value);
+  }
+
+  /** Remove the stored PAT for a cloud account. */
+  async clearCloudAccountToken(accountLabel: string): Promise<void> {
+    await this.secrets.delete(SecretManager.cloudAccountKey(accountLabel));
+  }
+
+  /** Whether a PAT is currently stored for a cloud account. */
+  async hasCloudAccountToken(accountLabel: string): Promise<boolean> {
+    const value = await this.secrets.get(SecretManager.cloudAccountKey(accountLabel));
+    return value !== undefined && value.length > 0;
   }
 }

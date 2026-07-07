@@ -4,6 +4,43 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-07-07
+
+### Added
+
+- **New "Copilot (Cloud)" source — GitHub Copilot cloud coding-agent sessions,
+  right beside Copilot and Claude Code.** When enabled (off by default), the
+  extension polls the GitHub agent-tasks API in the background — authenticated
+  through the `gh` CLI or a per-account token — and materializes your cloud
+  coding-agent tasks and sessions into a durable local sink under
+  `~/.agent-observability/copilot-cloud/`. They then appear as their own
+  top-level **Copilot (Cloud)** bucket in the Sessions tree (grouped by
+  repository) and merge into the Local Overview, with session detail showing the
+  prompt, lifecycle state (queued / in progress / waiting for user / failed /
+  timed out), normalized model, branches, an "Open on GitHub" link, the tool
+  timeline reconstructed from the session log, and AI-credit usage. One VS Code
+  window polls at a time (elected via a file lease); the others follow the sink.
+  Turn it on with `agentObservability.copilotCloud.enabled` and pin the accounts
+  to poll with `agentObservability.copilotCloud.accounts` (the active `gh` login
+  is captured automatically the first time you enable it).
+- **New command "Copilot (Cloud): Set account token"** stores a per-account
+  GitHub token (a `gh` OAuth token or a fine-grained PAT with the *Agent tasks*
+  read permission) securely in VS Code SecretStorage — the escape hatch for
+  accounts not signed into `gh`, machines without `gh`, or org policies that
+  block `gh`'s OAuth app. The token is never echoed, logged, or uploaded.
+- **The `@obs` chat participant now lists sessions from every source** (Copilot,
+  Copilot Cloud, and Claude Code), routing each button to the right source.
+
+### Changed
+
+- Per-source presentation (cost basis + tree icon) is now declared on each source
+  rather than inferred from its id, and a new **AI credits** cost basis is shown
+  for cloud sessions (kept as its own unit — never converted to the AIU dollar
+  rate). Copilot (Cloud) sessions are **local-only**: their prompts, tool I/O, and
+  assistant text are pulled down and rendered on this machine but are never
+  uploaded — the Sync view states this explicitly and shows each configured
+  account's poll status.
+
 ## [0.8.0] - 2026-07-06
 
 ### Added
