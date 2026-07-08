@@ -16,7 +16,7 @@
  */
 
 import { WriterLease, WriterLeaseClock } from '../otel/writerLease';
-import { sanitizeRepositoryUrl } from '../telemetry/repositoryUrl';
+import { UNKNOWN_REPOSITORY, sanitizeRepositoryUrl } from '../telemetry/repositoryUrl';
 import {
   CloudAccountAuth,
   CloudAccountStatus,
@@ -24,6 +24,7 @@ import {
   CloudTaskIndexEntry,
   RawCloudTaskDetail,
   SinkIndex,
+  cloudRepoId,
   isTerminalCloudState,
   rfc3339ToMs,
 } from './cloudTypes';
@@ -270,12 +271,16 @@ export class CloudAgentPoller {
         // GET (and its rate-limit cost) for the common case of many long-finished
         // tasks; `listUpdatedMs` comes from the list payload we already have, so the
         // check costs nothing. We still require every session log on disk, so a
-        // task that finished before its logs were archived isn't skipped early.
+        // task that finished before its logs were archived isn't skipped early. We
+        // also never skip a task whose repository is still `unknown`: that means a
+        // prior poll failed to resolve it (a rate limit, or the object-shape drift),
+        // so it flows through the conditional GET below to get another chance.
         const listState = task.state as string | undefined;
         const listUpdatedMs = rfc3339ToMs(task.updated_at) ?? rfc3339ToMs(task.created_at);
         if (
           prevEntry !== undefined &&
           prevEntry.terminal &&
+          prevEntry.repository !== UNKNOWN_REPOSITORY &&
           (listState === undefined || isTerminalCloudState(listState)) &&
           listUpdatedMs !== undefined &&
           listUpdatedMs <= prevEntry.updatedAtMs &&
@@ -424,7 +429,7 @@ export class CloudAgentPoller {
 
   /** Resolve the task's repo id to a sanitized `https://github.com/owner/repo` URL. */
   private async resolveRepository(auth: CloudAccountAuth, detail: RawCloudTaskDetail): Promise<string> {
-    const repoId = typeof detail.repository === 'number' ? detail.repository : undefined;
+    const repoId = cloudRepoId(detail.repository);
     if (repoId === undefined) {
       return sanitizeRepositoryUrl(undefined);
     }

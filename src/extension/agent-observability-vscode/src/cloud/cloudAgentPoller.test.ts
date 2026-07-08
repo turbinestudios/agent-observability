@@ -221,6 +221,37 @@ describe('CloudAgentPoller.pollOnce', () => {
     expect(sink.readIndex().tasks['task-1']).toBeDefined();
   });
 
+  it('resolves the repository from the object shape { id } (preview API drift)', async () => {
+    const objRepoDetail = { ...detail(), repository: { id: 999 } };
+    const client = fakeClient({
+      getTaskDetail: vi.fn(async () => ({ ok: true, value: { notModified: false, detail: objRepoDetail, etag: 'etag-1' } })),
+    });
+    const { poller } = makePoller({ client });
+    await poller.pollOnce();
+    expect(client.resolveRepo).toHaveBeenCalledWith(expect.anything(), 999);
+    expect(sink.readIndex().tasks['task-1'].repository).toBe('https://github.com/org/repo');
+  });
+
+  it('re-fetches an unknown-repo terminal task and recovers its repository', async () => {
+    // First resolveRepo fails (repo stays "unknown"); the second succeeds.
+    const client = fakeClient({
+      resolveRepo: vi
+        .fn()
+        .mockResolvedValueOnce({ ok: false, reason: 'rateLimited', message: 'slow down' })
+        .mockResolvedValueOnce({ ok: true, value: { id: 999, owner: 'org', name: 'repo' } }),
+    });
+    const { poller } = makePoller({ client });
+    await poller.pollOnce();
+    expect(sink.readIndex().tasks['task-1'].repository).toBe('unknown');
+
+    // Second poll: the task is terminal + unchanged, but because its repository is
+    // still "unknown" the skip is bypassed, the detail is re-fetched, and the repo
+    // resolves this time.
+    await poller.pollOnce();
+    expect(client.getTaskDetail).toHaveBeenCalledTimes(2);
+    expect(sink.readIndex().tasks['task-1'].repository).toBe('https://github.com/org/repo');
+  });
+
   it('reuses the cached detail on a 304 and replays the stored ETag', async () => {
     const client = fakeClient({
       listMyTasks: vi.fn(async () => ({ ok: true, value: [task('in_progress')] })),

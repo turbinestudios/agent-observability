@@ -4,6 +4,20 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.2] - 2026-07-08
+
+### Fixed
+
+- **Copilot (Cloud) sessions no longer vanish when the agent-tasks API returns
+  `repository` as an object `{ id }` instead of a bare number.** The repository
+  id is now read from either shape, so tasks resolve to their real `owner/repo`
+  instead of falling back to `unknown` — which the default
+  `excludedRepositories: ["unknown"]` filter would then hide, making it look
+  like there were no cloud sessions at all. Tasks that were already archived as
+  `unknown` are re-resolved on the next poll (the finished-and-unchanged skip is
+  bypassed while a task's repository is still `unknown`), so existing sessions
+  reappear without a manual refresh.
+
 ## [0.9.1] - 2026-07-08
 
 ### Changed

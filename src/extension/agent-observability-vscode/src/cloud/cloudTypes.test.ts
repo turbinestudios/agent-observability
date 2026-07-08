@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  cloudRepoId,
   cloudStateLabel,
   isTerminalCloudState,
   normalizeEpochMs,
@@ -117,6 +118,27 @@ describe('rfc3339ToMs', () => {
   it('returns undefined for an unparseable string', () => {
     expect(rfc3339ToMs('not-a-date')).toBeUndefined();
     expect(rfc3339ToMs('2026-13-99T99:99:99Z')).toBeUndefined();
+  });
+});
+
+describe('cloudRepoId', () => {
+  it('extracts the id from the object shape { id } (current preview API)', () => {
+    expect(cloudRepoId({ id: 1199256812 })).toBe(1199256812);
+    expect(cloudRepoId({ id: '1199256812' })).toBe(1199256812);
+  });
+
+  it('accepts a bare number or numeric string', () => {
+    expect(cloudRepoId(999)).toBe(999);
+    expect(cloudRepoId('999')).toBe(999);
+  });
+
+  it('returns undefined for missing / null / non-numeric / empty values', () => {
+    expect(cloudRepoId(undefined)).toBeUndefined();
+    expect(cloudRepoId(null)).toBeUndefined();
+    expect(cloudRepoId({})).toBeUndefined();
+    expect(cloudRepoId({ id: undefined })).toBeUndefined();
+    expect(cloudRepoId('not-a-number')).toBeUndefined();
+    expect(cloudRepoId('')).toBeUndefined();
   });
 });
 

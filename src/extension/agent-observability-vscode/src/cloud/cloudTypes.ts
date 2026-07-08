@@ -111,8 +111,12 @@ export interface RawCloudTask {
   created_at?: string;
   updated_at?: string;
   completed_at?: string;
-  /** Bare numeric ids — resolve to owner/repo via `GET repositories/{id}`. */
-  repository?: number | string;
+  /**
+   * The task's repository. The preview API has returned this as a bare numeric
+   * id AND (more recently) as an object `{ id, ... }`; both resolve to owner/repo
+   * via `GET repositories/{id}`. Use {@link cloudRepoId} to extract the id.
+   */
+  repository?: number | string | { id?: number | string } | null;
   owner?: number | string;
   creator?: { id?: number | string; login?: string };
   artifacts?: Array<{ provider?: string; type?: string }>;
@@ -341,4 +345,25 @@ export function rfc3339ToMs(value: string | undefined): number | undefined {
   }
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : undefined;
+}
+
+/**
+ * Extract a task's numeric repository id from either API shape: a bare number,
+ * a numeric string, or an object `{ id }` (the current preview-API shape). A
+ * non-finite / missing value yields `undefined`, so repo resolution degrades to
+ * the `unknown` repository rather than throwing.
+ */
+export function cloudRepoId(
+  repository: number | string | { id?: number | string } | null | undefined,
+): number | undefined {
+  const raw =
+    repository !== null && typeof repository === 'object' ? repository.id : repository;
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : undefined;
+  }
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
 }
