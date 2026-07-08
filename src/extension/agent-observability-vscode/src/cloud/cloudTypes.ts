@@ -265,6 +265,12 @@ export interface CloudTaskIndexEntry {
   updatedAtMs: number;
   /** Whether the task is terminal (its session logs are immutable). */
   terminal: boolean;
+  /**
+   * The `ETag` of the last task-detail response, replayed as `If-None-Match` on
+   * the next poll so an unchanged detail returns `304 Not Modified` (which does
+   * NOT count against the primary rate limit). Absent until the first fetch.
+   */
+  etag?: string;
 }
 
 /** The versioned sink index (`index.json`). */

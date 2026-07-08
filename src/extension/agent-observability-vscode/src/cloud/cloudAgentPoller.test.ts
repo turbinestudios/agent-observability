@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { CloudAgentPoller } from './cloudAgentPoller';
 import { CloudSink } from './cloudSink';
-import type { CloudApiClient, CloudApiResult } from './cloudApiClient';
+import type { CloudApiClient, CloudApiResult, ConditionalTaskDetail } from './cloudApiClient';
 import type { GhAuth, AuthResult } from './ghAuth';
 import type { WriterLease, WriterLeaseClock } from '../otel/writerLease';
 import {
@@ -79,7 +79,12 @@ interface FakeClient {
 function fakeClient(over: Partial<FakeClient> = {}): FakeClient {
   return {
     listMyTasks: vi.fn(async (): Promise<CloudApiResult<RawCloudTask[]>> => ({ ok: true, value: [task()] })),
-    getTaskDetail: vi.fn(async (): Promise<CloudApiResult<RawCloudTaskDetail>> => ({ ok: true, value: detail() })),
+    getTaskDetail: vi.fn(
+      async (): Promise<CloudApiResult<ConditionalTaskDetail>> => ({
+        ok: true,
+        value: { notModified: false, detail: detail(), etag: 'etag-1' },
+      }),
+    ),
     resolveRepo: vi.fn(async () => ({ ok: true, value: { id: 999, owner: 'org', name: 'repo' } })),
     fetchSessionLog: vi.fn(async (): Promise<CloudApiResult<string>> => ({ ok: true, value: 'data: {"role":"user","content":"hi"}\n' })),
     seedRepoCache: vi.fn(),
@@ -154,7 +159,10 @@ describe('CloudAgentPoller.pollOnce', () => {
   it('marks a non-terminal task and selects the active poll cadence', async () => {
     const client = fakeClient({
       listMyTasks: vi.fn(async () => ({ ok: true, value: [task('in_progress')] })),
-      getTaskDetail: vi.fn(async () => ({ ok: true, value: detail('in_progress', 'in_progress') })),
+      getTaskDetail: vi.fn(async () => ({
+        ok: true,
+        value: { notModified: false, detail: detail('in_progress', 'in_progress'), etag: 'etag-1' },
+      })),
     });
     const { poller } = makePoller({ client });
     const outcome = await poller.pollOnce();
@@ -199,5 +207,100 @@ describe('CloudAgentPoller.pollOnce', () => {
     const outcome = await poller.pollOnce();
     expect(outcome.polled).toBe(false);
     expect(client.listMyTasks).not.toHaveBeenCalled();
+  });
+
+  it('skips a terminal, unchanged task on the next poll (no detail GET)', async () => {
+    const { poller, client } = makePoller({});
+    await poller.pollOnce();
+    expect(client.getTaskDetail).toHaveBeenCalledTimes(1);
+    // Second poll: the list view shows the task terminal + unchanged and every
+    // session log is already on disk, so the poller skips the detail GET entirely.
+    await poller.pollOnce();
+    expect(client.getTaskDetail).toHaveBeenCalledTimes(1);
+    // The task is retained in the index across the skip.
+    expect(sink.readIndex().tasks['task-1']).toBeDefined();
+  });
+
+  it('reuses the cached detail on a 304 and replays the stored ETag', async () => {
+    const client = fakeClient({
+      listMyTasks: vi.fn(async () => ({ ok: true, value: [task('in_progress')] })),
+      getTaskDetail: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          value: { notModified: false, detail: detail('in_progress', 'in_progress'), etag: 'etag-1' },
+        })
+        .mockResolvedValueOnce({ ok: true, value: { notModified: true, etag: 'etag-1' } }),
+    });
+    const { poller } = makePoller({ client });
+    await poller.pollOnce();
+    await poller.pollOnce();
+
+    // First GET was unconditional; the second replayed the ETag captured from the 200.
+    expect(client.getTaskDetail.mock.calls[0][2]).toBeUndefined();
+    expect(client.getTaskDetail.mock.calls[1][2]).toBe('etag-1');
+    // The 304 reused the cached raw copy — the task survives and stays non-terminal.
+    const entry = sink.readIndex().tasks['task-1'];
+    expect(entry).toBeDefined();
+    expect(entry.terminal).toBe(false);
+    // Non-terminal → the session log is still polled on the 304 pass.
+    expect(client.fetchSessionLog).toHaveBeenCalledTimes(2);
+  });
+
+  it('honours the rate-limit Retry-After hint for backoff', async () => {
+    const client = fakeClient({
+      listMyTasks: vi.fn(async () => ({ ok: false, reason: 'rateLimited', message: 'slow down', retryAfterMs: 600_000 })),
+    });
+    const { poller } = makePoller({ client });
+    const outcome = await poller.pollOnce();
+    expect(outcome.rateLimited).toBe(true);
+    expect(outcome.rateLimitRetryMs).toBe(600_000);
+    // Backoff follows GitHub's hint (it exceeds both the idle base and the default).
+    expect(poller.currentCadenceMs()).toBe(600_000);
+  });
+
+  it('clamps an excessive rate-limit hint to the max backoff', async () => {
+    const client = fakeClient({
+      listMyTasks: vi.fn(async () => ({ ok: false, reason: 'rateLimited', message: 'slow down', retryAfterMs: 10 * 60 * 60_000 })),
+    });
+    const { poller } = makePoller({ client });
+    await poller.pollOnce();
+    expect(poller.currentCadenceMs()).toBe(60 * 60_000);
+  });
+
+  it('announces leader ownership once when it holds the lease', async () => {
+    const events: string[] = [];
+    const poller = new CloudAgentPoller({
+      config: config(),
+      auth: fakeAuth(),
+      client: fakeClient() as unknown as CloudApiClient,
+      sink,
+      onIngest: () => undefined,
+      onBecomeLeader: () => events.push('leader'),
+      onBecomeReader: () => events.push('reader'),
+      now: () => 1_720_000_100_000,
+      leaseFactory: leaseFactoryReturning(true),
+    });
+    await poller.pollOnce();
+    await poller.pollOnce();
+    // Fires once on the transition into leadership, not on every poll.
+    expect(events).toEqual(['leader']);
+  });
+
+  it('announces reader ownership when another window holds the lease', async () => {
+    const events: string[] = [];
+    const poller = new CloudAgentPoller({
+      config: config(),
+      auth: fakeAuth(),
+      client: fakeClient() as unknown as CloudApiClient,
+      sink,
+      onIngest: () => undefined,
+      onBecomeLeader: () => events.push('leader'),
+      onBecomeReader: () => events.push('reader'),
+      now: () => 1_720_000_100_000,
+      leaseFactory: leaseFactoryReturning(false),
+    });
+    await poller.pollOnce();
+    expect(events).toEqual(['reader']);
   });
 });

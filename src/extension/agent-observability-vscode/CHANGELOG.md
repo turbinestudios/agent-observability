@@ -4,6 +4,27 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] - 2026-07-08
+
+### Changed
+
+- **Copilot (Cloud) polling is far gentler on the GitHub API to avoid secondary
+  rate limits.** Each poll now (1) skips the task-detail request entirely for
+  tasks the cheap list view already shows as finished and unchanged since they
+  were fully archived, and (2) issues the remaining task-detail requests
+  conditionally with an `ETag` / `If-None-Match`, so an unchanged task comes back
+  as a `304 Not Modified` — which does not count against the primary rate limit —
+  and the cached copy is reused. When GitHub does signal a rate limit, the poller
+  now backs off for exactly as long as the `Retry-After` / `x-ratelimit-reset`
+  header asks (clamped to a one-hour ceiling) instead of a fixed delay.
+
+### Added
+
+- **The output channel now logs which VS Code window owns Copilot (Cloud)
+  polling**, and logs when a window takes over or steps down — mirroring the
+  existing ownership logging for the live OTLP receiver. Only one window polls
+  GitHub at a time (elected via a file lease); the rest follow its local sink.
+
 ## [0.9.0] - 2026-07-07
 
 ### Added

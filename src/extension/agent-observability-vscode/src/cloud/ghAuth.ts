@@ -27,10 +27,21 @@ const DEFAULT_CACHE_TTL_MS = 10 * 60 * 1000;
 /** `gh --version` / token probe timeout. */
 const EXEC_TIMEOUT_MS = 8_000;
 
+/**
+ * A typed non-2xx outcome shared by the auth resolver and the API client. Never
+ * throws into the poller. `retryAfterMs` is populated only for `rateLimited`
+ * outcomes when the response carried a `Retry-After` / `x-ratelimit-reset` hint,
+ * so the poller can back off exactly as long as GitHub asks (plan §4.1).
+ */
+export interface ApiFailure {
+  ok: false;
+  reason: FailureReason;
+  message: string;
+  retryAfterMs?: number;
+}
+
 /** Result of resolving an account's auth. Never throws into the poller. */
-export type AuthResult =
-  | { ok: true; auth: CloudAccountAuth }
-  | { ok: false; reason: FailureReason; message: string };
+export type AuthResult = { ok: true; auth: CloudAccountAuth } | ApiFailure;
 
 /** Injectable process runner for `gh` (tests inject a fake). */
 export interface GhExec {
@@ -162,7 +173,7 @@ export class GhAuth {
   /** Prefer a per-account PAT override, else the account's gh OAuth token. */
   private async resolveToken(
     login: string,
-  ): Promise<{ ok: true; token: string; source: 'gh' | 'pat' } | { ok: false; reason: FailureReason; message: string }> {
+  ): Promise<{ ok: true; token: string; source: 'gh' | 'pat' } | ApiFailure> {
     const pat = await this.deps.patFor(login);
     if (pat !== undefined && pat.trim().length > 0) {
       return { ok: true, token: pat.trim(), source: 'pat' };
@@ -189,7 +200,7 @@ export class GhAuth {
   /** Resolve the per-account CAPI base via GraphQL `viewer.copilotEndpoints.api`. */
   private async resolveCapiBase(
     token: string,
-  ): Promise<{ ok: true; capiBase: string } | { ok: false; reason: FailureReason; message: string }> {
+  ): Promise<{ ok: true; capiBase: string } | ApiFailure> {
     const body = JSON.stringify({ query: '{ viewer { copilotEndpoints { api } } }' });
     let status: number;
     let text: string;
@@ -257,12 +268,17 @@ export class GhAuth {
 export function statusFailure(
   status: number,
   header?: (name: string) => string | undefined,
-): { ok: false; reason: FailureReason; message: string } | undefined {
+): ApiFailure | undefined {
   if (status >= 200 && status < 300) {
     return undefined;
   }
   if (status === 429 || (status === 403 && isRateLimit(header))) {
-    return { ok: false, reason: 'rateLimited', message: 'GitHub API rate limited — backing off.' };
+    return {
+      ok: false,
+      reason: 'rateLimited',
+      message: 'GitHub API rate limited — backing off.',
+      retryAfterMs: rateLimitRetryMs(header),
+    };
   }
   if (status === 401 || status === 403) {
     return { ok: false, reason: 'unauthenticated', message: 'GitHub rejected the token (401/403) — it may be expired or lack scope.' };
@@ -279,6 +295,39 @@ function isRateLimit(header?: (name: string) => string | undefined): boolean {
     return false;
   }
   return header('retry-after') !== undefined || header('x-ratelimit-remaining') === '0';
+}
+
+/**
+ * How long GitHub wants us to wait, in ms, from a rate-limited response: the
+ * `Retry-After` seconds (secondary limits) or the delta to `x-ratelimit-reset`
+ * epoch seconds (primary limit), whichever is present. `undefined` when neither
+ * header is usable — the caller then applies its own default backoff.
+ */
+export function rateLimitRetryMs(
+  header?: (name: string) => string | undefined,
+  nowMs: number = Date.now(),
+): number | undefined {
+  if (header === undefined) {
+    return undefined;
+  }
+  const retryAfter = header('retry-after');
+  if (retryAfter !== undefined) {
+    const secs = Number(retryAfter);
+    if (Number.isFinite(secs) && secs >= 0) {
+      return Math.round(secs * 1000);
+    }
+  }
+  const reset = header('x-ratelimit-reset');
+  if (reset !== undefined) {
+    const epochSecs = Number(reset);
+    if (Number.isFinite(epochSecs)) {
+      const deltaMs = epochSecs * 1000 - nowMs;
+      if (deltaMs > 0) {
+        return deltaMs;
+      }
+    }
+  }
+  return undefined;
 }
 
 /** A network-error message that never leaks request contents. */

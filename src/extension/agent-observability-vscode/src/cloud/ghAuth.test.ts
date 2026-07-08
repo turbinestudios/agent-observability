@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GhAuth, GhExec, AuthResult, ghCommandCandidates, statusFailure } from './ghAuth';
+import { GhAuth, GhExec, AuthResult, ghCommandCandidates, statusFailure, rateLimitRetryMs } from './ghAuth';
 import { HttpPoster, HttpResponse } from '../sync/httpPoster';
 
 /**
@@ -412,5 +412,56 @@ describe('statusFailure mapping', () => {
   it('maps other non-2xx statuses to a generic error', () => {
     expect(statusFailure(500)?.reason).toBe('error');
     expect(statusFailure(418)?.reason).toBe('error');
+  });
+
+  it('carries retryAfterMs from a Retry-After header on a 429', () => {
+    const header = (name: string) => (name.toLowerCase() === 'retry-after' ? '30' : undefined);
+    const failure = statusFailure(429, header);
+    expect(failure?.reason).toBe('rateLimited');
+    expect(failure?.retryAfterMs).toBe(30_000);
+  });
+
+  it('treats a 403 with x-ratelimit-remaining: 0 as rateLimited', () => {
+    const header = (name: string) => (name.toLowerCase() === 'x-ratelimit-remaining' ? '0' : undefined);
+    expect(statusFailure(403, header)?.reason).toBe('rateLimited');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rateLimitRetryMs (pure)
+// ---------------------------------------------------------------------------
+
+describe('rateLimitRetryMs', () => {
+  it('parses Retry-After seconds into ms', () => {
+    const header = (name: string) => (name.toLowerCase() === 'retry-after' ? '45' : undefined);
+    expect(rateLimitRetryMs(header)).toBe(45_000);
+  });
+
+  it('computes the delta to x-ratelimit-reset epoch seconds', () => {
+    const now = 1_000_000;
+    const header = (name: string) => (name.toLowerCase() === 'x-ratelimit-reset' ? String(now / 1000 + 60) : undefined);
+    expect(rateLimitRetryMs(header, now)).toBe(60_000);
+  });
+
+  it('prefers Retry-After over x-ratelimit-reset', () => {
+    const header = (name: string) => {
+      const key = name.toLowerCase();
+      if (key === 'retry-after') {
+        return '10';
+      }
+      if (key === 'x-ratelimit-reset') {
+        return '999999999';
+      }
+      return undefined;
+    };
+    expect(rateLimitRetryMs(header, 0)).toBe(10_000);
+  });
+
+  it('returns undefined when neither header is present or usable', () => {
+    expect(rateLimitRetryMs(undefined)).toBeUndefined();
+    expect(rateLimitRetryMs(() => undefined)).toBeUndefined();
+    // A reset already in the past yields no positive delay.
+    const past = (name: string) => (name.toLowerCase() === 'x-ratelimit-reset' ? '1' : undefined);
+    expect(rateLimitRetryMs(past, 10_000_000)).toBeUndefined();
   });
 });

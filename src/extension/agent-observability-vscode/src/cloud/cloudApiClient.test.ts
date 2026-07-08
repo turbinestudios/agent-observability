@@ -134,24 +134,57 @@ describe('CloudApiClient.listMyTasks', () => {
 });
 
 describe('CloudApiClient.getTaskDetail', () => {
-  it('returns the parsed detail (with nested sessions) on a well-formed body', async () => {
+  it('returns the parsed detail (with nested sessions) and captures the ETag on a well-formed 200', async () => {
     const { client, poster } = makeClient();
     const url = `${REST_BASE}/agents/tasks/task-1`;
-    poster.on(url, json({
-      id: 'task-1',
-      name: 'Fix bug',
-      state: 'completed',
-      sessions: [{ id: 's1' }, { id: 's2' }],
-    }));
+    poster.on(url, {
+      status: 200,
+      body: JSON.stringify({
+        id: 'task-1',
+        name: 'Fix bug',
+        state: 'completed',
+        sessions: [{ id: 's1' }, { id: 's2' }],
+      }),
+      header: (name) => (name.toLowerCase() === 'etag' ? '"abc123"' : undefined),
+    });
 
     const res = await client.getTaskDetail(AUTH, 'task-1');
 
     expect(poster.gets[0].url).toBe(url);
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.value.id).toBe('task-1');
-      expect(res.value.sessions?.map((s) => s.id)).toEqual(['s1', 's2']);
+      expect(res.value.notModified).toBe(false);
+      expect(res.value.detail?.id).toBe('task-1');
+      expect(res.value.detail?.sessions?.map((s) => s.id)).toEqual(['s1', 's2']);
+      expect(res.value.etag).toBe('"abc123"');
     }
+  });
+
+  it('sends If-None-Match when given an ETag and maps 304 to notModified (no detail)', async () => {
+    const { client, poster } = makeClient();
+    const url = `${REST_BASE}/agents/tasks/task-1`;
+    poster.on(url, { status: 304, body: '' });
+
+    const res = await client.getTaskDetail(AUTH, 'task-1', '"abc123"');
+
+    expect(poster.gets[0].headers!['If-None-Match']).toBe('"abc123"');
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.notModified).toBe(true);
+      expect(res.value.detail).toBeUndefined();
+      // The prior ETag is echoed back so the caller can keep replaying it.
+      expect(res.value.etag).toBe('"abc123"');
+    }
+  });
+
+  it('does not send If-None-Match when no ETag is supplied', async () => {
+    const { client, poster } = makeClient();
+    const url = `${REST_BASE}/agents/tasks/task-1`;
+    poster.on(url, json({ id: 'task-1' }));
+
+    await client.getTaskDetail(AUTH, 'task-1');
+
+    expect(poster.gets[0].headers!['If-None-Match']).toBeUndefined();
   });
 
   it('rejects a body without a string id as { ok:false, reason:"error" }', async () => {

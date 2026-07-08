@@ -475,6 +475,13 @@ export function activate(context: vscode.ExtensionContext): void {
       sink: cloudSink,
       onIngest: refreshCloudViews,
       onError: (err) => logger.error('Copilot cloud poll error', err),
+      // Only ONE window polls GitHub for cloud-agent tasks (a WriterLease elects it,
+      // exactly like the live OTLP receiver); the rest follow its local sink. Log
+      // which role this window has so ownership is visible in the output channel.
+      onBecomeLeader: () =>
+        logger.info('This VS Code window now owns Copilot (Cloud) polling — it will poll GitHub for cloud-agent tasks.'),
+      onBecomeReader: () =>
+        logger.info('Another VS Code window owns Copilot (Cloud) polling — following its local sink for updates.'),
     });
     cloudPoller = poller;
     poller.start();

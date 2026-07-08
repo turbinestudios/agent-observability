@@ -34,8 +34,10 @@ import { GhAuth } from './ghAuth';
 /** Lease heartbeat cadence + staleness — decoupled from the poll cadence (plan §2.2). */
 const HEARTBEAT_MS = 30_000;
 const STALE_MS = 90_000;
-/** Extra delay applied after a rate-limited poll. */
+/** Default delay after a rate-limited poll when GitHub gave no Retry-After hint. */
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
+/** Upper bound on a header-driven backoff, so a bogus `x-ratelimit-reset` can't stall polling for hours. */
+const MAX_RATE_LIMIT_BACKOFF_MS = 60 * 60_000;
 
 export interface CloudAgentPollerDeps {
   config: CloudConfig;
@@ -45,6 +47,14 @@ export interface CloudAgentPollerDeps {
   /** Fired after a poll that changed the task set / any task state. */
   onIngest: () => void;
   onError?: (err: unknown) => void;
+  /**
+   * Fired once when THIS window becomes the polling leader (acquires the writer
+   * lease) — wired to an output-channel log line, mirroring how the live OTLP
+   * receiver logs which window owns it.
+   */
+  onBecomeLeader?: () => void;
+  /** Fired once when THIS window steps down / starts as a follower (another window polls). */
+  onBecomeReader?: () => void;
   now?: () => number;
   /** Injectable lease factory (tests). */
   leaseFactory?: (lockPath: string, staleMs: number, clock: WriterLeaseClock) => WriterLease;
@@ -60,6 +70,8 @@ export interface PollOutcome {
   anyNonTerminal: boolean;
   /** Whether any account hit a rate limit (drives backoff). */
   rateLimited: boolean;
+  /** GitHub's requested backoff (ms), from a Retry-After / reset header, when it gave one. */
+  rateLimitRetryMs?: number;
   accounts: CloudAccountStatus[];
 }
 
@@ -72,6 +84,8 @@ export class CloudAgentPoller {
   private lastOutcome: PollOutcome | undefined;
   /** In-flight poll, so concurrent callers coalesce instead of double-polling. */
   private inFlight: Promise<PollOutcome> | undefined;
+  /** Last observed polling role, so ownership transitions are logged exactly once. */
+  private role: 'leader' | 'reader' | undefined;
 
   constructor(private readonly deps: CloudAgentPollerDeps) {
     this.now = deps.now ?? (() => Date.now());
@@ -126,6 +140,26 @@ export class CloudAgentPoller {
   /** Refresh the heartbeat (doubles as re-election when not held). */
   private beat(): void {
     this.lease?.tryAcquire();
+    this.syncLeaseRole();
+  }
+
+  /**
+   * Detect a change in this window's polling role and announce it exactly once
+   * per transition, mirroring how the live OTLP receiver logs which window is
+   * listening vs. reading. The first determination always fires (role starts
+   * `undefined`), so startup records the initial owner.
+   */
+  private syncLeaseRole(): void {
+    const next: 'leader' | 'reader' = (this.lease?.isHeld ?? false) ? 'leader' : 'reader';
+    if (this.role === next) {
+      return;
+    }
+    this.role = next;
+    if (next === 'leader') {
+      this.deps.onBecomeLeader?.();
+    } else {
+      this.deps.onBecomeReader?.();
+    }
   }
 
   private scheduleNextPoll(delayMs: number): void {
@@ -148,7 +182,14 @@ export class CloudAgentPoller {
     const base = this.lastOutcome?.anyNonTerminal
       ? this.deps.config.getCopilotCloudActivePollMs()
       : this.deps.config.getCopilotCloudIdlePollMs();
-    return this.lastOutcome?.rateLimited ? Math.max(base, RATE_LIMIT_BACKOFF_MS) : base;
+    if (!this.lastOutcome?.rateLimited) {
+      return base;
+    }
+    // Honour GitHub's own Retry-After / reset hint when it gave one (clamped so a
+    // bogus reset can't stall us for hours); otherwise fall back to a fixed delay.
+    // Never poll SOONER than the base cadence.
+    const hinted = Math.min(this.lastOutcome.rateLimitRetryMs ?? RATE_LIMIT_BACKOFF_MS, MAX_RATE_LIMIT_BACKOFF_MS);
+    return Math.max(base, hinted);
   }
 
   /**
@@ -173,8 +214,12 @@ export class CloudAgentPoller {
       return this.record(idle);
     }
     this.ensureLease();
-    // Reader windows never poll — the leader owns the sink.
-    if (this.lease !== undefined && !this.lease.tryAcquire()) {
+    // Reader windows never poll — the leader owns the sink. Decide ownership once
+    // here (before any gh/GitHub call) so followers make ZERO external requests,
+    // and log the role transition when it changes.
+    const held = this.lease === undefined || this.lease.tryAcquire();
+    this.syncLeaseRole();
+    if (!held) {
       return this.record(idle);
     }
 
@@ -186,6 +231,7 @@ export class CloudAgentPoller {
     let changed = false;
     let anyNonTerminal = false;
     let rateLimited = false;
+    let rateLimitRetryMs: number | undefined;
     let watermarkMs = index.watermarkMs;
 
     for (const login of accounts) {
@@ -194,6 +240,7 @@ export class CloudAgentPoller {
         statuses.push({ login, lastOutcome: authResult.reason, lastErrorMessage: authResult.message, authSource: 'gh' });
         if (authResult.reason === 'rateLimited') {
           rateLimited = true;
+          rateLimitRetryMs = maxRetry(rateLimitRetryMs, authResult.retryAfterMs);
         }
         continue;
       }
@@ -210,24 +257,55 @@ export class CloudAgentPoller {
         statuses.push({ login, lastOutcome: listed.reason, lastErrorMessage: listed.message, authSource: auth.source });
         if (listed.reason === 'rateLimited') {
           rateLimited = true;
+          rateLimitRetryMs = maxRetry(rateLimitRetryMs, listed.retryAfterMs);
         }
         continue;
       }
 
       let accountRateLimited = false;
       for (const task of listed.value) {
-        const detailResult = await this.deps.client.getTaskDetail(auth, task.id);
-        if (!detailResult.ok) {
-          if (detailResult.reason === 'rateLimited') {
-            accountRateLimited = true;
-            break;
-          }
-          this.deps.onError?.(new Error(`task ${task.id}: ${detailResult.message}`));
+        const prevEntry = index.tasks[task.id];
+        // Fix #1 — skip a task we already have fully archived that the cheap list
+        // view says is terminal and unchanged since we last saw it. Avoids a detail
+        // GET (and its rate-limit cost) for the common case of many long-finished
+        // tasks; `listUpdatedMs` comes from the list payload we already have, so the
+        // check costs nothing. We still require every session log on disk, so a
+        // task that finished before its logs were archived isn't skipped early.
+        const listState = task.state as string | undefined;
+        const listUpdatedMs = rfc3339ToMs(task.updated_at) ?? rfc3339ToMs(task.created_at);
+        if (
+          prevEntry !== undefined &&
+          prevEntry.terminal &&
+          (listState === undefined || isTerminalCloudState(listState)) &&
+          listUpdatedMs !== undefined &&
+          listUpdatedMs <= prevEntry.updatedAtMs &&
+          prevEntry.sessionIds.every((id) => this.deps.sink.hasSessionLog(id))
+        ) {
+          watermarkMs = Math.max(watermarkMs, prevEntry.updatedAtMs);
           continue;
         }
-        const detail = detailResult.value;
+
+        // Fix #2 — conditional detail GET: an unchanged task replies `304` (free —
+        // no primary-rate-limit cost) and we reuse the cached raw copy; only a
+        // fresh `200` is rewritten to disk.
+        const loaded = await this.loadDetail(auth, task.id, prevEntry);
+        if (!loaded.ok) {
+          if (loaded.rateLimited) {
+            accountRateLimited = true;
+            rateLimitRetryMs = maxRetry(rateLimitRetryMs, loaded.retryAfterMs);
+            break;
+          }
+          if (loaded.message !== undefined) {
+            this.deps.onError?.(new Error(`task ${task.id}: ${loaded.message}`));
+          }
+          continue;
+        }
+        const detail = loaded.detail;
         const repository = await this.resolveRepository(auth, detail);
-        this.deps.sink.writeTaskRaw(detail.id, JSON.stringify(detail));
+        // Only a fresh 200 needs persisting; a 304 reused the on-disk copy verbatim.
+        if (loaded.fresh) {
+          this.deps.sink.writeTaskRaw(detail.id, JSON.stringify(detail));
+        }
 
         const sessions = Array.isArray(detail.sessions) ? detail.sessions : [];
         const sessionIds: string[] = [];
@@ -252,6 +330,7 @@ export class CloudAgentPoller {
             }
           } else if (log.reason === 'rateLimited') {
             accountRateLimited = true;
+            rateLimitRetryMs = maxRetry(rateLimitRetryMs, log.retryAfterMs);
             break;
           }
           // Other log failures (e.g. 404 on enterprise CAPI) degrade to metadata-only.
@@ -262,7 +341,6 @@ export class CloudAgentPoller {
         if (!terminal) {
           anyNonTerminal = true;
         }
-        const prevEntry = index.tasks[detail.id];
         // When the preview API omits timestamps (documented drift), fall back to the
         // PREVIOUS entry's timestamp (stable across polls), then 0 — NEVER this.now(),
         // which would make entryChanged() fire every poll (infinite refresh loop) and
@@ -278,6 +356,9 @@ export class CloudAgentPoller {
           sessionIds,
           updatedAtMs,
           terminal,
+          // Replayed as If-None-Match next poll; carried forward from the prior entry
+          // on a 304 so the conditional request stays valid. Not part of entryChanged.
+          etag: loaded.etag ?? prevEntry?.etag,
         };
         if (entryChanged(prevEntry, entry)) {
           changed = true;
@@ -306,7 +387,7 @@ export class CloudAgentPoller {
     // If we were stopped mid-poll, don't write or refresh (another window may now
     // be the leader).
     if (this.stopped) {
-      return this.record({ polled: true, changed, anyNonTerminal, rateLimited, accounts: statuses });
+      return this.record({ polled: true, changed, anyNonTerminal, rateLimited, rateLimitRetryMs, accounts: statuses });
     }
 
     // Only rewrite the index when something actually changed (a new/updated task or
@@ -324,7 +405,7 @@ export class CloudAgentPoller {
     }
     this.deps.sink.prune(this.deps.config.getCopilotCloudRetentionMs(), this.now());
 
-    const outcome = this.record({ polled: true, changed, anyNonTerminal, rateLimited, accounts: statuses });
+    const outcome = this.record({ polled: true, changed, anyNonTerminal, rateLimited, rateLimitRetryMs, accounts: statuses });
     if (changed) {
       this.deps.onIngest();
     }
@@ -354,10 +435,77 @@ export class CloudAgentPoller {
     return sanitizeRepositoryUrl(`https://github.com/${resolved.value.owner}/${resolved.value.name}`);
   }
 
+  /**
+   * Fetch a task's detail conditionally (Fix #2). Replays the prior response's
+   * ETag as `If-None-Match`; an unchanged task answers `304` (free) and we reuse
+   * the cached raw copy with `fresh: false`. A `200` returns `fresh: true` and the
+   * caller rewrites the raw file. If the server says `304` but the cached raw is
+   * gone (e.g. pruned), transparently re-fetch unconditionally so we never operate
+   * on a missing detail.
+   */
+  private async loadDetail(
+    auth: CloudAccountAuth,
+    taskId: string,
+    prevEntry: CloudTaskIndexEntry | undefined,
+  ): Promise<
+    | { ok: true; detail: RawCloudTaskDetail; etag?: string; fresh: boolean }
+    | { ok: false; rateLimited: boolean; retryAfterMs?: number; message?: string }
+  > {
+    const result = await this.deps.client.getTaskDetail(auth, taskId, prevEntry?.etag);
+    if (!result.ok) {
+      return { ok: false, rateLimited: result.reason === 'rateLimited', retryAfterMs: result.retryAfterMs, message: result.message };
+    }
+    if (!result.value.notModified && result.value.detail !== undefined) {
+      return { ok: true, detail: result.value.detail, etag: result.value.etag, fresh: true };
+    }
+    // 304 Not Modified — reuse the on-disk raw detail.
+    const cached = this.readCachedDetail(taskId);
+    if (cached !== undefined) {
+      return { ok: true, detail: cached, etag: result.value.etag ?? prevEntry?.etag, fresh: false };
+    }
+    // 304 but the cached raw vanished — re-fetch unconditionally so we recover.
+    const refetched = await this.deps.client.getTaskDetail(auth, taskId);
+    if (!refetched.ok) {
+      return { ok: false, rateLimited: refetched.reason === 'rateLimited', retryAfterMs: refetched.retryAfterMs, message: refetched.message };
+    }
+    if (refetched.value.detail === undefined) {
+      return { ok: false, rateLimited: false, message: 'server returned 304 with no cached copy to reuse.' };
+    }
+    return { ok: true, detail: refetched.value.detail, etag: refetched.value.etag, fresh: true };
+  }
+
+  /** Parse the sink's cached raw detail for a task, if present and well-formed. */
+  private readCachedDetail(taskId: string): RawCloudTaskDetail | undefined {
+    const raw = this.deps.sink.readTaskRaw(taskId);
+    if (raw === undefined) {
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(raw) as RawCloudTaskDetail;
+      if (parsed !== null && typeof parsed === 'object' && typeof parsed.id === 'string') {
+        return parsed;
+      }
+    } catch {
+      // Corrupt cache — treat as missing so loadDetail re-fetches.
+    }
+    return undefined;
+  }
+
   private record(outcome: PollOutcome): PollOutcome {
     this.lastOutcome = outcome;
     return outcome;
   }
+}
+
+/** The larger of two optional backoff hints (ms), or whichever one is defined. */
+function maxRetry(a: number | undefined, b: number | undefined): number | undefined {
+  if (a === undefined) {
+    return b;
+  }
+  if (b === undefined) {
+    return a;
+  }
+  return Math.max(a, b);
 }
 
 /** Whether the per-account status set is unchanged (so the index need not be rewritten). */

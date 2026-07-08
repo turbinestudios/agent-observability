@@ -13,14 +13,13 @@
  */
 
 import type { HttpPoster } from '../sync/httpPoster';
-import type { FailureReason } from '../telemetry/telemetryService';
 import {
   CloudAccountAuth,
   CloudRepoRef,
   RawCloudTask,
   RawCloudTaskDetail,
 } from './cloudTypes';
-import { networkMessage, statusFailure } from './ghAuth';
+import { ApiFailure, networkMessage, statusFailure } from './ghAuth';
 
 const GITHUB_API_BASE = 'https://api.github.com';
 /** Agent-tasks REST API version (probed 2026-07-07). */
@@ -28,9 +27,20 @@ const AGENTS_API_VERSION = '2026-03-10';
 /** CAPI logs endpoint API version. */
 const CAPI_API_VERSION = '2026-01-09';
 
-export type CloudApiResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; reason: FailureReason; message: string };
+export type CloudApiResult<T> = { ok: true; value: T } | ApiFailure;
+
+/**
+ * Outcome of a conditional `GET agents/tasks/{id}`. When `notModified` is true
+ * the server answered `304` (the cached raw detail is still current and this
+ * request did NOT count against the primary rate limit); `detail` is then
+ * undefined and the caller reuses its on-disk copy. `etag` is the value to
+ * replay as `If-None-Match` next poll.
+ */
+export interface ConditionalTaskDetail {
+  detail?: RawCloudTaskDetail;
+  etag?: string;
+  notModified: boolean;
+}
 
 export interface CloudApiClientDeps {
   http: HttpPoster;
@@ -80,17 +90,52 @@ export class CloudApiClient {
     return { ok: true, value: sorted.slice(0, Math.max(1, maxTasks)) };
   }
 
-  /** Full task detail with nested sessions (`GET agents/tasks/{id}`). */
-  async getTaskDetail(auth: CloudAccountAuth, taskId: string): Promise<CloudApiResult<RawCloudTaskDetail>> {
-    const res = await this.getJson(`${GITHUB_API_BASE}/agents/tasks/${encodeURIComponent(taskId)}`, this.restHeaders(auth.token));
-    if (!res.ok) {
-      return res;
+  /**
+   * Full task detail with nested sessions (`GET agents/tasks/{id}`), as a
+   * conditional request: pass the previous response's `etag` and an unchanged
+   * detail comes back as `304 Not Modified` (free — it does not count against the
+   * primary rate limit), letting the poller reuse its cached raw copy.
+   */
+  async getTaskDetail(
+    auth: CloudAccountAuth,
+    taskId: string,
+    etag?: string,
+  ): Promise<CloudApiResult<ConditionalTaskDetail>> {
+    const url = `${GITHUB_API_BASE}/agents/tasks/${encodeURIComponent(taskId)}`;
+    const headers = this.restHeaders(auth.token);
+    if (etag !== undefined && etag.length > 0) {
+      headers['If-None-Match'] = etag;
     }
-    const value = res.value as RawCloudTaskDetail;
+    let status: number;
+    let body: string;
+    let header: ((name: string) => string | undefined) | undefined;
+    try {
+      const res = await this.deps.http.get(url, headers);
+      status = res.status;
+      body = res.body;
+      header = res.header;
+    } catch (err) {
+      return { ok: false, reason: 'network', message: networkMessage(err) };
+    }
+    // 304 is NOT a 2xx, so it must be handled before statusFailure (which would
+    // otherwise map it to a generic error). The cached detail stays authoritative.
+    if (status === 304) {
+      return { ok: true, value: { notModified: true, etag: header?.('etag') ?? etag } };
+    }
+    const failure = statusFailure(status, header);
+    if (failure !== undefined) {
+      return failure;
+    }
+    let value: RawCloudTaskDetail;
+    try {
+      value = JSON.parse(body) as RawCloudTaskDetail;
+    } catch {
+      return { ok: false, reason: 'error', message: `Task detail for ${taskId} was unparseable JSON.` };
+    }
     if (value === null || typeof value !== 'object' || typeof value.id !== 'string') {
       return { ok: false, reason: 'error', message: `Malformed task detail for ${taskId}.` };
     }
-    return { ok: true, value };
+    return { ok: true, value: { notModified: false, detail: value, etag: header?.('etag') ?? etag } };
   }
 
   /** Resolve a bare numeric repository id to `owner/repo` (cached; ids are immutable). */
