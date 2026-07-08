@@ -164,6 +164,22 @@ describe('buildCloudSessionDetail', () => {
     expect(stats.costUsdMicros).toBeUndefined();
     expect(stats.creditsNano).toBe(Math.round(CREDITS));
     expect(stats.creditsNano).toBe(33570585000);
+    // Legacy `ai_credits` type is already nano-scaled → kept raw, labelled credits.
+    expect(stats.creditUnit).toBe('ai_credits');
+  });
+
+  it('scales a `pru` (premium request) count into nano and labels the unit', () => {
+    const detail = buildCloudSessionDetail(
+      makeInput({ session: rawSession({ usage: { credits: 3, type: 'pru' } }), log: parsedLog() }),
+    );
+    const stats = detail.treeStats;
+    // 3 premium requests → 3e9 nano so the shared `creditsNano` contract holds and
+    // the value renders as "3" instead of vanishing under a /1e9 division.
+    expect(stats.creditsNano).toBe(3_000_000_000);
+    expect(stats.creditUnit).toBe('pru');
+    // The unit is carried onto the per-agent rollup row for the usage table.
+    expect(detail.agentUsage[0].creditsNano).toBe(3_000_000_000);
+    expect(detail.agentUsage[0].creditUnit).toBe('pru');
   });
 
   it('rounds fractional credits and emits rows on credits alone (no log)', () => {

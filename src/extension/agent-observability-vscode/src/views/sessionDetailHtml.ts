@@ -1,6 +1,7 @@
 import {
   CombinedSessionDetail,
   CombinedSummary,
+  CloudCreditUnit,
   SessionDetail,
   SessionTreeStats,
   SessionAgentUsage,
@@ -31,18 +32,32 @@ function formatUsdMicros(micros: number | undefined): string {
 }
 
 /**
- * Format GitHub cloud coding-agent usage held as integer NANO-CREDITS (1 credit =
- * 1e9) as a plain credit count (e.g. `33.57`). Unlike AIU, credits are NOT
- * converted to a dollar figure — no published unit rate exists, and the panel
- * labels the unit ("AI Credits") separately. Zero/absent → `0`. Output is digits
- * and `.` only, so it is safe to inject without escaping.
+ * Format GitHub cloud coding-agent usage held as integer NANO-CREDITS (1 unit =
+ * 1e9) as a plain count. Unlike AIU, credits are NOT converted to a dollar figure
+ * — no published unit rate exists, and the panel labels the unit separately.
+ * `pru` (premium requests) are whole/small counts → shown without forced decimals;
+ * `ai_credits` are finer-grained sums → shown with 2–4 decimals. Zero/absent → `0`.
+ * Output is digits and `.` only, so it is safe to inject without escaping.
  */
-function formatCredits(creditsNano: number | undefined): string {
+function formatCredits(creditsNano: number | undefined, unit?: CloudCreditUnit): string {
   const credits = (creditsNano ?? 0) / 1_000_000_000;
   if (!(credits > 0)) {
     return '0';
   }
+  if (unit === 'pru') {
+    return Number.isInteger(credits) ? String(credits) : credits.toFixed(2);
+  }
   return credits.toFixed(credits < 1 ? 4 : 2);
+}
+
+/** Full name of a cloud credit unit for tiles/columns ("Premium Requests" / "AI Credits"). */
+function creditUnitLabel(unit: CloudCreditUnit | undefined): string {
+  return unit === 'pru' ? 'Premium Requests' : 'AI Credits';
+}
+
+/** Short acronym of a cloud credit unit for the tile / table header ("PR" / "CR"). */
+function creditUnitAcronym(unit: CloudCreditUnit | undefined): string {
+  return unit === 'pru' ? 'PR' : 'CR';
 }
 
 /** One combined session, paired with the data the panel resolves per session. */
@@ -422,7 +437,7 @@ function renderSessionSection(
     }
     if (costMode === 'credits') {
       return (detail.treeStats.creditsNano ?? 0) > 0
-        ? `<span class="turn-tokens">${formatCredits(detail.treeStats.creditsNano)} cr</span>`
+        ? `<span class="turn-tokens">${formatCredits(detail.treeStats.creditsNano, detail.treeStats.creditUnit)} ${detail.treeStats.creditUnit === 'pru' ? 'PR' : 'cr'}</span>`
         : '';
     }
     return detail.treeStats.aiuNano > 0
@@ -510,7 +525,11 @@ function treeTotalsRows(stats: SessionTreeStats, costMode: CostMode): string {
     costMode === 'usd'
       ? { acr: 'COST', label: 'Estimated Cost (USD)', value: formatUsdMicros(stats.costUsdMicros) }
       : costMode === 'credits'
-        ? { acr: 'CR', label: 'AI Credits', value: formatCredits(stats.creditsNano) }
+        ? {
+            acr: creditUnitAcronym(stats.creditUnit),
+            label: creditUnitLabel(stats.creditUnit),
+            value: formatCredits(stats.creditsNano, stats.creditUnit),
+          }
         : { acr: 'AIU', label: 'Copilot Usage (AIU)', value: formatAiu(stats.aiuNano) };
   // Flat right-aligned totals, each labelled by a short acronym (full name kept in
   // the `title` so the shorthand stays discoverable). TIN/TOUT/TCI = total
@@ -1118,24 +1137,27 @@ function renderAgentUsage(
     },
   );
 
-  // One cost column: AIU (Copilot), estimated USD (Claude), or AI credits (cloud).
+  // One cost column: AIU (Copilot), estimated USD (Claude), or credits (cloud).
+  // Cloud rows share the session's credit unit (pru vs ai_credits); use the first
+  // row that carries one for the footer/header label.
+  const creditUnit = rows.find((u) => u.creditUnit !== undefined)?.creditUnit;
   const costCell = (u: SessionAgentUsage): string =>
     costMode === 'usd'
       ? formatUsdMicros(u.costUsdMicros)
       : costMode === 'credits'
-        ? formatCredits(u.creditsNano)
+        ? formatCredits(u.creditsNano, u.creditUnit)
         : formatAiu(u.aiuNano);
   const costFooter =
     costMode === 'usd'
       ? formatUsdMicros(totals.costUsdMicros)
       : costMode === 'credits'
-        ? formatCredits(totals.creditsNano)
+        ? formatCredits(totals.creditsNano, creditUnit)
         : formatAiu(totals.aiuNano);
   const costHeader =
     costMode === 'usd'
       ? '<th class="n" title="Estimated USD cost for these model turns (token×rate)">Cost</th>'
       : costMode === 'credits'
-        ? '<th class="n" title="GitHub cloud coding-agent AI credits recorded for these model turns (the billed unit; no published $ rate)">AI Credits</th>'
+        ? `<th class="n" title="GitHub cloud coding-agent ${creditUnit === 'pru' ? 'premium requests' : 'AI credits'} recorded for these model turns (the billed unit; no published $ rate)">${creditUnitLabel(creditUnit)}</th>`
         : '<th class="n" title="AIU (Copilot premium-request units) recorded on these spans — the actual billed usage — with the derived cost at $0.01/AIU">AIU</th>';
 
   const bodyRows = rows

@@ -85,6 +85,11 @@ function mergeTreeStats(details: readonly SessionDetail[]): SessionTreeStats {
     acc.costUsdMicros = (acc.costUsdMicros ?? 0) + (t.costUsdMicros ?? 0);
     // Copilot (Cloud) carries AI credits here (local sources' is absent → 0).
     acc.creditsNano = (acc.creditsNano ?? 0) + (t.creditsNano ?? 0);
+    // Carry the credit unit from the first cloud session that reports one. A
+    // combined view mixing pru + ai_credits keeps the first unit's label (the
+    // summed nano value is still directionally right; the two units are close in
+    // magnitude once pru is normalized).
+    acc.creditUnit ??= t.creditUnit;
     acc.linesOfCode += t.linesOfCode;
     acc.linesOfDoc += t.linesOfDoc;
     acc.linesOfCodeRemoved += t.linesOfCodeRemoved;

@@ -4,6 +4,21 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.3] - 2026-07-08
+
+### Fixed
+
+- **Copilot (Cloud) credit usage now renders honestly for both billing units.**
+  GitHub's agent-tasks API reports a per-session `usage.type`, and — mid-migration
+  — mixes two units even under one account: legacy `ai_credits` (already in
+  nano-credits) and the current `pru` (a small premium-request count). The panel
+  previously divided **every** value by 1e9, so `pru` sessions (the large
+  majority) showed `0.0000` credits and looked empty next to token data — the
+  source of the "some sessions have tokens but no AI Credits" inconsistency. The
+  mapper now reads the unit, scales each correctly, and the detail panel labels it
+  accordingly ("Premium Requests" vs "AI Credits") so the two units never share a
+  name or a scale.
+
 ## [0.9.2] - 2026-07-08
 
 ### Fixed

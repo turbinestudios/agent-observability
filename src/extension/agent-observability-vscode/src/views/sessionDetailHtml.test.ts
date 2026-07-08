@@ -301,6 +301,49 @@ describe('renderSessionDetailHtml — Main agent AIU & cost', () => {
   });
 });
 
+describe('renderSessionDetailHtml — Copilot (Cloud) credit units', () => {
+  /** A cloud-style detail whose tree + main-agent rollup carry credits in `unit`. */
+  const creditDetail = (creditsNano: number, unit: 'ai_credits' | 'pru'): SessionDetail => ({
+    ...detail,
+    treeStats: { ...ZERO_TREE_STATS, modelTurns: 1, creditsNano, creditUnit: unit },
+    agentUsage: [
+      {
+        agentName: 'Copilot cloud agent',
+        model: 'claude-sonnet-4.6',
+        kind: 'main',
+        llmCalls: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        aiuNano: 0,
+        creditsNano,
+        creditUnit: unit,
+        linesOfCode: 0,
+        linesOfDoc: 0,
+        linesOfCodeRemoved: 0,
+        linesOfDocRemoved: 0,
+      },
+    ],
+  });
+
+  it('renders a `pru` count as "Premium Requests" and a plain integer (not 0)', () => {
+    // 3 premium requests are stored as 3e9 nano; the panel must show "3", not the
+    // "0.0000" the old blanket /1e9 division produced for small pru counts.
+    const html = renderSessionDetailHtml(creditDetail(3_000_000_000, 'pru'), [], NONCE, undefined, 'credits');
+    expect(html).toContain('Premium Requests');
+    expect(html).not.toContain('AI Credits');
+    expect(html).toMatch(/Copilot cloud agent<\/td>[\s\S]*?<td class="n">3<\/td>/);
+  });
+
+  it('renders a legacy `ai_credits` value as "AI Credits" with decimals', () => {
+    const html = renderSessionDetailHtml(creditDetail(10_191_735_000, 'ai_credits'), [], NONCE, undefined, 'credits');
+    expect(html).toContain('AI Credits');
+    expect(html).not.toContain('Premium Requests');
+    expect(html).toContain('10.19');
+  });
+});
+
 describe('renderSessionDetailHtml — spawned sub-agents', () => {
   /** Main thread + two spawned sub-agents on different models. */
   const agentDetail: SessionDetail = {

@@ -40,6 +40,20 @@ export type AgentSourceId = 'copilot' | 'claude' | 'copilot-cloud';
 export type CostMode = 'aiu' | 'usd' | 'credits';
 
 /**
+ * Which billed unit a Copilot (Cloud) session's `creditsNano` is denominated in.
+ * GitHub's agent-tasks API reports `usage.type` per session and — mid-migration —
+ * mixes two units even under one owner:
+ * - `ai_credits` — legacy "AI credits"; the raw value is already in nano-credits
+ *   (e.g. `10191735000` ⇒ `10.19` credits), shown with decimals.
+ * - `pru` — the current "premium request" unit; the raw value is a (small, often
+ *   whole) request count normalized to nano here so `creditsNano` keeps its
+ *   `1 unit = 1e9` contract, shown as a plain count.
+ * Absent for local sources. Drives the detail panel's credit tile/column LABEL and
+ * number precision so the two units never render under the same name or scale.
+ */
+export type CloudCreditUnit = 'ai_credits' | 'pru';
+
+/**
  * The fixed set of agent modes the cloud aggregate schema permits. Any
  * user-defined / custom chat mode name collapses to `custom` so project or
  * customer identifiers in a custom mode name never leak (privacy-critical;
@@ -383,6 +397,12 @@ export interface SessionAgentUsage {
    */
   creditsNano?: number;
   /**
+   * The unit {@link creditsNano} is denominated in ({@link CloudCreditUnit}). Set
+   * ONLY by the Copilot (Cloud) source; absent for local sources. See
+   * {@link SessionTreeStats.creditUnit}.
+   */
+  creditUnit?: CloudCreditUnit;
+  /**
    * LOCAL-ONLY lines this (agent, model, kind)'s file-writing tool calls added to /
    * removed from source-code vs documentation files (LoC / LoD / nLoC / nLoD). Each
    * tree file-write is attributed to the `chat` model turn that requested it (by
@@ -476,6 +496,13 @@ export interface SessionTreeStats {
    * `creditsNano` rollups.
    */
   creditsNano?: number;
+  /**
+   * The unit {@link creditsNano} is denominated in ({@link CloudCreditUnit}). Set
+   * ONLY by the Copilot (Cloud) source alongside {@link creditsNano}; absent for
+   * local sources. Drives the credit tile's LABEL ("Premium Requests" vs "AI
+   * Credits") and number precision so the two mixed units render honestly.
+   */
+  creditUnit?: CloudCreditUnit;
   /**
    * LOCAL-ONLY lines the whole agent tree's file-writing tool calls added to /
    * removed from source-code vs documentation files, classified by file

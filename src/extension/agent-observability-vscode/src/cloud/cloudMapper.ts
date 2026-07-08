@@ -5,15 +5,20 @@
  *
  * No `vscode`, no IO — every input arrives on {@link CloudSessionInput}.
  *
- * Cost basis: the cloud agent bills in **AI credits** (`usage.credits`), mapped to
- * {@link SessionTreeStats.creditsNano} / the per-model / per-agent `creditsNano`.
- * `aiuNano` is `0` and `costUsdMicros` absent (credits are their own unit — never
- * the AIU $ rate). Tokens are populated only when the CAPI log carried `usage`
- * chunks (opportunistic); otherwise they are `0` (see the source's
+ * Cost basis: the cloud agent bills in a premium unit reported per session as
+ * `usage.credits` + `usage.type`, mapped to {@link SessionTreeStats.creditsNano}
+ * (+ the matching {@link SessionTreeStats.creditUnit}) / the per-agent rollup.
+ * GitHub mixes two units mid-migration — `pru` (premium-request counts) and legacy
+ * `ai_credits` (nano-credits) — so the mapper normalizes both to nano-credits and
+ * records which unit they came from (see {@link creditsOf}). `aiuNano` is `0` and
+ * `costUsdMicros` absent (credits are their own unit — never the AIU $ rate).
+ * Tokens are populated only when the CAPI log carried `usage` chunks
+ * (opportunistic); otherwise they are `0` (see the source's
  * "token counts unavailable" note).
  */
 
 import {
+  CloudCreditUnit,
   Interaction,
   SessionAgentUsage,
   SessionDetail,
@@ -61,10 +66,28 @@ function toolCallCount(log: ParsedCloudLog | undefined): number {
   return log.toolInvocations.filter((t) => !t.isSetup).length;
 }
 
-/** Whole-tree AI-credit usage in nano-credits (raw `usage.credits`), or 0. */
-function creditsNanoOf(input: CloudSessionInput): number {
-  const credits = input.session.usage?.credits;
-  return typeof credits === 'number' && Number.isFinite(credits) && credits > 0 ? Math.round(credits) : 0;
+/** 1 credit unit = 1e9 nano — the scale {@link SessionTreeStats.creditsNano} keeps. */
+const NANO_PER_CREDIT = 1_000_000_000;
+
+/**
+ * The session's billed usage as `{ creditsNano, creditUnit }`, interpreting the
+ * REST `usage.type`:
+ * - `pru` — a premium-request COUNT (small, often whole); scaled ×1e9 into nano so
+ *   it shares the `creditsNano` `1 unit = 1e9` contract and renders as a count.
+ * - `ai_credits` / anything else (legacy or unknown) — already nano-credits; kept
+ *   raw, matching the original behaviour.
+ * `creditsNano` is `0` when no positive usage is present, but the resolved
+ * `creditUnit` is still returned so the label stays stable.
+ */
+function creditsOf(input: CloudSessionInput): { creditsNano: number; creditUnit: CloudCreditUnit } {
+  const usage = input.session.usage;
+  const creditUnit: CloudCreditUnit = usage?.type === 'pru' ? 'pru' : 'ai_credits';
+  const raw = usage?.credits;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) {
+    return { creditsNano: 0, creditUnit };
+  }
+  const creditsNano = creditUnit === 'pru' ? Math.round(raw * NANO_PER_CREDIT) : Math.round(raw);
+  return { creditsNano, creditUnit };
 }
 
 /** The session's title: session name (when distinct), else the task name, plus any suffix. */
@@ -116,6 +139,7 @@ function buildCloudTreeStats(input: CloudSessionInput): SessionTreeStats {
   const state = effectiveState(input);
   const failedState = state === 'failed' || state === 'timed_out';
   const hasError = failedState || (typeof input.session.error === 'string' && input.session.error.length > 0);
+  const credits = creditsOf(input);
   return {
     modelTurns: log?.llmTurns ?? 0,
     toolCalls: toolCallCount(log),
@@ -125,7 +149,8 @@ function buildCloudTreeStats(input: CloudSessionInput): SessionTreeStats {
     totalTokens: inputTokens + cachedTokens + outputTokens,
     errorCount: hasError ? 1 : 0,
     aiuNano: 0,
-    creditsNano: creditsNanoOf(input),
+    creditsNano: credits.creditsNano,
+    creditUnit: credits.creditUnit,
     linesOfCode: 0,
     linesOfDoc: 0,
     linesOfCodeRemoved: 0,
@@ -241,6 +266,7 @@ function buildCloudAgentUsage(input: CloudSessionInput, stats: SessionTreeStats)
       reasoningTokens: 0,
       aiuNano: 0,
       creditsNano: stats.creditsNano,
+      creditUnit: stats.creditUnit,
       linesOfCode: 0,
       linesOfDoc: 0,
       linesOfCodeRemoved: 0,
