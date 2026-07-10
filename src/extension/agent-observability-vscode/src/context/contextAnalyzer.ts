@@ -352,8 +352,11 @@ export function buildAgentAnalysisFromParts(
     [...discoveryFiles, ...toolReadFiles],
   );
 
-  // Combine all loaded files
-  const allFiles = [...discoveryFiles, ...toolReadFiles, ...systemPromptFiles];
+  // Combine, then collapse repeated references to the SAME file (e.g. an
+  // instruction re-discovered on every turn, or a skill both read and listed)
+  // into one entry, using the SAME identity the Total Overview uses. Without this
+  // a single-agent session's Main Agent list would out-count its own Total.
+  const allFiles = dedupeContextFiles([...discoveryFiles, ...toolReadFiles, ...systemPromptFiles]);
 
   // Resolve cross-references (only among applied/read files)
   const appliedFiles = allFiles.filter((f) => f.status !== 'skipped');
@@ -450,6 +453,46 @@ function normalizeContextPath(p: string): string {
 }
 
 /**
+ * Stable identity for a loaded context file: its on-disk path when known, else
+ * its base name. Path-first keeps files that share a base name apart — every
+ * skill's file is `SKILL.md`, so name-only identity would wrongly merge distinct
+ * skills — while still collapsing the same file referenced without a path.
+ */
+function contextFileIdentity(f: ContextFileEntry): string {
+  if (f.filePath !== undefined && f.filePath.length > 0) {
+    return `p:${normalizeContextPath(f.filePath)}`;
+  }
+  return `n:${f.name.toLowerCase()}`;
+}
+
+/** Pick the more informative of two entries that share a file identity. */
+function richerContextFile(a: ContextFileEntry, b: ContextFileEntry): ContextFileEntry {
+  const aInContext = a.status !== 'skipped';
+  const bInContext = b.status !== 'skipped';
+  if (aInContext !== bInContext) {
+    // A file that actually entered context outranks a skipped sighting of it.
+    return aInContext ? a : b;
+  }
+  return (b.estimatedTokens ?? 0) > (a.estimatedTokens ?? 0) ? b : a;
+}
+
+/**
+ * Collapse repeated references to the same file (by {@link contextFileIdentity})
+ * into a single entry, keeping the richest per identity. Applied by both the
+ * per-agent builder and the Total Overview so their file sets — and thus a
+ * single-agent session's Main Agent and Total — stay in lock-step.
+ */
+function dedupeContextFiles(files: readonly ContextFileEntry[]): ContextFileEntry[] {
+  const byId = new Map<string, ContextFileEntry>();
+  for (const file of files) {
+    const id = contextFileIdentity(file);
+    const existing = byId.get(id);
+    byId.set(id, existing === undefined ? file : richerContextFile(existing, file));
+  }
+  return [...byId.values()];
+}
+
+/**
  * Detect files that are referenced by loaded files but not themselves loaded.
  */
 function detectExpectedMissing(
@@ -513,14 +556,16 @@ export function filterAcceptedMissing(
  * the Copilot and Claude analyzers.
  */
 export function buildTotalAnalysis(agents: readonly AgentContextAnalysis[]): AgentContextAnalysis {
-  // Deduplicate loaded files across agents (by name, keeping the richest entry)
+  // Deduplicate loaded files across agents by file identity (path when known,
+  // else name — so distinct skills that share the `SKILL.md` base name are kept
+  // apart), keeping the richest entry. This mirrors the per-agent builder so a
+  // single-agent session's Total Overview equals its Main Agent.
   const fileMap = new Map<string, ContextFileEntry>();
   for (const agent of agents) {
     for (const file of agent.loadedFiles) {
-      const existing = fileMap.get(file.name);
-      if (!existing || (file.estimatedTokens ?? 0) > (existing.estimatedTokens ?? 0)) {
-        fileMap.set(file.name, file);
-      }
+      const id = contextFileIdentity(file);
+      const existing = fileMap.get(id);
+      fileMap.set(id, existing === undefined ? file : richerContextFile(existing, file));
     }
   }
 

@@ -4,6 +4,20 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.5] - 2026-07-10
+
+### Fixed
+
+- **The "Total Overview" and "Main Agent" sections of the Context Analysis tab no
+  longer disagree for single-agent sessions.** The Total Overview de-duplicated
+  loaded files while the per-agent lists did not, so a file re-discovered across
+  several turns (or two distinct skills that both use the `SKILL.md` filename)
+  inflated the Main Agent file count and context-file token total above the Total
+  — even when there were no sub-agents. Both views now collapse repeats using one
+  shared file identity (the on-disk path when known, otherwise the name), so the
+  same file is counted once while genuinely distinct skills are kept apart. As a
+  result a session with only a main agent shows an identical Total and Main Agent.
+
 ## [0.9.4] - 2026-07-10
 
 ### Fixed

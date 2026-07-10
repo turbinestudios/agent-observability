@@ -384,3 +384,59 @@ describe('analyzeContext — system-prompt <file> signal', () => {
     expect(new Set(skillFiles.map((f) => f.filePath)).size).toBe(2);
   });
 });
+
+describe('analyzeContext — Total Overview vs single Main Agent', () => {
+  it('Total Overview equals the Main Agent when there are no subagents', () => {
+    // The same instruction is re-discovered on two turns, producing two discovery
+    // events for one file. The per-agent list must collapse the repeat so it does
+    // not out-count the (already-deduped) Total Overview.
+    const discoveryEvents: DiscoveryEventRow[] = [
+      {
+        spanName: 'Instructions Discovery',
+        eventDetails: 'Resolved 1 instructions in 1.0ms | loaded: [copilot-instructions.md]',
+        eventCategory: 'discovery',
+        conversationId: null,
+        chatSessionId: null,
+        agentName: null,
+        debugLabel: null,
+      },
+      {
+        spanName: 'Instructions Discovery',
+        eventDetails: 'Resolved 1 instructions in 1.2ms | loaded: [copilot-instructions.md]',
+        eventCategory: 'discovery',
+        conversationId: null,
+        chatSessionId: null,
+        agentName: null,
+        debugLabel: null,
+      },
+    ];
+    const systemInstrMap = new Map([
+      ['main-span', {
+        value: 'You are the main agent.',
+        conversationId: null,
+        chatSessionId: null,
+        inputTokens: 20000,
+        agentName: null,
+        debugLabel: null,
+      }],
+    ]);
+
+    const telemetry = fakeTelemetry({ discoveryEvents, systemInstrMap });
+    const result = analyzeContext('session-key', telemetry);
+
+    expect(result).toBeDefined();
+    expect(result!.agents.filter((a) => a.kind === 'subagent').length).toBe(0);
+    const main = result!.agents.find((a) => a.kind === 'main')!;
+    const total = result!.total;
+
+    // The repeat is collapsed to a single entry in both views.
+    expect(main.loadedFiles.filter((f) => f.name === 'copilot-instructions.md').length).toBe(1);
+    // Total and Main must agree on every summary the tab renders.
+    expect(total.loadedFiles.length).toBe(main.loadedFiles.length);
+    expect(total.loadedFiles.filter((f) => f.status !== 'skipped').length)
+      .toBe(main.loadedFiles.filter((f) => f.status !== 'skipped').length);
+    expect(total.contextFileTokens).toBe(main.contextFileTokens);
+    expect(total.totalContextTokens).toBe(main.totalContextTokens);
+    expect(total.otherContextTokens).toBe(main.otherContextTokens);
+  });
+});
