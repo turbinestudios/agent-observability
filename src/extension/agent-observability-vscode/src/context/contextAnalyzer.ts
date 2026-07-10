@@ -19,6 +19,8 @@ import { parseDiscoveryEvents, type DiscoveryEventRow } from './discoveryParser'
 import { parseToolReads, type ToolReadRow } from './toolCallDetector';
 import { resolveReferences } from './referenceResolver';
 import { estimateContextSizes, findOversizedFiles } from './sizeEstimator';
+import { parseSystemPromptContextFiles } from '../aggregate/systemPromptParser';
+import { categoryForCustomizationFile } from '../aggregate/customizationFilter';
 
 /**
  * Configuration for files/sources accepted as missing (excluded from
@@ -340,8 +342,18 @@ export function buildAgentAnalysisFromParts(
   const knownNames = new Set(discoveryFiles.map((f) => f.name));
   const toolReadFiles = parseToolReads(parts.toolReadRows, knownNames);
 
+  // Detect customization files that entered context via the system prompt's
+  // <file>…</file> list. This is frequently the ONLY applied-file signal —
+  // Copilot's discovery core_event spans are absent on the otlp-http live-updates
+  // stream — so without it the tab under-reports the very files the Context
+  // Hotspots view (which reads this same signal) links back to.
+  const systemPromptFiles = extractSystemPromptFiles(
+    parts.systemInstructionsText,
+    [...discoveryFiles, ...toolReadFiles],
+  );
+
   // Combine all loaded files
-  const allFiles = [...discoveryFiles, ...toolReadFiles];
+  const allFiles = [...discoveryFiles, ...toolReadFiles, ...systemPromptFiles];
 
   // Resolve cross-references (only among applied/read files)
   const appliedFiles = allFiles.filter((f) => f.status !== 'skipped');
@@ -373,6 +385,68 @@ export function buildAgentAnalysisFromParts(
     otherContextTokens,
     oversizedFiles,
   };
+}
+
+/**
+ * Fold the customization files listed as `<file>…</file>` in the system prompt
+ * into `applied` context-file entries.
+ *
+ * Frequently this is the ONLY signal that a customization file reached the
+ * context window: Copilot's discovery `core_event` spans are absent on the
+ * otlp-http live-updates stream, so a session can carry files with no discovery
+ * event and no `read_file` call. The Context Hotspots view already reads this
+ * signal, so folding it in here keeps the session-detail tab and that view in
+ * agreement. Returns `[]` when there is no system-prompt text (e.g. the Claude
+ * path), making it a no-op there.
+ *
+ * Entries are deduped against files already detected from discovery/tool reads:
+ * by on-disk path when known, else by exact base name — except the shared
+ * `SKILL.md` name, whose distinct skills are told apart only by their path.
+ */
+function extractSystemPromptFiles(
+  systemInstructionsText: string | undefined,
+  existing: readonly ContextFileEntry[],
+): ContextFileEntry[] {
+  const parsed = parseSystemPromptContextFiles(systemInstructionsText);
+  if (parsed.length === 0) {
+    return [];
+  }
+
+  const seenPaths = new Set(
+    existing
+      .map((f) => f.filePath)
+      .filter((p): p is string => p !== undefined && p.length > 0)
+      .map(normalizeContextPath),
+  );
+  const seenNames = new Set(existing.map((f) => f.name));
+
+  const entries: ContextFileEntry[] = [];
+  for (const file of parsed) {
+    const normPath = normalizeContextPath(file.filePath);
+    if (seenPaths.has(normPath)) {
+      continue;
+    }
+    // `SKILL.md` is shared by every skill, so only its path identifies it — never
+    // dedupe distinct skills away by that one shared base name.
+    const dedupeByName = file.name.toLowerCase() !== 'skill.md';
+    if (dedupeByName && seenNames.has(file.name)) {
+      continue;
+    }
+    seenPaths.add(normPath);
+    seenNames.add(file.name);
+    entries.push({
+      name: file.name,
+      filePath: file.filePath,
+      category: categoryForCustomizationFile(file.name),
+      status: 'applied',
+    });
+  }
+  return entries;
+}
+
+/** Normalize a path for cross-signal comparison (POSIX separators, lower-case). */
+function normalizeContextPath(p: string): string {
+  return p.replace(/\\/g, '/').toLowerCase();
 }
 
 /**

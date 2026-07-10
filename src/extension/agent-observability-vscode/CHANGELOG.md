@@ -4,6 +4,21 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.4] - 2026-07-10
+
+### Fixed
+
+- **Session detail "Context Analysis" now lists the same customization files the
+  Context Hotspots view attributes to that session.** The tab derived its loaded
+  files only from Copilot's discovery `core_event` spans and `read_file` tool
+  calls — but those discovery spans are never emitted on the live-updates capture
+  stream, so files that reached the model purely via the system prompt's
+  `<file>…</file>` list showed up under a file in Context Hotspots yet were absent
+  (often "No context files detected") when you opened that session. The tab now
+  reads the same system-prompt signal the Hotspots index uses, deduplicated
+  against discovery/tool-read entries by path (and by name, except the shared
+  `SKILL.md`, so distinct skills are kept apart), so the two views agree.
+
 ## [0.9.3] - 2026-07-08
 
 ### Fixed

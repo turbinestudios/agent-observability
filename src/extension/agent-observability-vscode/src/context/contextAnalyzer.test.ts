@@ -299,3 +299,88 @@ describe('analyzeContext — subagent name assignment', () => {
     expect(html).toContain('Sub-agent: Backend');
   });
 });
+
+describe('analyzeContext — system-prompt <file> signal', () => {
+  it('surfaces customization files listed in the system prompt when no discovery events exist', () => {
+    // The otlp-http live-updates stream never emits discovery core_event spans,
+    // so the system prompt's <file> list is the only signal that a customization
+    // file reached the context window. This is exactly the case that the Context
+    // Hotspots view shows but the tab previously missed.
+    const systemInstrMap = new Map([
+      ['span-1', {
+        value: [
+          '<instructions>',
+          '<instruction><file>c:\\repo\\.github\\instructions\\security.instructions.md</file></instruction>',
+          '</instructions>',
+        ].join('\n'),
+        conversationId: 'conv-1',
+        chatSessionId: 'root-chat',
+        inputTokens: 12000,
+        agentName: null,
+        debugLabel: null,
+      }],
+    ]);
+
+    const telemetry = fakeTelemetry({ systemInstrMap });
+    const result = analyzeContext('session-key', telemetry);
+
+    expect(result).toBeDefined();
+    const main = result!.agents.find((a) => a.kind === 'main')!;
+    const entry = main.loadedFiles.find((f) => f.name === 'security.instructions.md');
+    expect(entry).toBeDefined();
+    expect(entry!.status).toBe('applied');
+    expect(entry!.category).toBe('instruction');
+  });
+
+  it('does not duplicate a system-prompt file already detected via a tool read (same path)', () => {
+    const filePath = 'c:\\repo\\.github\\instructions\\security.instructions.md';
+    const toolReads = [
+      { filePath, conversationId: null, chatSessionId: null, agentName: null, debugLabel: null },
+    ];
+    const systemInstrMap = new Map([
+      ['span-1', {
+        value: `<file>${filePath}</file>`,
+        conversationId: null,
+        chatSessionId: null,
+        inputTokens: 8000,
+        agentName: null,
+        debugLabel: null,
+      }],
+    ]);
+
+    const telemetry = fakeTelemetry({ toolReads, systemInstrMap });
+    const result = analyzeContext('session-key', telemetry);
+
+    expect(result).toBeDefined();
+    const main = result!.agents.find((a) => a.kind === 'main')!;
+    const matching = main.loadedFiles.filter((f) => f.name === 'security.instructions.md');
+    expect(matching.length).toBe(1);
+  });
+
+  it('keeps distinct SKILL.md skills listed in the system prompt', () => {
+    // Every skill's file is named SKILL.md, so distinct skills must be told apart
+    // by path — deduping by base name would collapse them into one.
+    const systemInstrMap = new Map([
+      ['span-1', {
+        value: [
+          '<file>c:\\repo\\.github\\skills\\tour\\SKILL.md</file>',
+          '<file>c:\\repo\\.github\\skills\\review\\SKILL.md</file>',
+        ].join('\n'),
+        conversationId: null,
+        chatSessionId: null,
+        inputTokens: 9000,
+        agentName: null,
+        debugLabel: null,
+      }],
+    ]);
+
+    const telemetry = fakeTelemetry({ systemInstrMap });
+    const result = analyzeContext('session-key', telemetry);
+
+    expect(result).toBeDefined();
+    const main = result!.agents.find((a) => a.kind === 'main')!;
+    const skillFiles = main.loadedFiles.filter((f) => f.name === 'SKILL.md');
+    expect(skillFiles.length).toBe(2);
+    expect(new Set(skillFiles.map((f) => f.filePath)).size).toBe(2);
+  });
+});
