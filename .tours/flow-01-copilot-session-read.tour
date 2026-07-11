@@ -8,19 +8,19 @@
     {
       "title": "Step 1 — Open the extension",
       "file": "src/extension/agent-observability-vscode/src/extension.ts",
-      "line": 63,
+      "line": 81,
       "description": "![1: Copilot session read](.tours/diagrams/d-1.svg)\n\n**▶ Step 1 of 9 in the sequence diagram — `Dev → extension.ts: Open the extension`**\n\nOpening the workspace fires the extension's single entry point, `activate()`. Everything downstream — sources, views, live updates — is wired here, and the read-only, privacy-first pipeline starts: nothing is read from disk until a view actually asks for it."
     },
     {
       "title": "Step 2 — Build the SourceRegistry",
       "file": "src/extension/agent-observability-vscode/src/extension.ts",
-      "line": 77,
-      "description": "![1: Copilot session read](.tours/diagrams/d-2.svg)\n\n**▶ Step 2 of 9 in the sequence diagram — `extension.ts → SourceRegistry: activate() builds registry`**\n\n`activate()` builds a `SourceRegistry` over the two telemetry sources — `CopilotSource` and the Claude source. The registry is the seam the views talk to, so no view ever knows which on-disk database it is really reading from."
+      "line": 106,
+      "description": "![1: Copilot session read](.tours/diagrams/d-2.svg)\n\n**▶ Step 2 of 9 in the sequence diagram — `extension.ts → SourceRegistry: activate() builds registry`**\n\n`activate()` builds a `SourceRegistry` over the telemetry sources — `CopilotSource`, the Claude source, the Copilot (Cloud) source, and the Copilot (Autonomous) source. The registry is the seam the views talk to, so no view ever knows which on-disk database it is really reading from."
     },
     {
       "title": "Step 3 — Register the tree views",
       "file": "src/extension/agent-observability-vscode/src/extension.ts",
-      "line": 199,
+      "line": 257,
       "description": "![1: Copilot session read](.tours/diagrams/d-3.svg)\n\n**▶ Step 3 of 9 in the sequence diagram — `extension.ts → Sessions view: register tree providers`**\n\nThe Sessions tree is registered with `createTreeView(..., { canSelectMany: true })` so several sessions can be selected and combined. Registration only wires the provider — still no telemetry is read yet."
     },
     {
