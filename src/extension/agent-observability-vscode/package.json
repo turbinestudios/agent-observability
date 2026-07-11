@@ -2,7 +2,7 @@
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
   "description": "Privacy-first local view of GitHub Copilot, GitHub Copilot cloud coding-agent, and Claude Code agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "publisher": "turbinestudios",
   "license": "UNLICENSED",
   "engines": {
@@ -184,6 +184,12 @@
       {
         "command": "agentObservability.setCloudAccountToken",
         "title": "Copilot (Cloud): Set account token",
+        "category": "Agent Observability",
+        "icon": "$(key)"
+      },
+      {
+        "command": "agentObservability.setAgentRelayToken",
+        "title": "Copilot (Autonomous): Set relay token",
         "category": "Agent Observability",
         "icon": "$(key)"
       }
@@ -879,6 +885,46 @@
           "minimum": 1,
           "scope": "application",
           "markdownDescription": "Maximum number of most-recent cloud-agent tasks to fetch and surface per account, bounding request and parse cost."
+        },
+        "agentObservability.copilotAgent.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Capture **autonomous Copilot CLI agent** sessions (e.g. an Azure Container Apps job that remediates an alert) that push their full `gen_ai.*` OpenTelemetry to a cloud landing spot. When on, a background poller pulls those raw OTLP batches into a local sink under your home directory and shows them alongside Copilot and Claude Code under a **Copilot (Autonomous)** source node. Off by default (opt-in). Requires `#agentObservability.copilotAgent.endpoint#` and a relay token set via **Copilot (Autonomous): Set relay token**. The batches carry full prompts and tool I/O by design for this source; they are stored locally and never re-uploaded."
+        },
+        "agentObservability.copilotAgent.endpoint": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Base URL of the cloud landing spot that autonomous-agent OTLP is pulled from (the relay's read API). Leave blank to keep the **Copilot (Autonomous)** source inert — nothing is pulled. Authenticated with a bearer token set via **Copilot (Autonomous): Set relay token**."
+        },
+        "agentObservability.copilotAgent.idlePollSeconds": {
+          "type": "number",
+          "default": 300,
+          "minimum": 60,
+          "scope": "application",
+          "markdownDescription": "How often (seconds) to poll the relay for new autonomous-agent OTLP batches while none arrived on the previous poll. Minimum 60. A single window polls (elected via a lease); the cadence speeds up automatically right after a batch is pulled (see `#agentObservability.copilotAgent.activePollSeconds#`)."
+        },
+        "agentObservability.copilotAgent.activePollSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 30,
+          "scope": "application",
+          "markdownDescription": "How often (seconds) to poll right after a poll that pulled new autonomous-agent batches, so a burst of activity catches up sooner. Minimum 30."
+        },
+        "agentObservability.copilotAgent.retentionDays": {
+          "type": "number",
+          "default": 180,
+          "minimum": 1,
+          "scope": "application",
+          "markdownDescription": "How many days of pulled autonomous-agent telemetry the local sink retains. Older spans (and their archived raw batches) are pruned on each poll. Defaults to 180 days."
+        },
+        "agentObservability.copilotAgent.maxSessions": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "scope": "application",
+          "markdownDescription": "Maximum number of raw OTLP batches to pull in a single poll, bounding download and parse cost against a large backlog."
         }
       }
     }

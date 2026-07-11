@@ -20,13 +20,17 @@ export type Operation = 'chat' | 'execute_tool' | 'execute_hook' | 'invoke_agent
  * `agent-traces.db`; `claude` reads Claude Code's JSONL transcripts under
  * `~/.claude/projects`; `copilot-cloud` reads GitHub Copilot **cloud
  * coding-agent** task/session logs pulled down into a local sink
- * (`~/.agent-observability/copilot-cloud/`). Defaults to `copilot` when absent
+ * (`~/.agent-observability/copilot-cloud/`); `copilot-agent` reads **autonomous
+ * Copilot CLI agent** runs (e.g. an ACA job remediating an alert) that push their
+ * full `gen_ai.*` OTLP to a cloud landing spot, pulled down into a local sink
+ * (`~/.agent-observability/copilot-agent/`). Defaults to `copilot` when absent
  * (the Copilot producer predates this field). Used to group the Sessions tree by
- * source and to switch the detail panel's cost basis (Copilot bills in AIU;
- * Claude is priced by tokens — see {@link SessionTreeStats.costUsdMicros}; the
- * cloud agent bills in AI credits — see {@link SessionTreeStats.creditsNano}).
+ * source and to switch the detail panel's cost basis (Copilot and the autonomous
+ * Copilot agent both bill in AIU — they emit the same OTel schema; Claude is
+ * priced by tokens — see {@link SessionTreeStats.costUsdMicros}; the cloud agent
+ * bills in AI credits — see {@link SessionTreeStats.creditsNano}).
  */
-export type AgentSourceId = 'copilot' | 'claude' | 'copilot-cloud';
+export type AgentSourceId = 'copilot' | 'claude' | 'copilot-cloud' | 'copilot-agent';
 
 /**
  * Cost basis a source is priced in, used by the detail panel to render the right

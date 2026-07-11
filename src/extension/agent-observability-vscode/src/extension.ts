@@ -39,6 +39,10 @@ import { CloudSink, resolveCloudSinkDir } from './cloud/cloudSink';
 import { CloudApiClient } from './cloud/cloudApiClient';
 import { CloudAgentPoller } from './cloud/cloudAgentPoller';
 import { GhAuth } from './cloud/ghAuth';
+import { AgentSink, resolveAgentSinkDir } from './cloud-agent/agentSink';
+import { AgentBlobClient } from './cloud-agent/agentBlobClient';
+import { AgentPuller } from './cloud-agent/agentPuller';
+import { CopilotAgentSource } from './cloud-agent/copilotAgentSource';
 import { readWorkspaceStoreSessions } from './telemetry/workspaceStore';
 import { CompositeAggregationSource } from './sync/compositeAggregationSource';
 import { CopilotContextHotspotsProvider } from './context/contextHotspotsProvider';
@@ -71,6 +75,8 @@ let liveController: LiveUpdateController | undefined;
 let copilotArchiver: CopilotArchiver | undefined;
 let cloudPoller: CloudAgentPoller | undefined;
 let cloudIndexWatch: fs.FSWatcher | undefined;
+let agentPuller: AgentPuller | undefined;
+let agentIndexWatch: fs.FSWatcher | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   // Diagnostic Output channel ("Agent Observability"). Content-free by contract
@@ -91,7 +97,13 @@ export function activate(context: vscode.ExtensionContext): void {
   const cloudSinkDir = resolveCloudSinkDir();
   const cloudSink = cloudSinkDir !== undefined ? new CloudSink(cloudSinkDir) : undefined;
   const cloudSource = new CopilotCloudSource(config, cloudSink);
-  const registry = new SourceRegistry([new CopilotSource(telemetry, config), claude, cloudSource]);
+  // Copilot (Autonomous): a local sink filled by a background puller that pulls
+  // full gen_ai.* OTLP batches from the relay landing spot. Reads
+  // ~/.agent-observability/copilot-agent/ on demand.
+  const agentSinkDir = resolveAgentSinkDir();
+  const agentSink = agentSinkDir !== undefined ? new AgentSink(agentSinkDir) : undefined;
+  const agentSource = new CopilotAgentSource(agentSink, config);
+  const registry = new SourceRegistry([new CopilotSource(telemetry, config), claude, cloudSource, agentSource]);
   sources = registry;
 
   // Consent + secret management (Phase 4). Both are constructed from the
@@ -323,10 +335,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // dropping the cloud source's cache via registry.refresh); results land when the
   // async poll completes and fire the ingest refresh.
   const cloudPollRefresh: Refreshable = { refresh: () => cloudPoller?.refresh() };
+  // The Refresh command also kicks an immediate autonomous-agent pull (in addition
+  // to dropping the agent source's cache via registry.refresh); results land when
+  // the async pull completes and fire the ingest refresh.
+  const agentPollRefresh: Refreshable = { refresh: () => agentPuller?.refresh() };
   const refreshables: Refreshable[] = [
     sourcesRefresh,
     workspaceContextRefresh,
     cloudPollRefresh,
+    agentPollRefresh,
     overview,
     sessions,
     sync,
@@ -505,6 +522,73 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  // ── Copilot (Autonomous) puller ─────────────────────────────────────────────
+  // Pulls full gen_ai.* OTLP batches that the autonomous agents pushed to the
+  // relay landing spot into the local agent sink, then lights up the same views
+  // as every other source. Off by default; gated on copilotAgent.enabled + a sink
+  // + a configured endpoint. Nothing is uploaded — this is a READ/pull path.
+  const refreshAgentViews = (): void => {
+    agentSource.refresh();
+    overview.refresh();
+    sessions.refresh();
+    detailPanels.rerenderActive();
+  };
+
+  const stopAgent = (): void => {
+    agentPuller?.stop();
+    agentPuller = undefined;
+    agentIndexWatch?.close();
+    agentIndexWatch = undefined;
+  };
+
+  const startAgent = (): void => {
+    stopAgent();
+    const endpoint = config.getCopilotAgentEndpoint();
+    if (!config.isCopilotAgentEnabled() || agentSink === undefined || endpoint === undefined) {
+      return;
+    }
+    const http = new FetchHttpPoster();
+    const client = new AgentBlobClient({
+      http,
+      endpoint,
+      getToken: () => secrets.getAgentRelayToken(),
+    });
+    const puller = new AgentPuller({
+      config,
+      reader: client,
+      sink: agentSink,
+      onIngest: refreshAgentViews,
+      onError: (err) => logger.error('Copilot (Autonomous) pull error', err),
+      // Only ONE window pulls from the relay (a WriterLease elects it, exactly like
+      // the live OTLP receiver + cloud poller); the rest follow its local sink. Log
+      // which role this window has so ownership is visible in the output channel.
+      onBecomeLeader: () =>
+        logger.info('This VS Code window now owns Copilot (Autonomous) pulling — it will pull OTLP batches from the relay.'),
+      onBecomeReader: () =>
+        logger.info('Another VS Code window owns Copilot (Autonomous) pulling — following its local sink for updates.'),
+    });
+    agentPuller = puller;
+    puller.start();
+
+    // Reader windows (and the leader) learn of sink changes via a cheap directory
+    // watch on index.json — a plain atomic JSON rewrite, so the fs.watch-blind-to-
+    // WAL caveat does not apply. Debounced; refreshes the agent source + trees.
+    try {
+      let watchDebounce: ReturnType<typeof setTimeout> | undefined;
+      agentIndexWatch = fs.watch(agentSink.dir(), (_event, filename) => {
+        if (filename !== null && filename !== 'index.json') {
+          return;
+        }
+        if (watchDebounce !== undefined) {
+          clearTimeout(watchDebounce);
+        }
+        watchDebounce = setTimeout(refreshAgentViews, 400);
+      });
+    } catch (err) {
+      logger.error('Copilot (Autonomous) index watch failed to start', err);
+    }
+  };
+
   // Build + start the live pipeline for whichever sources apply. Idempotent: a
   // re-entry (e.g. the Enable command) tears the previous one down first. Off
   // unless `liveUpdates.enabled`.
@@ -675,6 +759,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // Start the Copilot (Cloud) poller (off by default). Gated on copilotCloud.enabled.
   startCloud();
 
+  // Start the Copilot (Autonomous) puller (off by default). Gated on copilotAgent.enabled.
+  startAgent();
+
   // Keep the Sync view live when consent flips (set-key already refreshes via
   // the command path, but consent can also change programmatically).
   context.subscriptions.push(consent.onDidChange(() => sync.refresh()));
@@ -688,6 +775,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({ dispose: () => stopLive() });
   context.subscriptions.push({ dispose: () => stopArchiver() });
   context.subscriptions.push({ dispose: () => stopCloud() });
+  context.subscriptions.push({ dispose: () => stopAgent() });
 
   // On configuration change (e.g. toggling the feature flag, sqlitePath, or the
   // sync.enabled/intervalMinutes settings), drop the cached snapshot, re-arm the
@@ -755,6 +843,18 @@ export function activate(context: vscode.ExtensionContext): void {
         event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotCloudRetentionDays}`)
       ) {
         startCloud();
+      }
+      // Re-arm the Copilot (Autonomous) puller when its enable/endpoint/poll/scope
+      // settings change (re-reads config; toggling off tears down the puller).
+      if (
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotAgentEnabled}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotAgentEndpoint}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotAgentIdlePollSeconds}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotAgentActivePollSeconds}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotAgentMaxSessions}`) ||
+        event.affectsConfiguration(`${CONFIG_SECTION}.${ConfigKeys.copilotAgentRetentionDays}`)
+      ) {
+        startAgent();
       }
     }),
   );
@@ -1097,4 +1197,8 @@ export function deactivate(): void {
   cloudPoller = undefined;
   cloudIndexWatch?.close();
   cloudIndexWatch = undefined;
+  agentPuller?.stop();
+  agentPuller = undefined;
+  agentIndexWatch?.close();
+  agentIndexWatch = undefined;
 }

@@ -69,6 +69,12 @@ export const ConfigKeys = {
   copilotCloudScope: 'copilotCloud.scope',
   copilotCloudRetentionDays: 'copilotCloud.retentionDays',
   copilotCloudMaxTasks: 'copilotCloud.maxTasks',
+  copilotAgentEnabled: 'copilotAgent.enabled',
+  copilotAgentEndpoint: 'copilotAgent.endpoint',
+  copilotAgentIdlePollSeconds: 'copilotAgent.idlePollSeconds',
+  copilotAgentActivePollSeconds: 'copilotAgent.activePollSeconds',
+  copilotAgentRetentionDays: 'copilotAgent.retentionDays',
+  copilotAgentMaxSessions: 'copilotAgent.maxSessions',
 } as const;
 
 /** Default values mirroring the package.json contribution defaults. */
@@ -116,6 +122,12 @@ export const ConfigDefaults = {
   copilotCloudScope: 'my-tasks',
   copilotCloudRetentionDays: 180,
   copilotCloudMaxTasks: 100,
+  copilotAgentEnabled: false,
+  copilotAgentEndpoint: '',
+  copilotAgentIdlePollSeconds: 300,
+  copilotAgentActivePollSeconds: 60,
+  copilotAgentRetentionDays: 180,
+  copilotAgentMaxSessions: 100,
 } as const;
 
 /** Minimum allowed sync interval, mirroring the package.json `minimum`. */
@@ -132,6 +144,11 @@ export const MIN_ARCHIVE_SWEEP_SECONDS = 10;
 export const MIN_COPILOT_CLOUD_IDLE_POLL_SECONDS = 60;
 export const MIN_COPILOT_CLOUD_ACTIVE_POLL_SECONDS = 30;
 export const MIN_COPILOT_CLOUD_RETENTION_DAYS = 1;
+
+/** Minimum Copilot (Autonomous) poll intervals (seconds) + retention (days), mirroring package.json. */
+export const MIN_COPILOT_AGENT_IDLE_POLL_SECONDS = 60;
+export const MIN_COPILOT_AGENT_ACTIVE_POLL_SECONDS = 30;
+export const MIN_COPILOT_AGENT_RETENTION_DAYS = 1;
 
 /** Milliseconds per day, for the retention conversion. */
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -589,6 +606,76 @@ export class Configuration {
     );
     if (!Number.isFinite(raw) || raw <= 0) {
       return ConfigDefaults.copilotCloudMaxTasks;
+    }
+    return Math.floor(raw);
+  }
+
+  /** Whether the Copilot (Autonomous) source pulls autonomous-agent OTLP from the relay. */
+  isCopilotAgentEnabled(): boolean {
+    return this.config().get<boolean>(
+      ConfigKeys.copilotAgentEnabled,
+      ConfigDefaults.copilotAgentEnabled,
+    );
+  }
+
+  /**
+   * Base URL of the cloud landing spot autonomous-agent OTLP is pulled from.
+   * Blank (the default) leaves the source inert — `undefined` so nothing is pulled.
+   */
+  getCopilotAgentEndpoint(): string | undefined {
+    const value = this.config()
+      .get<string>(ConfigKeys.copilotAgentEndpoint, ConfigDefaults.copilotAgentEndpoint)
+      .trim();
+    return value.length > 0 ? value : undefined;
+  }
+
+  /**
+   * Poll interval (ms) while no agent batch arrived on the previous poll. Clamped
+   * to the documented minimum so a hand-edited settings.json cannot busy-loop.
+   */
+  getCopilotAgentIdlePollMs(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.copilotAgentIdlePollSeconds,
+      ConfigDefaults.copilotAgentIdlePollSeconds,
+    );
+    const seconds = Number.isFinite(raw)
+      ? Math.max(MIN_COPILOT_AGENT_IDLE_POLL_SECONDS, Math.floor(raw))
+      : ConfigDefaults.copilotAgentIdlePollSeconds;
+    return seconds * 1000;
+  }
+
+  /** Poll interval (ms) right after a poll that pulled new agent batches, clamped to the minimum. */
+  getCopilotAgentActivePollMs(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.copilotAgentActivePollSeconds,
+      ConfigDefaults.copilotAgentActivePollSeconds,
+    );
+    const seconds = Number.isFinite(raw)
+      ? Math.max(MIN_COPILOT_AGENT_ACTIVE_POLL_SECONDS, Math.floor(raw))
+      : ConfigDefaults.copilotAgentActivePollSeconds;
+    return seconds * 1000;
+  }
+
+  /** How long ingested agent spans + archived raw batches are retained, as ms. Clamped to the minimum. */
+  getCopilotAgentRetentionMs(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.copilotAgentRetentionDays,
+      ConfigDefaults.copilotAgentRetentionDays,
+    );
+    const days = Number.isFinite(raw)
+      ? Math.max(MIN_COPILOT_AGENT_RETENTION_DAYS, Math.floor(raw))
+      : ConfigDefaults.copilotAgentRetentionDays;
+    return days * MS_PER_DAY;
+  }
+
+  /** Max agent batches pulled in one poll (back-pressure against a backlog; positive-int floor). */
+  getCopilotAgentMaxSessions(): number {
+    const raw = this.config().get<number>(
+      ConfigKeys.copilotAgentMaxSessions,
+      ConfigDefaults.copilotAgentMaxSessions,
+    );
+    if (!Number.isFinite(raw) || raw <= 0) {
+      return ConfigDefaults.copilotAgentMaxSessions;
     }
     return Math.floor(raw);
   }

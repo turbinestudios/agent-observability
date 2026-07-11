@@ -116,4 +116,67 @@ describe('otlpSpansToRows', () => {
     // every attribute on the span is represented
     expect(chatAttrs.size).toBe(15);
   });
+
+  it('does not copy non-identity resource attributes (session.id) onto spans', () => {
+    // The local-Copilot resource carries only session.id, which is not a
+    // service.*/agent.* key, so the copy must be a no-op for the local path.
+    expect(attributes.some((r) => r.key === 'session.id')).toBe(false);
+  });
+});
+
+describe('otlpSpansToRows resource/agent identity', () => {
+  // A self-hosted producer (autonomous Copilot CLI agent) sets its identity on
+  // the Resource via service.* and custom agent.* keys.
+  const agentEnvelope = {
+    resourceSpans: [
+      {
+        resource: {
+          attributes: [
+            { key: 'service.name', value: sv('error-remediation') },
+            { key: 'service.instance.id', value: sv('run-42') },
+            { key: 'service.namespace', value: sv('aca-jobs') },
+            { key: 'agent.type', value: sv('copilot-cli') },
+            // Not a service.*/agent.* key → must NOT be copied onto the span.
+            { key: 'deployment.environment', value: sv('prod') },
+          ],
+        },
+        scopeSpans: [
+          {
+            spans: [
+              {
+                name: 'chat gpt',
+                spanId: 's-agent',
+                traceId: 't2',
+                startTimeUnixNano: '1700000000000000000',
+                endTimeUnixNano: '1700000001000000000',
+                status: { code: 1 },
+                attributes: [
+                  { key: 'gen_ai.operation.name', value: sv('chat') },
+                  // Span-level override of a resource key: the span value must win.
+                  { key: 'service.namespace', value: sv('span-wins') },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  const { attributes } = otlpSpansToRows(flattenSpans(agentEnvelope));
+  const agentAttrs = new Map(attributes.filter((r) => r.span_id === 's-agent').map((r) => [r.key, r.value]));
+
+  it('copies service.* and agent.* resource attributes onto the span', () => {
+    expect(agentAttrs.get('service.name')).toBe('error-remediation');
+    expect(agentAttrs.get('service.instance.id')).toBe('run-42');
+    expect(agentAttrs.get('agent.type')).toBe('copilot-cli');
+  });
+
+  it('does not copy resource keys outside the identity prefixes', () => {
+    expect(agentAttrs.has('deployment.environment')).toBe(false);
+  });
+
+  it('lets a span-level attribute win over a resource attribute of the same key', () => {
+    expect(agentAttrs.get('service.namespace')).toBe('span-wins');
+  });
 });

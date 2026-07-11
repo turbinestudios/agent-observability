@@ -65,6 +65,7 @@ const EXPECTED_COMMANDS = [
   'agentObservability.disableLiveUpdates',
   'agentObservability.showLogs',
   'agentObservability.setCloudAccountToken',
+  'agentObservability.setAgentRelayToken',
 ] as const;
 
 const EXPECTED_VIEWS = [
@@ -114,6 +115,12 @@ const EXPECTED_CONFIG_KEYS = [
   'agentObservability.copilotCloud.scope',
   'agentObservability.copilotCloud.retentionDays',
   'agentObservability.copilotCloud.maxTasks',
+  'agentObservability.copilotAgent.enabled',
+  'agentObservability.copilotAgent.endpoint',
+  'agentObservability.copilotAgent.idlePollSeconds',
+  'agentObservability.copilotAgent.activePollSeconds',
+  'agentObservability.copilotAgent.retentionDays',
+  'agentObservability.copilotAgent.maxSessions',
 ] as const;
 
 describe('manifest contract is stable', () => {
@@ -179,6 +186,33 @@ describe('manifest contract is stable', () => {
       'agentObservability.copilotCloud.scope',
       'agentObservability.copilotCloud.retentionDays',
       'agentObservability.copilotCloud.maxTasks',
+    ]) {
+      expect(props[key].scope).toBe('application');
+    }
+  });
+
+  it('locks the Copilot (Autonomous) source off-by-default and application-scoped', () => {
+    const props = manifest.contributes.configuration.properties;
+    // Privacy-relevant default: the autonomous-agent source is opt-in (off) — it
+    // pulls full gen_ai.* prompts/tool I/O down and stores them raw locally.
+    expect(props['agentObservability.copilotAgent.enabled'].default).toBe(false);
+    expect(props['agentObservability.copilotAgent.endpoint'].default).toBe('');
+    expect(props['agentObservability.copilotAgent.idlePollSeconds'].default).toBe(300);
+    expect(props['agentObservability.copilotAgent.idlePollSeconds'].minimum).toBe(60);
+    expect(props['agentObservability.copilotAgent.activePollSeconds'].default).toBe(60);
+    expect(props['agentObservability.copilotAgent.activePollSeconds'].minimum).toBe(30);
+    expect(props['agentObservability.copilotAgent.retentionDays'].default).toBe(180);
+    expect(props['agentObservability.copilotAgent.retentionDays'].minimum).toBe(1);
+    expect(props['agentObservability.copilotAgent.maxSessions'].default).toBe(100);
+    expect(props['agentObservability.copilotAgent.maxSessions'].minimum).toBe(1);
+    // Home-anchored sink = machine-wide, like copilotArchive.*/copilotCloud.* — application scope.
+    for (const key of [
+      'agentObservability.copilotAgent.enabled',
+      'agentObservability.copilotAgent.endpoint',
+      'agentObservability.copilotAgent.idlePollSeconds',
+      'agentObservability.copilotAgent.activePollSeconds',
+      'agentObservability.copilotAgent.retentionDays',
+      'agentObservability.copilotAgent.maxSessions',
     ]) {
       expect(props[key].scope).toBe('application');
     }

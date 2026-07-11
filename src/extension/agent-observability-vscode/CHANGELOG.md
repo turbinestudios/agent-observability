@@ -4,6 +4,26 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.6] - 2026-07-11
+
+### Added
+
+- **New source: "Copilot (Autonomous)".** Autonomous Copilot CLI agents (for
+  example an Azure Container Apps job that remediates an alert) can push their
+  full `gen_ai.*` OpenTelemetry to a cloud landing spot; when enabled, a
+  background puller pulls those raw OTLP batches into a local sink under your
+  home directory (`~/.agent-observability/copilot-agent/`) and shows the sessions
+  alongside Copilot and Claude Code under a **Copilot (Autonomous)** node. Because
+  the batches carry the same OTLP schema as local Copilot Chat, the session
+  detail, context, and deviation panels light up unchanged. A single VS Code
+  window pulls (elected via a lease); the rest follow its local sink. Off by
+  default (opt-in). Configure with the new `agentObservability.copilotAgent.*`
+  settings and authenticate the pull with a bearer token stored via the new
+  **Copilot (Autonomous): Set relay token** command
+  (`agentObservability.setAgentRelayToken`). The pulled data is stored locally and
+  is **never re-uploaded** — it does not participate in the aggregate cloud-sync
+  path.
+
 ## [0.9.5] - 2026-07-10
 
 ### Fixed

@@ -29,6 +29,7 @@ export const Commands = {
   disableLiveUpdates: 'agentObservability.disableLiveUpdates',
   showLogs: 'agentObservability.showLogs',
   setCloudAccountToken: 'agentObservability.setCloudAccountToken',
+  setAgentRelayToken: 'agentObservability.setAgentRelayToken',
 } as const;
 
 /** The required prefix of an organization API key (`aoa_<keyId>_<secret>`). */
@@ -153,6 +154,12 @@ export function registerCommands(
   // stored in SecretStorage; the escape hatch for accounts not logged into gh.
   register(Commands.setCloudAccountToken, () => {
     void runSetCloudAccountToken(secrets, () => refreshAll(refreshables));
+  });
+
+  // Set the Copilot (Autonomous) relay token — a single masked bearer token,
+  // stored in SecretStorage; used to authenticate the pull from the OTLP relay.
+  register(Commands.setAgentRelayToken, () => {
+    void runSetAgentRelayToken(secrets, () => refreshAll(refreshables));
   });
 
   // Toggle Cloud Sharing — flip consent behind an explicit disclosure modal.
@@ -429,6 +436,36 @@ async function runSetCloudAccountToken(secrets: SecretManager, onChanged: () => 
   // Confirmation MUST NOT echo the token.
   void vscode.window.showInformationMessage(
     `Agent Observability: token for '${label}' saved securely in VS Code SecretStorage. It is never uploaded or logged.`,
+  );
+}
+
+/**
+ * `setAgentRelayToken` handler. Prompts for a single masked bearer token for the
+ * autonomous-agent OTLP relay, stores it in SecretStorage (never echoed), and
+ * refreshes so the puller picks it up on its next poll.
+ */
+async function runSetAgentRelayToken(secrets: SecretManager, onChanged: () => void): Promise<void> {
+  const token = await vscode.window.showInputBox({
+    title: 'Copilot (Autonomous): Set relay token',
+    prompt:
+      'Paste the bearer token for the autonomous-agent OTLP relay (authenticates the pull from copilotAgent.endpoint). Stored securely in VS Code SecretStorage.',
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (value) => (value.trim().length === 0 ? 'Token must not be empty.' : undefined),
+  });
+  if (token === undefined) {
+    return; // cancelled
+  }
+  const trimmed = token.trim();
+  if (trimmed.length === 0) {
+    return;
+  }
+
+  await secrets.setAgentRelayToken(trimmed);
+  onChanged();
+  // Confirmation MUST NOT echo the token.
+  void vscode.window.showInformationMessage(
+    'Agent Observability: Copilot (Autonomous) relay token saved securely in VS Code SecretStorage. It is never uploaded or logged.',
   );
 }
 

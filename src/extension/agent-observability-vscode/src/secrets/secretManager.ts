@@ -119,4 +119,32 @@ export class SecretManager {
     const value = await this.secrets.get(SecretManager.cloudAccountKey(accountLabel));
     return value !== undefined && value.length > 0;
   }
+
+  /** SecretStorage key for the Copilot (Autonomous) relay bearer token. */
+  static readonly AGENT_RELAY_TOKEN = 'agentObservability.agentRelayToken';
+
+  /**
+   * The stored bearer token for the autonomous-agent OTLP relay, or `undefined`
+   * when none is set. Used ONLY to authenticate the read/pull against the relay's
+   * landing spot; never placed in any aggregate batch, log, or diagnostic.
+   */
+  async getAgentRelayToken(): Promise<string | undefined> {
+    return this.secrets.get(SecretManager.AGENT_RELAY_TOKEN);
+  }
+
+  /** Store the agent relay token. Written verbatim — validate before calling. */
+  async setAgentRelayToken(value: string): Promise<void> {
+    await this.secrets.store(SecretManager.AGENT_RELAY_TOKEN, value);
+  }
+
+  /** Remove the stored agent relay token. */
+  async clearAgentRelayToken(): Promise<void> {
+    await this.secrets.delete(SecretManager.AGENT_RELAY_TOKEN);
+  }
+
+  /** Whether an agent relay token is currently stored. */
+  async hasAgentRelayToken(): Promise<boolean> {
+    const value = await this.secrets.get(SecretManager.AGENT_RELAY_TOKEN);
+    return value !== undefined && value.length > 0;
+  }
 }

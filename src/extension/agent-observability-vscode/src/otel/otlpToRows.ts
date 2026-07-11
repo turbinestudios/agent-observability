@@ -93,15 +93,29 @@ function nanoToMs(nano?: string): number | undefined {
 }
 
 /**
+ * OTLP Resource-attribute key prefixes copied down onto each span's
+ * `span_attributes`. Resource attributes describe the PRODUCER of the telemetry
+ * (the service/agent). A self-hosted producer — e.g. an autonomous Copilot CLI
+ * agent — carries its identity here via `service.name` / `service.instance.id` /
+ * `service.namespace` / `service.version` and custom `agent.*` keys. Local Copilot
+ * Chat sets none of these (its resource carries only `session.id`), so copying is a
+ * no-op for the local path while making agent identity queryable for cloud-agent
+ * ingestion. A span-level attribute of the same key always wins (more specific).
+ */
+export const RESOURCE_ATTR_KEY_PREFIXES = ['service.', 'agent.'] as const;
+
+/**
  * Convert flattened OTLP spans to `spans` + `span_attributes` rows. Spans without
  * a `spanId` are skipped (it is the primary key). An attribute value of any
  * non-string type is stringified, matching how Copilot stores `span_attributes`.
+ * Selected Resource attributes ({@link RESOURCE_ATTR_KEY_PREFIXES}) are copied onto
+ * each span's attributes so producer/agent identity is queryable per span.
  */
 export function otlpSpansToRows(flat: readonly FlatSpan[]): SpanRows {
   const spans: SpanRow[] = [];
   const attributes: AttrRow[] = [];
 
-  for (const { span } of flat) {
+  for (const { span, resource } of flat) {
     const spanId = span.spanId;
     if (spanId === undefined || spanId.length === 0) {
       continue;
@@ -143,6 +157,18 @@ export function otlpSpansToRows(flat: readonly FlatSpan[]): SpanRows {
 
     for (const [key, value] of a) {
       attributes.push({ span_id: spanId, key, value: value === undefined ? null : String(value) });
+    }
+
+    // Copy producer/agent identity down from the Resource onto the span. A
+    // span-level attribute of the same key already won (written above), so only
+    // resource keys absent from the span are added.
+    for (const [key, value] of resource) {
+      if (a.has(key)) {
+        continue;
+      }
+      if (RESOURCE_ATTR_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+        attributes.push({ span_id: spanId, key, value: value === undefined ? null : String(value) });
+      }
     }
   }
 
