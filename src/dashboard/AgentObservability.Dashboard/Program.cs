@@ -1,11 +1,13 @@
 using AgentObservability.Dashboard.Components;
 using AgentObservability.Dashboard.Models;
 using AgentObservability.Dashboard.Services;
+using AgentObservability.Dashboard.Services.AgentRelay;
 using AgentObservability.Dashboard.Services.Analytics;
 using AgentObservability.Dashboard.Services.Ingestion;
 using AgentObservability.Dashboard;
 using Azure.Data.Tables;
-using Azure.Identity;
+using Azure.Storage.Blobs;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,13 +23,25 @@ builder.Services.AddScoped<Radzen.ContextMenuService>();
 var storageTableEndpoint = builder.Configuration["Storage:TableEndpoint"];
 if (!string.IsNullOrEmpty(storageTableEndpoint))
 {
-    builder.Services.AddSingleton(new TableServiceClient(new Uri(storageTableEndpoint), new DefaultAzureCredential()));
+    builder.Services.AddSingleton(new TableServiceClient(new Uri(storageTableEndpoint), new Azure.Identity.DefaultAzureCredential()));
 }
 else
 {
     // Fallback to connection string for local development (Azurite)
     var storageConnectionString = builder.Configuration["Storage:ConnectionString"] ?? "UseDevelopmentStorage=true";
     builder.Services.AddSingleton(new TableServiceClient(storageConnectionString));
+}
+
+// Azure Blob Storage client backing the autonomous-agent OTLP relay (raw batches).
+var storageBlobEndpoint = builder.Configuration["Storage:BlobEndpoint"];
+if (!string.IsNullOrEmpty(storageBlobEndpoint))
+{
+    builder.Services.AddSingleton(new BlobServiceClient(new Uri(storageBlobEndpoint), new Azure.Identity.DefaultAzureCredential()));
+}
+else
+{
+    var storageConnectionString = builder.Configuration["Storage:ConnectionString"] ?? "UseDevelopmentStorage=true";
+    builder.Services.AddSingleton(new BlobServiceClient(storageConnectionString));
 }
 
 // Cloud Ingestion API.
@@ -60,6 +74,12 @@ builder.Services.AddSingleton<IContextInsightStore>(sp => sp.GetRequiredService<
 builder.Services.AddSingleton<TableSyncStatusStore>();
 builder.Services.AddSingleton<ISyncStatusStore>(sp => sp.GetRequiredService<TableSyncStatusStore>());
 
+// Autonomous-agent OTLP relay: raw batches pushed by an alert-triggered Copilot CLI agent and
+// pulled by the VS Code extension. Blob-backed, org-scoped by the same ingestion API key.
+builder.Services.Configure<AgentRelayOptions>(builder.Configuration.GetSection(AgentRelayOptions.SectionName));
+builder.Services.AddSingleton<BlobAgentOtlpBatchStore>();
+builder.Services.AddSingleton<IAgentOtlpBatchStore>(sp => sp.GetRequiredService<BlobAgentOtlpBatchStore>());
+
 // Aggregate-backed analytics for the org-level pages (Overview, Repository, Developer Activity,
 // LLM Analytics). Backed solely by the privacy-scoped aggregate store in Table Storage.
 builder.Services.Configure<AnalyticsOptions>(builder.Configuration.GetSection(AnalyticsOptions.SectionName));
@@ -91,6 +111,19 @@ catch (Exception ex)
     app.Logger.LogWarning(ex, "Could not ensure ingestion tables exist; ingestion storage may be unavailable.");
 }
 
+// Ensure the agent OTLP relay container exists (guarded like the tables above).
+if (app.Services.GetRequiredService<IOptions<AgentRelayOptions>>().Value.Enabled)
+{
+    try
+    {
+        await app.Services.GetRequiredService<BlobAgentOtlpBatchStore>().EnsureContainerExistsAsync();
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Could not ensure the agent OTLP relay container exists; relay storage may be unavailable.");
+    }
+}
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseHsts();
@@ -104,6 +137,7 @@ app.MapRazorComponents<AgentObservability.Dashboard.App>()
     .AddInteractiveServerRenderMode();
 
 app.MapIngestionApi();
+app.MapAgentOtlpApi();
 
 app.Run();
 

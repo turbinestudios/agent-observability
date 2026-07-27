@@ -19,6 +19,12 @@ param dashboardIdentityId string
 @description('Table service endpoint for Azure Table Storage')
 param storageTableEndpoint string
 
+@description('Blob service endpoint for Azure Blob Storage (autonomous-agent OTLP relay)')
+param storageBlobEndpoint string
+
+@description('Enable the autonomous-agent OTLP relay endpoints (AgentRelay:Enabled)')
+param agentRelayEnabled bool = true
+
 @secure()
 @description('Server-side pepper for ingestion API-key HMAC (Ingestion:KeyPepper), wired as a Container App secret')
 param ingestionKeyPepper string
@@ -72,12 +78,20 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: storageTableEndpoint
             }
             {
+              name: 'Storage__BlobEndpoint'
+              value: storageBlobEndpoint
+            }
+            {
               name: 'Ingestion__Enabled'
               value: 'true'
             }
             {
               name: 'Ingestion__KeyPepper'
               secretRef: 'ingestion-key-pepper'
+            }
+            {
+              name: 'AgentRelay__Enabled'
+              value: string(agentRelayEnabled)
             }
             {
               name: 'Analytics__OrgId'

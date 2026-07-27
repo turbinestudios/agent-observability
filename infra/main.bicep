@@ -19,6 +19,12 @@ param ingestionKeyPepper string
 @description('Organization id filter for aggregate analytics (Analytics:OrgId). Empty = all orgs.')
 param analyticsOrgId string = ''
 
+@description('Enable the autonomous-agent OTLP relay endpoints on the dashboard')
+param agentRelayEnabled bool = true
+
+@description('Retention in days for raw autonomous-agent OTLP batches before lifecycle deletion')
+param agentOtlpRetentionDays int = 7
+
 // Azure Container Registry
 module acr 'modules/acr.bicep' = {
   params: {
@@ -77,11 +83,12 @@ module containerAppsEnv 'modules/container-apps-env.bicep' = {
   }
 }
 
-// Storage Account for workflow configuration (Table Storage)
+// Storage Account for workflow configuration (Table Storage) and the agent OTLP relay (Blob Storage)
 module storageAccount 'modules/storage-account.bicep' = {
   params: {
     location: location
     storageAccountName: replace('st${baseName}${uniqueString(resourceGroup().id)}', '-', '')
+    agentOtlpRetentionDays: agentOtlpRetentionDays
   }
 }
 
@@ -95,8 +102,10 @@ module dashboard 'modules/dashboard-app.bicep' = {
     acrLoginServer: acr.outputs.loginServer
     dashboardIdentityId: dashboardIdentity.id
     storageTableEndpoint: storageAccount.outputs.tableEndpoint
+    storageBlobEndpoint: storageAccount.outputs.blobEndpoint
     ingestionKeyPepper: ingestionKeyPepper
     analyticsOrgId: analyticsOrgId
+    agentRelayEnabled: agentRelayEnabled
   }
   dependsOn: [dashboardAcrPullRole]
 }
@@ -119,6 +128,17 @@ resource dashboardTableDataRole 'Microsoft.Authorization/roleAssignments@2022-04
   }
 }
 
+// Storage Blob Data Contributor role for Dashboard identity (agent OTLP relay read/write)
+resource dashboardBlobDataRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, 'ca-${baseName}-dashboard', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  scope: storageAccountResource
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    principalId: dashboard.outputs.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Outputs
 @description('FQDN of the Dashboard')
 output dashboardFqdn string = dashboard.outputs.fqdn
@@ -131,3 +151,6 @@ output keyVaultUri string = keyVault.outputs.keyVaultUri
 
 @description('Storage Account Table Endpoint')
 output storageTableEndpoint string = storageAccount.outputs.tableEndpoint
+
+@description('Storage Account Blob Endpoint')
+output storageBlobEndpoint string = storageAccount.outputs.blobEndpoint
