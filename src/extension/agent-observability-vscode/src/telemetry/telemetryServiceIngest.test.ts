@@ -300,7 +300,11 @@ const UUID_TOOL = 'a1111111-1111-2222-3333-444444444444';
 const UUID_SUGG = 'b1111111-1111-2222-3333-444444444444';
 const UUID_FALLBACK = 'c1111111-1111-2222-3333-444444444444';
 const UUID_SYNTH = 'd1111111-1111-2222-3333-444444444444';
+const UUID_AGENT = 'e1111111-1111-2222-3333-444444444444';
+const UUID_PARENT = 'f1111111-1111-2222-3333-444444444444';
+const UUID_TURN = '01111111-1111-2222-3333-444444444444';
 const WS_REPO = 'https://github.com/org/workspace-repo';
+const AGENT_REPO = 'https://github.com/turbinestudios/loop-app';
 
 /**
  * A session whose ONLY span is a tool call — a UUID `chat_session_id`, no
@@ -366,6 +370,86 @@ function suggestionOnlyEnvelopeFor(uuid: string) {
   };
 }
 
+/**
+ * The shape an autonomous Copilot CLI agent relays through the OTLP relay: the
+ * whole run shares ONE `gen_ai.conversation.id`, NO `chat_session_id` is ever
+ * emitted, and the repository is a bare `owner/repo` slug on
+ * `github.copilot.git.repository` (not a `copilot_chat.repo.remote_url`).
+ */
+function autonomousEnvelopeFor(conversation: string) {
+  const span = (
+    id: string,
+    name: string,
+    operation: string,
+    extra: Array<{ key: string; value: { stringValue: string } }> = [],
+  ) => ({
+    name,
+    spanId: `${id}-${conversation}`,
+    traceId: `tr-${conversation}`,
+    startTimeUnixNano: '1700000000000000000',
+    endTimeUnixNano: '1700000001000000000',
+    status: { code: 1 },
+    attributes: [
+      { key: 'gen_ai.operation.name', value: sv(operation) },
+      { key: 'gen_ai.conversation.id', value: sv(conversation) },
+      ...extra,
+    ],
+  });
+
+  return {
+    resourceSpans: [
+      {
+        resource: { attributes: [{ key: 'service.name', value: sv('copilot-remediation-agent') }] },
+        scopeSpans: [
+          {
+            spans: [
+              span('a', 'invoke_agent', 'invoke_agent', [
+                { key: 'github.copilot.git.repository', value: sv('turbinestudios/loop-app') },
+              ]),
+              span('c', 'chat claude-sonnet-5', 'chat', [
+                { key: 'gen_ai.response.model', value: sv('claude-sonnet-5') },
+              ]),
+              span('t', 'execute_tool bash', 'execute_tool', [
+                { key: 'gen_ai.tool.name', value: sv('bash') },
+              ]),
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * A Copilot Chat session (`chat_session_id`) plus ONE per-turn
+ * `conversation_id` fragment under it — both spans carry the parent's
+ * `chat_session_id`, which is what must keep the fragment out of the list.
+ */
+function perTurnFragmentEnvelope(turn: string, parent: string) {
+  const span = (id: string, conversation: string) => ({
+    name: 'chat',
+    spanId: `${id}-${conversation}`,
+    traceId: `tr-${parent}`,
+    startTimeUnixNano: '1700000000000000000',
+    endTimeUnixNano: '1700000001000000000',
+    status: { code: 1 },
+    attributes: [
+      { key: 'gen_ai.operation.name', value: sv('chat') },
+      { key: 'gen_ai.conversation.id', value: sv(conversation) },
+      { key: 'copilot_chat.chat_session_id', value: sv(parent) },
+      { key: 'gen_ai.response.model', value: sv('gpt-x') },
+    ],
+  });
+  return {
+    resourceSpans: [
+      {
+        resource: { attributes: [] },
+        scopeSpans: [{ spans: [span('root', parent), span('turn', turn)] }],
+      },
+    ],
+  };
+}
+
 /** Build a service backed solely by an ingest DB holding the given envelope. */
 function serviceForIngest(env: object): TelemetryService {
   tmp = mkdtempSync(path.join(os.tmpdir(), 'agent-obs-gate-'));
@@ -413,6 +497,34 @@ describe('relaxed session gate + workspace-scoped context', () => {
     expect(repos.ok && repos.value.some((r) => r.repository === WS_REPO)).toBe(true);
     const scoped = service.listSessions(WS_REPO);
     expect(scoped.ok && scoped.value.some((s) => s.sessionId === UUID_FALLBACK)).toBe(true);
+    service.dispose();
+  });
+
+  it('lists an autonomous CLI session (conversation id only) under its slug repo', () => {
+    const service = serviceForIngest(autonomousEnvelopeFor(UUID_AGENT));
+
+    // The whole run shares ONE conversation id and carries NO chat_session_id —
+    // the shape an autonomous Copilot CLI agent relays. It must still be listed,
+    // grouped under the repo from `github.copilot.git.repository`.
+    const session = listedSession(service, UUID_AGENT);
+    expect(session).toBeDefined();
+    expect(session?.repository).toBe(AGENT_REPO);
+    expect(session?.llmCalls).toBe(1);
+    expect(session?.toolCalls).toBe(1);
+
+    const repos = service.listRepositories();
+    expect(repos.ok && repos.value.some((r) => r.repository === AGENT_REPO)).toBe(true);
+    const scoped = service.listSessions(AGENT_REPO);
+    expect(scoped.ok && scoped.value.some((s) => s.sessionId === UUID_AGENT)).toBe(true);
+    service.dispose();
+  });
+
+  it('still hides a per-turn conversation fragment that carries a parent chat_session_id', () => {
+    // Guard for the gate relaxation above: Copilot Chat spans carry BOTH ids, and
+    // the per-turn conversation id must never surface as a session of its own.
+    const service = serviceForIngest(perTurnFragmentEnvelope(UUID_TURN, UUID_PARENT));
+    expect(listedSession(service, UUID_TURN)).toBeUndefined();
+    expect(listedSession(service, UUID_PARENT)).toBeDefined();
     service.dispose();
   });
 

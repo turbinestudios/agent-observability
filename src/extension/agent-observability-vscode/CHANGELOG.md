@@ -4,6 +4,28 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.7] - 2026-07-28
+
+### Fixed
+
+- **"Copilot (Autonomous)" showed no sessions even after batches were pulled.**
+  Relayed OTLP landed in the local sink correctly, but two read-layer assumptions
+  borrowed from VS Code Copilot Chat hid every autonomous session:
+  - The started-session gate required a UUID `chat_session_id`. An autonomous
+    Copilot CLI run never emits one — the whole run shares a single
+    `gen_ai.conversation.id` — so the Sessions tree and the repository rollup were
+    empty while the Overview still counted the spans. Such a session is now
+    admitted by its conversation id, but only when none of its spans carry a
+    `chat_session_id`, which keeps Copilot Chat's per-turn conversation fragments
+    (and spawned sub-agents) out of the list as before.
+  - The repository was resolved only from `copilot_chat.repo.remote_url`.
+    Autonomous agents report `github.copilot.git.repository` as a bare
+    `owner/repo` slug, so every session resolved to `unknown` — and was therefore
+    hidden entirely for anyone listing `unknown` in
+    `agentObservability.excludedRepositories`. Both attribute spellings are now
+    read (a full remote wins), with the slug normalized to
+    `https://github.com/owner/repo` through the same privacy sanitizer.
+
 ## [0.9.6] - 2026-07-11
 
 ### Added

@@ -73,6 +73,43 @@ export function sanitizeRepositoryUrl(raw: string | null | undefined): string {
   return REPOSITORY_PATTERN.test(candidate) ? candidate : UNKNOWN_REPOSITORY;
 }
 
+/** A bare `owner/repo` GitHub slug: exactly one slash, no host, no scheme. */
+const SLUG_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+/**
+ * Normalize a repository reported as a bare `owner/repo` slug to canonical
+ * `https://github.com/owner/repo`.
+ *
+ * Autonomous Copilot CLI agents report their repository on
+ * `github.copilot.git.repository` as a slug (no scheme, no host), where VS Code
+ * Copilot Chat reports a full git remote on `copilot_chat.repo.remote_url`. A
+ * slug carries no host, so `github.com` is assumed — the attribute lives in the
+ * `github.copilot.*` namespace, which only GitHub-hosted agents emit.
+ *
+ * A value that already looks like a remote (`scheme://…`, `git@host:…`) is
+ * handed to {@link sanitizeRepositoryUrl} unchanged, so a GHES-hosted agent that
+ * reports a full URL still resolves. Anything else returns
+ * {@link UNKNOWN_REPOSITORY}. Every path funnels through
+ * {@link sanitizeRepositoryUrl}, so this adds no new way for a credential-bearing
+ * value to escape.
+ */
+export function sanitizeRepositorySlug(raw: string | null | undefined): string {
+  if (raw === null || raw === undefined) {
+    return UNKNOWN_REPOSITORY;
+  }
+  const value = raw.trim();
+  if (value.length === 0) {
+    return UNKNOWN_REPOSITORY;
+  }
+  // Already a remote (URL-style or SCP-style) — the URL sanitizer owns it.
+  if (value.includes('://') || value.includes('@') || value.includes(':')) {
+    return sanitizeRepositoryUrl(value);
+  }
+  return SLUG_PATTERN.test(value)
+    ? sanitizeRepositoryUrl(`https://github.com/${value}`)
+    : UNKNOWN_REPOSITORY;
+}
+
 interface ParsedRemote {
   host: string;
   /** Port suffix including the leading colon, or empty string. */

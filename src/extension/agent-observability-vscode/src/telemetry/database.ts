@@ -57,6 +57,15 @@ const NO_EXCLUSIONS: ReadonlySet<string> = new Set();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * The `sessions` view's grouping key as a SQL expression, for queries that must
+ * group identically. A fixed expression from this module — never user input.
+ */
+const SESSION_KEY_EXPR = 'COALESCE(conversation_id, chat_session_id)';
+
+/** Shared empty set for a session-key lookup that does not need to be queried. */
+const NO_SESSIONS: ReadonlySet<string> = new Set();
+
+/**
  * Defensive cap on the breadth-first agent-tree walk in {@link
  * TelemetryDatabase.sessionTreeIds}. Each hop expands the frontier by one edge in
  * the conversation/chat-session id graph; real agent runs nest only a few levels,
@@ -2125,8 +2134,8 @@ export class TelemetryDatabase {
   }
 
   /**
-   * Set of `chat_session_id` UUIDs that have STARTED — i.e. carry at least one
-   * span — excluding sessions that used only inline-suggestion models.
+   * Set of session keys that have STARTED — i.e. carry at least one span —
+   * excluding sessions that used only inline-suggestion models.
    *
    * Unlike a stricter "human-initiated" gate, this deliberately does NOT require a
    * `copilot_chat.user_request` span. A just-started session emits an
@@ -2136,46 +2145,84 @@ export class TelemetryDatabase {
    * chat model and are still excluded — a session with no chat spans yet is absent
    * from that exclusion set and thus admitted.
    *
-   * Because the `sessions` view groups by `COALESCE(conversation_id,
-   * chat_session_id)`, only rows where that key equals the bare `chat_session_id`
-   * will match this set — per-turn `conversation_id` fragments (including spawned
-   * sub-agents, whose spans carry the parent's `chat_session_id`) are naturally
-   * excluded.
+   * TWO span shapes qualify, because the emitters differ:
+   *
+   * (a) VS Code Copilot Chat — a UUID `chat_session_id`. Because the `sessions`
+   *     view groups by `COALESCE(conversation_id, chat_session_id)`, only rows
+   *     where that key equals the bare `chat_session_id` match, so per-turn
+   *     `conversation_id` fragments (including spawned sub-agents, whose spans
+   *     carry the parent's `chat_session_id`) are naturally excluded.
+   *
+   * (b) Autonomous Copilot CLI agents — NO `chat_session_id` at all; the whole run
+   *     shares one `gen_ai.conversation.id`, which IS the session. Such a session
+   *     is admitted by its UUID session key, but ONLY when none of its spans carry
+   *     a `chat_session_id` — that condition is what keeps (a)'s per-turn
+   *     conversation fragments out, since those always carry the parent's id.
+   *     Without this, every relayed autonomous session was silently absent from
+   *     the Sessions tree and the repository rollup.
    */
   private startedSessionIds(): ReadonlySet<string> {
     if (this.startedSessionsCache !== undefined) {
       return this.startedSessionsCache;
     }
-    // Distinct UUID chat_session_ids that carry at least one span of any kind.
-    const rows = this.allRows<{ csid: string }>(
+    // (a) Distinct UUID chat_session_ids that carry at least one span of any kind.
+    // Keep only UUID-shaped ids (excludes tool-call ids like `toolu_bdrk_*`).
+    const chatSessionCandidates = this.allRows<{ csid: string }>(
       `SELECT DISTINCT chat_session_id AS csid
          FROM spans
          WHERE chat_session_id IS NOT NULL
            AND LENGTH(chat_session_id) = 36`,
-    );
-
-    // Keep only UUID-shaped ids (excludes tool-call ids like `toolu_bdrk_*`).
-    const uuidCandidates = rows
+    )
       .filter((r) => UUID_RE.test(r.csid))
       .map((r) => r.csid);
 
-    // Sessions whose CHAT spans use ONLY inline-suggestion models (no real chat
-    // model). Sessions with no chat spans yet are absent here and thus admitted.
-    const suggestionOnlySessions = new Set(
+    // (b) Session keys whose spans carry NO chat_session_id — the autonomous
+    // Copilot CLI shape, where the conversation id is the session.
+    const conversationOnlyCandidates = this.allRows<{ sk: string }>(
+      `SELECT ${SESSION_KEY_EXPR} AS sk
+         FROM spans
+         WHERE ${SESSION_KEY_EXPR} IS NOT NULL
+           AND LENGTH(${SESSION_KEY_EXPR}) = 36
+         GROUP BY ${SESSION_KEY_EXPR}
+         HAVING SUM(CASE WHEN chat_session_id IS NOT NULL AND chat_session_id <> '' THEN 1 ELSE 0 END) = 0`,
+    )
+      .filter((r) => UUID_RE.test(r.sk))
+      .map((r) => r.sk);
+
+    // Suggestion-only exclusion, applied per shape with its own key (grouping the
+    // Copilot Chat case by the session key instead would break it, because its
+    // rows are keyed by per-turn conversation ids).
+    const suggestionOnlyByChatSession = this.suggestionOnlySessions('chat_session_id');
+    const suggestionOnlyByKey =
+      conversationOnlyCandidates.length > 0
+        ? this.suggestionOnlySessions(SESSION_KEY_EXPR)
+        : NO_SESSIONS;
+
+    this.startedSessionsCache = new Set([
+      ...chatSessionCandidates.filter((id) => !suggestionOnlyByChatSession.has(id)),
+      ...conversationOnlyCandidates.filter((id) => !suggestionOnlyByKey.has(id)),
+    ]);
+    return this.startedSessionsCache;
+  }
+
+  /**
+   * Session keys (grouped by `keyExpr`) whose CHAT spans use ONLY inline-
+   * suggestion models — i.e. no real chat model. Sessions with no chat spans yet
+   * are absent from the result and are therefore admitted by the caller.
+   *
+   * `keyExpr` is a fixed SQL expression from this module (never user input).
+   */
+  private suggestionOnlySessions(keyExpr: string): ReadonlySet<string> {
+    return new Set(
       this.allRows<{ sk: string }>(
-        `SELECT chat_session_id AS sk
+        `SELECT ${keyExpr} AS sk
            FROM spans
-           WHERE chat_session_id IS NOT NULL
+           WHERE ${keyExpr} IS NOT NULL
              AND operation_name = 'chat'
-           GROUP BY chat_session_id
+           GROUP BY ${keyExpr}
            HAVING SUM(CASE WHEN COALESCE(response_model, request_model) NOT LIKE '%suggestions%' THEN 1 ELSE 0 END) = 0`,
       ).map((r) => r.sk),
     );
-
-    this.startedSessionsCache = new Set(
-      uuidCandidates.filter((id) => !suggestionOnlySessions.has(id)),
-    );
-    return this.startedSessionsCache;
   }
 }
 

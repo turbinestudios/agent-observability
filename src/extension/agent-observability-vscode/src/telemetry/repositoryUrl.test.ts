@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { sanitizeRepositoryUrl, REPOSITORY_PATTERN } from './repositoryUrl';
+import { sanitizeRepositorySlug, sanitizeRepositoryUrl, REPOSITORY_PATTERN } from './repositoryUrl';
 
 /**
  * Privacy-critical sanitizer tests. Every output MUST satisfy the aggregate
@@ -82,4 +82,30 @@ describe('sanitizeRepositoryUrl', () => {
       'https://self-hosted.example.com:8443/team/repo',
     );
   });
+});
+
+describe('sanitizeRepositorySlug', () => {
+  const cases: Array<[string, string | null | undefined, string]> = [
+    ['owner/repo slug -> github url', 'turbinestudios/loop-app', 'https://github.com/turbinestudios/loop-app'],
+    ['drops a .git suffix', 'org/repo.git', 'https://github.com/org/repo'],
+    ['trims surrounding whitespace', '  org/repo  ', 'https://github.com/org/repo'],
+    ['a full https remote passes through the url sanitizer', 'https://ghes.example.com/org/repo.git', 'https://ghes.example.com/org/repo'],
+    ['an scp-style remote passes through the url sanitizer', 'git@github.com:org/repo.git', 'https://github.com/org/repo'],
+    ['a credential-bearing remote is still stripped', 'https://x-access-token:ghp_x@github.com/o/r.git', 'https://github.com/o/r'],
+    ['a bare name (no owner) -> unknown', 'repo', 'unknown'],
+    ['a deep path -> unknown', 'org/team/repo', 'unknown'],
+    ['a path-traversal attempt -> unknown', '../../etc/passwd', 'unknown'],
+    ['empty -> unknown', '', 'unknown'],
+    ['null -> unknown', null, 'unknown'],
+    ['undefined -> unknown', undefined, 'unknown'],
+  ];
+
+  for (const [name, input, expected] of cases) {
+    it(name, () => {
+      const out = sanitizeRepositorySlug(input);
+      expect(out).toBe(expected);
+      expect(REPOSITORY_PATTERN.test(out)).toBe(true);
+      expect(SCHEMA_REPO_PATTERN.test(out)).toBe(true);
+    });
+  }
 });

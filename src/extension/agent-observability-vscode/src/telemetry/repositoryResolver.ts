@@ -1,38 +1,48 @@
 import type { Database } from 'node-sqlite3-wasm';
-import { sanitizeRepositoryUrl, UNKNOWN_REPOSITORY } from './repositoryUrl';
+import { sanitizeRepositorySlug, sanitizeRepositoryUrl, UNKNOWN_REPOSITORY } from './repositoryUrl';
 
 /**
  * Per-session repository resolution.
  *
- * `copilot_chat.repo.remote_url` is SPARSE — it appears on a handful of
- * `invoke_agent` spans, not on every span. Resolving per span would mislabel
- * most activity as `unknown`. Instead we build a
- * `Map<sessionKey, sanitizedRepository>` from the sparse attribute, keyed by
- * `COALESCE(conversation_id, chat_session_id)` (identical to the `sessions`
- * view and the cloud join key), then back-fill it onto every span/session.
+ * The repo attribute is SPARSE — it appears on a handful of `invoke_agent`
+ * spans, not on every span. Resolving per span would mislabel most activity as
+ * `unknown`. Instead we build a `Map<sessionKey, sanitizedRepository>` from the
+ * sparse attribute, keyed by `COALESCE(conversation_id, chat_session_id)`
+ * (identical to the `sessions` view and the cloud join key), then back-fill it
+ * onto every span/session.
  *
- * `MAX(value)` plays the role of KQL `take_any` (one stable raw URL per
- * session). The raw URL is sanitized HERE (mandatory) before it is exposed, so
- * no credential-bearing remote ever reaches a model or an aggregate.
+ * TWO attribute spellings are read, because the emitters differ:
+ * - `copilot_chat.repo.remote_url` — VS Code Copilot Chat: a full git remote.
+ * - `github.copilot.git.repository` — autonomous Copilot CLI agents: a bare
+ *   `owner/repo` slug. Without this, every relayed autonomous session resolved
+ *   to `unknown` and vanished from the Sessions tree for anyone excluding the
+ *   `unknown` bucket.
+ * The full remote wins when a session recorded both.
+ *
+ * `MAX(value)` plays the role of KQL `take_any` (one stable raw value per
+ * session per key). The raw value is sanitized HERE (mandatory) before it is
+ * exposed, so no credential-bearing remote ever reaches a model or an aggregate.
  */
 
 interface RepoRow {
   session_id: string | null;
   repo_url_raw: string | null;
+  repo_slug_raw: string | null;
 }
 
 /**
- * SQL building the sparse `(session_id → raw repo url)` lookup. Kept module-
- * level so it is shared/testable. Note: the value selected here is STILL RAW;
- * sanitization happens in {@link buildRepositoryResolver}.
+ * SQL building the sparse `(session_id → raw repo url / slug)` lookup. Kept
+ * module-level so it is shared/testable. Note: the values selected here are
+ * STILL RAW; sanitization happens in {@link RepositoryResolver.fromDatabase}.
  */
 const REPO_BY_SESSION_SQL = `
   SELECT COALESCE(s.conversation_id, s.chat_session_id) AS session_id,
-         MAX(a.value) AS repo_url_raw
+         MAX(CASE WHEN a.key = 'copilot_chat.repo.remote_url' THEN a.value END) AS repo_url_raw,
+         MAX(CASE WHEN a.key = 'github.copilot.git.repository' THEN a.value END) AS repo_slug_raw
   FROM spans s
   JOIN span_attributes a
     ON a.span_id = s.span_id
-   AND a.key = 'copilot_chat.repo.remote_url'
+   AND a.key IN ('copilot_chat.repo.remote_url', 'github.copilot.git.repository')
   WHERE a.value IS NOT NULL AND a.value <> ''
     AND COALESCE(s.conversation_id, s.chat_session_id) IS NOT NULL
   GROUP BY COALESCE(s.conversation_id, s.chat_session_id)
@@ -76,8 +86,14 @@ export class RepositoryResolver {
       if (row.session_id === null) {
         continue;
       }
-      // Sanitize the raw URL — privacy-critical chokepoint.
-      map.set(row.session_id, sanitizeRepositoryUrl(row.repo_url_raw));
+      // Sanitize the raw values — privacy-critical chokepoint. A full remote
+      // (Copilot Chat) wins; the bare `owner/repo` slug an autonomous Copilot
+      // CLI agent reports is the fallback.
+      const fromUrl = sanitizeRepositoryUrl(row.repo_url_raw);
+      map.set(
+        row.session_id,
+        fromUrl !== UNKNOWN_REPOSITORY ? fromUrl : sanitizeRepositorySlug(row.repo_slug_raw),
+      );
     }
     return new RepositoryResolver(map);
   }
