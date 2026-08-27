@@ -1,0 +1,251 @@
+.sessions-pane {
+  width: var(--sidebar-width);
+  flex: 0 0 var(--sidebar-width);
+  border-right: 1px solid var(--border);
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sessions-header {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sessions-search {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.sessions-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+
+.sessions-banner {
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sessions-banner.subtle {
+  color: var(--fg-subtle);
+}
+
+.sessions-banner.error {
+  color: var(--danger);
+}
+
+.progress {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 200ms ease-out;
+}
+
+.sessions-error {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--danger);
+  border-bottom: 1px solid var(--border);
+}
+
+.sessions-error button {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.sessions-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.sessions-virtual {
+  position: relative;
+  width: 100%;
+}
+
+.sessions-row-wrap {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+.session-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  height: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-row:hover {
+  background: var(--hover);
+}
+
+.session-row[aria-current='true'] {
+  background: var(--selection);
+}
+
+.session-row-top,
+.session-row-bottom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.session-time {
+  flex: none;
+  font-size: 11px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-repo,
+.session-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.session-repo {
+  flex: 0 1 auto;
+}
+
+.session-meta {
+  flex: 1 1 auto;
+  text-align: right;
+  color: var(--fg-subtle);
+}
+
+.session-meta.dim {
+  font-style: italic;
+}
+
+.chip {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--bg-sunken);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+}
+
+/* --- detail pane --------------------------------------------------------- */
+
+.detail-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: auto;
+  background: var(--bg);
+}
+
+.detail-stub {
+  padding: 24px 28px;
+  max-width: 720px;
+}
+
+.detail-stub h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.detail-sub {
+  margin: 4px 0 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+
+.detail-stub dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px 20px;
+  margin: 0;
+}
+
+.detail-stub dt {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.detail-stub dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.detail-note {
+  margin-top: 24px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-subtle);
+  font-size: 12px;
+}

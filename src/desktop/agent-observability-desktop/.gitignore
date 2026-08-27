@@ -1,0 +1,6 @@
+# electron-vite build output
+out/
+# electron-builder installers
+release/
+# Bundled benchmark scripts (the .ts sources are tracked)
+scripts/*.js

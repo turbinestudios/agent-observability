@@ -1,0 +1,93 @@
+.app {
+  display: flex;
+  height: 100%;
+}
+
+.app-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.view-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+}
+
+.view-layer[hidden] {
+  display: none;
+}
+
+/* --- activity rail ------------------------------------------------------- */
+
+.rail {
+  width: var(--rail-width);
+  flex: 0 0 var(--rail-width);
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 8px;
+  gap: 2px;
+  /* Clears the traffic lights on macOS, where the title bar is inset. */
+  padding-top: env(titlebar-area-height, 8px);
+}
+
+.rail-button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  cursor: pointer;
+  position: relative;
+}
+
+.rail-button:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.rail-button[aria-current='true'] {
+  color: var(--accent);
+  background: var(--selection);
+}
+
+.rail-button[aria-current='true']::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+/* --- placeholder --------------------------------------------------------- */
+
+.placeholder {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.placeholder h2 {
+  margin: 0 0 8px;
+  color: var(--fg);
+  font-size: 15px;
+}
+
+.placeholder p {
+  margin: 0;
+  max-width: 46ch;
+}

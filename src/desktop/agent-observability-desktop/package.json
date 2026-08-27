@@ -1,0 +1,43 @@
+{
+  "name": "agent-observability-desktop",
+  "productName": "Agent Observability",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone desktop app for Agent Observability: a sessions-first view of Copilot and Claude Code agent activity, reading the same on-disk data as the VS Code extension.",
+  "license": "UNLICENSED",
+  "author": "Turbine Studios",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "lint": "eslint src --ext ts,tsx",
+    "test": "vitest run --passWithNoTests",
+    "package": "electron-vite build && electron-builder --publish never"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "chokidar": "^5.0.0"
+  },
+  "devDependencies": {
+    "@agent-observability/core": "*",
+    "@tanstack/react-virtual": "^3.14.10",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.14.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "eslint": "^8.57.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "^5.5.0",
+    "vite": "^6.3.6",
+    "vitest": "^3.2.7"
+  }
+}
