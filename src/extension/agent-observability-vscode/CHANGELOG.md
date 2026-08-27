@@ -4,6 +4,25 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.10] - 2026-08-27
+
+### Changed
+
+- **The repository is now an npm workspace.** `npm install` runs at the repo
+  root and installs for every package; the extension's own lockfile is gone in
+  favour of a single root `package-lock.json`. This is the groundwork for a
+  shared core package consumed by both this extension and a standalone desktop
+  app. Nothing about the extension's behavior changes.
+- **`node-sqlite3-wasm` is staged into `dist/node_modules` at build time.**
+  Workspaces hoist dependencies to the repo root, so `.vscodeignore` could no
+  longer re-include the package from the extension folder — the `.vsix` would
+  have installed without its WebAssembly sidecar and failed at runtime. The new
+  `scripts/stageSqliteWasm.js` copies it into `dist/`, which ships wholesale and
+  is where Node resolution looks first. Packaging now uses
+  `vsce package --no-dependencies`, since dependency listing via `npm list` is
+  unreliable inside a workspace.
+- Dev-only helper scripts (`scripts/**`) no longer ship inside the `.vsix`.
+
 ## [0.9.9] - 2026-08-27
 
 ### Fixed

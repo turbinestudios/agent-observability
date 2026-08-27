@@ -2,6 +2,9 @@
 [Bb]in/
 [Oo]bj/
 
+# Node workspaces install at the repo root (npm hoists dependencies here).
+node_modules/
+
 # User-specific files
 *.rsuser
 *.suo

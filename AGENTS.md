@@ -17,16 +17,32 @@ analytics. See [README.md](README.md) for the full overview.
 
 ## Build, test, run
 
-**Extension** (run from `src/extension/agent-observability-vscode`):
+**Extension.** The repo is an npm workspace, so dependencies install once from
+the **repo root** (they hoist to the root `node_modules`; there is a single root
+`package-lock.json`):
 
 ```bash
-npm install
-npm run compile     # esbuild bundle to dist/extension.js
+npm install         # run at the repo root, installs every workspace
+```
+
+Build and test commands run from `src/extension/agent-observability-vscode`:
+
+```bash
+npm run compile     # esbuild bundle to dist/extension.js + stages node-sqlite3-wasm
 npm run typecheck   # tsc --noEmit (strict)
 npm run lint        # eslint
 npm test            # vitest run (headless)
-npm run package     # vsce package (.vsix)
+npm run package     # vsce package --no-dependencies (.vsix)
 ```
+
+Or across all workspaces from the root: `npm run typecheck --workspaces
+--if-present` (same for `lint`, `test`, `compile`).
+
+`node-sqlite3-wasm` is external to the esbuild bundle and is staged into
+`dist/node_modules` by `scripts/stageSqliteWasm.js` — workspace hoisting puts it
+in the root `node_modules`, out of reach of `.vscodeignore`. Never re-add a
+`!node_modules/**` re-include; verify packaging with `npx vsce ls
+--no-dependencies` and check the `.wasm` sidecar is listed.
 
 Press <kbd>F5</kbd> to launch an Extension Development Host. See the
 [extension README](src/extension/agent-observability-vscode/README.md) for

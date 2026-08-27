@@ -2,7 +2,7 @@
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
   "description": "Privacy-first local view of GitHub Copilot, GitHub Copilot cloud coding-agent, and Claude Code agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
-  "version": "0.9.9",
+  "version": "0.9.10",
   "publisher": "turbinestudios",
   "license": "UNLICENSED",
   "engines": {
@@ -930,12 +930,12 @@
     }
   },
   "scripts": {
-    "compile": "node esbuild.js",
+    "compile": "node esbuild.js && node scripts/stageSqliteWasm.js",
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext ts",
     "test": "vitest run",
-    "package": "vsce package"
+    "package": "node scripts/stageSqliteWasm.js && vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

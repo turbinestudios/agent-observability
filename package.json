@@ -1,0 +1,16 @@
+{
+  "name": "agent-observability-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Workspace root for the Agent Observability extension, shared core, and desktop app. Not published; the .NET dashboard and Bicep infra are built separately.",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "src/extension/agent-observability-vscode"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "compile": "npm run compile --workspaces --if-present"
+  }
+}

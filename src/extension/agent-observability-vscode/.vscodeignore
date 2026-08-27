@@ -5,13 +5,19 @@ src/**
 out/**
 coverage/**
 
-# Exclude node_modules wholesale, then re-include the one runtime dependency.
-# node-sqlite3-wasm is marked external in esbuild (it loads its .wasm sidecar
-# via __dirname, so it is NOT bundled into dist/extension.js) and must be
-# shipped from node_modules. Being WebAssembly, it has no native binary and no
-# Node/Electron ABI to mismatch — one .vsix works across all VS Code versions.
+# Build/dev-only scripts (packaging staging, OTLP capture helpers). They run
+# from the repo, never from an installed extension.
+scripts/**
+
+# Exclude node_modules wholesale. The one runtime dependency, node-sqlite3-wasm,
+# is marked external in esbuild (it loads its .wasm sidecar via __dirname, so it
+# is NOT bundled into dist/extension.js) and is staged into dist/node_modules by
+# scripts/stageSqliteWasm.js — npm workspaces hoist it to the repo root, so it
+# cannot be re-included from here. This pattern is anchored and does not match
+# dist/node_modules, which ships with the rest of dist/. Being WebAssembly, it
+# has no native binary and no Node/Electron ABI to mismatch — one .vsix works
+# across all VS Code versions.
 node_modules/**
-!node_modules/node-sqlite3-wasm/**
 
 **/*.map
 **/*.ts
