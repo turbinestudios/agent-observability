@@ -63,6 +63,16 @@ const api = {
   setNativeTheme(theme: 'dark' | 'light'): void {
     ipcRenderer.send('theme:set', theme);
   },
+
+  /**
+   * Hand a rendered session-detail document to the main process and get back a
+   * URL to load it from. It is served as a document of its own rather than
+   * inlined into a frame, so it keeps its own strict script policy instead of
+   * inheriting this page's — which would block the scripts it needs.
+   */
+  stashDetail(html: string): Promise<string | undefined> {
+    return ipcRenderer.invoke('detail:stash', html);
+  },
 };
 
 export type DesktopApi = typeof api;

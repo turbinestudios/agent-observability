@@ -105,6 +105,12 @@
   font-weight: 600;
 }
 
+.card-note {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  white-space: nowrap;
+}
+
 .overview-split {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));

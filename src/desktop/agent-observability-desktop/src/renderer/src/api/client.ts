@@ -32,6 +32,7 @@ declare global {
       showItem(path: string): Promise<void>;
       getVersion(): Promise<string>;
       setNativeTheme(theme: 'dark' | 'light'): void;
+      stashDetail(html: string): Promise<string | undefined>;
     };
   }
 }

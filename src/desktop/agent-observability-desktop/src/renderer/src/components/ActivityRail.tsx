@@ -31,7 +31,7 @@ const ENTRIES: RailEntry[] = [
   },
   {
     id: 'overview',
-    label: 'Local Overview',
+    label: 'Statistics',
     icon: (
       <>
         <rect x="3" y="12" width="4.5" height="9" rx="1" />

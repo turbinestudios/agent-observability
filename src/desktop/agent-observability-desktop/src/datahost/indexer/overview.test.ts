@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { IndexDb } from './indexDb';
+import { IndexDb, TOP_REPOSITORY_LIMIT } from './indexDb';
 import type { SessionRow } from '../../shared/rpc';
 
 /**
@@ -181,11 +181,28 @@ describe('top repositories', () => {
     ]);
   });
 
-  it('caps the list at five', () => {
+  it('caps the list, so a long tail does not fill the card', () => {
     db.upsertSessions(
-      Array.from({ length: 9 }, (_, i) => row({ sessionId: `s${i}`, repository: `repo-${i}` })),
+      Array.from({ length: TOP_REPOSITORY_LIMIT + 4 }, (_, i) =>
+        row({ sessionId: `s${i}`, repository: `repo-${i}` }),
+      ),
     );
-    expect(db.overview(30).topRepositories).toHaveLength(5);
+    expect(db.overview(30).topRepositories).toHaveLength(TOP_REPOSITORY_LIMIT);
+  });
+
+  it('breaks ties by name, so a repository cannot vanish between runs', () => {
+    // Several repositories on the same count is the normal case; without a
+    // second sort key SQLite picks arbitrarily and the list is unstable.
+    db.upsertSessions([
+      row({ sessionId: 'a', repository: 'zebra' }),
+      row({ sessionId: 'b', repository: 'alpha' }),
+      row({ sessionId: 'c', repository: 'mango' }),
+    ]);
+    expect(db.overview(30).topRepositories.map((r) => r.repository)).toEqual([
+      'alpha',
+      'mango',
+      'zebra',
+    ]);
   });
 });
 

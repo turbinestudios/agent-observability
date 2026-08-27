@@ -36,7 +36,7 @@ interface DetailMessage {
 
 export function SessionDetail({ row }: Props): JSX.Element {
   const { theme } = useThemeValue();
-  const [html, setHtml] = useState<string | undefined>(undefined);
+  const [docUrl, setDocUrl] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -48,13 +48,21 @@ export function SessionDetail({ row }: Props): JSX.Element {
 
     dataHost
       .call('sessions.detail', row.source, row.sessionId, theme)
-      .then((doc) => {
+      .then(async (doc) => {
         if (row.source === 'copilot') {
           copilotWarmed = true;
         }
+        // Loaded from a URL rather than inlined: an inline frame would inherit
+        // this page's script policy, which blocks the document's own scripts
+        // and leaves it looking fine but completely inert.
+        const url = await window.desktop.stashDetail(doc);
         // A slow parse must not overwrite a newer selection.
         if (!cancelled) {
-          setHtml(doc);
+          if (url === undefined) {
+            setError('The session view could not be prepared.');
+          } else {
+            setDocUrl(url);
+          }
           setLoading(false);
         }
       })
@@ -122,7 +130,7 @@ export function SessionDetail({ row }: Props): JSX.Element {
     );
   }
 
-  if (loading || html === undefined) {
+  if (loading || docUrl === undefined) {
     // The first Copilot session opened in a run pays a large one-time cost:
     // the shared read layer indexes the whole recorded tool output before it can
     // answer anything. Every session after it is fast. Saying so beats letting a
@@ -148,9 +156,10 @@ export function SessionDetail({ row }: Props): JSX.Element {
       className="detail-frame"
       title={row.title ?? row.sessionId}
       // Scripts only: no same-origin, so the document cannot touch this app's
-      // DOM, storage, or the preload bridge.
+      // DOM, storage, or the preload bridge. It still enforces the strict
+      // nonce policy declared in its own markup.
       sandbox="allow-scripts"
-      srcDoc={html}
+      src={docUrl}
     />
   );
 }

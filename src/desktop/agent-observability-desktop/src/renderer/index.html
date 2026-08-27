@@ -4,12 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
-      Strict CSP: the renderer loads only its own bundle. Session detail is
-      rendered into a sandboxed iframe, so nothing here needs remote origins.
+      Strict CSP: the renderer loads only its own bundle, so nothing here needs
+      a remote origin.
+
+      `frame-src` admits ao-detail:, which is how the session document is
+      served. It has to be a real URL rather than inline markup — a frame with
+      no URL of its own inherits this policy, and `script-src 'self'` would then
+      block the scripts that document needs, leaving it inert. Loaded from a URL
+      it is governed by the strict nonce policy in its own markup instead.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-src 'self'"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-src ao-detail:"
     />
     <title>Agent Observability</title>
   </head>

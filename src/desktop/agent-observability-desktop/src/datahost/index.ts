@@ -3,6 +3,7 @@ import { Configuration } from '@agent-observability/core/src/config/configuratio
 import { ClaudeCodeService } from '@agent-observability/core/src/claude/claudeCodeService';
 import { TelemetryService } from '@agent-observability/core/src/telemetry/telemetryService';
 import { CopilotSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
+import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
 import type {
   ContextAction,
@@ -42,9 +43,17 @@ const db = new IndexDb();
 // The same registry abstraction the extension wires up. Listing comes from the
 // index; the registry serves session detail, where the per-source parsing
 // differences live. Cloud sources plug in here unchanged as they land.
+//
+// The archive has to be pointed at explicitly, exactly as the extension does at
+// startup. Without it the read layer falls back to Copilot's own short-lived
+// database, which holds a rolling handful of sessions — so every session the
+// indexer found in the archive fails to open with "database not found".
+const telemetry = new TelemetryService(config);
+telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
+
 const sources = new SourceRegistry([
   new ClaudeCodeService(config),
-  new CopilotSource(new TelemetryService(config), config),
+  new CopilotSource(telemetry, config),
 ]);
 const detail = new DetailRenderer(sources);
 const renames = new RenameStore();
@@ -90,7 +99,10 @@ function runIndex(): IndexStatus {
 
   const notes: string[] = [];
   const onRows = (rows: SessionRow[]): void => {
-    emit({ event: 'sessions.upserted', rows });
+    // The indexer writes the source's own title, which is correct for the index
+    // but wrong to show: a user-chosen name has to be layered back on before
+    // these reach the list, or a refresh silently reverts every rename.
+    emit({ event: 'sessions.upserted', rows: renames.apply(rows) });
     refreshCounts();
     emit({ event: 'index.progress', status });
   };

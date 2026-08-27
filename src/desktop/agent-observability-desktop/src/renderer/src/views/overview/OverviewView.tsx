@@ -97,7 +97,7 @@ export function OverviewView(): JSX.Element {
   return (
     <div className="overview">
       <header className="overview-header">
-        <h1>Local Overview</h1>
+        <h1>Statistics</h1>
         <p>
           Everything recorded on this machine. Nothing here has been uploaded — all of it is read
           from your own agent logs.
@@ -153,6 +153,13 @@ export function OverviewView(): JSX.Element {
         <section className="card">
           <div className="card-head">
             <h2>Busiest repositories</h2>
+            {data.totals.repositories > data.topRepositories.length && (
+              // Say what is being left out, rather than letting a truncated
+              // list read as the whole picture.
+              <span className="card-note">
+                top {data.topRepositories.length} of {data.totals.repositories}
+              </span>
+            )}
           </div>
           <HorizontalBars
             rows={data.topRepositories.map((r) => ({

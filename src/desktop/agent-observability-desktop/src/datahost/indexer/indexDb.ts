@@ -30,6 +30,13 @@ import type {
 /** Bump to invalidate every existing index (drop-and-rebuild, no migration). */
 export const SCHEMA_VERSION = 1;
 
+/**
+ * How many repositories the overview ranks. Ten rather than a handful: with a
+ * short list, several repositories tie on the same count and real work drops
+ * off the bottom for no reason a reader can see.
+ */
+export const TOP_REPOSITORY_LIMIT = 10;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -423,16 +430,19 @@ export class IndexDb {
       )
       .all(Date.now() - windowDays * 86_400_000) as DayPoint[];
 
+    // Ties are common — several repositories sitting on the same count — so the
+    // order needs a second key, or SQLite picks arbitrarily and a repository can
+    // vanish from the list between runs for no visible reason.
     const topRepositories = this.db
       .prepare(
         `SELECT repository, COUNT(*) AS sessions
            FROM sessions
           WHERE repository <> 'unknown'
           GROUP BY repository
-          ORDER BY sessions DESC
-          LIMIT 5`,
+          ORDER BY sessions DESC, repository ASC
+          LIMIT ?`,
       )
-      .all() as OverviewData['topRepositories'];
+      .all(TOP_REPOSITORY_LIMIT) as OverviewData['topRepositories'];
 
     return { totals, bySource, daily, windowDays, topRepositories };
   }
