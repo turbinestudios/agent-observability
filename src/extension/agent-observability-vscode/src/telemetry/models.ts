@@ -419,6 +419,17 @@ export interface SessionAgentUsage {
   linesOfDoc: number;
   linesOfCodeRemoved: number;
   linesOfDocRemoved: number;
+  /**
+   * Wall-clock run time of this (agent, model, kind) in ms — last observed
+   * activity minus first observed activity of its model turns within ONE session
+   * (Copilot: chat-span start/end times; Claude: assistant-record and
+   * tool-execution timestamps; Cloud: the session's own run time). Trailing tool
+   * executions after the last model turn are not tracked for Copilot. In MERGED
+   * views (combined sessions / repository) the per-session values are SUMMED —
+   * never min/max across sessions, which would count idle time between sessions.
+   * `undefined` when the source has no usable timestamps; rendered as an em dash.
+   */
+  runDurationMs?: number;
 }
 
 /**

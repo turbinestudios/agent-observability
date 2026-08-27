@@ -136,7 +136,7 @@ describe('TelemetryService with a durable archive source', () => {
     service.dispose();
   });
 
-  it('prefers the live-ingest DB over the archive when both are set', () => {
+  it('prefers the durable archive over the live-ingest DB when both are set', () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), 'agent-obs-arc-'));
     const archivePath = path.join(tmp, 'archive.db');
     const ingestPath = path.join(tmp, 'ingest.db');
@@ -152,13 +152,16 @@ describe('TelemetryService with a durable archive source', () => {
     service.setArchiveDbPath(archivePath);
     service.setIngestDbPath(ingestPath);
 
-    // Live-ingest is the SOLE source → its session has interactions; the
-    // archive-only session is invisible (a source is open, so the lookup
-    // succeeds with an empty result rather than failing).
-    const live = service.getSessionInteractions('live-only');
-    expect(live.ok && live.value.length > 0).toBe(true);
+    // The archive is the SOLE source: the archiver sweeps the ingest DB into it
+    // (so it is a superset in production, lagging at most one sweep) and keeps
+    // months where ingest keeps days — reading ingest instead silently hid every
+    // repository older than the prune window. The reader never folds live spans
+    // in itself; that is the archiver's job. The ingest-only session is invisible
+    // (a source is open, so the lookup succeeds with an empty result).
     const arch = service.getSessionInteractions('arch-only');
-    expect(arch.ok && arch.value.length === 0).toBe(true);
+    expect(arch.ok && arch.value.length > 0).toBe(true);
+    const live = service.getSessionInteractions('live-only');
+    expect(live.ok && live.value.length === 0).toBe(true);
     service.dispose();
   });
 });
@@ -303,7 +306,11 @@ const UUID_SYNTH = 'd1111111-1111-2222-3333-444444444444';
 const UUID_AGENT = 'e1111111-1111-2222-3333-444444444444';
 const UUID_PARENT = 'f1111111-1111-2222-3333-444444444444';
 const UUID_TURN = '01111111-1111-2222-3333-444444444444';
+const UUID_NOISE = '21111111-1111-2222-3333-444444444444';
+const UUID_GLOBAL = '31111111-1111-2222-3333-444444444444';
+const UUID_REPOINT = '41111111-1111-2222-3333-444444444444';
 const WS_REPO = 'https://github.com/org/workspace-repo';
+const GLOBAL_REPO = 'https://github.com/org/global-repo';
 const AGENT_REPO = 'https://github.com/turbinestudios/loop-app';
 
 /**
@@ -360,6 +367,41 @@ function suggestionOnlyEnvelopeFor(uuid: string) {
                   { key: 'gen_ai.operation.name', value: sv('chat') },
                   { key: 'copilot_chat.chat_session_id', value: sv(uuid) },
                   { key: 'gen_ai.response.model', value: sv('copilot-suggestions') },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * The shape ordinary chat-helper telemetry has: a conversation-keyed `chat`
+ * span with a real chat model, NO `chat_session_id`, and NO agent-run span.
+ * Emitted by NES, commit-message/title/progress generators and
+ * `copilotLanguageModelWrapper` — must never be listed as a session.
+ */
+function helperNoiseEnvelopeFor(uuid: string) {
+  return {
+    resourceSpans: [
+      {
+        resource: { attributes: [] },
+        scopeSpans: [
+          {
+            spans: [
+              {
+                name: 'chat',
+                spanId: `n-${uuid}`,
+                traceId: `tr-${uuid}`,
+                startTimeUnixNano: '1700000000000000000',
+                endTimeUnixNano: '1700000001000000000',
+                status: { code: 1 },
+                attributes: [
+                  { key: 'gen_ai.operation.name', value: sv('chat') },
+                  { key: 'gen_ai.conversation.id', value: sv(uuid) },
+                  { key: 'gen_ai.response.model', value: sv('gpt-4o-mini') },
                 ],
               },
             ],
@@ -450,6 +492,43 @@ function perTurnFragmentEnvelope(turn: string, parent: string) {
   };
 }
 
+/**
+ * A session whose workspace `origin` was RE-POINTED mid-session: two
+ * repo-bearing spans with different remotes. The alphabetically-LATER value is
+ * deliberately the EARLIER span, so the old `MAX(value)` pick would keep it.
+ */
+function repointedEnvelopeFor(uuid: string) {
+  const span = (id: string, startNano: string, repo: string) => ({
+    name: 'invoke_agent',
+    spanId: `${id}-${uuid}`,
+    traceId: `tr-${uuid}`,
+    startTimeUnixNano: startNano,
+    endTimeUnixNano: startNano,
+    status: { code: 1 },
+    attributes: [
+      { key: 'gen_ai.operation.name', value: sv('invoke_agent') },
+      { key: 'gen_ai.conversation.id', value: sv(uuid) },
+      { key: 'copilot_chat.chat_session_id', value: sv(uuid) },
+      { key: 'copilot_chat.repo.remote_url', value: sv(repo) },
+    ],
+  });
+  return {
+    resourceSpans: [
+      {
+        resource: { attributes: [] },
+        scopeSpans: [
+          {
+            spans: [
+              span('a', '1700000000000000000', 'https://github.com/org/zzz-old.git'),
+              span('b', '1700000600000000000', 'https://github.com/org/aaa-new.git'),
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 /** Build a service backed solely by an ingest DB holding the given envelope. */
 function serviceForIngest(env: object): TelemetryService {
   tmp = mkdtempSync(path.join(os.tmpdir(), 'agent-obs-gate-'));
@@ -516,6 +595,43 @@ describe('relaxed session gate + workspace-scoped context', () => {
     expect(repos.ok && repos.value.some((r) => r.repository === AGENT_REPO)).toBe(true);
     const scoped = service.listSessions(AGENT_REPO);
     expect(scoped.ok && scoped.value.some((s) => s.sessionId === UUID_AGENT)).toBe(true);
+    service.dispose();
+  });
+
+  it('resolves a mid-session origin re-point to the LATEST remote, not the alphabetical max', () => {
+    const service = serviceForIngest(repointedEnvelopeFor(UUID_REPOINT));
+    expect(listedSession(service, UUID_REPOINT)?.repository).toBe('https://github.com/org/aaa-new');
+    service.dispose();
+  });
+
+  it('groups a repo-less session under its repo via the cross-workspace map', () => {
+    const service = serviceForIngest(toolOnlyEnvelopeFor(UUID_GLOBAL));
+    expect(listedSession(service, UUID_GLOBAL)?.repository).toBe('unknown');
+
+    service.setGlobalSessionRepositories(new Map([[UUID_GLOBAL, GLOBAL_REPO]]));
+    expect(listedSession(service, UUID_GLOBAL)?.repository).toBe(GLOBAL_REPO);
+    const repos = service.listRepositories();
+    expect(repos.ok && repos.value.some((r) => r.repository === GLOBAL_REPO)).toBe(true);
+
+    // The LIVE workspace context wins over the global map for sessions it claims.
+    service.setWorkspaceSessionContext({
+      repository: WS_REPO,
+      sessionIds: new Set([UUID_GLOBAL]),
+      recent: [],
+    });
+    expect(listedSession(service, UUID_GLOBAL)?.repository).toBe(WS_REPO);
+    service.dispose();
+  });
+
+  it('never lists conversation-only chat-helper noise (no agent-run span)', () => {
+    // The shape NES / commit-message / title generators and language-model
+    // wrappers emit: conversation-keyed `chat` spans with NO chat_session_id and
+    // NO invoke_agent/execute_tool/execute_hook span. Before the agent-run-span
+    // gate these flooded the tree as phantom repo-less sessions.
+    const service = serviceForIngest(helperNoiseEnvelopeFor(UUID_NOISE));
+    expect(listedSession(service, UUID_NOISE)).toBeUndefined();
+    const loose = service.listSessions('unknown');
+    expect(loose.ok && loose.value.length === 0).toBe(true);
     service.dispose();
   });
 

@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { sanitizeRepositoryUrl, UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 
@@ -16,14 +17,26 @@ import { sanitizeRepositoryUrl, UNKNOWN_REPOSITORY } from '../telemetry/reposito
  *
  * The raw config-text parsing is pure ({@link parseGitConfigRemote}) and tested;
  * the filesystem walk is cached per `cwd` for the life of the resolver instance.
+ *
+ * An SCP/ssh remote may use an SSH HOST ALIAS (`git@github-work:owner/repo`,
+ * with `Host github-work / HostName github.com` in `~/.ssh/config`) — common
+ * for a second account on the same forge. The sanitizer rejects such dotless
+ * hosts, so without resolution every alias-remoted repo collapsed to `unknown`.
+ * The alias is substituted from the ssh config BEFORE sanitizing; a repo under
+ * `\\wsl$\<distro>\home\<user>\...` consults that WSL user's ssh config first.
  */
 
 /** Resolves `cwd` → sanitized repository, caching results per directory. */
 export class GitRemoteResolver {
   private readonly cache = new Map<string, string>();
+  /** Parsed `Host alias → HostName` maps per ssh-config path (undefined = unreadable). */
+  private readonly sshConfigCache = new Map<string, ReadonlyMap<string, string> | undefined>();
 
-  /** Inject a reader for tests; defaults to the real filesystem. */
-  constructor(private readonly io: GitRemoteIo = defaultGitRemoteIo) {}
+  /** Inject a reader / home dir for tests; defaults to the real filesystem. */
+  constructor(
+    private readonly io: GitRemoteIo = defaultGitRemoteIo,
+    private readonly homeDir: string = os.homedir(),
+  ) {}
 
   /** Sanitized repository for a working directory, or `unknown`. Cached. */
   resolve(cwd: string | undefined | null): string {
@@ -49,7 +62,76 @@ export class GitRemoteResolver {
       return UNKNOWN_REPOSITORY;
     }
     const raw = parseGitConfigRemote(text);
-    return sanitizeRepositoryUrl(raw);
+    return sanitizeRepositoryUrl(this.resolveSshHostAlias(raw, cwd));
+  }
+
+  /**
+   * Substitute a dotless SSH host alias in `raw` with its `HostName` from the
+   * relevant ssh config(s). A remote whose host already looks real (contains a
+   * dot) and any unresolvable alias pass through unchanged.
+   */
+  private resolveSshHostAlias(raw: string | undefined, cwd: string): string | undefined {
+    if (raw === undefined) {
+      return undefined;
+    }
+    // ssh://[user@]host[:port]/path — handled before the SCP form so the
+    // scheme's own colon is never mistaken for the SCP separator.
+    const sshUrl = /^ssh:\/\/([^/@]+@)?([^/:]+)((?::\d+)?\/.+)$/.exec(raw);
+    if (sshUrl !== null) {
+      const real = this.sshHostName(sshUrl[2], cwd);
+      return real === undefined ? raw : `ssh://${sshUrl[1] ?? ''}${real}${sshUrl[3]}`;
+    }
+    if (raw.includes('://')) {
+      return raw; // http(s)/git scheme: host aliases don't apply
+    }
+    // SCP-style: [user@]host:path.
+    const scp = /^([^/@]+@)?([^/:]+):(.+)$/.exec(raw);
+    if (scp === null) {
+      return raw;
+    }
+    const real = this.sshHostName(scp[2], cwd);
+    return real === undefined ? raw : `${scp[1] ?? ''}${real}:${scp[3]}`;
+  }
+
+  /** `HostName` for a dotless alias from the candidate ssh configs, else undefined. */
+  private sshHostName(host: string, cwd: string): string | undefined {
+    if (host.length <= 1 || host.includes('.')) {
+      return undefined; // a real host (or a Windows drive letter) — not an alias
+    }
+    for (const configPath of this.sshConfigCandidates(cwd)) {
+      const real = this.sshAliases(configPath)?.get(host);
+      if (real !== undefined) {
+        return real;
+      }
+    }
+    return undefined;
+  }
+
+  private sshAliases(configPath: string): ReadonlyMap<string, string> | undefined {
+    if (this.sshConfigCache.has(configPath)) {
+      return this.sshConfigCache.get(configPath);
+    }
+    const text = this.io.readFile(configPath);
+    const parsed = text === undefined ? undefined : parseSshConfigHostNames(text);
+    this.sshConfigCache.set(configPath, parsed);
+    return parsed;
+  }
+
+  /**
+   * The ssh configs that could define `cwd`'s aliases: for a repo reached over
+   * `\\wsl$` (or `\\wsl.localhost`), that WSL user's config first — the remote
+   * was configured inside WSL — then the local home's config.
+   */
+  private sshConfigCandidates(cwd: string): string[] {
+    const candidates: string[] = [];
+    const wsl = /^[\\/]{2}(wsl\$|wsl\.localhost)[\\/]([^\\/]+)[\\/]home[\\/]([^\\/]+)[\\/]/i.exec(cwd);
+    if (wsl !== null) {
+      candidates.push(`\\\\${wsl[1]}\\${wsl[2]}\\home\\${wsl[3]}\\.ssh\\config`);
+    }
+    if (this.homeDir.length > 0) {
+      candidates.push(path.join(this.homeDir, '.ssh', 'config'));
+    }
+    return candidates;
   }
 
   /**
@@ -176,6 +258,43 @@ export function parseGitConfigRemote(text: string): string | undefined {
     return undefined;
   }
   return remotes.get('origin') ?? remotes.get(order[0]);
+}
+
+/**
+ * Extract `Host <alias> → HostName <real>` pairs from ssh-config text. Only
+ * literal alias tokens are kept (wildcard/negated patterns configure defaults,
+ * not alias identity); per ssh semantics the FIRST HostName obtained for an
+ * alias wins. Pure and lenient — an unparseable line is skipped.
+ */
+export function parseSshConfigHostNames(text: string): Map<string, string> {
+  const map = new Map<string, string>();
+  let currentAliases: string[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith('#')) {
+      continue;
+    }
+    const match = /^(\S+)(?:\s*=\s*|\s+)(.*)$/.exec(line);
+    if (match === null) {
+      continue;
+    }
+    const keyword = match[1].toLowerCase();
+    if (keyword === 'host') {
+      currentAliases = match[2]
+        .split(/\s+/)
+        .filter((p) => p.length > 0 && !/[*?]/.test(p) && !p.startsWith('!'));
+    } else if (keyword === 'hostname') {
+      const value = match[2].trim();
+      if (value.length > 0) {
+        for (const alias of currentAliases) {
+          if (!map.has(alias)) {
+            map.set(alias, value);
+          }
+        }
+      }
+    }
+  }
+  return map;
 }
 
 /** Drop a trailing `#`/`;` comment that is not inside a quoted value. */

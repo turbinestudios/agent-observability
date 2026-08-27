@@ -13,6 +13,19 @@ import { copyFixtureToTemp } from './testSupport';
 const KNOWN_SESSION = '97fb6af7-7d93-45fe-a00b-289fa761bf66';
 const SAMPLE_REPO = 'https://github.com/example-org/sample-repo';
 
+/**
+ * The fixture's ONLY real chat sessions. Its conversation-only telemetry
+ * (Next Edit Suggestions, `copilotLanguageModelWrapper`, commit-message /
+ * title / progress generators — 63 candidate groups) must NOT be listed:
+ * those carry chat spans only, never an agent-run span.
+ */
+const REAL_SESSIONS = [
+  '8319bef8-8bca-40ce-9eb5-026215d785c0',
+  '97fb6af7-7d93-45fe-a00b-289fa761bf66',
+  'd9f9fc8d-ea20-4324-b687-89626fdf6095',
+  'e15b78ed-a4e2-4b67-b29f-ffa9c4a3c706',
+];
+
 describe('TelemetryDatabase against the fixture', () => {
   let db: TelemetryDatabase;
   let cleanup: () => void;
@@ -56,8 +69,22 @@ describe('TelemetryDatabase against the fixture', () => {
     }
     const sample = repos.find((r) => r.repository === SAMPLE_REPO);
     expect(sample).toBeDefined();
-    expect(sample?.sessionCount).toBeGreaterThan(0);
+    expect(sample?.sessionCount).toBe(REAL_SESSIONS.length);
     expect(sample?.interactionCount).toBeGreaterThan(0);
+  });
+
+  // Regression guard: conversation-only chat-helper telemetry (NES, commit
+  // message/title generators, language-model wrappers) must never surface as
+  // sessions — before the agent-run-span gate they appeared as 63 phantom
+  // repo-less rows next to the 4 real ones.
+  it('lists exactly the real chat sessions, all connected to the sample repo', () => {
+    const sessions = db.listSessions();
+    expect(sessions.map((s) => s.sessionId).sort()).toEqual(REAL_SESSIONS);
+    for (const s of sessions) {
+      expect(s.repository).toBe(SAMPLE_REPO);
+    }
+    expect(db.listSessions('unknown')).toEqual([]);
+    expect(db.listRepositories().map((r) => r.repository)).toEqual([SAMPLE_REPO]);
   });
 
   it('lists non-empty sessions, each carrying a sanitized repository', () => {

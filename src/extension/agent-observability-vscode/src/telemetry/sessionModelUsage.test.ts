@@ -142,6 +142,27 @@ describe('TelemetryDatabase.getSessionDetail — tree-scoped model/agent breakdo
     expect(detail.agentUsage[detail.agentUsage.length - 1].kind).toBe('subagent');
   });
 
+  it('attributes a wall-clock run time to every agent row, main bracketing subs', () => {
+    for (const key of [AGENT_RUN_INFRA, AGENT_RUN_DEFAULT]) {
+      const detail = db.getSessionDetail(key);
+      if (detail === undefined) {
+        throw new Error('expected detail');
+      }
+      for (const u of detail.agentUsage) {
+        expect(u.runDurationMs).toBeDefined();
+        expect(u.runDurationMs).toBeGreaterThanOrEqual(0);
+      }
+      // The main thread's chat spans bracket the whole tree, so its span is at
+      // least as long as any sub-agent's.
+      const mainSpan = Math.max(
+        ...detail.agentUsage.filter((u) => u.kind === 'main').map((u) => u.runDurationMs ?? 0),
+      );
+      for (const sub of detail.agentUsage.filter((u) => u.kind === 'subagent')) {
+        expect(mainSpan).toBeGreaterThanOrEqual(sub.runDurationMs ?? 0);
+      }
+    }
+  });
+
   it('reads the optional reasoning_tokens column (present in this fixture, all zero)', () => {
     const detail = db.getSessionDetail(AGENT_RUN_INFRA);
     if (detail === undefined) {

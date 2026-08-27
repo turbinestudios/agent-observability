@@ -110,6 +110,23 @@ const defaultIo: WorkspaceStoreIo = {
 };
 
 /**
+ * Cheap id-only variant of {@link readWorkspaceStoreSessions}: every chat-session
+ * UUID (lowercased) in a workspace's `<hash>` store, from filenames alone — no
+ * file contents, no title parsing. Used to build the CROSS-workspace session→
+ * repository fallback, where only membership matters.
+ */
+export function listChatSessionIds(hashDir: string, io: WorkspaceStoreIo = defaultIo): Set<string> {
+  const ids = new Set<string>();
+  for (const file of io.listChatSessionFiles(path.join(hashDir, 'chatSessions'))) {
+    const match = UUID_FILE_RE.exec(file);
+    if (match !== null) {
+      ids.add(match[1].toLowerCase());
+    }
+  }
+  return ids;
+}
+
+/**
  * Read the current workspace's chat-session store from its `<hash>` storage
  * directory. Resilient by design: a missing directory or an unreadable file is
  * skipped, never thrown — a partial result is always better than failing the

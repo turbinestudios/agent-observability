@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'node:path';
 import {
+  listChatSessionIds,
   readWorkspaceStoreSessions,
   WorkspaceStoreIo,
 } from './workspaceStore';
@@ -116,5 +117,28 @@ describe('readWorkspaceStoreSessions', () => {
     const result = readWorkspaceStoreSessions(HASH_DIR, { io, nowMs: NOW });
     expect(result.sessionIds.size).toBe(0);
     expect(result.recent).toHaveLength(0);
+  });
+});
+
+describe('listChatSessionIds', () => {
+  it('returns every UUID filename lowercased, from names alone (no reads)', () => {
+    let reads = 0;
+    const io: WorkspaceStoreIo = {
+      listChatSessionFiles: (dir) =>
+        dir === CHAT_DIR
+          ? [`${UUID_RECENT.toUpperCase()}.jsonl`, `${UUID_OLD}.json`, 'notes.txt', 'sub-dir']
+          : [],
+      statMtimeMs: () => {
+        reads += 1;
+        return undefined;
+      },
+      readFile: () => {
+        reads += 1;
+        return undefined;
+      },
+    };
+    const ids = listChatSessionIds(HASH_DIR, io);
+    expect(ids).toEqual(new Set([UUID_RECENT, UUID_OLD]));
+    expect(reads).toBe(0);
   });
 });

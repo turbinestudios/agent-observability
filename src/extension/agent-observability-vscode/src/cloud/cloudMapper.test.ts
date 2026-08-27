@@ -214,6 +214,8 @@ describe('buildCloudSessionDetail', () => {
     expect(a.aiuNano).toBe(0);
     expect(a.costUsdMicros).toBeUndefined();
     expect(a.creditsNano).toBe(CREDITS);
+    // The single main row's run time IS the session's run time.
+    expect(a.runDurationMs).toBe(detail.summary.durationMs);
   });
 
   it('builds one turn: REST prompt userRequest, tool events, run_setup tag, final response', () => {

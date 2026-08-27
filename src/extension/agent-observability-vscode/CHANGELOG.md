@@ -4,6 +4,78 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.9] - 2026-08-27
+
+### Fixed
+
+- **Sessions from every workspace now connect to their repository — not just
+  the current window's.** The repo attribute on telemetry spans is sparse, and
+  the only fallback was scoped to the CURRENT workspace, so sessions recorded
+  in any other window (WSL windows included) sat in the "unknown" bucket and
+  their repositories never appeared in the tree at all. A cross-workspace map
+  is now built from every workspace store under
+  `<userData>/User/workspaceStorage` — its chat-session ids joined to the
+  folder's sanitized git remote (WSL folders are reached over `\\wsl$`). The
+  scan is deferred off activation and rebuilt at most every 5 minutes; the
+  live current-workspace context still wins for sessions it claims.
+- **SSH host aliases in git remotes resolve to their real host.** A remote
+  like `git@github-work:owner/repo` (with `Host github-work / HostName
+  github.com` in `~/.ssh/config` — the common second-account setup) was
+  rejected by the URL sanitizer as a dotless host, so every such repository
+  collapsed into "unknown" for both the workspace fallback and Claude Code
+  sessions. The alias is now substituted from the ssh config before
+  sanitizing; a repo under `\\wsl$` consults that WSL user's ssh config first.
+- **A session whose `origin` was re-pointed mid-session resolves to the
+  latest remote.** When a session carried more than one repo attribute value,
+  the alphabetical `MAX()` pick could resolve it to the long-abandoned remote
+  — hiding the repository the work actually landed in. The most recent
+  repo-bearing span now wins.
+
+## [0.9.8] - 2026-08-27
+
+### Fixed
+
+- **Phantom "unconnected" sessions no longer flood the Sessions tree.** The
+  0.9.7 gate that admits conversation-only sessions (the autonomous Copilot CLI
+  shape) also matched ordinary chat-helper telemetry — Next Edit Suggestions,
+  commit-message/title/progress generators, and language-model wrappers — which
+  emit conversation-keyed `chat` spans with no `chat_session_id`. Dozens of
+  repo-less one-call "sessions" appeared as loose rows and inflated the totals.
+  A conversation-only session must now also carry an agent-run span
+  (`invoke_agent` / `execute_tool` / `execute_hook`), which every real
+  autonomous run has and the helper noise never does.
+- **Repositories with Copilot activity older than the 7-day live-ingest window
+  no longer disappear.** With live updates on, the read layer used the
+  live-OTLP ingest DB as its sole source, and that DB is pruned to 7 days — so
+  every repository whose activity was older silently vanished from the tree.
+  The durable home archive (180-day retention, continuously swept from the
+  ingest DB) is now preferred whenever it exists. Live detail updates now
+  refresh on the archive sweep cadence (default 60 s;
+  `agentObservability.copilotArchive.sweepIntervalSeconds` goes down to 10 s),
+  and overview/repository counts now cover the archive's full window.
+- **`owner/repo` shorthand now works in `excludedRepositories` and the sync
+  repository list.** Such an entry previously normalized to the literal
+  `unknown`, so it hid the entire "no detected git remote" bucket instead of
+  the intended repository. Shorthand now canonicalizes to
+  `https://github.com/owner/repo`, and an unparseable entry is dropped instead
+  of silently scoping the unknown bucket.
+- **The workspace repository fallback matches session ids case-insensitively**,
+  so sessions whose telemetry key differs from the stored (lowercased) id in
+  casing are grouped under the workspace repo instead of "unknown".
+
+### Added
+
+- **Run time column in the agent tables.** The Main agent and Spawned
+  sub-agents tables (session, combined, and repository views) show each
+  agent's wall-clock run time — first to last observed model-turn activity
+  within a session; combined and repository views sum the per-session times.
+
+### Changed
+
+- **Durations of a minute or longer render as hours/minutes/seconds** (for
+  example `1h 30m 32s` instead of `5432.1 s`) in the session header, the
+  combined view, and the timeline.
+
 ## [0.9.7] - 2026-07-28
 
 ### Fixed

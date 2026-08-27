@@ -263,6 +263,31 @@ describe('combineSessionDetails', () => {
     });
   });
 
+  it('sums per-session run time in the merge (never a min/max span)', () => {
+    const a = session({ sessionId: 'a' }, {
+      agentUsage: [
+        agentUsage('Copilot', 'gpt', 'main', { runDurationMs: 10_000 }),
+        agentUsage('Testing', 'gpt', 'subagent', {}),
+      ],
+    });
+    const b = session({ sessionId: 'b' }, {
+      agentUsage: [
+        agentUsage('Copilot', 'gpt', 'main', { runDurationMs: 20_000 }),
+        agentUsage('Testing', 'gpt', 'subagent', {}),
+      ],
+    });
+
+    const { agentUsage: merged } = combineSessionDetails([a, b]);
+
+    const main = merged.find((u) => u.kind === 'main');
+    // 10 000 + 20 000: each value is one session's wall-clock span; a min/max
+    // merge would count the idle time between the sessions.
+    expect(main?.runDurationMs).toBe(30_000);
+    // Rows with no timing data anywhere stay undefined (rendered as an em dash).
+    const sub = merged.find((u) => u.kind === 'subagent');
+    expect(sub?.runDurationMs).toBeUndefined();
+  });
+
   it('does not mutate the input details', () => {
     const a = session({ sessionId: 'a' }, {
       modelUsage: [modelUsage('m', { inputTokens: 10 })],

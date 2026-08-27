@@ -114,6 +114,39 @@ describe('renderCombinedSessionDetailHtml', () => {
     expect(html).toContain('4.00');
   });
 
+  it('shows the merged Run time as the SUM of per-session spans, not their span', () => {
+    const mainRow = (runDurationMs: number): SessionDetail['agentUsage'][number] => ({
+      agentName: 'Copilot',
+      model: 'gpt',
+      kind: 'main',
+      llmCalls: 1,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      reasoningTokens: 0,
+      aiuNano: 0,
+      linesOfCode: 0,
+      linesOfDoc: 0,
+      linesOfCodeRemoved: 0,
+      linesOfDocRemoved: 0,
+      runDurationMs,
+    });
+    // Sessions hours apart: a min/max merge would show a huge idle-laden span.
+    const a = session({ sessionId: 'a-1', startedAtMs: 1_000, endedAtMs: 11_000 }, {
+      agentUsage: [mainRow(10_000)],
+    });
+    const b = session(
+      { sessionId: 'b-2', startedAtMs: 7_200_000_000, endedAtMs: 7_200_020_000 },
+      { agentUsage: [mainRow(20_000)] },
+    );
+
+    const html = renderCombinedSessionDetailHtml(viewFor([a, b]), NONCE);
+
+    expect(html).toContain('>Run time</th>');
+    // 10 000 + 20 000 ms = 30.0 s in the merged Main agent table.
+    expect(html).toContain('<td class="n">30.0 s</td>');
+  });
+
   it('overlays a scope divider and centered short-id label per session on the trend', () => {
     // One whole-tree model turn → one plotted point; two per session gives each
     // session a scope wide enough to draw a divider and label.

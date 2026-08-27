@@ -44,6 +44,7 @@ import { AgentBlobClient } from './cloud-agent/agentBlobClient';
 import { AgentPuller } from './cloud-agent/agentPuller';
 import { CopilotAgentSource } from './cloud-agent/copilotAgentSource';
 import { readWorkspaceStoreSessions } from './telemetry/workspaceStore';
+import { buildGlobalSessionRepositories } from './telemetry/globalWorkspaceRepos';
 import { CompositeAggregationSource } from './sync/compositeAggregationSource';
 import { CopilotContextHotspotsProvider } from './context/contextHotspotsProvider';
 import { OutputChannelLogger } from './log/outputChannelLogger';
@@ -305,6 +306,7 @@ export function activate(context: vscode.ExtensionContext): void {
     storeDebounce = setTimeout(() => {
       storeDebounce = undefined;
       refreshWorkspaceContext();
+      refreshGlobalSessionRepositories();
       sessions.refresh();
     }, 400);
   };
@@ -326,6 +328,40 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     },
   });
+
+  // ── Cross-workspace session→repository fallback ─────────────────────────────
+  // The current-workspace context above can only claim THIS window's sessions;
+  // sessions recorded in any OTHER workspace (captured centrally by the OTLP
+  // receiver/archive regardless of which window ran them) would sit in the
+  // `unknown` bucket unless their spans happened to carry a repo attribute — and
+  // their repositories never appeared in the tree at all. Build the global map
+  // from every workspace store under `<userData>/User/workspaceStorage` (WSL
+  // windows' stores live client-side too, and their folders are reached over
+  // `\\wsl$`). Deferred off the activation path and time-gated: the scan can
+  // touch UNC paths that are slow while WSL is stopped.
+  const workspaceStorageRoot = path.join(
+    path.dirname(path.dirname(context.globalStorageUri.fsPath)),
+    'workspaceStorage',
+  );
+  const GLOBAL_REPOS_REBUILD_MS = 5 * 60 * 1000;
+  let globalReposBuiltAtMs = 0;
+  const refreshGlobalSessionRepositories = (): void => {
+    const nowMs = Date.now();
+    if (nowMs - globalReposBuiltAtMs < GLOBAL_REPOS_REBUILD_MS) {
+      return;
+    }
+    globalReposBuiltAtMs = nowMs;
+    try {
+      telemetry.setGlobalSessionRepositories(
+        buildGlobalSessionRepositories(workspaceStorageRoot, (p) => gitRemote.resolve(p)),
+      );
+      sessions.refresh();
+    } catch (err) {
+      logger.error('Cross-workspace repository scan failed', err);
+    }
+  };
+  const globalReposTimer = setTimeout(refreshGlobalSessionRepositories, 0);
+  context.subscriptions.push({ dispose: () => clearTimeout(globalReposTimer) });
 
   // Refresh re-reads every source (re-snapshots Copilot, re-discovers Claude),
   // re-reads the workspace chat-session context, then fans out to every view.

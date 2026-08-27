@@ -178,6 +178,11 @@ function mergeAgentUsage(details: readonly SessionDetail[]): SessionAgentUsage[]
         existing.linesOfDoc += u.linesOfDoc;
         existing.linesOfCodeRemoved += u.linesOfCodeRemoved;
         existing.linesOfDocRemoved += u.linesOfDocRemoved;
+        // Run time SUMS across sessions (each value is one session's wall-clock
+        // span); a min/max merge would count the idle time between sessions.
+        if (u.runDurationMs !== undefined) {
+          existing.runDurationMs = (existing.runDurationMs ?? 0) + u.runDurationMs;
+        }
       }
     }
   }

@@ -171,6 +171,36 @@ describe('renderSessionDetailHtml — local-only badge', () => {
   });
 });
 
+describe('renderSessionDetailHtml — header duration tiers', () => {
+  const withDuration = (durationMs: number): SessionDetail => ({
+    ...detail,
+    summary: { ...detail.summary, durationMs },
+  });
+
+  it('renders sub-minute durations as decimal seconds', () => {
+    const html = renderSessionDetailHtml(withDuration(45_000), [], NONCE);
+    expect(html).toContain('<dd>45.0 s</dd>');
+  });
+
+  it('renders minute-scale durations as m/s, not raw seconds', () => {
+    // The `detail` fixture's own 60 000 ms.
+    const html = renderSessionDetailHtml(detail, [], NONCE);
+    expect(html).toContain('<dd>1m 0s</dd>');
+    expect(html).not.toContain('60.0 s');
+  });
+
+  it('renders hour-scale durations as h/m/s', () => {
+    const html = renderSessionDetailHtml(withDuration(5_432_100), [], NONCE);
+    expect(html).toContain('<dd>1h 30m 32s</dd>');
+  });
+
+  it('never rounds up to a 60-minute remainder', () => {
+    // 3 599 600 ms rounds to 3600 s: must decompose to 1h 0m 0s, not 60m 0s.
+    const html = renderSessionDetailHtml(withDuration(3_599_600), [], NONCE);
+    expect(html).toContain('<dd>1h 0m 0s</dd>');
+  });
+});
+
 describe('renderSessionDetailHtml — live in-place update shell', () => {
   // The panel mounts the full document ONCE, then pushes data as `update` messages
   // so the in-page controller swaps the body WITHOUT reloading — keeping open
@@ -299,6 +329,20 @@ describe('renderSessionDetailHtml — Main agent AIU & cost', () => {
     expect(html).toContain('&lt;script&gt;evil&lt;/script&gt;');
     expect(html).not.toContain('<script>evil</script>');
   });
+
+  it('renders an em dash in Run time when the source has no timestamps', () => {
+    // None of the usageDetail rows carry runDurationMs — a fake "0 ms" would
+    // read as measured, so every row AND the footer must show the dash.
+    const html = renderSessionDetailHtml(usageDetail, [], NONCE);
+    expect(html).toContain('>Run time</th>');
+    const rows = [...html.matchAll(/<td>Main agent<\/td>[\s\S]*?<\/tr>/g)];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row[0]).toContain('<td class="n">—</td>');
+    }
+    expect(footerRow(html)).toContain('<td class="n">—</td>');
+    expect(html).not.toContain('0 ms');
+  });
 });
 
 describe('renderSessionDetailHtml — Copilot (Cloud) credit units', () => {
@@ -360,9 +404,9 @@ describe('renderSessionDetailHtml — spawned sub-agents', () => {
       { model: 'gpt-5.4', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0, aiuNano: 3_000_000_000 },
     ],
     agentUsage: [
-      { agentName: 'GitHub Copilot Chat', model: 'gpt-5.4', kind: 'main', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0, aiuNano: 3_000_000_000, linesOfCode: 120, linesOfDoc: 18, linesOfCodeRemoved: 30, linesOfDocRemoved: 4 },
-      { agentName: 'Testing', model: 'gpt-5.3-codex', kind: 'subagent', llmCalls: 2, inputTokens: 1300, outputTokens: 40, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0, linesOfCode: 45, linesOfDoc: 0, linesOfCodeRemoved: 12, linesOfDocRemoved: 0 },
-      { agentName: 'Frontend', model: 'gpt-5.4', kind: 'subagent', llmCalls: 1, inputTokens: 900, outputTokens: 10, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0, linesOfCode: 60, linesOfDoc: 5, linesOfCodeRemoved: 8, linesOfDocRemoved: 1 },
+      { agentName: 'GitHub Copilot Chat', model: 'gpt-5.4', kind: 'main', llmCalls: 3, inputTokens: 5000, outputTokens: 200, cachedTokens: 100, reasoningTokens: 0, aiuNano: 3_000_000_000, linesOfCode: 120, linesOfDoc: 18, linesOfCodeRemoved: 30, linesOfDocRemoved: 4, runDurationMs: 4_215_000 },
+      { agentName: 'Testing', model: 'gpt-5.3-codex', kind: 'subagent', llmCalls: 2, inputTokens: 1300, outputTokens: 40, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0, linesOfCode: 45, linesOfDoc: 0, linesOfCodeRemoved: 12, linesOfDocRemoved: 0, runDurationMs: 300_000 },
+      { agentName: 'Frontend', model: 'gpt-5.4', kind: 'subagent', llmCalls: 1, inputTokens: 900, outputTokens: 10, cachedTokens: 0, reasoningTokens: 0, aiuNano: 0, linesOfCode: 60, linesOfDoc: 5, linesOfCodeRemoved: 8, linesOfDocRemoved: 1, runDurationMs: 65_000 },
     ],
     treeModelTurns: [],
   };
@@ -403,6 +447,23 @@ describe('renderSessionDetailHtml — spawned sub-agents', () => {
     // A sub-agent row carries its own (45/0/12/0).
     const subRow = html.match(/<td>Testing<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
     expect(subRow).toMatch(/<td class="n">45<\/td>\s*<td class="n">0<\/td>\s*<td class="n">12<\/td>\s*<td class="n">0<\/td>/);
+  });
+
+  it('renders a Run time column with per-row wall-clock spans', () => {
+    const html = renderSessionDetailHtml(agentDetail, [], NONCE);
+    expect(html).toContain('>Run time</th>');
+    const mainRow = html.match(/<td>GitHub Copilot Chat<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
+    expect(mainRow).toContain('<td class="n">1h 10m 15s</td>'); // 4 215 000 ms
+    const testingRow = html.match(/<td>Testing<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
+    expect(testingRow).toContain('<td class="n">5m 0s</td>'); // 300 000 ms
+    const frontendRow = html.match(/<td>Frontend<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
+    expect(frontendRow).toContain('<td class="n">1m 5s</td>'); // 65 000 ms
+  });
+
+  it('sub-agent subtotal sums the run time of the sub-agent rows only', () => {
+    const html = renderSessionDetailHtml(agentDetail, [], NONCE);
+    const sub = html.match(/<td>Sub-agent total<\/td>[\s\S]*?<\/tr>/)?.[0] ?? '';
+    expect(sub).toContain('<td class="n">6m 5s</td>'); // 300 000 + 65 000 ms
   });
 
   it('sub-agent subtotal sums the per-agent LoC/LoD columns', () => {

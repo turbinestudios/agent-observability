@@ -66,6 +66,16 @@ describe('normalizeRepositoryList', () => {
     ]);
     expect(set).toEqual(new Set([REPO_A, 'unknown']));
   });
+
+  it('canonicalizes bare owner/repo shorthand to the github.com form', () => {
+    // The doc-claimed shorthand: previously this collapsed to 'unknown' and
+    // silently scoped the whole no-remote bucket instead of the repo.
+    expect(normalizeRepositoryList(['example-org/repo-a'])).toEqual(new Set([REPO_A]));
+  });
+
+  it('drops an unparseable entry instead of mapping it to "unknown"', () => {
+    expect(normalizeRepositoryList(['not a repo!!'])).toEqual(new Set());
+  });
 });
 
 describe('isRepositoryIncluded', () => {
@@ -84,6 +94,12 @@ describe('isRepositoryIncluded', () => {
     const policy = buildRepoSyncPolicy('exclude', [REPO_A]);
     expect(isRepositoryIncluded(REPO_A, policy)).toBe(false);
     expect(isRepositoryIncluded(REPO_B, policy)).toBe(true);
+  });
+
+  it('a shorthand exclusion hides that repo, never the unknown bucket', () => {
+    const policy = buildRepoSyncPolicy('exclude', ['example-org/repo-a']);
+    expect(isRepositoryIncluded(REPO_A, policy)).toBe(false);
+    expect(isRepositoryIncluded('unknown', policy)).toBe(true);
   });
 });
 

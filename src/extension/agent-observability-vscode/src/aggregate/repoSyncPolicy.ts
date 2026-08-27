@@ -1,4 +1,4 @@
-import { sanitizeRepositoryUrl } from '../telemetry/repositoryUrl';
+import { sanitizeRepositorySlug, UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 
 /**
  * Per-repository sync scoping policy.
@@ -42,18 +42,28 @@ export const ALL_REPOSITORIES_POLICY: RepoSyncPolicy = {
 
 /**
  * Normalize a raw (possibly hand-edited) repository list into the canonical set
- * membership tests use. Every entry passes through {@link sanitizeRepositoryUrl}
+ * membership tests use. Every entry passes through {@link sanitizeRepositorySlug}
  * — the SAME chokepoint the row values pass through — so a hand-typed
  * `org/repo`, a trailing `.git`, an SCP-style remote, or odd casing all converge
  * with the canonical row form and match as expected. The literal `unknown` token
  * is passed through verbatim so users can scope sessions with no detected git
- * remote. Shared by the sync scope and the local `excludedRepositories` filter.
+ * remote; an entry that fails to sanitize is DROPPED — mapping it to `unknown`
+ * would silently scope the whole no-remote bucket on a typo. Shared by the sync
+ * scope and the local `excludedRepositories` filter.
  */
 export function normalizeRepositoryList(raw: readonly string[]): Set<string> {
   const repositories = new Set<string>();
   for (const entry of raw) {
-    if (typeof entry === 'string' && entry.trim().length > 0) {
-      repositories.add(entry.trim() === 'unknown' ? 'unknown' : sanitizeRepositoryUrl(entry));
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      continue;
+    }
+    if (entry.trim() === UNKNOWN_REPOSITORY) {
+      repositories.add(UNKNOWN_REPOSITORY);
+      continue;
+    }
+    const sanitized = sanitizeRepositorySlug(entry);
+    if (sanitized !== UNKNOWN_REPOSITORY) {
+      repositories.add(sanitized);
     }
   }
   return repositories;

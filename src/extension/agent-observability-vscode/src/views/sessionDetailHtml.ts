@@ -1094,7 +1094,7 @@ function renderSubAgentUsage(usage: readonly SessionAgentUsage[], costMode: Cost
 /**
  * Shared renderer for a per-(agent, model) usage table — used for both the main
  * thread and the spawned sub-agents so they share one column layout (Agent, Model,
- * Calls, Input, Output, Cached, AIU). The AIU column is the actual billed figure
+ * Calls, Run time, Input, Output, Cached, AIU). The AIU column is the actual billed figure
  * and carries the derived dollar cost inline ({@link formatAiu}); the footer is
  * this table's own subtotal. Returns `''` when there are no rows.
  */
@@ -1110,6 +1110,7 @@ function renderAgentUsage(
   const totals = rows.reduce(
     (acc, u) => {
       acc.llmCalls += u.llmCalls;
+      acc.runDurationMs += u.runDurationMs ?? 0;
       acc.inputTokens += u.inputTokens;
       acc.outputTokens += u.outputTokens;
       acc.cachedTokens += u.cachedTokens;
@@ -1124,6 +1125,7 @@ function renderAgentUsage(
     },
     {
       llmCalls: 0,
+      runDurationMs: 0,
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: 0,
@@ -1136,6 +1138,12 @@ function renderAgentUsage(
       linesOfDocRemoved: 0,
     },
   );
+
+  // Run time renders an em dash when a source carries no timestamps at all —
+  // a fake "0 ms" would read as measured.
+  const hasRunTime = rows.some((u) => u.runDurationMs !== undefined);
+  const runCell = (v: number | undefined): string =>
+    v === undefined ? '—' : escapeHtml(formatDuration(v));
 
   // One cost column: AIU (Copilot), estimated USD (Claude), or credits (cloud).
   // Cloud rows share the session's credit unit (pru vs ai_credits); use the first
@@ -1166,6 +1174,7 @@ function renderAgentUsage(
         <td>${escapeHtml(u.agentName)}</td>
         <td class="model">${escapeHtml(u.model)}</td>
         <td class="n">${num(u.llmCalls)}</td>
+        <td class="n">${runCell(u.runDurationMs)}</td>
         <td class="n">${num(u.inputTokens)}</td>
         <td class="n">${num(u.outputTokens)}</td>
         <td class="n">${num(u.cachedTokens)}</td>
@@ -1185,7 +1194,9 @@ function renderAgentUsage(
     <table>
       <thead>
         <tr>
-          <th>Agent</th><th>Model</th><th class="n" title="${escapeHtml(opts.callsTitle)}">Calls</th><th class="n">Input</th>
+          <th>Agent</th><th>Model</th><th class="n" title="${escapeHtml(opts.callsTitle)}">Calls</th>
+          <th class="n" title="Wall-clock run time attributed to this agent (first to last model-turn activity in a session; combined/repository views sum per-session times). The totals row sums the rows — concurrently running agents count separately.">Run time</th>
+          <th class="n">Input</th>
           <th class="n">Output</th><th class="n">Cached</th>
           ${costHeader}
           <th class="n" title="Lines of Code added to source-code files by this agent/model's file-writing tool calls">LoC</th>
@@ -1202,6 +1213,7 @@ function renderAgentUsage(
           <td>${escapeHtml(opts.footerLabel)}</td>
           <td class="model"></td>
           <td class="n">${num(totals.llmCalls)}</td>
+          <td class="n">${hasRunTime ? escapeHtml(formatDuration(totals.runDurationMs)) : '—'}</td>
           <td class="n">${num(totals.inputTokens)}</td>
           <td class="n">${num(totals.outputTokens)}</td>
           <td class="n">${num(totals.cachedTokens)}</td>
@@ -1407,12 +1419,28 @@ function formatTime(epochMs: number): string {
   return new Date(epochMs).toLocaleTimeString();
 }
 
-/** Human duration: sub-second in ms, otherwise seconds. */
+/**
+ * Human duration: sub-second in ms, decimal seconds under a minute, then
+ * minutes+seconds under an hour, else hours+minutes+seconds (no days tier —
+ * multi-day spans read as large hour counts on purpose).
+ */
 function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) {
+    ms = 0;
+  }
   if (ms < 1000) {
     return `${ms} ms`;
   }
-  return `${(ms / 1000).toFixed(1)} s`;
+  if (ms < 60_000) {
+    return `${(ms / 1000).toFixed(1)} s`;
+  }
+  // Round to whole seconds BEFORE decomposing so 3 599 600 ms is 1h 0m 0s,
+  // never 60m 0s.
+  const totalSeconds = Math.round(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0 ? `${hours}h ${minutes}m ${seconds}s` : `${minutes}m ${seconds}s`;
 }
 
 // ─── Context Analysis Rendering ────────────────────────────────────────────────

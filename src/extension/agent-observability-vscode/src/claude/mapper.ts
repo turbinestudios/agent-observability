@@ -567,6 +567,8 @@ function buildModelUsage(main: ExtractedTurn[], subs: SubExtract[]): SessionMode
 
 function buildAgentUsage(main: ExtractedTurn[], subs: SubExtract[]): SessionAgentUsage[] {
   const rows = new Map<string, SessionAgentUsage>();
+  // Wall-clock activity bounds per (agent, model, kind) for `runDurationMs`.
+  const bounds = new Map<string, { startMs: number; endMs: number }>();
   const ensure = (agentName: string, model: string, kind: 'main' | 'subagent'): SessionAgentUsage => {
     const key = agentUsageKey({ agentName, model, kind });
     let row = rows.get(key);
@@ -603,6 +605,24 @@ function buildAgentUsage(main: ExtractedTurn[], subs: SubExtract[]): SessionAgen
       for (const tool of turn.tools) {
         addLocToAgent(row, tool.loc);
       }
+      if (turn.timestampMs > 0) {
+        const key = agentUsageKey({ agentName, model: turn.model, kind });
+        // Generation start ≈ record ts minus the gap-derived latency (so a
+        // single-turn sub-agent doesn't report 0); the activity end extends
+        // over the turn's resolved tool executions.
+        const startMs = turn.durationMs > 0 ? turn.timestampMs - turn.durationMs : turn.timestampMs;
+        let endMs = turn.timestampMs;
+        for (const tool of turn.tools) {
+          endMs = Math.max(endMs, tool.timestampMs + tool.durationMs);
+        }
+        const b = bounds.get(key);
+        if (b === undefined) {
+          bounds.set(key, { startMs, endMs });
+        } else {
+          b.startMs = Math.min(b.startMs, startMs);
+          b.endMs = Math.max(b.endMs, endMs);
+        }
+      }
     }
   };
   accumulate(main, 'Main agent', 'main');
@@ -611,6 +631,12 @@ function buildAgentUsage(main: ExtractedTurn[], subs: SubExtract[]): SessionAgen
       ? `Sub-agent: ${sub.agentType}`
       : 'Sub-agent';
     accumulate(sub.extract.records, name, 'subagent');
+  }
+  for (const [key, b] of bounds) {
+    const row = rows.get(key);
+    if (row !== undefined) {
+      row.runDurationMs = Math.max(0, b.endMs - b.startMs);
+    }
   }
   // Main first, then by total tokens desc.
   return [...rows.values()].sort((a, b) => {

@@ -1301,6 +1301,8 @@ export class TelemetryDatabase {
       cached_tokens: number | null;
       reasoning_tokens: number | null;
       aiu_nano: number | null;
+      started_at_ms: number | null;
+      ended_at_ms: number | null;
     }>(
       // Each chat span carries at most one debug_log_label and one nano-AIU
       // attribute, so the two LEFT JOINs are 1:1 and do not multiply rows.
@@ -1314,7 +1316,9 @@ export class TelemetryDatabase {
               SUM(COALESCE(s.output_tokens, 0)) AS output_tokens,
               SUM(COALESCE(s.cached_tokens, 0)) AS cached_tokens,
               ${reasoningSel} AS reasoning_tokens,
-              SUM(CASE WHEN aiu.value IS NOT NULL THEN CAST(aiu.value AS INTEGER) ELSE 0 END) AS aiu_nano
+              SUM(CASE WHEN aiu.value IS NOT NULL THEN CAST(aiu.value AS INTEGER) ELSE 0 END) AS aiu_nano,
+              MIN(CASE WHEN s.start_time_ms > 0 THEN s.start_time_ms END) AS started_at_ms,
+              MAX(s.end_time_ms) AS ended_at_ms
          FROM spans s
          LEFT JOIN span_attributes lbl
            ON lbl.span_id = s.span_id AND lbl.key = 'copilot_chat.debug_log_label'
@@ -1328,6 +1332,9 @@ export class TelemetryDatabase {
 
     const usageByModel = new Map<string, SessionModelUsage>();
     const usageByAgent = new Map<string, SessionAgentUsage>();
+    // Wall-clock bounds per agent key; folded across the SQL group rows (the same
+    // key arrives once per chat_session_id / model form / debug label).
+    const timeByAgent = new Map<string, { startMs: number; endMs: number }>();
 
     for (const row of rows) {
       const model = resolveModel(row.response_model, row.request_model);
@@ -1378,6 +1385,20 @@ export class TelemetryDatabase {
       agent.reasoningTokens += reasoning;
       agent.aiuNano += aiu;
 
+      if (
+        row.started_at_ms !== null &&
+        row.ended_at_ms !== null &&
+        row.ended_at_ms >= row.started_at_ms
+      ) {
+        const t = timeByAgent.get(agentKey);
+        if (t === undefined) {
+          timeByAgent.set(agentKey, { startMs: row.started_at_ms, endMs: row.ended_at_ms });
+        } else {
+          t.startMs = Math.min(t.startMs, row.started_at_ms);
+          t.endMs = Math.max(t.endMs, row.ended_at_ms);
+        }
+      }
+
       let usage = usageByModel.get(model);
       if (usage === undefined) {
         usage = {
@@ -1397,6 +1418,13 @@ export class TelemetryDatabase {
       usage.cachedTokens += cached;
       usage.reasoningTokens += reasoning;
       usage.aiuNano += aiu;
+    }
+
+    for (const [key, t] of timeByAgent) {
+      const agent = usageByAgent.get(key);
+      if (agent !== undefined) {
+        agent.runDurationMs = Math.max(0, t.endMs - t.startMs);
+      }
     }
 
     // Per-(agent, model, kind) LoC/LoD over the WHOLE tree's file-writes, attributed
@@ -2157,8 +2185,16 @@ export class TelemetryDatabase {
    *     shares one `gen_ai.conversation.id`, which IS the session. Such a session
    *     is admitted by its UUID session key, but ONLY when none of its spans carry
    *     a `chat_session_id` — that condition is what keeps (a)'s per-turn
-   *     conversation fragments out, since those always carry the parent's id.
-   *     Without this, every relayed autonomous session was silently absent from
+   *     conversation fragments out, since those always carry the parent's id —
+   *     AND at least one span is an agent-run span (`invoke_agent` /
+   *     `execute_tool` / `execute_hook`). Chat-helper telemetry (Next Edit
+   *     Suggestions, `copilotLanguageModelWrapper`, commit-message/title/progress
+   *     generators) emits conversation-keyed `chat` spans only and must never
+   *     surface as sessions; `execute_tool` spans end promptly DURING a run, so a
+   *     live autonomous session still appears by its first tool call. A
+   *     hypothetical autonomous run that only ever emits `chat` spans stays
+   *     hidden — it is shape-indistinguishable from the helper noise. Without
+   *     shape (b), every relayed autonomous session was silently absent from
    *     the Sessions tree and the repository rollup.
    */
   private startedSessionIds(): ReadonlySet<string> {
@@ -2177,14 +2213,17 @@ export class TelemetryDatabase {
       .map((r) => r.csid);
 
     // (b) Session keys whose spans carry NO chat_session_id — the autonomous
-    // Copilot CLI shape, where the conversation id is the session.
+    // Copilot CLI shape, where the conversation id is the session. Requiring an
+    // agent-run span keeps conversation-keyed chat-helper noise (NES, commit
+    // message/title generators, language-model wrappers) out.
     const conversationOnlyCandidates = this.allRows<{ sk: string }>(
       `SELECT ${SESSION_KEY_EXPR} AS sk
          FROM spans
          WHERE ${SESSION_KEY_EXPR} IS NOT NULL
            AND LENGTH(${SESSION_KEY_EXPR}) = 36
          GROUP BY ${SESSION_KEY_EXPR}
-         HAVING SUM(CASE WHEN chat_session_id IS NOT NULL AND chat_session_id <> '' THEN 1 ELSE 0 END) = 0`,
+         HAVING SUM(CASE WHEN chat_session_id IS NOT NULL AND chat_session_id <> '' THEN 1 ELSE 0 END) = 0
+            AND SUM(CASE WHEN operation_name IN ('invoke_agent', 'execute_tool', 'execute_hook') THEN 1 ELSE 0 END) > 0`,
     )
       .filter((r) => UUID_RE.test(r.sk))
       .map((r) => r.sk);

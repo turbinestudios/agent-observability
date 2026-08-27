@@ -165,6 +165,12 @@ describe('buildSessionDetail (whole tree)', () => {
     expect(sub).toHaveLength(1);
     expect(sub[0].agentName).toBe('Sub-agent: Explore');
     expect(sub[0].model).toBe(HAIKU);
+    // Wall-clock run time: first observed activity → last. The main thread's
+    // first turn starts at its ts minus the gap-derived latency (10:00:05 − 5 s
+    // = 10:00:00) and the last turn ends at 10:00:12 → 12 s. The sub-agent's
+    // single turn spans its ts (10:00:07) to its tool result (10:00:08) → 1 s.
+    expect(main[0].runDurationMs).toBe(12_000);
+    expect(sub[0].runDurationMs).toBe(1_000);
     // Main-first ordering.
     expect(detail.agentUsage[0].kind).toBe('main');
     // One model-turn point per tree LLM call.

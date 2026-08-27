@@ -156,19 +156,38 @@ export class TelemetryService {
    * cache drop — the installed function itself never has to be replaced.
    */
   private readonly repositoryFallbackFn = (sessionId: string): string | undefined => {
+    // The workspace stores persist their session ids lowercased; telemetry keys
+    // can arrive in mixed case, so match case-insensitively.
+    const lower = sessionId.toLowerCase();
     const ctx = this.workspaceContext;
-    if (ctx === undefined || ctx.repository === UNKNOWN_REPOSITORY) {
-      return undefined;
+    if (
+      ctx !== undefined &&
+      ctx.repository !== UNKNOWN_REPOSITORY &&
+      ctx.sessionIds.has(lower)
+    ) {
+      return ctx.repository;
     }
-    return ctx.sessionIds.has(sessionId) ? ctx.repository : undefined;
+    // Sessions recorded in OTHER workspaces (any window, WSL included) resolve
+    // through the cross-workspace map — the live context wins for the current
+    // window because it is fresher than the periodically rebuilt map.
+    const global = this.globalSessionRepositories?.get(lower);
+    return global !== undefined && global !== UNKNOWN_REPOSITORY ? global : undefined;
   };
+  /**
+   * CROSS-workspace `lowercased chat-session id → sanitized repository` map
+   * (see {@link ./globalWorkspaceRepos.buildGlobalSessionRepositories}),
+   * consulted after the live workspace context for sessions whose spans carry
+   * no repo attribute.
+   */
+  private globalSessionRepositories: ReadonlyMap<string, string> | undefined;
   /** When set + present, the extension's OWN live-OTLP ingest DB (the sink). */
   private ingestDbPath: string | undefined;
   /**
    * When set + present, the DURABLE, home-anchored Copilot archive
-   * ({@link ../otel/copilotArchiver.CopilotArchiver}). Read as the sole source
-   * UNLESS the live-OTLP ingest DB is active (that stays the real-time source),
-   * and preferred over auto-detecting Copilot's short-lived native DB(s).
+   * ({@link ../otel/copilotArchiver.CopilotArchiver}). Read as the sole source,
+   * preferred over the live-OTLP ingest DB (the archiver sweeps ingest into it,
+   * and ingest is pruned to days while the archive keeps months) and over
+   * auto-detecting Copilot's short-lived native DB(s).
    */
   private archiveDbPath: string | undefined;
 
@@ -235,6 +254,21 @@ export class TelemetryService {
    */
   setWorkspaceSessionContext(context: WorkspaceSessionContext | undefined): void {
     this.workspaceContext = context;
+    this.cache.repositories = undefined;
+    this.cache.sessions.clear();
+    for (const handle of this.handles) {
+      handle.db.setRepositoryFallback(this.repositoryFallbackFn);
+    }
+  }
+
+  /**
+   * Install (or clear) the CROSS-workspace session→repository fallback map.
+   * Same cache discipline as {@link setWorkspaceSessionContext}: the stable
+   * fallback function reads the live field, so only the session/repository
+   * caches need dropping.
+   */
+  setGlobalSessionRepositories(map: ReadonlyMap<string, string> | undefined): void {
+    this.globalSessionRepositories = map;
     this.cache.repositories = undefined;
     this.cache.sessions.clear();
     for (const handle of this.handles) {
@@ -719,14 +753,18 @@ export class TelemetryService {
 
     // Source precedence, each SOLE when it applies (so the merge stays over one
     // disjoint source and additive rollups never double-count):
-    //   1. live-OTLP ingest DB — real-time, when live updates are on;
-    //   2. durable home archive — persists Copilot history across windows/editions;
-    //   3. Copilot's short-lived native DB(s) — first-run fallback until (2) exists.
+    //   1. durable home archive — a superset of the ingest DB (the archiver
+    //      sweeps ingest into it continuously, lagging at most one sweep) that
+    //      persists months of Copilot history, where the ingest DB is pruned to
+    //      days and would silently hide older repositories/sessions;
+    //   2. live-OTLP ingest DB — until the first sweep creates the archive, or
+    //      when archiving is disabled;
+    //   3. Copilot's short-lived native DB(s) — first-run fallback until (1) exists.
     let targets: Array<{ path: string; source: DatabaseSource }> | undefined;
-    if (this.ingestDbPath !== undefined && sourceMtime(this.ingestDbPath) !== undefined) {
-      targets = [{ path: this.ingestDbPath, source: 'ingest' }];
-    } else if (this.archiveDbPath !== undefined && sourceMtime(this.archiveDbPath) !== undefined) {
+    if (this.archiveDbPath !== undefined && sourceMtime(this.archiveDbPath) !== undefined) {
       targets = [{ path: this.archiveDbPath, source: 'ingest' }];
+    } else if (this.ingestDbPath !== undefined && sourceMtime(this.ingestDbPath) !== undefined) {
+      targets = [{ path: this.ingestDbPath, source: 'ingest' }];
     } else {
       // When nothing is readable anywhere, still attempt the denied-but-present
       // candidate so the precise EACCES/EPERM surfaces (snapshot copy throws).

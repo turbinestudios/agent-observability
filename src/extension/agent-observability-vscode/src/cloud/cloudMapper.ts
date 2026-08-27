@@ -271,6 +271,7 @@ function buildCloudAgentUsage(input: CloudSessionInput, stats: SessionTreeStats)
       linesOfDoc: 0,
       linesOfCodeRemoved: 0,
       linesOfDocRemoved: 0,
+      runDurationMs: timing(input).durationMs,
     },
   ];
 }

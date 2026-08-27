@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TelemetryService, ServiceConfig } from './telemetryService';
 import { copyFixtureToTemp } from './testSupport';
+import { normalizeRepositoryList } from '../aggregate/repoSyncPolicy';
 
 /**
  * Service-level repository exclusion (`agentObservability.excludedRepositories`):
@@ -18,18 +19,22 @@ function makeConfig(dbPath: string, excluded: readonly string[]): ServiceConfig 
     getSqlitePathOverride: () => dbPath,
     getCodeFileExtensions: () => [],
     getDocFileExtensions: () => [],
-    getExcludedRepositories: () => new Set(excluded),
+    // Same chokepoint the real Configuration uses, so shorthand entries are
+    // exercised the way a hand-edited setting reaches the service.
+    getExcludedRepositories: () => normalizeRepositoryList(excluded),
   };
 }
 
 describe('TelemetryService repository exclusion', () => {
   let cleanup: () => void;
+  let copyPath: string;
   let unfiltered: TelemetryService;
   let filtered: TelemetryService;
 
   beforeAll(() => {
     const copy = copyFixtureToTemp();
     cleanup = copy.cleanup;
+    copyPath = copy.dbPath;
     unfiltered = new TelemetryService(makeConfig(copy.dbPath, []));
     filtered = new TelemetryService(makeConfig(copy.dbPath, [SAMPLE_REPO]));
   });
@@ -96,6 +101,25 @@ describe('TelemetryService repository exclusion', () => {
     expect(distinct.ok).toBe(true);
     if (distinct.ok) {
       expect(distinct.value).not.toContain(SAMPLE_REPO);
+    }
+  });
+
+  it('an owner/repo shorthand entry hides that repo but not the unknown bucket', () => {
+    // Previously the shorthand collapsed to 'unknown' in normalization: the
+    // intended repo stayed visible and the whole no-remote bucket vanished.
+    const shorthand = new TelemetryService(
+      makeConfig(copyPath, ['example-org/sample-repo']),
+    );
+    try {
+      const repos = shorthand.listRepositories();
+      expect(repos.ok).toBe(true);
+      if (repos.ok) {
+        expect(repos.value.some((r) => r.repository === SAMPLE_REPO)).toBe(false);
+      }
+      const loose = shorthand.listSessions('unknown');
+      expect(loose.ok).toBe(true);
+    } finally {
+      shorthand.dispose();
     }
   });
 
