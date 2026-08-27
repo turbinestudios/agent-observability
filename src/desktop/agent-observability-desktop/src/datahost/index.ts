@@ -145,8 +145,13 @@ function attach(port: MessagePortMain): void {
   port.start();
 }
 
+const debug = process.env.AO_DEBUG === '1';
+
 // Main sends the renderer's MessagePort over as the first message.
 process.parentPort?.on('message', (event) => {
+  if (debug) {
+    console.log(`[datahost] message from main, ports=${event.ports.length}`);
+  }
   const [port] = event.ports;
   if (port !== undefined) {
     attach(port);

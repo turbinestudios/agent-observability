@@ -35,6 +35,21 @@ function createWindow(): void {
   // Show only once painted, so launch never flashes an empty white frame.
   mainWindow.once('ready-to-show', () => mainWindow?.show());
 
+  // Renderer console output is invisible without devtools open, which makes a
+  // startup failure look like an empty window. Forwarding it to stdout means
+  // `AO_DEBUG=1 <app>` from a terminal shows what actually went wrong.
+  if (process.env.AO_DEBUG === '1') {
+    mainWindow.webContents.on('console-message', (_event, level, message) => {
+      console.log(`[renderer:${level}] ${message}`);
+    });
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+      console.log(`[renderer] gone: ${details.reason}`);
+    });
+    mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+      console.log(`[preload] ${preloadPath}: ${error.message}`);
+    });
+  }
+
   // External links belong in the user's browser, never in an app window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -71,6 +86,9 @@ function connectRendererToDataHost(): void {
   const { port1, port2 } = new MessageChannelMain();
   dataHost.postMessage({ type: 'renderer-port' }, [port1]);
   mainWindow.webContents.postMessage('datahost:port', null, [port2]);
+  if (process.env.AO_DEBUG === '1') {
+    console.log('[main] handed renderer a data-host port');
+  }
 }
 
 app.whenReady().then(() => {

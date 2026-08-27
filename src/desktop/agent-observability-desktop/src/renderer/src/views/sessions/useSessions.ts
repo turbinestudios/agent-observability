@@ -50,6 +50,7 @@ export function useSessions(query: string): UseSessionsResult {
       });
       applyRows(next);
       setError(undefined);
+      console.log(`[sessions] loaded ${next.length} row(s)`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

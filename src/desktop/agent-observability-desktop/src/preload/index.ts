@@ -9,24 +9,36 @@ import { contextBridge, ipcRenderer } from 'electron';
  * API stays small enough to audit at a glance.
  */
 
+/** Message the page listens for to pick up its data-host port. */
+export const DATA_HOST_PORT_MESSAGE = 'agent-observability:datahost-port';
+
+/**
+ * Hand the data-host port to the page.
+ *
+ * A MessagePort cannot be passed through contextBridge — it arrives as a proxy
+ * with its prototype stripped, so calling `start()` on it throws. Transferring
+ * it with `window.postMessage` moves the real object into the page's world,
+ * which is the only way it stays a working port.
+ */
+ipcRenderer.on('datahost:port', (event) => {
+  const [port] = event.ports;
+  if (port !== undefined) {
+    window.postMessage({ type: DATA_HOST_PORT_MESSAGE }, '*', [port]);
+  }
+});
+
 const api = {
   /**
    * Ask main to connect this renderer to the data host. The port arrives as a
-   * `datahost:port` message; call this only after `onDataHostPort` is installed.
+   * `window.postMessage` carrying {@link DATA_HOST_PORT_MESSAGE}; install that
+   * listener before calling this.
    */
   requestDataHostPort(): void {
     ipcRenderer.send('datahost:request-port');
   },
 
-  /** Register the handler that receives the data-host MessagePort. */
-  onDataHostPort(handler: (port: MessagePort) => void): void {
-    ipcRenderer.on('datahost:port', (event) => {
-      const [port] = event.ports;
-      if (port !== undefined) {
-        handler(port as unknown as MessagePort);
-      }
-    });
-  },
+  /** The message type that carries the transferred port. */
+  dataHostPortMessage: DATA_HOST_PORT_MESSAGE,
 
   /** Open a web link in the user's default browser. */
   openExternal(url: string): Promise<void> {

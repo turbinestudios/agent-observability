@@ -18,7 +18,8 @@
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
-    "chokidar": "^5.0.0"
+    "chokidar": "^5.0.0",
+    "node-sqlite3-wasm": "^0.8.57"
   },
   "devDependencies": {
     "@agent-observability/core": "*",
