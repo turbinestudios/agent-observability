@@ -106,9 +106,36 @@ function writeSourceDb(spans: SpanInput[], attributes: [string, string, string][
   source.close();
 }
 
+/** `<userData>/User/workspaceStorage`, where VS Code keeps per-workspace state. */
+let workspaceStorage: string;
+
+/**
+ * A workspace store: the folder it points at, and the chat sessions held there.
+ * Only filenames matter — the repository comes from the folder's git remote.
+ */
+function writeWorkspaceStore(hash: string, folder: string, sessionIds: string[]): void {
+  const hashDir = path.join(workspaceStorage, hash);
+  fs.mkdirSync(path.join(hashDir, 'chatSessions'), { recursive: true });
+  fs.writeFileSync(
+    path.join(hashDir, 'workspace.json'),
+    JSON.stringify({ folder: `file:///${folder.replace(/^\/+/, '')}` }),
+  );
+  for (const id of sessionIds) {
+    fs.writeFileSync(path.join(hashDir, 'chatSessions', `${id}.json`), '{}');
+  }
+}
+
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ao-copilot-'));
-  sourceDb = path.join(root, 'agent-traces.db');
+  // The native layout, so the workspaceStorage sibling is derivable from the
+  // database path the way it is on a real machine.
+  const userDir = path.join(root, 'User');
+  const globalStorage = path.join(userDir, 'globalStorage', 'github.copilot-chat');
+  fs.mkdirSync(globalStorage, { recursive: true });
+  workspaceStorage = path.join(userDir, 'workspaceStorage');
+  fs.mkdirSync(workspaceStorage, { recursive: true });
+
+  sourceDb = path.join(globalStorage, 'agent-traces.db');
   indexPath = path.join(root, 'index.db');
   db = new IndexDb(indexPath);
 });
@@ -118,8 +145,8 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function run(config = makeConfig()) {
-  return new CopilotIndexer({ db, config }).run();
+function run(config = makeConfig(), gitRemote?: { resolve(p: string): string }) {
+  return new CopilotIndexer({ db, config, gitRemote }).run();
 }
 
 describe('what counts as a session', () => {
@@ -236,10 +263,51 @@ describe('session content', () => {
     expect(db.listSessions({ source: 'copilot' })[0].repository).toBe('https://github.com/acme/new');
   });
 
-  it('falls back to unknown when no repository attribute exists', () => {
+  it('falls back to unknown when nothing knows the repository', () => {
     writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }]);
     run();
     expect(db.listSessions({ source: 'copilot' })[0].repository).toBe('unknown');
+  });
+
+  it('resolves from the workspace store when the spans carry no attribute', () => {
+    // Copilot records the repository on a span only sometimes. Without this
+    // fallback a whole organisation's sessions read as "unknown" even though
+    // the workspace they ran in names the folder plainly.
+    writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }]);
+    writeWorkspaceStore('hash-1', '/work/portal', [UUID_A]);
+
+    run(makeConfig(), { resolve: (p) => (p.endsWith('portal') ? 'https://github.com/acme/portal' : 'unknown') });
+
+    expect(db.listSessions({ source: 'copilot' })[0].repository).toBe('https://github.com/acme/portal');
+  });
+
+  it('prefers the span attribute over the workspace store', () => {
+    // The session's own recorded remote is the more specific answer: a
+    // workspace folder can be re-pointed or hold sessions from elsewhere.
+    writeSourceDb(
+      [{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }],
+      [['s1', 'copilot_chat.repo.remote_url', 'https://github.com/acme/from-span.git']],
+    );
+    writeWorkspaceStore('hash-1', '/work/portal', [UUID_A]);
+
+    run(makeConfig(), { resolve: () => 'https://github.com/acme/from-workspace' });
+
+    expect(db.listSessions({ source: 'copilot' })[0].repository).toBe('https://github.com/acme/from-span');
+  });
+
+  it('survives a workspace store it cannot read', () => {
+    writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }]);
+    writeWorkspaceStore('hash-1', '/work/portal', [UUID_A]);
+
+    // A folder on a stopped WSL distro throws rather than returning nothing.
+    expect(() =>
+      run(makeConfig(), {
+        resolve: () => {
+          throw new Error('UNC path unavailable');
+        },
+      }),
+    ).not.toThrow();
+    expect(db.listSessions({ source: 'copilot' })).toHaveLength(1);
   });
 
   it('hides sessions in an excluded repository', () => {

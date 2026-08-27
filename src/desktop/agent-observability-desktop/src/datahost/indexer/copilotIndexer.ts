@@ -3,6 +3,9 @@ import Database from 'better-sqlite3';
 import { resolveDatabasePaths } from '@agent-observability/core/src/telemetry/paths';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
 import { sanitizeRepositoryUrl } from '@agent-observability/core/src/telemetry/repositoryUrl';
+import { buildGlobalSessionRepositories } from '@agent-observability/core/src/telemetry/globalWorkspaceRepos';
+import { titleStorageDirs } from '@agent-observability/core/src/telemetry/titleStore';
+import { GitRemoteResolver } from '@agent-observability/core/src/claude/gitRemote';
 import {
   CHAT_SESSION_CANDIDATES_SQL,
   CONVERSATION_ONLY_CANDIDATES_SQL,
@@ -39,6 +42,11 @@ export interface CopilotIndexerDeps {
   config: Configuration;
   onRows?: (rows: SessionRow[]) => void;
   onDiscovered?: (total: number) => void;
+  /**
+   * Resolves a folder to its sanitized git remote. Injectable so a test can
+   * confine resolution instead of reading the machine's real checkouts.
+   */
+  gitRemote?: { resolve(localPath: string): string };
   now?: () => number;
 }
 
@@ -152,12 +160,18 @@ export class CopilotIndexer {
       }
 
       const repositories = this.resolveRepositories(db);
+      const byWorkspace = this.workspaceRepositories();
       const titles = readCopilotTitles(this.deps.db, this.deps.config);
       const excluded = this.deps.config.getExcludedRepositories();
 
       const rows: SessionRow[] = [];
       for (const aggregate of aggregates) {
-        const repository = repositories.get(aggregate.session_id) ?? 'unknown';
+        // The span attribute wins when a session recorded one; plenty do not,
+        // and those are the sessions that would otherwise read as "unknown".
+        const repository =
+          repositories.get(aggregate.session_id) ??
+          byWorkspace.get(aggregate.session_id) ??
+          'unknown';
         if (excluded.has(repository)) {
           continue;
         }
@@ -211,6 +225,36 @@ export class CopilotIndexer {
           );
 
     return startedSessionSet(chatSessions, conversationOnly, suggestionByChatSession, suggestionByKey);
+  }
+
+  /**
+   * Session id → repository, derived from VS Code's own workspace stores.
+   *
+   * Copilot records the repository on a span only sometimes, so a session run
+   * in a workspace whose spans happened not to carry it lands in "unknown"
+   * despite the repository being perfectly well known. Each workspace store
+   * names its folder and lists the chat sessions held there, which is enough to
+   * resolve those from the folder's git remote instead.
+   *
+   * Best-effort: the scan can reach WSL folders over UNC paths that are slow or
+   * unavailable, and a Copilot list without repositories still beats no list.
+   */
+  private workspaceRepositories(): Map<string, string> {
+    const map = new Map<string, string>();
+    try {
+      const sourcePaths = resolveDatabasePaths(this.deps.config).databases.map((d) => d.path);
+      const gitRemote = this.deps.gitRemote ?? new GitRemoteResolver();
+      for (const root of titleStorageDirs(sourcePaths)) {
+        for (const [id, repository] of buildGlobalSessionRepositories(root, (p) =>
+          gitRemote.resolve(p),
+        )) {
+          map.set(id, repository);
+        }
+      }
+    } catch {
+      // Leave what was gathered; sessions simply keep their own attribute.
+    }
+    return map;
   }
 
   private resolveRepositories(db: Database.Database): Map<string, string> {
