@@ -8,6 +8,7 @@ import { useSessions } from './useSessions';
 import { SessionDetail } from './SessionDetail';
 import { IndexStatusBar } from './IndexStatusBar';
 import { SourceFilter } from './SourceFilter';
+import { DeleteDialog } from './DeleteDialog';
 import { formatDuration, formatRelative, formatTokens, sourceLabel } from './format';
 import './sessions.css';
 
@@ -23,10 +24,10 @@ export function SessionsView(): JSX.Element {
   const [source, setSource] = useState<string | undefined>(undefined);
   const [selected, setSelected] = useState<string | undefined>(undefined);
   const [renaming, setRenaming] = useState<string | undefined>(undefined);
-  const { rows, groups, status, connection, loading, error, refresh, rebuild, reload } = useSessions(
-    query,
-    source,
-  );
+  const [confirming, setConfirming] = useState<SessionRow | undefined>(undefined);
+  const [showHidden, setShowHidden] = useState(false);
+  const { rows, groups, status, connection, loading, error, refresh, rebuild, reload, hiddenCount } =
+    useSessions(query, source, showHidden);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -57,8 +58,30 @@ export function SessionsView(): JSX.Element {
     [query, reload],
   );
 
+  const restore = useCallback(
+    (row: SessionRow) => {
+      void dataHost
+        .call('sessions.hide', row.source, row.sessionId, false)
+        .then(() => reload())
+        .catch(() => undefined);
+    },
+    [reload],
+  );
+
   return (
     <>
+      {confirming !== undefined && (
+        <DeleteDialog
+          row={confirming}
+          onClose={() => setConfirming(undefined)}
+          onRemoved={() => {
+            if (selected === sessionKey(confirming.source, confirming.sessionId)) {
+              setSelected(undefined);
+            }
+            reload();
+          }}
+        />
+      )}
       <aside className="sessions-pane">
         <header className="sessions-header">
           <input
@@ -76,7 +99,17 @@ export function SessionsView(): JSX.Element {
           </button>
         </header>
 
-        <SourceFilter groups={groups} active={source} onSelect={setSource} />
+        <SourceFilter
+          groups={groups}
+          active={source}
+          onSelect={setSource}
+          hiddenCount={hiddenCount}
+          showingHidden={showHidden}
+          onToggleHidden={() => {
+            setShowHidden((v) => !v);
+            setSelected(undefined);
+          }}
+        />
 
         <IndexStatusBar
           status={status}
@@ -117,10 +150,13 @@ export function SessionsView(): JSX.Element {
                       row={row}
                       selected={key === selected}
                       renaming={renaming === key}
+                      hidden={showHidden}
                       onSelect={() => setSelected(key)}
                       onStartRename={() => setRenaming(key)}
                       onCancelRename={() => setRenaming(undefined)}
                       onCommitRename={(title) => commitRename(row, title)}
+                      onRemove={() => setConfirming(row)}
+                      onRestore={() => restore(row)}
                     />
                   </div>
                 );
@@ -165,18 +201,25 @@ function SessionRowItem({
   row,
   selected,
   renaming,
+  hidden,
   onSelect,
   onStartRename,
   onCancelRename,
   onCommitRename,
+  onRemove,
+  onRestore,
 }: {
   row: SessionRow;
   selected: boolean;
   renaming: boolean;
+  /** True while the list is showing hidden sessions, where the action is restore. */
+  hidden: boolean;
   onSelect: () => void;
   onStartRename: () => void;
   onCancelRename: () => void;
   onCommitRename: (title: string) => void;
+  onRemove: () => void;
+  onRestore: () => void;
 }): JSX.Element {
   const title = row.title ?? row.sessionId.slice(0, 8);
 
@@ -234,6 +277,32 @@ function SessionRowItem({
           <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25ZM20.7 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83Z" />
           </svg>
+        </span>
+        <span
+          className="row-remove"
+          role="button"
+          tabIndex={-1}
+          aria-label={hidden ? 'Restore session' : 'Remove session'}
+          title={hidden ? 'Restore to the list' : 'Remove…'}
+          onClick={(e) => {
+            // The row itself selects; this must not also open the session.
+            e.stopPropagation();
+            if (hidden) {
+              onRestore();
+            } else {
+              onRemove();
+            }
+          }}
+        >
+          {hidden ? (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8Z" />
+            </svg>
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M9 3h6l1 1h4v2H4V4h4l1-1ZM6 8h12l-1 12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 8Z" />
+            </svg>
+          )}
         </span>
         <span className="session-time">{formatRelative(row.endedAtMs)}</span>
       </div>

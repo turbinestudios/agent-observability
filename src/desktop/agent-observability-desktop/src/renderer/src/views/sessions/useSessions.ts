@@ -24,19 +24,29 @@ interface UseSessionsResult {
   connection: ConnectionState;
   loading: boolean;
   error: string | undefined;
+  /** How many sessions the user has taken out of the list. */
+  hiddenCount: number;
   refresh: () => void;
   rebuild: () => void;
   reload: () => void;
 }
 
-/** `source` is undefined for "All". */
-export function useSessions(query: string, source: string | undefined): UseSessionsResult {
+/**
+ * `source` is undefined for "All". `showHidden` swaps the list over to the
+ * sessions the user removed, so they can be restored.
+ */
+export function useSessions(
+  query: string,
+  source: string | undefined,
+  showHidden = false,
+): UseSessionsResult {
   const [rows, setRows] = useState<SessionRow[]>([]);
   const [groups, setGroups] = useState<SessionGroup[]>([]);
   const [status, setStatus] = useState<IndexStatus>({ indexed: 0, total: 0, phase: 'idle' });
   const [connection, setConnection] = useState<ConnectionState>(() => dataHost.connectionState());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [hiddenCount, setHiddenCount] = useState(0);
 
   // Held in a ref so the event subscription can merge without being torn down
   // and re-created on every render.
@@ -51,15 +61,20 @@ export function useSessions(query: string, source: string | undefined): UseSessi
     setRows(next);
   }, []);
 
+  const hiddenRef = useRef(showHidden);
+  hiddenRef.current = showHidden;
+
   const load = useCallback(async () => {
     try {
       const next = await dataHost.call('sessions.list', {
         query: queryRef.current,
         source: sourceRef.current,
+        hidden: hiddenRef.current,
         limit: PAGE_SIZE,
       });
       applyRows(next);
       setError(undefined);
+      void dataHost.call('sessions.hiddenCount').then(setHiddenCount).catch(() => undefined);
       console.log(`[sessions] loaded ${next.length} row(s)`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -75,7 +90,7 @@ export function useSessions(query: string, source: string | undefined): UseSessi
     setLoading(true);
     const timer = setTimeout(() => void load(), query.length === 0 ? 0 : 150);
     return () => clearTimeout(timer);
-  }, [query, source, load]);
+  }, [query, source, showHidden, load]);
 
   useEffect(() => {
     const offRows = dataHost.on('sessions.upserted', (event) => {
@@ -86,6 +101,11 @@ export function useSessions(query: string, source: string | undefined): UseSessi
       // filter, and deciding that here would duplicate the SQL predicate. Let
       // the next query settle it instead of guessing.
       if (queryRef.current.length > 0) {
+        return;
+      }
+      // While showing hidden sessions the indexer's pushes are about visible
+      // ones, so they must not leak into the list.
+      if (hiddenRef.current) {
         return;
       }
       // A source filter, by contrast, is decidable from the row itself.
@@ -153,8 +173,19 @@ export function useSessions(query: string, source: string | undefined): UseSessi
   }, [applyRows, load]);
 
   return useMemo(
-    () => ({ rows, groups, status, connection, loading, error, refresh, rebuild, reload: load }),
-    [rows, groups, status, connection, loading, error, refresh, rebuild, load],
+    () => ({
+      rows,
+      groups,
+      status,
+      connection,
+      loading,
+      error,
+      hiddenCount,
+      refresh,
+      rebuild,
+      reload: load,
+    }),
+    [rows, groups, status, connection, loading, error, hiddenCount, refresh, rebuild, load],
   );
 }
 

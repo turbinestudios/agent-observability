@@ -62,6 +62,16 @@ export interface ListSessionsParams {
   query?: string;
   offset?: number;
   limit?: number;
+  /** Show the hidden sessions instead of the visible ones, so they can be restored. */
+  hidden?: boolean;
+}
+
+/** What deleting a session would actually remove, for the confirmation dialog. */
+export interface DeletionPlan {
+  supported: boolean;
+  target: string;
+  consequence: string;
+  caveat?: string;
 }
 
 export interface IndexStatus {
@@ -150,6 +160,20 @@ export interface RpcMethods {
    * Returns the row as it now reads.
    */
   'sessions.rename'(source: string, sessionId: string, title: string): SessionRow | undefined;
+  /**
+   * Take a session out of the list, or put it back. Reversible, and touches
+   * nothing on disk.
+   */
+  'sessions.hide'(source: string, sessionId: string, hidden: boolean): void;
+  /** How many sessions are currently hidden, so the UI can offer to show them. */
+  'sessions.hiddenCount'(): number;
+  /** What a permanent delete would remove. Read-only — nothing is deleted. */
+  'sessions.deletionPlan'(source: string, sessionId: string): DeletionPlan;
+  /**
+   * Permanently remove a session's underlying data. Irreversible; call only
+   * after the user has confirmed against {@link RpcMethods['sessions.deletionPlan']}.
+   */
+  'sessions.delete'(source: string, sessionId: string): { ok: boolean; detail: string };
   'overview.get'(): OverviewData;
   'index.status'(): IndexStatus;
   'index.refresh'(): IndexStatus;

@@ -19,9 +19,19 @@ interface Props {
   /** `undefined` means All. */
   active: string | undefined;
   onSelect: (source: string | undefined) => void;
+  hiddenCount: number;
+  showingHidden: boolean;
+  onToggleHidden: () => void;
 }
 
-export function SourceFilter({ groups, active, onSelect }: Props): JSX.Element {
+export function SourceFilter({
+  groups,
+  active,
+  onSelect,
+  hiddenCount,
+  showingHidden,
+  onToggleHidden,
+}: Props): JSX.Element {
   const counts = new Map<string, number>();
   for (const group of groups) {
     counts.set(group.source, (counts.get(group.source) ?? 0) + group.count);
@@ -42,6 +52,18 @@ export function SourceFilter({ groups, active, onSelect }: Props): JSX.Element {
           onClick={() => onSelect(id)}
         />
       ))}
+      {/*
+        Only offered once something is hidden — otherwise it is a control that
+        does nothing, and it would imply sessions are missing when none are.
+      */}
+      {hiddenCount > 0 && (
+        <Chip
+          label="Hidden"
+          count={hiddenCount}
+          selected={showingHidden}
+          onClick={onToggleHidden}
+        />
+      )}
     </div>
   );
 }

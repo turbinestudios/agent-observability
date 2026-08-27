@@ -202,8 +202,8 @@ export class IndexDb {
 
   // -- reads ----------------------------------------------------------------
 
-  listSessions(params: ListSessionsParams): SessionRow[] {
-    const { where, args } = buildFilter(params);
+  listSessions(params: ListSessionsParams, hiddenKeys: readonly string[] = []): SessionRow[] {
+    const { where, args } = buildFilter(params, hiddenKeys);
     const limit = clampLimit(params.limit);
     const offset = Math.max(0, params.offset ?? 0);
     const rows = this.db
@@ -214,21 +214,33 @@ export class IndexDb {
     return rows.map(toSessionRow);
   }
 
-  countSessions(params: ListSessionsParams): number {
-    const { where, args } = buildFilter(params);
+  countSessions(params: ListSessionsParams, hiddenKeys: readonly string[] = []): number {
+    const { where, args } = buildFilter(params, hiddenKeys);
     const row = this.db.prepare(`SELECT COUNT(*) AS n FROM sessions ${where}`).get(...args) as {
       n: number;
     };
     return row.n;
   }
 
-  listGroups(): SessionGroup[] {
+  listGroups(hiddenKeys: readonly string[] = []): SessionGroup[] {
+    // Counts here drive the filter chips, so they must agree with what the
+    // list actually shows.
+    const exclude =
+      hiddenKeys.length === 0
+        ? ''
+        : `WHERE source || ':' || session_id NOT IN (${hiddenKeys.map(() => '?').join(', ')})`;
     return this.db
       .prepare(
         `SELECT source, repository, COUNT(*) AS count, MAX(ended_at_ms) AS newestMs
-         FROM sessions GROUP BY source, repository ORDER BY newestMs DESC`,
+         FROM sessions ${exclude} GROUP BY source, repository ORDER BY newestMs DESC`,
       )
-      .all() as SessionGroup[];
+      .all(...hiddenKeys) as SessionGroup[];
+  }
+
+  /** Forget a session entirely, so a deleted one does not linger in the index. */
+  removeSession(source: string, sessionId: string): void {
+    this.db.prepare('DELETE FROM sessions WHERE source = ? AND session_id = ?').run(source, sessionId);
+    this.db.prepare('DELETE FROM files WHERE source = ? AND session_id = ?').run(source, sessionId);
   }
 
   /** Counts for the progress indicator: total rows and how many are hydrated. */
@@ -383,7 +395,17 @@ export class IndexDb {
    * with thousands of sessions — the view can open instantly instead of the
    * user watching sources be re-read.
    */
-  overview(windowDays: number): OverviewData {
+  overview(windowDays: number, hiddenKeys: readonly string[] = []): OverviewData {
+    // Applied to every aggregate below, so the totals, the per-source split,
+    // the daily series, and the repository ranking all count the same sessions.
+    const excl =
+      hiddenKeys.length === 0
+        ? ''
+        : `source || ':' || session_id NOT IN (${hiddenKeys.map(() => '?').join(', ')})`;
+    const whereExcl = excl === '' ? '' : `WHERE ${excl}`;
+    const andExcl = excl === '' ? '' : `AND ${excl}`;
+    const hk = hiddenKeys;
+
     const totals = this.db
       .prepare(
         `SELECT COUNT(*) AS sessions,
@@ -396,9 +418,9 @@ export class IndexDb {
                 COUNT(DISTINCT CASE WHEN repository <> 'unknown' THEN repository END) AS repositories,
                 COUNT(DISTINCT CASE WHEN model <> 'unknown' THEN model END) AS models,
                 COALESCE(AVG(NULLIF(duration_ms, 0)), 0) AS avgSessionMs
-           FROM sessions`,
+           FROM sessions ${whereExcl}`,
       )
-      .get() as OverviewData['totals'];
+      .get(...hk) as OverviewData['totals'];
 
     const bySource = this.db
       .prepare(
@@ -407,11 +429,11 @@ export class IndexDb {
                 COALESCE(SUM(interaction_count), 0) AS steps,
                 COALESCE(SUM(input_tokens), 0) AS inputTokens,
                 COALESCE(SUM(output_tokens), 0) AS outputTokens
-           FROM sessions
+           FROM sessions ${whereExcl}
           GROUP BY source
           ORDER BY sessions DESC`,
       )
-      .all() as OverviewData['bySource'];
+      .all(...hk) as OverviewData['bySource'];
 
     // Local time, so a day boundary matches what the user considers a day.
     // Rows with no timestamp would land on 1970 and stretch the axis.
@@ -425,10 +447,11 @@ export class IndexDb {
            FROM sessions
           WHERE ended_at_ms > 0
             AND ended_at_ms >= ?
+            ${andExcl}
           GROUP BY day, source
           ORDER BY day ASC`,
       )
-      .all(Date.now() - windowDays * 86_400_000) as DayPoint[];
+      .all(Date.now() - windowDays * 86_400_000, ...hk) as DayPoint[];
 
     // Ties are common — several repositories sitting on the same count — so the
     // order needs a second key, or SQLite picks arbitrarily and a repository can
@@ -438,11 +461,12 @@ export class IndexDb {
         `SELECT repository, COUNT(*) AS sessions
            FROM sessions
           WHERE repository <> 'unknown'
+            ${andExcl}
           GROUP BY repository
           ORDER BY sessions DESC, repository ASC
           LIMIT ?`,
       )
-      .all(TOP_REPOSITORY_LIMIT) as OverviewData['topRepositories'];
+      .all(...hk, TOP_REPOSITORY_LIMIT) as OverviewData['topRepositories'];
 
     return { totals, bySource, daily, windowDays, topRepositories };
   }
@@ -518,9 +542,26 @@ function clampLimit(limit: number | undefined): number {
   return Math.min(Math.floor(limit), 2000);
 }
 
-function buildFilter(params: ListSessionsParams): { where: string; args: unknown[] } {
+function buildFilter(
+  params: ListSessionsParams,
+  /** `source:sessionId` keys the user has taken out of their list. */
+  hiddenKeys: readonly string[] = [],
+): { where: string; args: unknown[] } {
   const clauses: string[] = [];
   const args: unknown[] = [];
+
+  // Hidden sessions are excluded in SQL rather than after the query, so a
+  // page of results is not silently short once some of it is filtered away.
+  if (hiddenKeys.length > 0) {
+    const placeholders = hiddenKeys.map(() => '?').join(', ');
+    const key = `source || ':' || session_id`;
+    clauses.push(`${key} ${params.hidden === true ? 'IN' : 'NOT IN'} (${placeholders})`);
+    args.push(...hiddenKeys);
+  } else if (params.hidden === true) {
+    // Asking for hidden sessions when none are hidden must return nothing,
+    // not everything.
+    clauses.push('1 = 0');
+  }
   if (params.source !== undefined && params.source.length > 0) {
     clauses.push('source = ?');
     args.push(params.source);

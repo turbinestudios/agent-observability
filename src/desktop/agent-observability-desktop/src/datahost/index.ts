@@ -22,6 +22,8 @@ import { ClaudeIndexer } from './indexer/claudeIndexer';
 import { CopilotIndexer } from './indexer/copilotIndexer';
 import { IndexDb } from './indexer/indexDb';
 import { RenameStore } from './renames';
+import { HiddenStore } from './hidden';
+import { describeDeletion, deleteSession } from './deletion';
 
 /**
  * The data host: a utilityProcess that owns every expensive operation.
@@ -57,6 +59,7 @@ const sources = new SourceRegistry([
 ]);
 const detail = new DetailRenderer(sources);
 const renames = new RenameStore();
+const hidden = new HiddenStore();
 
 /** How far back the overview charts look. */
 const OVERVIEW_WINDOW_DAYS = 30;
@@ -101,8 +104,13 @@ function runIndex(): IndexStatus {
   const onRows = (rows: SessionRow[]): void => {
     // The indexer writes the source's own title, which is correct for the index
     // but wrong to show: a user-chosen name has to be layered back on before
-    // these reach the list, or a refresh silently reverts every rename.
-    emit({ event: 'sessions.upserted', rows: renames.apply(rows) });
+    // these reach the list, or a refresh silently reverts every rename. Hidden
+    // sessions are dropped here for the same reason — a refresh must not put
+    // one back on screen.
+    const visible = rows.filter((r) => !hidden.isHidden(r.source, r.sessionId));
+    if (visible.length > 0) {
+      emit({ event: 'sessions.upserted', rows: renames.apply(visible) });
+    }
     refreshCounts();
     emit({ event: 'index.progress', status });
   };
@@ -184,14 +192,18 @@ function applyContextAction(action: ContextAction): void {
  * session would make it unsearchable by the name the user just gave it.
  */
 function listSessions(params: ListSessionsParams): SessionRow[] {
-  const rows = db.listSessions(params);
+  const hiddenKeys = hidden.all();
+  const rows = db.listSessions(params, hiddenKeys);
   const query = params.query?.trim() ?? '';
   if (query.length === 0) {
     return renames.apply(rows);
   }
 
   const seen = new Set(rows.map((r) => sessionKey(r.source, r.sessionId)));
-  const extraKeys = renames.matchingKeys(query).filter((key) => !seen.has(key));
+  const showingHidden = params.hidden === true;
+  const extraKeys = renames
+    .matchingKeys(query)
+    .filter((key) => !seen.has(key) && hidden.all().includes(key) === showingHidden);
   const extra = db.getRowsByKey(extraKeys).filter((row) => {
     // The union must still respect an active source filter.
     if (params.source !== undefined && row.source !== params.source) {
@@ -217,9 +229,35 @@ function handle(request: RpcRequest): unknown {
     case 'sessions.list':
       return listSessions(request.params[0]);
     case 'sessions.groups':
-      return db.listGroups();
+      return db.listGroups(hidden.all());
     case 'sessions.count':
-      return db.countSessions(request.params[0]);
+      return db.countSessions(request.params[0], hidden.all());
+    case 'sessions.hide': {
+      const [source, sessionId, isHidden] = request.params;
+      hidden.set(source, sessionId, isHidden);
+      // The list filters on this, so it has to re-query rather than patch.
+      emit({ event: 'sessions.removed', keys: [sessionKey(source, sessionId)] });
+      return undefined;
+    }
+    case 'sessions.hiddenCount':
+      return hidden.size();
+    case 'sessions.deletionPlan': {
+      const [source, sessionId] = request.params;
+      return describeDeletion(source, sessionId, { config });
+    }
+    case 'sessions.delete': {
+      const [source, sessionId] = request.params;
+      const result = deleteSession(source, sessionId, { config });
+      if (result.ok) {
+        // Drop it from the index too, or the next list would still show it
+        // until a re-index noticed the source data was gone.
+        db.removeSession(source, sessionId);
+        detail.invalidate(source, sessionId);
+        emit({ event: 'sessions.removed', keys: [sessionKey(source, sessionId)] });
+        refreshCounts();
+      }
+      return result;
+    }
     case 'sessions.detail': {
       const [source, sessionId, theme] = request.params;
       return detail.renderDocument(
@@ -265,7 +303,9 @@ function handle(request: RpcRequest): unknown {
       return patched;
     }
     case 'overview.get':
-      return db.overview(OVERVIEW_WINDOW_DAYS);
+      // Hidden sessions are excluded so the totals agree with the list; a
+      // count that includes what the user removed reads as a bug.
+      return db.overview(OVERVIEW_WINDOW_DAYS, hidden.all());
     case 'index.status':
       refreshCounts();
       return status;
