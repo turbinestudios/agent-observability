@@ -223,28 +223,11 @@
   background: var(--hover);
 }
 
-.spinner {
-  flex: none;
+.status-bar .spinner {
   margin-top: 2px;
-  color: var(--accent);
-  animation: spin 900ms linear infinite;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/*
- * A spinner that never stops is a distraction for anyone sensitive to motion,
- * and the text beside it already says what is happening.
- */
 @media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation-duration: 2.4s;
-  }
-
   .progress-fill {
     transition: none;
   }

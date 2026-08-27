@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
 import type { SessionRow } from '../../../../shared/rpc';
 import { useThemeValue } from '../../theme/ThemeContext';
+import { Spinner } from '../../components/Spinner';
 
 /**
  * Renders a session using the shared detail renderer, inside a sandboxed iframe.
@@ -137,15 +138,14 @@ export function SessionDetail({ row }: Props): JSX.Element {
     // minutes-long wait look like a hang.
     const firstCopilot = row.source === 'copilot' && !copilotWarmed;
     return (
-      <div className="placeholder">
-        <div>
-          <p>Reading session…</p>
-          {firstCopilot && (
-            <p style={{ color: 'var(--fg-subtle)', marginTop: 6, maxWidth: '42ch' }}>
-              The first Copilot session takes a while to open — the rest of them will be quick.
-            </p>
-          )}
-        </div>
+      <div className="detail-loading" role="status" aria-live="polite">
+        <Spinner size={44} stroke={3} />
+        <p className="detail-loading-title">Reading session…</p>
+        {firstCopilot && (
+          <p className="detail-loading-note">
+            The first Copilot session takes a while to open — the rest of them will be quick.
+          </p>
+        )}
       </div>
     );
   }

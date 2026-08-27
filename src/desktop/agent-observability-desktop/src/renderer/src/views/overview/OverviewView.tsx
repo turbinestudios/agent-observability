@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { dataHost } from '../../api/client';
 import type { OverviewData } from '../../../../shared/rpc';
 import { formatDuration, formatTokens, sourceLabel } from '../sessions/format';
+import { Spinner } from '../../components/Spinner';
 import { HorizontalBars, Legend, StackedBarChart } from './charts';
 import type { SeriesStyle, StackedColumn } from './charts';
 import './overview.css';
@@ -71,10 +72,9 @@ export function OverviewView(): JSX.Element {
 
   if (data === undefined) {
     return (
-      <div className="placeholder">
-        <div>
-          <p>Reading totals…</p>
-        </div>
+      <div className="detail-loading" role="status" aria-live="polite">
+        <Spinner size={36} stroke={3} />
+        <p className="detail-loading-title">Reading totals…</p>
       </div>
     );
   }
