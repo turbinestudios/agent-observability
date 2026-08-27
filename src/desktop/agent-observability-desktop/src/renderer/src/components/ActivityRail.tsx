@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useThemeValue } from '../theme/ThemeContext';
 
 /**
- * The view switcher. Sessions sits first and is the app's default; everything
+ * The view switcher. Dashboard sits first and is the app's default; everything
  * else is a secondary destination that opens on demand. The theme toggle sits
  * at the bottom, separated from the destinations above it.
  */
@@ -19,6 +19,17 @@ interface RailEntry {
 
 const ENTRIES: RailEntry[] = [
   {
+    id: 'overview',
+    label: 'Dashboard',
+    icon: (
+      <>
+        <rect x="3" y="12" width="4.5" height="9" rx="1" />
+        <rect x="9.75" y="7" width="4.5" height="14" rx="1" />
+        <rect x="16.5" y="3" width="4.5" height="18" rx="1" />
+      </>
+    ),
+  },
+  {
     id: 'sessions',
     label: 'Sessions',
     icon: (
@@ -26,17 +37,6 @@ const ENTRIES: RailEntry[] = [
         <rect x="3" y="4" width="18" height="2.5" rx="1.25" />
         <rect x="3" y="10.75" width="18" height="2.5" rx="1.25" />
         <rect x="3" y="17.5" width="12" height="2.5" rx="1.25" />
-      </>
-    ),
-  },
-  {
-    id: 'overview',
-    label: 'Statistics',
-    icon: (
-      <>
-        <rect x="3" y="12" width="4.5" height="9" rx="1" />
-        <rect x="9.75" y="7" width="4.5" height="14" rx="1" />
-        <rect x="16.5" y="3" width="4.5" height="18" rx="1" />
       </>
     ),
   },

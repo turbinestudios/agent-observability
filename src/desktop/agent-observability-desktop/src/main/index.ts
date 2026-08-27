@@ -11,6 +11,7 @@ import {
   nativeTheme,
 } from 'electron';
 import type { UtilityProcess } from 'electron';
+import { initAutoUpdater } from './updater';
 
 /**
  * Scheme the session-detail document is served over.
@@ -146,6 +147,7 @@ app.whenReady().then(() => {
 
   startDataHost();
   createWindow();
+  initAutoUpdater(() => mainWindow);
 
   // The renderer owns the theme choice (persisted on its side); main mirrors
   // it into the window chrome. Values are constrained to the two we ship.

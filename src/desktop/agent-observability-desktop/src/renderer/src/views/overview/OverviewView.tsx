@@ -97,7 +97,7 @@ export function OverviewView(): JSX.Element {
   return (
     <div className="overview">
       <header className="overview-header">
-        <h1>Statistics</h1>
+        <h1>Dashboard</h1>
         <p>
           Everything recorded on this machine. Nothing here has been uploaded — all of it is read
           from your own agent logs.

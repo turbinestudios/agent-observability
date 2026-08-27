@@ -1,0 +1,78 @@
+name: Cut Desktop Release
+
+# One button to release: computes the next version from the newest desktop-v*
+# tag, pushes the new tag, and starts the release build. The build has to be
+# dispatched explicitly — tag pushes made with GITHUB_TOKEN deliberately do not
+# trigger `on: push` workflows (GitHub's recursion guard), and workflow_dispatch
+# is the documented exception.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version part to increment'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+      version:
+        description: 'Explicit version (e.g. 1.2.0) — overrides bump'
+        required: false
+        type: string
+
+permissions:
+  contents: write # push the tag
+  actions: write # dispatch the release workflow
+
+concurrency:
+  group: cut-desktop-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag and start release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so every desktop-v* tag is available to count from.
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: next
+        env:
+          EXPLICIT: ${{ inputs.version }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          latest=$(git tag -l 'desktop-v*' --sort=-v:refname | head -n1)
+          latest="${latest#desktop-v}"
+          latest="${latest:-0.0.0}"
+          if [ -n "$EXPLICIT" ]; then
+            next="$EXPLICIT"
+          else
+            next=$(npx --yes semver -i "$BUMP" "$latest")
+          fi
+          if git rev-parse -q --verify "refs/tags/desktop-v$next" >/dev/null; then
+            echo "::error::desktop-v$next already exists"
+            exit 1
+          fi
+          echo "Releasing desktop-v$next (previous: desktop-v$latest)"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Push tag
+        run: |
+          git tag "desktop-v${{ steps.next.outputs.version }}"
+          git push origin "desktop-v${{ steps.next.outputs.version }}"
+
+      - name: Start release build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Dispatching on the tag ref makes the release workflow's
+        # `startsWith(github.ref, 'refs/tags/desktop-v')` condition true, so it
+        # drafts the GitHub Release exactly as a direct tag push would.
+        run: >
+          gh workflow run release-desktop.yml
+          --repo "$GITHUB_REPOSITORY"
+          --ref "desktop-v${{ steps.next.outputs.version }}"
+          -f dry_run=false

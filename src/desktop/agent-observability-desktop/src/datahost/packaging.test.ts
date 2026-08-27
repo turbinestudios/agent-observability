@@ -23,7 +23,7 @@ function manifest(): { dependencies?: Record<string, string> } {
 }
 
 describe('runtime dependencies', () => {
-  it.each(['node-sqlite3-wasm', 'better-sqlite3'])(
+  it.each(['node-sqlite3-wasm', 'better-sqlite3', 'electron-updater'])(
     'declares %s so it is externalized rather than bundled',
     (name) => {
       expect(Object.keys(manifest().dependencies ?? {})).toContain(name);

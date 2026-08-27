@@ -47,6 +47,16 @@ jobs:
       - name: Install
         run: npm ci
 
+      # The tag is the single source of truth for the released version: the
+      # checked-in package.json version only shows in local dev builds. This is
+      # what keeps app.getVersion(), latest.yml, and the tag in agreement —
+      # auto-update compares the first two, humans read the third. Runs after
+      # `npm ci` so lockfile validation is undisturbed.
+      - name: Stamp version from tag
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        shell: bash
+        run: npm pkg set version="${GITHUB_REF_NAME#desktop-v}" -w agent-observability-desktop
+
       - name: Typecheck
         run: npm run typecheck --workspaces --if-present
 
@@ -54,6 +64,15 @@ jobs:
         run: npm test --workspaces --if-present
 
       - name: Build renderer, preload, and data host
+        env:
+          # Fine-grained PAT (contents: read, this repo only, ≤1-year expiry)
+          # baked into the main bundle so installed apps can read the update
+          # feed on this INTERNAL repo. Belongs on THIS step, not the
+          # electron-builder one: the token is embedded when electron-vite
+          # writes the bundle. When the secret is absent (dry runs, forks) the
+          # app builds fine and simply disables update checks. Rotating the
+          # PAT only helps future builds — ship a release soon after.
+          MAIN_VITE_UPDATE_TOKEN: ${{ secrets.DESKTOP_UPDATE_TOKEN }}
         run: npm run build -w agent-observability-desktop
 
       - name: Package installers
@@ -72,10 +91,16 @@ jobs:
           name: installers-${{ matrix.artifact }}
           if-no-files-found: error
           retention-days: 7
+          # latest*.yml and *.blockmap are the electron-updater feed: without
+          # them attached to the release, installed apps never see an update.
+          # The globs deliberately miss builder-debug.yml and
+          # builder-effective-config.yaml, which also land in release/.
           path: |
             src/desktop/agent-observability-desktop/release/*.dmg
             src/desktop/agent-observability-desktop/release/*.zip
             src/desktop/agent-observability-desktop/release/*.exe
+            src/desktop/agent-observability-desktop/release/latest*.yml
+            src/desktop/agent-observability-desktop/release/*.blockmap
 
   release:
     name: Publish release
@@ -116,3 +141,10 @@ jobs:
               Or run `xattr -cr "/Applications/Agent Observability.app"`.
             - **Windows** — on the SmartScreen prompt choose **More info** →
               **Run anyway**.
+
+            ### Auto-update
+
+            Installed apps check this repo's releases at startup — but only
+            **published** ones, so nothing reaches users until this draft is
+            published. Windows updates itself after a prompt; macOS shows a
+            dialog linking back to this page.

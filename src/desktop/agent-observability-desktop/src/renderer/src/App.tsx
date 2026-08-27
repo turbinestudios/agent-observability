@@ -11,14 +11,13 @@ import './app.css';
 /**
  * The app shell.
  *
- * Sessions is the default and permanently mounted view — switching to another
- * view hides it rather than unmounting, so returning to a long, scrolled list
- * is instant and never re-queries. The other views are secondary by design:
- * they load only when first opened, so nothing competes with sessions for
- * startup work.
+ * Dashboard (overview) is the view the app opens on. Sessions is permanently
+ * mounted regardless — switching away hides it rather than unmounting, so a
+ * long, scrolled list is instant to return to and never re-queries. The
+ * remaining views load only when first opened.
  */
 export function App(): JSX.Element {
-  const [view, setView] = useState<ViewId>('sessions');
+  const [view, setView] = useState<ViewId>('overview');
 
   return (
     <ThemeProvider>

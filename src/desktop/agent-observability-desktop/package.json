@@ -1,7 +1,7 @@
 {
   "name": "agent-observability-desktop",
   "productName": "Agent Observability",
-  "version": "0.2.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Standalone desktop app for Agent Observability: a sessions-first view of Copilot and Claude Code agent activity, reading the same on-disk data as the VS Code extension.",
   "license": "UNLICENSED",
@@ -19,6 +19,7 @@
   "dependencies": {
     "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",
+    "electron-updater": "^6.8.9",
     "node-sqlite3-wasm": "^0.8.57"
   },
   "devDependencies": {
