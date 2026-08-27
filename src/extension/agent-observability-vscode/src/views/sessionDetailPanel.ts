@@ -1,12 +1,12 @@
 import * as vscode from 'vscode';
 import * as crypto from 'node:crypto';
-import { LocalDeviationDetector } from '../deviation/localDeviations';
-import { WorkflowDeviation } from '../deviation/models';
-import { groupInteractionsByTurn } from '../deviation/turnGrouping';
-import { SessionDetail } from '../telemetry/models';
-import { SessionDataSource, SourceRegistry } from '../sources/sessionSource';
-import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
-import { AcceptedMissingConfig } from '../context/contextAnalyzer';
+import { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
+import { WorkflowDeviation } from '@agent-observability/core/src/deviation/models';
+import { groupInteractionsByTurn } from '@agent-observability/core/src/deviation/turnGrouping';
+import { SessionDetail } from '@agent-observability/core/src/telemetry/models';
+import { SessionDataSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
+import { combineSessionDetails } from '@agent-observability/core/src/telemetry/combinedSessionDetail';
+import { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
 import {
   CombinedSessionSection,
   CostMode,
@@ -19,7 +19,7 @@ import {
   renderRepositoryDetailContent,
   renderSessionDetailHtml,
   renderSessionDetailContent,
-} from './sessionDetailHtml';
+} from '@agent-observability/core/src/views/sessionDetailHtml';
 
 /** Webview view type used for all session-detail panels. */
 const VIEW_TYPE = 'agentObservability.sessionDetail';

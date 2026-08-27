@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { GlobalStateSyncStateStore } from './globalStateSyncStateStore';
-import { SyncRun, MAX_HISTORY } from './syncState';
+import { SyncRun, MAX_HISTORY } from '@agent-observability/core/src/sync/syncState';
 
 /**
  * The globalState-backed store, driven by a tiny fake Memento so no `vscode`

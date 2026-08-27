@@ -1,8 +1,8 @@
 import type * as vscode from 'vscode';
-import { Configuration } from '../../config/configuration';
-import { describeLmError, noModelsError, FriendlyError } from '../lmErrors';
+import { Configuration } from '@agent-observability/core/src/config/configuration';
+import { describeLmError, noModelsError, FriendlyError } from '@agent-observability/core/src/chat/lmErrors';
 import { listCopilotModels, selectCopilotModel, streamRequest } from '../languageModelClient';
-import { BackendAvailability, ChatBackend, ChatRequest, ModelChoice } from './chatBackend';
+import { BackendAvailability, ChatBackend, ChatRequest, ModelChoice } from '@agent-observability/core/src/chat/backends/chatBackend';
 
 /**
  * The GitHub Copilot backend: the AI Helper's original inference path, wrapped

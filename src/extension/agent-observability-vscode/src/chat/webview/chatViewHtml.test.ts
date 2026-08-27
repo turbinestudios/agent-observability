@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderChatHtml } from './chatViewHtml';
-import { QUICK_COMMANDS } from '../quickCommands';
+import { QUICK_COMMANDS } from '@agent-observability/core/src/chat/quickCommands';
 
 describe('renderChatHtml', () => {
   const nonce = 'TESTNONCE123';

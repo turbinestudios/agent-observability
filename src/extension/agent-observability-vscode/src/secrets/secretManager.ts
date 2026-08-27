@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { createHash } from 'node:crypto';
-import { generateSaltHex } from './pseudonymize';
+import { generateSaltHex } from '@agent-observability/core/src/secrets/pseudonymize';
 
 /**
  * Secret-at-rest manager wrapping VS Code {@link vscode.SecretStorage}

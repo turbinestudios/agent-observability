@@ -1,5 +1,5 @@
-import { escapeHtml } from '../../views/escapeHtml';
-import { QUICK_COMMANDS } from '../quickCommands';
+import { escapeHtml } from '@agent-observability/core/src/views/escapeHtml';
+import { QUICK_COMMANDS } from '@agent-observability/core/src/chat/quickCommands';
 
 /**
  * Pure HTML for the AI Helper webview, following the established pattern in

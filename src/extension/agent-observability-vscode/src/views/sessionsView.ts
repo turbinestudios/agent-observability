@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import { RepositorySummary, SessionSummary } from '../telemetry/models';
-import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
-import { SessionDataSource, SourceRegistry } from '../sources/sessionSource';
+import { RepositorySummary, SessionSummary } from '@agent-observability/core/src/telemetry/models';
+import { UNKNOWN_REPOSITORY } from '@agent-observability/core/src/telemetry/repositoryUrl';
+import { SessionDataSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
 
 /** Stable view id; referenced by package.json and the refresh command wiring. */
 export const SESSIONS_VIEW_ID = 'agentObservability.sessions';

@@ -2,7 +2,7 @@
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
   "description": "Privacy-first local view of GitHub Copilot, GitHub Copilot cloud coding-agent, and Claude Code agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
-  "version": "0.9.11",
+  "version": "0.9.12",
   "publisher": "turbinestudios",
   "license": "UNLICENSED",
   "engines": {
@@ -944,7 +944,6 @@
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "@vscode/vsce": "^3.0.0",
-    "ajv": "^8.20.0",
     "esbuild": "^0.23.0",
     "eslint": "^8.57.0",
     "typescript": "^5.5.0",

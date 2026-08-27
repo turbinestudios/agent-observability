@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { OverviewMetrics } from '../telemetry/models';
-import { SessionDataSource, SourceRegistry } from '../sources/sessionSource';
+import { OverviewMetrics } from '@agent-observability/core/src/telemetry/models';
+import { SessionDataSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
 
 /** Stable view id; referenced by package.json and the refresh command wiring. */
 export const OVERVIEW_VIEW_ID = 'agentObservability.overview';

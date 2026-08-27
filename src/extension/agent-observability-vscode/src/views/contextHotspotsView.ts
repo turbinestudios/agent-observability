@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
-import type { SessionSummary } from '../telemetry/models';
-import type { ContextInsightCategory } from '../aggregate/contextInsightsModels';
-import { hasMultipleRepositories, type ContextHotspot, type ContextHotspotSession } from '../aggregate/contextHotspotsIndex';
-import type { ContextHotspotsProvider } from '../context/contextHotspotsProvider';
+import type { SessionSummary } from '@agent-observability/core/src/telemetry/models';
+import type { ContextInsightCategory } from '@agent-observability/core/src/aggregate/contextInsightsModels';
+import { hasMultipleRepositories, type ContextHotspot, type ContextHotspotSession } from '@agent-observability/core/src/aggregate/contextHotspotsIndex';
+import type { ContextHotspotsProvider } from '@agent-observability/core/src/context/contextHotspotsProvider';
 
 /** Stable view id; referenced by package.json and the refresh command wiring. */
 export const CONTEXT_HOTSPOTS_VIEW_ID = 'agentObservability.contextHotspots';

@@ -9,6 +9,7 @@ analytics. See [README.md](README.md) for the full overview.
 
 | Area | Path | Stack |
 | --- | --- | --- |
+| Shared core (host-independent) | [src/core/agent-observability-core](src/core/agent-observability-core) | TypeScript, vitest |
 | VS Code extension (producer) | [src/extension/agent-observability-vscode](src/extension/agent-observability-vscode) | TypeScript, esbuild, vitest |
 | Cloud dashboard (consumer) | [src/dashboard/AgentObservability.Dashboard](src/dashboard/AgentObservability.Dashboard) | Blazor Server (.NET), xUnit |
 | Shared aggregate contract | [schemas/aggregate-batch.schema.json](schemas/aggregate-batch.schema.json) | JSON Schema |
@@ -48,6 +49,29 @@ Press <kbd>F5</kbd> to launch an Extension Development Host. See the
 [extension README](src/extension/agent-observability-vscode/README.md) for
 architecture seams and the `node-sqlite3-wasm` packaging notes.
 
+### Where code goes: core vs. extension
+
+Most of the logic lives in **`src/core/agent-observability-core`** — session
+sources and parsing, the telemetry/SQLite layer, aggregation, sync, deviation
+and context analysis, the OTLP stack, and the pure HTML renderers. It is
+host-independent: importing `vscode` there is a lint error, because the same
+code is consumed by a standalone desktop app where that module does not exist.
+
+The extension package keeps only what genuinely needs the VS Code API: the tree
+views, the webview panel and chat provider, commands, `extension.ts` wiring, and
+five small host adapters — `OutputChannelLogger`, `VscodeSettingsReader`,
+`SecretManager`, `ConsentManager`, `GlobalStateSyncStateStore`, and
+`vscodeFileWatchFactory`. When something needs a host capability, add an
+interface in core and implement it here rather than reaching for `vscode`.
+
+Core is consumed as TypeScript source and bundled in by esbuild, so there is no
+build step and no `dist` to keep fresh; edit core and press F5. Cross-package
+imports carry the `/src/` segment:
+
+```ts
+import { SessionSummary } from '@agent-observability/core/src/telemetry/models';
+```
+
 **Dashboard** (run from repo root):
 
 ```powershell
@@ -67,8 +91,8 @@ opt-in aggregate batch defined by
 is `additionalProperties: false` at every level.
 
 - Never add a raw-content field to any aggregate / sync path
-  (`src/extension/agent-observability-vscode/src/aggregate/*`,
-  `.../src/sync/*`).
+  (`src/core/agent-observability-core/src/aggregate/*`,
+  `src/core/agent-observability-core/src/sync/*`).
 - Cloud sharing is **off by default** and gated on explicit consent plus an API
   key in VS Code SecretStorage (never in `settings.json`).
 - The dashboard ingestion URL is a hardcoded constant, not a user setting.

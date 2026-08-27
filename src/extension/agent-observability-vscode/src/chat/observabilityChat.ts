@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
 import { Commands } from '../commands';
-import type { SessionSummary } from '../telemetry/models';
-import type { Result } from '../telemetry/telemetryService';
-import { SourceRegistry } from '../sources/sessionSource';
-import { planChatResponse } from './chatResponsePlan';
+import type { SessionSummary } from '@agent-observability/core/src/telemetry/models';
+import type { Result } from '@agent-observability/core/src/telemetry/telemetryService';
+import { SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
+import { planChatResponse } from '@agent-observability/core/src/chat/chatResponsePlan';
 
 /**
  * `@obs` chat participant.

@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import { MAX_HISTORY, SyncRun, SyncStateStore } from './syncState';
+import { MAX_HISTORY, SyncRun, SyncStateStore } from '@agent-observability/core/src/sync/syncState';
 
 /**
  * Durable {@link SyncStateStore} over {@link vscode.ExtensionContext.globalState}.

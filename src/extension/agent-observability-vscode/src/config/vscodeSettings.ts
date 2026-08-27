@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { CONFIG_SECTION, SettingsReader, SettingsSubscription } from './configuration';
+import { CONFIG_SECTION, SettingsReader, SettingsSubscription } from '@agent-observability/core/src/config/configuration';
 
 /**
  * The VS Code implementation of {@link SettingsReader}: reads the

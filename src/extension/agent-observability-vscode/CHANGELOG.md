@@ -4,6 +4,23 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.12] - 2026-08-27
+
+### Changed
+
+- **The bulk of the extension now lives in a shared `@agent-observability/core`
+  package** — session sources and parsing, the telemetry and SQLite layer,
+  aggregation, sync, deviation and context analysis, the OTLP stack, and the
+  session-detail renderers. The extension keeps the VS Code surface: tree views,
+  the detail panel, the AI Helper webview, commands, and the host adapters.
+  Nothing about the extension's behavior, settings, or data handling changes —
+  core is compiled into `dist/extension.js` exactly as before, and the full test
+  suite moved with the code, passing unchanged.
+
+  The point is a second consumer: a standalone desktop app can now read the same
+  sessions through the same code. Importing `vscode` from core is a lint error,
+  so the boundary cannot erode silently.
+
 ## [0.9.11] - 2026-08-27
 
 ### Changed

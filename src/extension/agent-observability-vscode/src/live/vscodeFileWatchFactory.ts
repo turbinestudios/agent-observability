@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { FileWatchFactory, WatchHandle } from './claudeWatcher';
+import { FileWatchFactory, WatchHandle } from '@agent-observability/core/src/live/claudeWatcher';
 
 /**
  * {@link FileWatchFactory} backed by vscode's `createFileSystemWatcher`.

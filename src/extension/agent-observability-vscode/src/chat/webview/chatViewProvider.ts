@@ -1,31 +1,31 @@
 import * as vscode from 'vscode';
 import * as crypto from 'node:crypto';
-import { CONFIG_SECTION, ConfigKeys, Configuration } from '../../config/configuration';
-import { SourceRegistry } from '../../sources/sessionSource';
-import { OverviewMetrics, RepositorySummary, SessionSummary } from '../../telemetry/models';
-import { Conversation, assembleMessages } from '../conversation';
+import { CONFIG_SECTION, ConfigKeys, Configuration } from '@agent-observability/core/src/config/configuration';
+import { SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
+import { OverviewMetrics, RepositorySummary, SessionSummary } from '@agent-observability/core/src/telemetry/models';
+import { Conversation, assembleMessages } from '@agent-observability/core/src/chat/conversation';
 import { ContextLoader } from '../contextLoader';
-import { getQuickCommand, selectContextForFreeText } from '../quickCommands';
-import { isCancellation } from '../lmErrors';
-import { ChatBackend, ChatBackendRegistry } from '../backends/chatBackend';
+import { getQuickCommand, selectContextForFreeText } from '@agent-observability/core/src/chat/quickCommands';
+import { isCancellation } from '@agent-observability/core/src/chat/lmErrors';
+import { ChatBackend, ChatBackendRegistry } from '@agent-observability/core/src/chat/backends/chatBackend';
 import { CopilotBackend } from '../backends/copilotBackend';
-import { ClaudeCodeBackend } from '../backends/claudeCodeBackend';
-import { buildUiState, BackendOption } from '../backends/uiState';
+import { ClaudeCodeBackend } from '@agent-observability/core/src/chat/backends/claudeCodeBackend';
+import { buildUiState, BackendOption } from '@agent-observability/core/src/chat/backends/uiState';
 import { renderChatHtml } from './chatViewHtml';
-import { markdownToHtml } from './markdownToHtml';
-import { HostToWebview, PreferenceKey, WebviewToHost } from './protocol';
+import { markdownToHtml } from '@agent-observability/core/src/chat/webview/markdownToHtml';
+import { HostToWebview, PreferenceKey, WebviewToHost } from '@agent-observability/core/src/chat/webview/protocol';
 import {
   buildWorkflowGenPreamble,
   mergeWorkflowsByRepository,
   validateWorkflowsJson,
-} from '../tasks/workflowGen';
+} from '@agent-observability/core/src/chat/tasks/workflowGen';
 import {
   buildContextFilesDigest,
   gatherProjectContextFiles,
   resolveWorkspaceRepository,
-} from '../tasks/projectContext';
-import { buildMinimalConfigPreamble, parseConfigObject } from '../tasks/minimalConfig';
-import { SummaryInput, buildLogSummaryPreamble, buildSummaryDigest, toSafeSessionRow } from '../tasks/logSummary';
+} from '@agent-observability/core/src/chat/tasks/projectContext';
+import { buildMinimalConfigPreamble, parseConfigObject } from '@agent-observability/core/src/chat/tasks/minimalConfig';
+import { SummaryInput, buildLogSummaryPreamble, buildSummaryDigest, toSafeSessionRow } from '@agent-observability/core/src/chat/tasks/logSummary';
 
 /** Contributed view id for the AI Helper webview (matches package.json). */
 export const ASSISTANT_VIEW_ID = 'agentObservability.assistant';

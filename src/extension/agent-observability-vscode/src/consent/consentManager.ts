@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { computeCanSync } from './syncGate';
+import { computeCanSync } from '@agent-observability/core/src/consent/syncGate';
 
 /**
  * Cloud-sharing consent gate.

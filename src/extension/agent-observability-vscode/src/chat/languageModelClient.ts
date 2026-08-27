@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AssembledMessage } from './conversation';
+import { AssembledMessage } from '@agent-observability/core/src/chat/conversation';
 
 /**
  * Thin wrapper over the VS Code Language Model API, backed by the user's own

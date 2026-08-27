@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
-import { CONFIG_SECTION } from '../config/configuration';
+import { CONFIG_SECTION } from '@agent-observability/core/src/config/configuration';
 import { ConsentManager } from '../consent/consentManager';
-import { consentModalDetail } from '../consent/consentDisclosure';
+import { consentModalDetail } from '@agent-observability/core/src/consent/consentDisclosure';
 import { SecretManager } from '../secrets/secretManager';
-import { SyncEngine } from '../sync/syncEngine';
-import { Logger } from '../log/logger';
+import { SyncEngine } from '@agent-observability/core/src/sync/syncEngine';
+import { Logger } from '@agent-observability/core/src/log/logger';
 
 /**
  * Stable command ids. These MUST match the `contributes.commands` entries in

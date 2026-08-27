@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Logger, errorMessage } from './logger';
+import { Logger, errorMessage } from '@agent-observability/core/src/log/logger';
 
 /**
  * The concrete {@link Logger} backed by a VS Code LogOutputChannel — the

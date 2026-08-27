@@ -1,13 +1,13 @@
 import * as vscode from 'vscode';
-import { Configuration } from '../config/configuration';
-import { TelemetryService } from '../telemetry/telemetryService';
+import { Configuration } from '@agent-observability/core/src/config/configuration';
+import { TelemetryService } from '@agent-observability/core/src/telemetry/telemetryService';
 import { ConsentManager } from '../consent/consentManager';
 import { SecretManager } from '../secrets/secretManager';
 import { Commands } from '../commands';
-import { isRepositoryIncluded } from '../aggregate/repoSyncPolicy';
-import { WHAT_IS_SHARED, WHAT_IS_NOT_SHARED, DISCLOSURE_SUMMARY } from '../consent/consentDisclosure';
-import { SyncStateStore, SyncRun, SyncRunOutcome } from '../sync/syncState';
-import { CloudSink } from '../cloud/cloudSink';
+import { isRepositoryIncluded } from '@agent-observability/core/src/aggregate/repoSyncPolicy';
+import { WHAT_IS_SHARED, WHAT_IS_NOT_SHARED, DISCLOSURE_SUMMARY } from '@agent-observability/core/src/consent/consentDisclosure';
+import { SyncStateStore, SyncRun, SyncRunOutcome } from '@agent-observability/core/src/sync/syncState';
+import { CloudSink } from '@agent-observability/core/src/cloud/cloudSink';
 
 /** Stable view id; referenced by package.json and the syncNow command wiring. */
 export const SYNC_VIEW_ID = 'agentObservability.sync';
