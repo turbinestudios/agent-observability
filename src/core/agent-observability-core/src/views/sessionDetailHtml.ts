@@ -13,6 +13,7 @@ import { WorkflowDeviation } from '../deviation/models';
 import { SessionContextAnalysis, AgentContextAnalysis, ContextFileEntry } from '../context/models';
 import { aiuToUsd } from '../telemetry/pricing';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
+import { OVERSIZED_THRESHOLD_TOKENS } from '../context/sizeEstimator';
 import { escapeHtml } from './escapeHtml';
 
 // The cost basis of a session ({@link CostMode}) now lives on the shared model
@@ -1567,10 +1568,41 @@ function renderContextBudget(agent: AgentContextAnalysis): string {
  * events carry names only).
  */
 function ctxFileName(f: ContextFileEntry): string {
+  const label = contextFileLabel(f);
   if (f.filePath === undefined || f.filePath.length === 0) {
-    return escapeHtml(f.name);
+    return escapeHtml(label);
   }
-  return `<a href="#" class="ctx-file-link" data-path="${escapeHtml(f.filePath)}" title="${escapeHtml(f.filePath)}">${escapeHtml(f.name)}</a>`;
+  return `<a href="#" class="ctx-file-link" data-path="${escapeHtml(f.filePath)}" title="${escapeHtml(f.filePath)}">${escapeHtml(label)}</a>`;
+}
+
+/**
+ * What to call a context file in the list.
+ *
+ * Every skill's file is named `SKILL.md`, so a session that loaded nine skills
+ * shows nine identical rows. The skill's identity is its containing folder, so
+ * that is prefixed — `plan/SKILL.md` — which names the skill while keeping the
+ * row recognizable as a file. The same applies to any other convention-named
+ * file whose folder carries the meaning.
+ */
+function contextFileLabel(f: ContextFileEntry): string {
+  if (!FOLDER_NAMED_FILES.has(f.name.toLowerCase())) {
+    return f.name;
+  }
+  const parent = parentFolderName(f.filePath);
+  return parent === undefined ? f.name : `${parent}/${f.name}`;
+}
+
+/** Files whose folder, not their own name, is what identifies them. */
+const FOLDER_NAMED_FILES = new Set(['skill.md', 'index.md', 'readme.md']);
+
+/** The immediate folder of a path, or `undefined` when there is not one. */
+function parentFolderName(filePath: string | undefined): string | undefined {
+  if (filePath === undefined || filePath.length === 0) {
+    return undefined;
+  }
+  const parts = filePath.split(/[\\/]+/).filter((p) => p.length > 0);
+  // parts: [..., folder, file] — a bare filename has no folder to borrow.
+  return parts.length >= 2 ? parts[parts.length - 2] : undefined;
 }
 
 /**
@@ -1658,17 +1690,32 @@ function renderOversizedCallouts(agent: AgentContextAnalysis): string {
 
   const cards = agent.oversizedFiles.map((f) => {
     const tokens = f.estimatedTokens ?? 0;
+    const times = tokens / OVERSIZED_THRESHOLD_TOKENS;
+    // "3.2x over" is the number that tells you how much work trimming is; the
+    // raw token count alone leaves the reader to do that division.
+    const overBy = times >= 10 ? `${Math.round(times)}×` : `${times.toFixed(1)}×`;
     return `<div class="ctx-oversized-card">
       <span class="ctx-oversized-icon">⚠️</span>
       <div class="ctx-oversized-info">
         <strong>${ctxFileName(f)}</strong>
-        <span class="muted">~${formatInt(tokens)} tokens — consider splitting or trimming this file</span>
+        <span class="muted">~${formatInt(tokens)} tokens — <strong>${escapeHtml(overBy)} the ${formatInt(
+          OVERSIZED_THRESHOLD_TOKENS,
+        )}-token guideline</strong>${
+          f.charCount !== undefined ? ` (${formatInt(f.charCount)} characters)` : ''
+        }</span>
       </div>
     </div>`;
   }).join('\n');
 
   return `<div class="ctx-oversized-section">
   <h3>Oversized context files</h3>
+  <p class="ctx-oversized-note muted">
+    These files are loaded into the model's context on every turn, so their size
+    is spent before any of your actual work is. Anything over
+    ${formatInt(OVERSIZED_THRESHOLD_TOKENS)} estimated tokens is flagged here —
+    splitting a large file, or moving rarely-needed detail into one that is
+    loaded on demand, gives that budget back.
+  </p>
   ${cards}
 </div>`;
 }
@@ -1850,6 +1897,7 @@ const STYLE = `
   .ctx-warn { cursor: help; }
   .ctx-skip-reason { font-size: .75rem; }
   .ctx-file-link { color: var(--vscode-textLink-foreground, #4e94ce); text-decoration: none; }
+  .ctx-oversized-note { font-size: .78rem; line-height: 1.45; margin: .1rem 0 .5rem; max-width: 68ch; }
   .repo-link { color: var(--vscode-textLink-foreground, #4e94ce); text-decoration: none; cursor: pointer; }
   .repo-link:hover { color: var(--vscode-textLink-activeForeground, #6cb6ff); text-decoration: underline; }
   .ctx-file-link:hover { color: var(--vscode-textLink-activeForeground, #4e94ce); text-decoration: underline; }

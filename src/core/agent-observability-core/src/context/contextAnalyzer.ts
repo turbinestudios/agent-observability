@@ -449,7 +449,10 @@ function extractSystemPromptFiles(
 
 /** Normalize a path for cross-signal comparison (POSIX separators, lower-case). */
 function normalizeContextPath(p: string): string {
-  return p.replace(/\\/g, '/').toLowerCase();
+  // Collapse repeated separators as well as unifying them: a path that arrived
+  // JSON-escaped (`c:\\a\\b`) must land on the same identity as the same path
+  // unescaped, or the file is listed — and counted — twice.
+  return p.replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase();
 }
 
 /**

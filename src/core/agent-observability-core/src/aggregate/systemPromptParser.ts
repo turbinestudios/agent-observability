@@ -19,12 +19,16 @@
  */
 
 import { isCustomizationFileName } from './customizationFilter';
+import { collapseRepeatedSeparators } from '../context/filePaths';
 
 /** One customization file referenced by a system prompt. */
 export interface SystemPromptContextFile {
   /** Base file name (e.g. `security.instructions.md`). */
   name: string;
-  /** The raw path exactly as it appeared inside the `<file>` element. */
+  /**
+   * The path as it appeared inside the `<file>` element, with JSON-escaped
+   * separators collapsed so it compares equal to the same path seen elsewhere.
+   */
   filePath: string;
 }
 
@@ -64,7 +68,9 @@ export function parseSystemPromptContextFiles(
       continue;
     }
     seen.add(dedupeKey);
-    results.push({ name, filePath: raw });
+    // The system prompt embeds these paths JSON-escaped; left as-is the same
+    // file reads as two distinct ones against the other context signals.
+    results.push({ name, filePath: collapseRepeatedSeparators(raw) });
   }
 
   return results;

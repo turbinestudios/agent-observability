@@ -11,6 +11,7 @@
  */
 
 import type { ContextFileCategory, ContextFileEntry, ContextFileStatus } from './models';
+import { collapseRepeatedSeparators } from './filePaths';
 
 /** A raw discovery event row from the database layer. */
 export interface DiscoveryEventRow {
@@ -237,7 +238,8 @@ function extractPathFromUri(raw: string): string | undefined {
   }
   try {
     const decoded = decodeURIComponent(raw.slice('file:///'.length));
-    return /^[a-zA-Z]:/.test(decoded) ? decoded : `/${decoded}`;
+    const path = /^[a-zA-Z]:/.test(decoded) ? decoded : `/${decoded}`;
+    return collapseRepeatedSeparators(path);
   } catch {
     return undefined;
   }
