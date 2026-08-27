@@ -1,0 +1,50 @@
+appId: com.turbinestudios.agent-observability
+productName: Agent Observability
+copyright: Copyright © Turbine Studios
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - out/**
+  - package.json
+
+# better-sqlite3 ships Node-API prebuilds (prebuilds/<platform>-<arch>.node),
+# and Node-API is ABI-stable across both Node and Electron releases — the
+# shipped binary loads under Electron unchanged. Rebuilding would force a
+# source compile, which needs Visual Studio or Xcode on every runner and buys
+# nothing. Verified by loading the module under Electron before turning this off.
+npmRebuild: false
+
+# Releases are attached to a GitHub Release by the workflow, not uploaded from
+# here — keeping publishing in one place makes a local build safe to run.
+publish: null
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # Builds are unsigned. `identity: null` still applies an ad-hoc signature,
+  # which is what lets the app launch at all on Apple Silicon; Gatekeeper will
+  # warn on first open (see README).
+  identity: null
+  darkModeSupport: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+
+# Arch is in every filename: installing a mac x64 build on Apple Silicon (or the
+# reverse) fails in confusing ways, and users pick from a flat list of assets.
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}

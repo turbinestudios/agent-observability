@@ -1,0 +1,118 @@
+name: Release Desktop App
+
+# Tagged releases only. The extension versions independently, so desktop tags
+# are namespaced: desktop-v0.1.0, desktop-v0.2.0, …
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build the installers but do not create a release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not discard the other's artifacts — a
+      # partial release is more useful than none, and easier to diagnose.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: macos
+          - os: windows-latest
+            artifact: windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Installs every workspace, including the shared core the app bundles.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck --workspaces --if-present
+
+      - name: Test
+        run: npm test --workspaces --if-present
+
+      - name: Build renderer, preload, and data host
+        run: npm run build -w agent-observability-desktop
+
+      - name: Package installers
+        working-directory: src/desktop/agent-observability-desktop
+        # Unsigned on purpose for now: no certificates are configured, and
+        # auto-discovery would otherwise pick up an unrelated keychain identity
+        # on a self-hosted runner and fail the build.
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --config electron-builder.yml --publish never
+
+      - name: Collect installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            src/desktop/agent-observability-desktop/release/*.dmg
+            src/desktop/agent-observability-desktop/release/*.zip
+            src/desktop/agent-observability-desktop/release/*.exe
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: installers
+
+      - name: List what will be attached
+        run: ls -lh installers
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installers/*
+          # Drafted rather than published: someone should download and open one
+          # build per platform before users see it, since these are unsigned and
+          # nothing in CI actually launches the app.
+          draft: true
+          name: Agent Observability Desktop ${{ github.ref_name }}
+          body: |
+            Desktop app build for `${{ github.ref_name }}`.
+
+            Download the installer for your platform. macOS users: pick
+            **arm64** for Apple Silicon and **x64** for Intel — the wrong
+            architecture will not launch.
+
+            ### First launch
+
+            These builds are **not code-signed**, so both systems will warn:
+
+            - **macOS** — right-click the app and choose **Open**, then confirm.
+              Or run `xattr -cr "/Applications/Agent Observability.app"`.
+            - **Windows** — on the SmartScreen prompt choose **More info** →
+              **Run anyway**.
