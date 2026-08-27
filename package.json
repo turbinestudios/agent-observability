@@ -5,7 +5,9 @@
   "description": "Workspace root for the Agent Observability extension, shared core, and desktop app. Not published; the .NET dashboard and Bicep infra are built separately.",
   "license": "UNLICENSED",
   "workspaces": [
-    "src/extension/agent-observability-vscode"
+    "src/core/agent-observability-core",
+    "src/extension/agent-observability-vscode",
+    "src/desktop/*"
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",

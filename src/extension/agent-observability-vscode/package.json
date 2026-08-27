@@ -938,6 +938,7 @@
     "package": "node scripts/stageSqliteWasm.js && vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@agent-observability/core": "*",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.90.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
