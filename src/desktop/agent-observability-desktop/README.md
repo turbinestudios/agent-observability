@@ -15,13 +15,19 @@ list cannot appear until hundreds of megabytes have been read. This app keeps a
 persisted index at `~/.agent-observability/desktop/index.db` and does that work
 once, in the background.
 
-Measured on a real corpus (686 transcripts, 805 MB, 183 sessions):
+Measured on a real corpus (686 Claude transcripts at 805 MB, plus a 1.6 GB
+Copilot archive — 230 sessions in total):
 
 | | Time to a usable list |
 | --- | --- |
-| Extension (parse on demand) | 3,696 ms, capped at 150 sessions |
-| Desktop, first launch | **76 ms**, then hydrates over ~5s behind the list |
-| Desktop, every launch after | **0.8 ms**, all 183 sessions |
+| Extension, Claude (parse on demand) | 3,696 ms, capped at 150 sessions |
+| Extension, Copilot (copy + WAL replay) | 68,365 ms for 47 sessions |
+| Desktop, first launch | **76 ms**, then hydrates behind the list |
+| Desktop, every launch after | **0.8 ms**, all 230 sessions, uncapped |
+
+The Copilot rows match the extension's exactly — same 47 sessions, same step
+counts, same titles and repositories — which is the point: the speed is worth
+nothing if the data differs.
 
 Three things make that work:
 
@@ -30,6 +36,15 @@ Three things make that work:
   in afterwards, newest sessions first.
 - **Fingerprinting.** A file whose size, mtime, and head hash are unchanged is
   never reopened, so a no-op refresh over the whole corpus costs ~113 ms.
+- **Copilot's database is read in place.** The extension cannot open it — its
+  SQLite driver refuses a WAL database — so it copies all 1.6 GB and replays the
+  WAL by hand on every refresh. `better-sqlite3` speaks WAL natively, so the copy
+  disappears and a refresh becomes one aggregate query. Nothing is ever written
+  to Copilot's file.
+- **Titles are indexed once.** They live in per-workspace stores totalling ~4 GB;
+  the extension rereads all of them each refresh. Here a store whose mtime has
+  not moved is skipped, and a changed session file is read only far enough to
+  reach its first line.
 - **Nothing heavy on the UI path.** Parsing runs in a separate process; the
   interactive query is one indexed `SELECT`.
 

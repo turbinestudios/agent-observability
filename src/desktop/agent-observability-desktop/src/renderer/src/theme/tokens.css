@@ -1,14 +1,39 @@
 /*
  * Theme tokens for the app shell.
  *
- * Light is defined on bare :root so it applies with no media query, and dark
- * overrides only the values that change. The same token names are mapped onto
- * the --vscode-* variables the shared detail renderer expects (see
- * theme/vscodeVars.ts), so one palette drives both the app and the embedded
- * session document.
+ * Dark is the default and is defined on bare :root, so the very first paint is
+ * already dark even before any script runs — no flash of a light window. Light
+ * is opt-in via `data-theme="light"`, set by the theme toggle.
+ *
+ * The same palette is mapped onto the --vscode-* variables the shared session
+ * renderer reads (see datahost/detail/theme.ts), so one set of colors drives
+ * both the app shell and the embedded session document.
  */
 
 :root {
+  --bg: #16171a;
+  --bg-elevated: #1e2024;
+  --bg-sunken: #101114;
+  --fg: #e6e8ea;
+  --fg-muted: #a0a6ad;
+  --fg-subtle: #767d85;
+  --border: #2c2f34;
+  --border-strong: #3d4147;
+  --accent: #5b9bf8;
+  --accent-fg: #0d1117;
+  --selection: #24344d;
+  --hover: #23262b;
+  --warning: #d0a215;
+  --danger: #f0736a;
+
+  --rail-width: 52px;
+  --sidebar-width: 340px;
+  --radius: 6px;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Ubuntu, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+:root[data-theme='light'] {
   --bg: #ffffff;
   --bg-elevated: #f6f7f9;
   --bg-sunken: #eceef1;
@@ -23,31 +48,6 @@
   --hover: #eef1f5;
   --warning: #9a6400;
   --danger: #b3261e;
-
-  --rail-width: 52px;
-  --sidebar-width: 340px;
-  --radius: 6px;
-  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Ubuntu, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16171a;
-    --bg-elevated: #1e2024;
-    --bg-sunken: #101114;
-    --fg: #e6e8ea;
-    --fg-muted: #a0a6ad;
-    --fg-subtle: #767d85;
-    --border: #2c2f34;
-    --border-strong: #3d4147;
-    --accent: #5b9bf8;
-    --accent-fg: #0d1117;
-    --selection: #24344d;
-    --hover: #23262b;
-    --warning: #d0a215;
-    --danger: #f0736a;
-  }
 }
 
 * {

@@ -4,6 +4,17 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.14] - 2026-08-27
+
+### Changed
+
+- The rule deciding which span groups count as real sessions — the one that
+  keeps tool-call ids and chat-helper traffic out of the Sessions list — moved
+  into its own module with direct test coverage. Behavior is unchanged; it now
+  has a single definition shared with the desktop app, which reads the same
+  database and would otherwise have needed its own copy of a filter subtle
+  enough to drift silently.
+
 ## [0.9.13] - 2026-08-27
 
 ### Changed

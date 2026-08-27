@@ -5,6 +5,7 @@ import type { SessionRow } from '../../../../shared/rpc';
 import { sessionKey } from '../../../../shared/rpc';
 import { useSessions } from './useSessions';
 import { SessionDetail } from './SessionDetail';
+import { IndexStatusBar } from './IndexStatusBar';
 import { formatDuration, formatRelative, formatTokens, sourceLabel } from './format';
 import './sessions.css';
 
@@ -18,7 +19,7 @@ import './sessions.css';
 export function SessionsView(): JSX.Element {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<string | undefined>(undefined);
-  const { rows, status, loading, error, refresh, rebuild } = useSessions(query);
+  const { rows, status, connection, loading, error, refresh, rebuild } = useSessions(query);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -29,6 +30,8 @@ export function SessionsView(): JSX.Element {
   });
 
   const selectedRow = rows.find((r) => sessionKey(r.source, r.sessionId) === selected);
+  const busy =
+    connection === 'connecting' || status.phase === 'discovering' || status.phase === 'hydrating';
 
   return (
     <>
@@ -49,9 +52,14 @@ export function SessionsView(): JSX.Element {
           </button>
         </header>
 
-        <IndexBanner status={status} loading={loading} rowCount={rows.length} />
+        <IndexStatusBar
+          status={status}
+          connection={connection}
+          rowCount={rows.length}
+          onRebuild={rebuild}
+        />
 
-        {error !== undefined && (
+        {error !== undefined && connection === 'connected' && (
           <div className="sessions-error">
             <p>{error}</p>
             <button type="button" onClick={rebuild}>
@@ -61,7 +69,12 @@ export function SessionsView(): JSX.Element {
         )}
 
         <div className="sessions-scroll" ref={scrollRef}>
-          {rows.length === 0 && !loading ? (
+          {/*
+            "No sessions yet" is only true once nothing is still arriving.
+            Showing it during the first index pass would flash a wrong answer
+            before the rows land.
+          */}
+          {rows.length === 0 && !loading && !busy ? (
             <EmptyState query={query} />
           ) : (
             <div className="sessions-virtual" style={{ height: virtualizer.getTotalSize() }}>
@@ -100,40 +113,6 @@ export function SessionsView(): JSX.Element {
         )}
       </section>
     </>
-  );
-}
-
-/** Progress while the indexer is still hydrating rows. */
-function IndexBanner({
-  status,
-  loading,
-  rowCount,
-}: {
-  status: { indexed: number; total: number; phase: string; message?: string };
-  loading: boolean;
-  rowCount: number;
-}): JSX.Element | null {
-  if (status.phase === 'error') {
-    return <div className="sessions-banner error">Indexing failed: {status.message}</div>;
-  }
-  const busy = status.phase === 'discovering' || status.phase === 'hydrating';
-  if (!busy && !loading) {
-    return rowCount > 0 ? (
-      <div className="sessions-banner subtle">{rowCount.toLocaleString()} sessions</div>
-    ) : null;
-  }
-  const pct = status.total === 0 ? 0 : Math.round((status.indexed / status.total) * 100);
-  return (
-    <div className="sessions-banner">
-      <span>
-        {status.phase === 'discovering'
-          ? 'Finding sessions…'
-          : `Reading sessions — ${status.indexed.toLocaleString()} of ${status.total.toLocaleString()}`}
-      </span>
-      <div className="progress" role="progressbar" aria-valuenow={pct}>
-        <div className="progress-fill" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
   );
 }
 

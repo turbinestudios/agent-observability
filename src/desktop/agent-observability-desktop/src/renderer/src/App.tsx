@@ -4,6 +4,7 @@ import { SessionsView } from './views/sessions/SessionsView';
 import { PlaceholderView } from './views/PlaceholderView';
 import { ActivityRail } from './components/ActivityRail';
 import type { ViewId } from './components/ActivityRail';
+import { ThemeProvider } from './theme/ThemeContext';
 import './app.css';
 
 /**
@@ -19,18 +20,20 @@ export function App(): JSX.Element {
   const [view, setView] = useState<ViewId>('sessions');
 
   return (
-    <div className="app">
-      <ActivityRail active={view} onSelect={setView} />
-      <main className="app-main">
-        <div className="view-layer" hidden={view !== 'sessions'}>
-          <SessionsView />
-        </div>
-        {view !== 'sessions' && (
-          <div className="view-layer">
-            <PlaceholderView view={view} />
+    <ThemeProvider>
+      <div className="app">
+        <ActivityRail active={view} onSelect={setView} />
+        <main className="app-main">
+          <div className="view-layer" hidden={view !== 'sessions'}>
+            <SessionsView />
           </div>
-        )}
-      </main>
-    </div>
+          {view !== 'sessions' && (
+            <div className="view-layer">
+              <PlaceholderView view={view} />
+            </div>
+          )}
+        </main>
+      </div>
+    </ThemeProvider>
   );
 }

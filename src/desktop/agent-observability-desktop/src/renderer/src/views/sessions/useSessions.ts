@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
+import type { ConnectionState } from '../../api/client';
 import type { IndexStatus, SessionRow } from '../../../../shared/rpc';
 import { sessionKey } from '../../../../shared/rpc';
 
@@ -19,6 +20,7 @@ const PAGE_SIZE = 300;
 interface UseSessionsResult {
   rows: SessionRow[];
   status: IndexStatus;
+  connection: ConnectionState;
   loading: boolean;
   error: string | undefined;
   refresh: () => void;
@@ -28,6 +30,7 @@ interface UseSessionsResult {
 export function useSessions(query: string): UseSessionsResult {
   const [rows, setRows] = useState<SessionRow[]>([]);
   const [status, setStatus] = useState<IndexStatus>({ indexed: 0, total: 0, phase: 'idle' });
+  const [connection, setConnection] = useState<ConnectionState>(() => dataHost.connectionState());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -94,12 +97,16 @@ export function useSessions(query: string): UseSessionsResult {
       }
     });
 
+    const offConnection = dataHost.onConnectionChange(setConnection);
+    setConnection(dataHost.connectionState());
+
     void dataHost.call('index.status').then(setStatus).catch(() => undefined);
 
     return () => {
       offRows();
       offRemoved();
       offProgress();
+      offConnection();
     };
   }, [applyRows]);
 
@@ -117,8 +124,8 @@ export function useSessions(query: string): UseSessionsResult {
   }, [applyRows, load]);
 
   return useMemo(
-    () => ({ rows, status, loading, error, refresh, rebuild }),
-    [rows, status, loading, error, refresh, rebuild],
+    () => ({ rows, status, connection, loading, error, refresh, rebuild }),
+    [rows, status, connection, loading, error, refresh, rebuild],
   );
 }
 

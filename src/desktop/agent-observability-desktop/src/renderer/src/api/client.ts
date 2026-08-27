@@ -19,6 +19,9 @@ type Handler = (event: RpcEvent) => void;
 /** How long to wait for the data-host handshake before reporting it failed. */
 const CONNECT_TIMEOUT_MS = 10_000;
 
+/** Whether the data host is reachable — surfaced so the UI can explain a wait. */
+export type ConnectionState = 'connecting' | 'connected' | 'failed';
+
 declare global {
   interface Window {
     desktop: {
@@ -42,6 +45,7 @@ class DataHostClient {
   private ready = false;
   private failure: Error | undefined;
   private connectTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly connectionWatchers = new Set<(state: ConnectionState) => void>();
 
   constructor() {
     if (window.desktop === undefined) {
@@ -77,6 +81,27 @@ class DataHostClient {
     }, CONNECT_TIMEOUT_MS);
   }
 
+  /** Current reachability of the data host. */
+  connectionState(): ConnectionState {
+    if (this.failure !== undefined) {
+      return 'failed';
+    }
+    return this.ready ? 'connected' : 'connecting';
+  }
+
+  /** Subscribe to connection changes; returns an unsubscribe function. */
+  onConnectionChange(watcher: (state: ConnectionState) => void): () => void {
+    this.connectionWatchers.add(watcher);
+    return () => this.connectionWatchers.delete(watcher);
+  }
+
+  private announceConnection(): void {
+    const state = this.connectionState();
+    for (const watcher of this.connectionWatchers) {
+      watcher(state);
+    }
+  }
+
   /** Reject everything queued and waiting, and remember why. */
   private fail(message: string): void {
     this.failure = new Error(message);
@@ -88,6 +113,7 @@ class DataHostClient {
     for (const handler of this.handlers.get('index.progress') ?? []) {
       handler({ event: 'index.progress', status: { indexed: 0, total: 0, phase: 'error', message } });
     }
+    this.announceConnection();
   }
 
   private bind(port: MessagePort): void {
@@ -121,6 +147,7 @@ class DataHostClient {
     for (const send of this.queued.splice(0)) {
       send();
     }
+    this.announceConnection();
   }
 
   call<K extends RpcMethodName>(

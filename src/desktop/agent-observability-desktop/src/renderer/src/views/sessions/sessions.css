@@ -47,22 +47,89 @@
   background: var(--hover);
 }
 
-.sessions-banner {
-  padding: 7px 10px;
+/* --- index status ---------------------------------------------------------- */
+
+.status-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
   font-size: 12px;
   color: var(--fg-muted);
   border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
 }
 
-.sessions-banner.subtle {
+.status-bar.status-quiet {
+  padding: 6px 10px;
   color: var(--fg-subtle);
 }
 
-.sessions-banner.error {
+.status-bar.status-error {
   color: var(--danger);
+  align-items: center;
+}
+
+.status-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.status-line {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-error .status-line {
+  color: var(--danger);
+}
+
+.status-sub {
+  color: var(--fg-subtle);
+  font-size: 11px;
+}
+
+.status-action {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.status-action:hover {
+  background: var(--hover);
+}
+
+.spinner {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * A spinner that never stops is a distraction for anyone sensitive to motion,
+ * and the text beside it already says what is happening.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+
+  .progress-fill {
+    transition: none;
+  }
 }
 
 .progress {

@@ -22,6 +22,14 @@ import {
   mapAgentMode,
   statusToSuccess,
 } from './models';
+import {
+  CHAT_SESSION_CANDIDATES_SQL,
+  CONVERSATION_ONLY_CANDIDATES_SQL,
+  SESSION_KEY_EXPR,
+  UUID_RE,
+  startedSessionSet,
+  suggestionOnlySql,
+} from './sessionFilter';
 import { extractResponseText } from './responseText';
 import { countWrittenLines, sumWrittenLines, WriteLineDelta } from './locAnalysis';
 import { SessionTitleInfo } from './sessionTitles';
@@ -49,18 +57,6 @@ const DEFAULT_AGENT = 'copilot';
 
 /** Shared empty exclusion set so the no-filter default never allocates. */
 const NO_EXCLUSIONS: ReadonlySet<string> = new Set();
-
-/**
- * A whole-string UUID. Distinguishes a real chat-session id (joinable to the
- * LOCAL title store) from a `call_…` sub-agent spawn id in `chat_session_id`.
- */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * The `sessions` view's grouping key as a SQL expression, for queries that must
- * group identically. A fixed expression from this module — never user input.
- */
-const SESSION_KEY_EXPR = 'COALESCE(conversation_id, chat_session_id)';
 
 /** Shared empty set for a session-key lookup that does not need to be queried. */
 const NO_SESSIONS: ReadonlySet<string> = new Set();
@@ -2201,32 +2197,9 @@ export class TelemetryDatabase {
     if (this.startedSessionsCache !== undefined) {
       return this.startedSessionsCache;
     }
-    // (a) Distinct UUID chat_session_ids that carry at least one span of any kind.
-    // Keep only UUID-shaped ids (excludes tool-call ids like `toolu_bdrk_*`).
-    const chatSessionCandidates = this.allRows<{ csid: string }>(
-      `SELECT DISTINCT chat_session_id AS csid
-         FROM spans
-         WHERE chat_session_id IS NOT NULL
-           AND LENGTH(chat_session_id) = 36`,
-    )
-      .filter((r) => UUID_RE.test(r.csid))
-      .map((r) => r.csid);
-
-    // (b) Session keys whose spans carry NO chat_session_id — the autonomous
-    // Copilot CLI shape, where the conversation id is the session. Requiring an
-    // agent-run span keeps conversation-keyed chat-helper noise (NES, commit
-    // message/title generators, language-model wrappers) out.
-    const conversationOnlyCandidates = this.allRows<{ sk: string }>(
-      `SELECT ${SESSION_KEY_EXPR} AS sk
-         FROM spans
-         WHERE ${SESSION_KEY_EXPR} IS NOT NULL
-           AND LENGTH(${SESSION_KEY_EXPR}) = 36
-         GROUP BY ${SESSION_KEY_EXPR}
-         HAVING SUM(CASE WHEN chat_session_id IS NOT NULL AND chat_session_id <> '' THEN 1 ELSE 0 END) = 0
-            AND SUM(CASE WHEN operation_name IN ('invoke_agent', 'execute_tool', 'execute_hook') THEN 1 ELSE 0 END) > 0`,
-    )
-      .filter((r) => UUID_RE.test(r.sk))
-      .map((r) => r.sk);
+    type KeyRow = { session_key: string };
+    const chatSessionCandidates = this.allRows<KeyRow>(CHAT_SESSION_CANDIDATES_SQL);
+    const conversationOnlyCandidates = this.allRows<KeyRow>(CONVERSATION_ONLY_CANDIDATES_SQL);
 
     // Suggestion-only exclusion, applied per shape with its own key (grouping the
     // Copilot Chat case by the session key instead would break it, because its
@@ -2237,10 +2210,12 @@ export class TelemetryDatabase {
         ? this.suggestionOnlySessions(SESSION_KEY_EXPR)
         : NO_SESSIONS;
 
-    this.startedSessionsCache = new Set([
-      ...chatSessionCandidates.filter((id) => !suggestionOnlyByChatSession.has(id)),
-      ...conversationOnlyCandidates.filter((id) => !suggestionOnlyByKey.has(id)),
-    ]);
+    this.startedSessionsCache = startedSessionSet(
+      chatSessionCandidates,
+      conversationOnlyCandidates,
+      suggestionOnlyByChatSession,
+      suggestionOnlyByKey,
+    );
     return this.startedSessionsCache;
   }
 
@@ -2253,14 +2228,7 @@ export class TelemetryDatabase {
    */
   private suggestionOnlySessions(keyExpr: string): ReadonlySet<string> {
     return new Set(
-      this.allRows<{ sk: string }>(
-        `SELECT ${keyExpr} AS sk
-           FROM spans
-           WHERE ${keyExpr} IS NOT NULL
-             AND operation_name = 'chat'
-           GROUP BY ${keyExpr}
-           HAVING SUM(CASE WHEN COALESCE(response_model, request_model) NOT LIKE '%suggestions%' THEN 1 ELSE 0 END) = 0`,
-      ).map((r) => r.sk),
+      this.allRows<{ session_key: string }>(suggestionOnlySql(keyExpr)).map((r) => r.session_key),
     );
   }
 }

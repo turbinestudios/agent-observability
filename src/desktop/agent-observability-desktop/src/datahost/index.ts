@@ -1,11 +1,13 @@
 import type { MessagePortMain } from 'electron';
 import { Configuration } from '@agent-observability/core/src/config/configuration';
 import { ClaudeCodeService } from '@agent-observability/core/src/claude/claudeCodeService';
-import { SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
+import { TelemetryService } from '@agent-observability/core/src/telemetry/telemetryService';
+import { CopilotSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
 import type { IndexStatus, RpcEvent, RpcRequest, RpcResponse, SessionRow } from '../shared/rpc';
 import { DetailRenderer } from './detail/detailRenderer';
 import { DesktopSettingsReader } from './drivers/desktopConfig';
 import { ClaudeIndexer } from './indexer/claudeIndexer';
+import { CopilotIndexer } from './indexer/copilotIndexer';
 import { IndexDb } from './indexer/indexDb';
 
 /**
@@ -25,9 +27,13 @@ const settings = new DesktopSettingsReader();
 const config = new Configuration(settings);
 const db = new IndexDb();
 
-// The same registry abstraction the extension wires up. Only the Claude source
-// is registered so far; the others plug in here unchanged as they land.
-const sources = new SourceRegistry([new ClaudeCodeService(config)]);
+// The same registry abstraction the extension wires up. Listing comes from the
+// index; the registry serves session detail, where the per-source parsing
+// differences live. Cloud sources plug in here unchanged as they land.
+const sources = new SourceRegistry([
+  new ClaudeCodeService(config),
+  new CopilotSource(new TelemetryService(config), config),
+]);
 const detail = new DetailRenderer(sources);
 
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'idle' };
@@ -52,41 +58,66 @@ function refreshCounts(): void {
 }
 
 /**
- * Run an index pass. Rows are pushed as they are written so the list fills in
- * progressively instead of waiting for the whole sweep.
+ * Run an index pass over every source. Rows are pushed as they are written so
+ * the list fills in progressively instead of waiting for the whole sweep.
+ *
+ * A source that fails does not stop the others: a missing or locked Copilot
+ * database should never cost the user their Claude sessions.
  */
 function runIndex(): IndexStatus {
   if (indexing) {
     return status;
   }
   indexing = true;
-  status = { ...status, phase: 'discovering' };
+  status = { ...status, phase: 'discovering', message: undefined };
   emit({ event: 'index.progress', status });
 
-  try {
-    const indexer = new ClaudeIndexer({
-      db,
-      config,
-      onDiscovered: (total) => {
-        status = { ...status, total, phase: 'hydrating' };
-        emit({ event: 'index.progress', status });
-      },
-      onRows: (rows: SessionRow[]) => {
-        emit({ event: 'sessions.upserted', rows });
-        refreshCounts();
-        emit({ event: 'index.progress', status });
-      },
-    });
-    indexer.run();
+  const notes: string[] = [];
+  const onRows = (rows: SessionRow[]): void => {
+    emit({ event: 'sessions.upserted', rows });
     refreshCounts();
-    status = { ...status, phase: 'idle', message: undefined };
+    emit({ event: 'index.progress', status });
+  };
+  const onDiscovered = (total: number): void => {
+    // Sources are indexed one after another, so the total accumulates rather
+    // than being replaced — otherwise the progress bar would restart.
+    status = { ...status, total: status.total + total, phase: 'hydrating' };
+    emit({ event: 'index.progress', status });
+  };
+
+  // Start each pass from a clean total so a refresh does not double-count.
+  status = { ...status, total: 0 };
+
+  try {
+    new ClaudeIndexer({ db, config, onDiscovered, onRows }).run();
   } catch (err) {
-    status = { ...status, phase: 'error', message: err instanceof Error ? err.message : String(err) };
-  } finally {
-    indexing = false;
+    notes.push(`Claude Code: ${errorText(err)}`);
   }
+
+  try {
+    const copilot = new CopilotIndexer({ db, config, onDiscovered, onRows }).run();
+    if (copilot.skipped !== undefined) {
+      notes.push(`Copilot: ${copilot.skipped}`);
+    }
+  } catch (err) {
+    notes.push(`Copilot: ${errorText(err)}`);
+  }
+
+  refreshCounts();
+  indexing = false;
+  status = {
+    ...status,
+    phase: 'idle',
+    // Kept as an advisory note, not an error: the sources that did work are
+    // still listed, and the user should know which one did not.
+    message: notes.length === 0 ? undefined : notes.join(' · '),
+  };
   emit({ event: 'index.progress', status });
   return status;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function handle(request: RpcRequest): unknown {

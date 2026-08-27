@@ -1,7 +1,10 @@
 import type { JSX } from 'react';
+import { useThemeValue } from '../theme/ThemeContext';
+
 /**
  * The view switcher. Sessions sits first and is the app's default; everything
- * else is a secondary destination that opens on demand.
+ * else is a secondary destination that opens on demand. The theme toggle sits
+ * at the bottom, separated from the destinations above it.
  */
 
 export type ViewId = 'sessions' | 'overview' | 'hotspots' | 'assistant' | 'sync' | 'settings';
@@ -64,6 +67,7 @@ interface Props {
 }
 
 export function ActivityRail({ active, onSelect }: Props): JSX.Element {
+  const { theme, toggle } = useThemeValue();
   return (
     <nav className="rail" aria-label="Views">
       {ENTRIES.map((entry) => (
@@ -81,6 +85,28 @@ export function ActivityRail({ active, onSelect }: Props): JSX.Element {
           </svg>
         </button>
       ))}
+
+      {/* Pinned to the bottom: an appearance control, not a destination. */}
+      <button
+        type="button"
+        className="rail-button rail-button-end"
+        onClick={toggle}
+        aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          {theme === 'dark' ? (
+            // Showing a sun in dark mode: the icon is the destination, not the
+            // current state, which is what a single toggle should signal.
+            <>
+              <circle cx="12" cy="12" r="4.2" />
+              <path d="M12 1.8v3M12 19.2v3M1.8 12h3M19.2 12h3M4.8 4.8l2.1 2.1M17.1 17.1l2.1 2.1M19.2 4.8l-2.1 2.1M6.9 17.1l-2.1 2.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" fill="none" />
+            </>
+          ) : (
+            <path d="M21 13.2A9 9 0 1 1 10.8 3a7.2 7.2 0 0 0 10.2 10.2Z" />
+          )}
+        </svg>
+      </button>
     </nav>
   );
 }

@@ -1,22 +1,57 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 /**
- * Follows the OS light/dark setting, and keeps following it when it changes.
+ * The app's light/dark preference.
  *
- * The app's own styles handle this in CSS, but the embedded detail document is
- * generated ahead of time and needs to be told which palette to use.
+ * Dark is the default — this is a tool that sits open next to an editor, and
+ * most people running it are in a dark editor already. The choice is explicit
+ * rather than following the OS, because a session view that flips theme when
+ * the system switches at sunset is more disruptive than helpful.
+ *
+ * The value is applied as `data-theme` on the document element so CSS can key
+ * off it, and persisted so a restart keeps the choice. Persistence is
+ * best-effort: a browser context with storage disabled still works, it just
+ * starts dark each time.
  */
-export function useTheme(): 'light' | 'dark' {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
-    window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
-  );
+
+export type Theme = 'light' | 'dark';
+
+const STORAGE_KEY = 'agent-observability.theme';
+const DEFAULT_THEME: Theme = 'dark';
+
+function readStored(): Theme {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    return stored === 'light' || stored === 'dark' ? stored : DEFAULT_THEME;
+  } catch {
+    return DEFAULT_THEME;
+  }
+}
+
+function persist(theme: Theme): void {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, theme);
+  } catch {
+    // Storage unavailable; the theme still applies for this run.
+  }
+}
+
+/** Apply immediately at module load so the first paint is already themed. */
+export function applyStoredThemeEarly(): void {
+  document.documentElement.dataset.theme = readStored();
+}
+
+export function useTheme(): { theme: Theme; toggle: () => void } {
+  const [theme, setTheme] = useState<Theme>(readStored);
 
   useEffect(() => {
-    const query = window.matchMedia('(prefers-color-scheme: dark)');
-    const onChange = (event: MediaQueryListEvent): void => setTheme(event.matches ? 'dark' : 'light');
-    query.addEventListener('change', onChange);
-    return () => query.removeEventListener('change', onChange);
+    document.documentElement.dataset.theme = theme;
+    persist(theme);
+  }, [theme]);
+
+  const toggle = useCallback(() => {
+    setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
   }, []);
 
-  return theme;
+  return { theme, toggle };
 }

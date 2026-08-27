@@ -70,6 +70,12 @@
   background: var(--accent);
 }
 
+/* Pushes the theme toggle to the bottom, away from the destinations. */
+.rail-button-end {
+  margin-top: auto;
+  margin-bottom: 8px;
+}
+
 /* --- placeholder --------------------------------------------------------- */
 
 .placeholder {

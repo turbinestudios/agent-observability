@@ -342,6 +342,52 @@ export class IndexDb {
     return gone.map((id) => `${source}:${id}`);
   }
 
+  /** A session's cached title plus the fingerprint of the file it came from. */
+  getTitle(sessionId: string): { title?: string; derived: boolean; srcPath: string; srcMtimeMs: number } | undefined {
+    const row = this.db.prepare('SELECT * FROM titles WHERE session_id = ?').get(sessionId) as
+      | { title: string | null; derived: number; src_path: string; src_mtime_ms: number }
+      | undefined;
+    if (row === undefined) {
+      return undefined;
+    }
+    return {
+      title: row.title ?? undefined,
+      derived: row.derived === 1,
+      srcPath: row.src_path,
+      srcMtimeMs: row.src_mtime_ms,
+    };
+  }
+
+  /**
+   * Record a title and the fingerprint it came from. A file with no readable
+   * title is still recorded, so it is not re-read on every pass.
+   */
+  putTitle(
+    sessionId: string,
+    title: string | undefined,
+    derived: boolean,
+    srcPath: string,
+    srcMtimeMs: number,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO titles (session_id, title, derived, src_path, src_mtime_ms)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           title = excluded.title, derived = excluded.derived,
+           src_path = excluded.src_path, src_mtime_ms = excluded.src_mtime_ms`,
+      )
+      .run(sessionId, title ?? null, derived ? 1 : 0, srcPath, srcMtimeMs);
+  }
+
+  /** Every known title, for joining onto a batch of sessions. */
+  allTitles(): Map<string, { title: string; derived: boolean }> {
+    const rows = this.db
+      .prepare(`SELECT session_id, title, derived FROM titles WHERE title IS NOT NULL AND title <> ''`)
+      .all() as { session_id: string; title: string; derived: number }[];
+    return new Map(rows.map((r) => [r.session_id, { title: r.title, derived: r.derived === 1 }]));
+  }
+
   getCachedRepository(cwd: string): string | undefined {
     const row = this.db.prepare('SELECT repository FROM repo_cache WHERE cwd = ?').get(cwd) as
       | { repository: string }

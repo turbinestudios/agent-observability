@@ -2,7 +2,7 @@ import type { JSX } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
 import type { SessionRow } from '../../../../shared/rpc';
-import { useTheme } from '../../theme/useTheme';
+import { useThemeValue } from '../../theme/ThemeContext';
 
 /**
  * Renders a session using the shared detail renderer, inside a sandboxed iframe.
@@ -20,7 +20,7 @@ interface Props {
 }
 
 export function SessionDetail({ row }: Props): JSX.Element {
-  const theme = useTheme();
+  const { theme } = useThemeValue();
   const [html, setHtml] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
