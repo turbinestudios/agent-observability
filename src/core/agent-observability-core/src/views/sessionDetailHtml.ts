@@ -114,6 +114,12 @@ function formatInt(value: number): string {
  * - The document declares a strict Content-Security-Policy: `default-src 'none'`,
  *   styles and scripts allowed only via the supplied nonce, no external/CDN
  *   resources. Scripts are limited to the inline legend-filter interaction.
+ *
+ * `extraHeadHtml` is injected verbatim before `</head>`, for host-supplied
+ * `<style>`/`<script>` tags carrying the same nonce — the desktop app uses it to
+ * define the `--vscode-*` variables this document's CSS reads and to shim
+ * `acquireVsCodeApi` outside VS Code. It is HOST-AUTHORED markup and is NOT
+ * escaped, so never pass session content or any other untrusted value through it.
  */
 export function renderSessionDetailHtml(
   detail: SessionDetail,
@@ -121,6 +127,7 @@ export function renderSessionDetailHtml(
   nonce: string,
   contextAnalysis?: SessionContextAnalysis,
   costMode: CostMode = 'aiu',
+  extraHeadHtml = '',
 ): string {
   const { summary } = detail;
   const csp = [
@@ -143,6 +150,7 @@ export function renderSessionDetailHtml(
       : `Session ${shortId(summary.sessionId)}`,
   )}</title>
   <style nonce="${nonce}">${STYLE}</style>
+  ${extraHeadHtml}
 </head>
 <body>
   <div id="live-root">${renderSessionDetailContent(detail, turnDeviations, contextAnalysis, costMode)}</div>

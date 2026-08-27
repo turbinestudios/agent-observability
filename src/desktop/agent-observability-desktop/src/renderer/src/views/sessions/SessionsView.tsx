@@ -4,6 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { SessionRow } from '../../../../shared/rpc';
 import { sessionKey } from '../../../../shared/rpc';
 import { useSessions } from './useSessions';
+import { SessionDetail } from './SessionDetail';
 import { formatDuration, formatRelative, formatTokens, sourceLabel } from './format';
 import './sessions.css';
 
@@ -95,7 +96,7 @@ export function SessionsView(): JSX.Element {
             </div>
           </div>
         ) : (
-          <SessionStub row={selectedRow} />
+          <SessionDetail key={`${selectedRow.source}:${selectedRow.sessionId}`} row={selectedRow} />
         )}
       </section>
     </>
@@ -189,38 +190,3 @@ function SessionRowItem({
   );
 }
 
-/**
- * Interim detail pane. The shared HTML renderer gets wired in at the detail
- * milestone; until then this shows the indexed facts so selection is useful.
- */
-function SessionStub({ row }: { row: SessionRow }): JSX.Element {
-  const fields: [string, string][] = [
-    ['Repository', row.repository],
-    ['Source', sourceLabel(row.source)],
-    ['Model', row.model],
-    ['Steps', row.interactionCount.toLocaleString()],
-    ['LLM calls', row.llmCalls.toLocaleString()],
-    ['Tool calls', row.toolCalls.toLocaleString()],
-    ['Input tokens', row.inputTokens.toLocaleString()],
-    ['Output tokens', row.outputTokens.toLocaleString()],
-    ['Cached tokens', row.cachedTokens.toLocaleString()],
-    ['Duration', formatDuration(row.durationMs)],
-  ];
-  return (
-    <div className="detail-stub">
-      <h1>{row.title ?? row.sessionId}</h1>
-      <p className="detail-sub">{row.sessionId}</p>
-      <dl>
-        {fields.map(([label, value]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="detail-note">
-        Full turn-by-turn detail arrives with the shared session renderer in the next milestone.
-      </p>
-    </div>
-  );
-}

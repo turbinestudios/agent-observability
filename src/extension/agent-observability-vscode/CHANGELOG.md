@@ -4,6 +4,16 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.13] - 2026-08-27
+
+### Changed
+
+- The session-detail renderer takes an optional `extraHeadHtml` argument, so a
+  host can inject nonce-tagged markup into the document head. The extension
+  passes nothing and renders exactly as before; the desktop app uses it to
+  supply the theme variables the document's CSS reads. Shared code, one
+  renderer, no fork.
+
 ## [0.9.12] - 2026-08-27
 
 ### Changed

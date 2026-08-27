@@ -69,12 +69,21 @@ export interface IndexStatus {
   message?: string;
 }
 
+/** Which palette the detail document should render with. */
+export type DetailTheme = 'light' | 'dark';
+
 /** Request/response methods. Every one resolves off the UI thread. */
 export interface RpcMethods {
   ping(payload: string): string;
   'sessions.list'(params: ListSessionsParams): SessionRow[];
   'sessions.groups'(): SessionGroup[];
   'sessions.count'(params: ListSessionsParams): number;
+  /**
+   * The full detail document for a session, ready to drop into an iframe.
+   * Rendering happens here rather than in the renderer because it means parsing
+   * a whole transcript.
+   */
+  'sessions.detail'(source: string, sessionId: string, theme: DetailTheme): string;
   'index.status'(): IndexStatus;
   'index.refresh'(): IndexStatus;
   /** Drop and rebuild the index from scratch — the recovery path. */

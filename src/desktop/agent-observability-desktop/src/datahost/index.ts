@@ -1,6 +1,9 @@
 import type { MessagePortMain } from 'electron';
 import { Configuration } from '@agent-observability/core/src/config/configuration';
+import { ClaudeCodeService } from '@agent-observability/core/src/claude/claudeCodeService';
+import { SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
 import type { IndexStatus, RpcEvent, RpcRequest, RpcResponse, SessionRow } from '../shared/rpc';
+import { DetailRenderer } from './detail/detailRenderer';
 import { DesktopSettingsReader } from './drivers/desktopConfig';
 import { ClaudeIndexer } from './indexer/claudeIndexer';
 import { IndexDb } from './indexer/indexDb';
@@ -21,6 +24,11 @@ import { IndexDb } from './indexer/indexDb';
 const settings = new DesktopSettingsReader();
 const config = new Configuration(settings);
 const db = new IndexDb();
+
+// The same registry abstraction the extension wires up. Only the Claude source
+// is registered so far; the others plug in here unchanged as they land.
+const sources = new SourceRegistry([new ClaudeCodeService(config)]);
+const detail = new DetailRenderer(sources);
 
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'idle' };
 let indexing = false;
@@ -91,6 +99,13 @@ function handle(request: RpcRequest): unknown {
       return db.listGroups();
     case 'sessions.count':
       return db.countSessions(request.params[0]);
+    case 'sessions.detail': {
+      const [source, sessionId, theme] = request.params;
+      // The indexed timestamp doubles as the cache key: it moves whenever the
+      // indexer rewrites the row, which is exactly when a re-parse is needed.
+      const row = db.getRow(source, sessionId);
+      return detail.renderDocument(source, sessionId, theme, row?.indexedAtMs ?? 0);
+    }
     case 'index.status':
       refreshCounts();
       return status;

@@ -204,6 +204,17 @@
   background: var(--bg);
 }
 
+/*
+ * The detail document brings its own styles and scrolling, so the frame just
+ * fills the pane. No border: it should read as part of the app, not an embed.
+ */
+.detail-frame {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: var(--bg);
+}
+
 .detail-stub {
   padding: 24px 28px;
   max-width: 720px;
