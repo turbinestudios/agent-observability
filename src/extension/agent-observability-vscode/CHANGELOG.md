@@ -4,6 +4,19 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.15] - 2026-08-27
+
+### Added
+
+- **The session detail header now shows which repository the session ran
+  against**, linked so it opens on GitHub. Sessions whose remote could not be
+  resolved simply omit the row rather than displaying "unknown", and a remote
+  that is not a web URL — an ssh remote, a local path — is shown as plain text
+  instead of a link that would go nowhere.
+- Cloud agent sessions that carry a run URL now show an **Open on GitHub** link
+  in the same header. The field already existed on the model but was never
+  rendered.
+
 ## [0.9.14] - 2026-08-27
 
 ### Changed

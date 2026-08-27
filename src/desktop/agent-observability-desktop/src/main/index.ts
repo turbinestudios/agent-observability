@@ -15,6 +15,12 @@ import type { UtilityProcess } from 'electron';
 let mainWindow: BrowserWindow | undefined;
 let dataHost: UtilityProcess | undefined;
 
+/** Window backgrounds matching the renderer's `--bg` token per theme. */
+const BACKGROUND: Record<'dark' | 'light', string> = {
+  dark: '#16171a',
+  light: '#ffffff',
+};
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -22,7 +28,8 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 600,
     show: false,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#16171a' : '#ffffff',
+    title: `Agent Observability ${app.getVersion()}`,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? BACKGROUND.dark : BACKGROUND.light,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -92,8 +99,24 @@ function connectRendererToDataHost(): void {
 }
 
 app.whenReady().then(() => {
+  // The app defaults to dark; setting themeSource before the window exists
+  // makes the OS draw the title bar, menu bar, and system dialogs dark from
+  // the first frame instead of flashing light chrome around a dark page. The
+  // renderer re-asserts the stored choice once it mounts (theme:set below).
+  nativeTheme.themeSource = 'dark';
+
   startDataHost();
   createWindow();
+
+  // The renderer owns the theme choice (persisted on its side); main mirrors
+  // it into the window chrome. Values are constrained to the two we ship.
+  ipcMain.on('theme:set', (_event, theme: unknown) => {
+    if (theme !== 'dark' && theme !== 'light') {
+      return;
+    }
+    nativeTheme.themeSource = theme;
+    mainWindow?.setBackgroundColor(BACKGROUND[theme]);
+  });
 
   // The renderer asks for its port once its listener is installed, so the
   // handshake cannot race a slow first paint.

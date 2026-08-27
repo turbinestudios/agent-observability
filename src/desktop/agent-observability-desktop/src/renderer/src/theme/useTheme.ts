@@ -47,6 +47,9 @@ export function useTheme(): { theme: Theme; toggle: () => void } {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     persist(theme);
+    // Keep the native chrome (title bar, menu bar, system dialogs) in step —
+    // a dark page under a light title bar reads as a glitch, not a theme.
+    window.desktop?.setNativeTheme(theme);
   }, [theme]);
 
   const toggle = useCallback(() => {

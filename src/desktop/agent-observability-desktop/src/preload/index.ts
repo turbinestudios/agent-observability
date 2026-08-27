@@ -58,6 +58,11 @@ const api = {
   getVersion(): Promise<string> {
     return ipcRenderer.invoke('app:get-version');
   },
+
+  /** Mirror the app's theme into the native window chrome (title bar, menus). */
+  setNativeTheme(theme: 'dark' | 'light'): void {
+    ipcRenderer.send('theme:set', theme);
+  },
 };
 
 export type DesktopApi = typeof api;

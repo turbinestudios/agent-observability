@@ -31,6 +31,7 @@ declare global {
       openPath(path: string): Promise<string>;
       showItem(path: string): Promise<void>;
       getVersion(): Promise<string>;
+      setNativeTheme(theme: 'dark' | 'light'): void;
     };
   }
 }

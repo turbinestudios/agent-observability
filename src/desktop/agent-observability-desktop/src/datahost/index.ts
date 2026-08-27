@@ -3,12 +3,24 @@ import { Configuration } from '@agent-observability/core/src/config/configuratio
 import { ClaudeCodeService } from '@agent-observability/core/src/claude/claudeCodeService';
 import { TelemetryService } from '@agent-observability/core/src/telemetry/telemetryService';
 import { CopilotSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
-import type { IndexStatus, RpcEvent, RpcRequest, RpcResponse, SessionRow } from '../shared/rpc';
+import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
+import type {
+  ContextAction,
+  IndexStatus,
+  ListSessionsParams,
+  RpcEvent,
+  RpcRequest,
+  RpcResponse,
+  SessionRow,
+} from '../shared/rpc';
+import { sessionKey } from '../shared/rpc';
 import { DetailRenderer } from './detail/detailRenderer';
+import type { DetailContext } from './detail/detailRenderer';
 import { DesktopSettingsReader } from './drivers/desktopConfig';
 import { ClaudeIndexer } from './indexer/claudeIndexer';
 import { CopilotIndexer } from './indexer/copilotIndexer';
 import { IndexDb } from './indexer/indexDb';
+import { RenameStore } from './renames';
 
 /**
  * The data host: a utilityProcess that owns every expensive operation.
@@ -35,6 +47,10 @@ const sources = new SourceRegistry([
   new CopilotSource(new TelemetryService(config), config),
 ]);
 const detail = new DetailRenderer(sources);
+const renames = new RenameStore();
+
+/** How far back the overview charts look. */
+const OVERVIEW_WINDOW_DAYS = 30;
 
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'idle' };
 let indexing = false;
@@ -120,23 +136,124 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Settings keys shared with the extension, so both honour the same accepts. */
+const ACCEPTED_FILES_KEY = 'context.acceptedMissingFiles';
+const ACCEPTED_SOURCES_KEY = 'context.acceptedMissingSources';
+
+function acceptedMissing(): AcceptedMissingConfig {
+  return {
+    files: settings.get<string[]>(ACCEPTED_FILES_KEY, []),
+    sources: settings.get<string[]>(ACCEPTED_SOURCES_KEY, []),
+  };
+}
+
+function detailContext(source: string, sessionId: string): DetailContext {
+  return { acceptedMissing: acceptedMissing(), renamedTitle: renames.get(source, sessionId) };
+}
+
+/**
+ * Remember a context gap the user has accepted, so the analysis stops flagging
+ * it. Appends rather than replaces, and ignores a duplicate.
+ */
+function applyContextAction(action: ContextAction): void {
+  const key = action.kind === 'accept-file' ? ACCEPTED_FILES_KEY : ACCEPTED_SOURCES_KEY;
+  const current = settings.get<string[]>(key, []);
+  if (current.includes(action.value)) {
+    return;
+  }
+  settings.update({ [key]: [...current, action.value] });
+}
+
+/**
+ * List sessions, with user-chosen names layered on.
+ *
+ * A text search runs in SQL over the ORIGINAL titles, so a session found only
+ * by its new name has to be unioned in separately — otherwise renaming a
+ * session would make it unsearchable by the name the user just gave it.
+ */
+function listSessions(params: ListSessionsParams): SessionRow[] {
+  const rows = db.listSessions(params);
+  const query = params.query?.trim() ?? '';
+  if (query.length === 0) {
+    return renames.apply(rows);
+  }
+
+  const seen = new Set(rows.map((r) => sessionKey(r.source, r.sessionId)));
+  const extraKeys = renames.matchingKeys(query).filter((key) => !seen.has(key));
+  const extra = db.getRowsByKey(extraKeys).filter((row) => {
+    // The union must still respect an active source filter.
+    if (params.source !== undefined && row.source !== params.source) {
+      return false;
+    }
+    return params.repository === undefined || row.repository === params.repository;
+  });
+
+  return renames
+    .apply([...rows, ...extra])
+    .sort((a, b) => b.endedAtMs - a.endedAtMs || (a.sessionId < b.sessionId ? 1 : -1));
+}
+
+/** The indexed timestamp doubles as the detail cache key. */
+function stampOf(source: string, sessionId: string): number {
+  return db.getRow(source, sessionId)?.indexedAtMs ?? 0;
+}
+
 function handle(request: RpcRequest): unknown {
   switch (request.method) {
     case 'ping':
       return request.params[0];
     case 'sessions.list':
-      return db.listSessions(request.params[0]);
+      return listSessions(request.params[0]);
     case 'sessions.groups':
       return db.listGroups();
     case 'sessions.count':
       return db.countSessions(request.params[0]);
     case 'sessions.detail': {
       const [source, sessionId, theme] = request.params;
-      // The indexed timestamp doubles as the cache key: it moves whenever the
-      // indexer rewrites the row, which is exactly when a re-parse is needed.
-      const row = db.getRow(source, sessionId);
-      return detail.renderDocument(source, sessionId, theme, row?.indexedAtMs ?? 0);
+      return detail.renderDocument(
+        source,
+        sessionId,
+        theme,
+        stampOf(source, sessionId),
+        detailContext(source, sessionId),
+      );
     }
+    case 'sessions.detailBody': {
+      const [source, sessionId] = request.params;
+      return detail.renderBody(
+        source,
+        sessionId,
+        stampOf(source, sessionId),
+        detailContext(source, sessionId),
+      );
+    }
+    case 'sessions.contextAction': {
+      const [source, sessionId, action] = request.params;
+      applyContextAction(action);
+      // The accepted lists are part of the analysis cache key, so this rebuilds
+      // rather than returning the stale breakdown.
+      return detail.renderBody(
+        source,
+        sessionId,
+        stampOf(source, sessionId),
+        detailContext(source, sessionId),
+      );
+    }
+    case 'sessions.rename': {
+      const [source, sessionId, title] = request.params;
+      renames.set(source, sessionId, title);
+      // The cached document carries the old name in its header.
+      detail.invalidate(source, sessionId);
+      const row = db.getRow(source, sessionId);
+      if (row === undefined) {
+        return undefined;
+      }
+      const [patched] = renames.apply([row]);
+      emit({ event: 'sessions.upserted', rows: [patched] });
+      return patched;
+    }
+    case 'overview.get':
+      return db.overview(OVERVIEW_WINDOW_DAYS);
     case 'index.status':
       refreshCounts();
       return status;

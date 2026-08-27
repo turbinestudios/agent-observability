@@ -1,0 +1,301 @@
+/*
+ * Overview.
+ *
+ * The series colors are the validated categorical slots, stepped per mode
+ * against this app's card surface (light #f6f7f9, dark #1e2024) rather than
+ * flipped automatically. Dark is the default and lives on bare :root, matching
+ * how the rest of the app is themed.
+ *
+ * On the light surface three of the four slots sit below 3:1 contrast, so
+ * identity never rests on color alone: every chart carries a legend, the
+ * repository bars are labelled directly, and the by-source table repeats the
+ * same numbers as text.
+ */
+
+:root {
+  --series-1: #3987e5; /* blue   — Claude Code */
+  --series-2: #d95926; /* orange — Copilot */
+  --series-3: #199e70; /* aqua   — input tokens */
+  --series-4: #c98500; /* yellow — output tokens */
+  --chart-grid: #2c2c2a;
+  --chart-axis: #383835;
+}
+
+:root[data-theme='light'] {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --chart-grid: #e1e0d9;
+  --chart-axis: #c3c2b7;
+}
+
+.overview {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 22px 26px 32px;
+}
+
+.overview-header h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.overview-header p {
+  margin: 4px 0 20px;
+  max-width: 62ch;
+  color: var(--fg-muted);
+}
+
+/* --- stat tiles ------------------------------------------------------------ */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.tile-value {
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.tile-label {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* --- cards ----------------------------------------------------------------- */
+
+.card {
+  margin-bottom: 14px;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.card-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.overview-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.overview-split .card {
+  margin-bottom: 0;
+}
+
+/* --- charts ---------------------------------------------------------------- */
+
+.chart-wrap {
+  position: relative;
+}
+
+.chart {
+  display: block;
+  width: 100%;
+  height: 150px;
+  overflow: visible;
+}
+
+.chart-baseline {
+  stroke: var(--chart-axis);
+  stroke-width: 1;
+}
+
+.chart-zero {
+  fill: var(--chart-grid);
+}
+
+.chart-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-empty {
+  margin: 0;
+  padding: 26px 0;
+  text-align: center;
+  color: var(--fg-subtle);
+  font-size: 12px;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+  flex: none;
+}
+
+/* --- tooltip --------------------------------------------------------------- */
+
+.chart-tooltip {
+  position: fixed;
+  z-index: 20;
+  min-width: 150px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 28%);
+  font-size: 11px;
+  /* The tooltip trails the cursor; catching pointer events would flicker it. */
+  pointer-events: none;
+}
+
+.tooltip-title {
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tooltip-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.tooltip-label {
+  flex: 1;
+  color: var(--fg-muted);
+}
+
+.tooltip-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- horizontal bars ------------------------------------------------------- */
+
+.hbars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.hbars li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.hbar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hbar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+
+.hbar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+}
+
+.hbar-value {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- by-source table ------------------------------------------------------- */
+
+.source-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.source-table th,
+.source-table td {
+  padding: 5px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-weight: 400;
+}
+
+.source-table thead th {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-subtle);
+}
+
+.source-table tbody th {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.source-table .n {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.source-table tbody tr:last-child th,
+.source-table tbody tr:last-child td {
+  border-bottom: none;
+}

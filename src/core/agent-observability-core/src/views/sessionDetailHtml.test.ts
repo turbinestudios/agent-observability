@@ -159,13 +159,13 @@ describe('renderSessionDetailHtml — local-only badge', () => {
     expect(html).not.toContain('Est. cost');
   });
 
-  it('keeps the header to start / end / duration only', () => {
+  it('keeps the header to where and when the session ran', () => {
     const html = renderSessionDetailHtml(detail, [], NONCE);
+    expect(html).toContain('<dt>Repository</dt>');
     expect(html).toContain('<dt>Started</dt>');
     expect(html).toContain('<dt>Ended</dt>');
     expect(html).toContain('<dt>Duration</dt>');
-    // The richer per-thread fields have moved out of the header.
-    expect(html).not.toContain('<dt>Repository</dt>');
+    // The per-thread counts belong to the tables below, not the header.
     expect(html).not.toContain('<dt>Interactions</dt>');
     expect(html).not.toContain('<dt>Tokens in / out</dt>');
   });

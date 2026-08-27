@@ -47,6 +47,124 @@
   background: var(--hover);
 }
 
+/* --- source filter --------------------------------------------------------- */
+
+.source-filter {
+  display: flex;
+  gap: 4px;
+  padding: 0 10px 9px;
+  border-bottom: 1px solid var(--border);
+}
+
+.filter-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filter-chip:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.filter-chip[aria-pressed='true'] {
+  background: var(--selection);
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.filter-count {
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.filter-chip[aria-pressed='true'] .filter-count {
+  color: var(--accent);
+}
+
+/* --- rename ---------------------------------------------------------------- */
+
+.session-row-renaming {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--selection);
+}
+
+.rename-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 7px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.rename-input:focus-visible {
+  outline: none;
+}
+
+.rename-reset {
+  flex: none;
+  padding: 3px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.rename-reset:hover {
+  background: var(--hover);
+}
+
+/* A rename button on every row would be noise; it appears on the active one. */
+.row-rename {
+  flex: none;
+  display: none;
+  place-items: center;
+  padding: 2px;
+  border-radius: 3px;
+  color: var(--fg-subtle);
+}
+
+.session-row:hover .row-rename,
+.session-row[aria-current='true'] .row-rename {
+  display: grid;
+}
+
+.row-rename:hover {
+  background: var(--bg-sunken);
+  color: var(--fg);
+}
+
+/* Marks a user-chosen name, so a renamed session is not mistaken for its own. */
+.renamed-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 /* --- index status ---------------------------------------------------------- */
 
 .status-bar {

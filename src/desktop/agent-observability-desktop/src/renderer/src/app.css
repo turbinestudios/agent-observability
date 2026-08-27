@@ -73,7 +73,14 @@
 /* Pushes the theme toggle to the bottom, away from the destinations. */
 .rail-button-end {
   margin-top: auto;
-  margin-bottom: 8px;
+}
+
+.rail-version {
+  padding-bottom: 8px;
+  font-size: 9px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
 }
 
 /* --- placeholder --------------------------------------------------------- */

@@ -281,10 +281,17 @@ export class SessionDetailPanelManager {
   private registerMessageHandler(panel: vscode.WebviewPanel, sourceId: string, sessionKey: string): void {
     panel.webview.onDidReceiveMessage(async (msg: unknown) => {
       if (typeof msg !== 'object' || msg === null) return;
-      const message = msg as { type?: string; file?: string; source?: string; path?: string };
+      const message = msg as { type?: string; file?: string; source?: string; path?: string; url?: string };
       const config = vscode.workspace.getConfiguration('agentObservability.context');
 
-      if (message.type === 'open-context-file' && typeof message.path === 'string') {
+      if (message.type === 'open-external-url' && typeof message.url === 'string') {
+        // Web links only. The markup already restricts this, but the check is
+        // repeated here because the host must not trust webview input to send
+        // an arbitrary scheme to the OS handler.
+        if (/^https?:\/\//i.test(message.url)) {
+          await vscode.env.openExternal(vscode.Uri.parse(message.url));
+        }
+      } else if (message.type === 'open-context-file' && typeof message.path === 'string') {
         try {
           const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(message.path));
           await vscode.window.showTextDocument(doc, { preview: true });

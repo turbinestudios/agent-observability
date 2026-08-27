@@ -473,10 +473,14 @@ function renderSessionSection(
 
 /**
  * Sanitized session header: the session's name (same LOCAL-ONLY title the
- * Sessions list shows, falling back to the short id when no title is known)
- * and WHEN it ran (start / end / duration). The richer per-thread breakdown
- * (models, counts, tokens, cost) lives in the "By model" table and "Agent run
- * totals" card below, so the header stays a thin temporal overview.
+ * Sessions list shows, falling back to the short id when no title is known),
+ * WHICH repository it ran against, and WHEN it ran (start / end / duration).
+ * The richer per-thread breakdown (models, counts, tokens, cost) lives in the
+ * "By model" table and "Agent run totals" card below, so the header stays a
+ * thin overview.
+ *
+ * The repository is omitted rather than shown as "unknown": a session whose
+ * remote could not be resolved is common and saying so adds nothing.
  */
 function renderHeader(detail: SessionDetail): string {
   const s = detail.summary;
@@ -484,15 +488,43 @@ function renderHeader(detail: SessionDetail): string {
   // When titled, the id moves up into the eyebrow so it stays discoverable.
   const eyebrow = title !== undefined ? `Session · ${shortId(s.sessionId)}` : 'Session';
   const heading = title !== undefined ? truncate(title, 80) : shortId(s.sessionId);
+
+  const hasRepo = s.repository !== undefined && s.repository !== UNKNOWN_REPOSITORY && s.repository.length > 0;
+  const repoRow = hasRepo
+    ? `<div><dt>Repository</dt><dd>${renderExternalLink(s.repository, repoShortName(s.repository))}</dd></div>`
+    : '';
+  const externalRow =
+    s.externalUrl !== undefined && s.externalUrl.length > 0
+      ? `<div><dt>Agent run</dt><dd>${renderExternalLink(s.externalUrl, 'Open on GitHub ↗')}</dd></div>`
+      : '';
+
   return `<header class="header">
     <p class="eyebrow">${escapeHtml(eyebrow)}</p>
     <h1>${escapeHtml(heading)}</h1>
     <dl class="meta">
+      ${repoRow}
       <div><dt>Started</dt><dd>${escapeHtml(formatLocal(s.startedAtMs))}</dd></div>
       <div><dt>Ended</dt><dd>${escapeHtml(formatLocal(s.endedAtMs))}</dd></div>
       <div><dt>Duration</dt><dd>${escapeHtml(formatDuration(s.durationMs))}</dd></div>
+      ${externalRow}
     </dl>
   </header>`;
+}
+
+/**
+ * A value that opens in the user's browser when it is a web URL, and is plain
+ * text otherwise.
+ *
+ * Only http(s) becomes a link: a repository can also be an ssh remote or a
+ * local path, and handing either to a URL opener does nothing useful. The host
+ * receives the click as a message and decides whether to honour it, so this
+ * markup alone cannot navigate anywhere.
+ */
+function renderExternalLink(url: string, label: string): string {
+  if (!/^https?:\/\//i.test(url)) {
+    return `<span title="${escapeHtml(url)}">${escapeHtml(label)}</span>`;
+  }
+  return `<a class="repo-link" data-url="${escapeHtml(url)}" title="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
 }
 
 /**
@@ -1818,6 +1850,8 @@ const STYLE = `
   .ctx-warn { cursor: help; }
   .ctx-skip-reason { font-size: .75rem; }
   .ctx-file-link { color: var(--vscode-textLink-foreground, #4e94ce); text-decoration: none; }
+  .repo-link { color: var(--vscode-textLink-foreground, #4e94ce); text-decoration: none; cursor: pointer; }
+  .repo-link:hover { color: var(--vscode-textLink-activeForeground, #6cb6ff); text-decoration: underline; }
   .ctx-file-link:hover { color: var(--vscode-textLink-activeForeground, #4e94ce); text-decoration: underline; }
   .ctx-ref-type { font-size: .72rem; font-family: var(--vscode-editor-font-family, monospace); }
   .ctx-missing-section p { font-size: .8rem; margin: .2rem 0 .4rem; }
@@ -2166,7 +2200,22 @@ const WEBVIEW_CONTROLLER = `
   });
   }
 
-  function initAll() { initTrend(); initTabs(); initAcceptMissing(); initCtxFileLinks(); }
+  // ── External links (header repository / agent run) ───────────────────────────
+  // Opened in the user's browser by the host; a webview cannot navigate itself,
+  // and the host re-checks the scheme before honouring it.
+  function initExternalLinks() {
+  (root || document).querySelectorAll('.repo-link').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+      e.preventDefault();
+      var url = el.getAttribute('data-url');
+      if (url) {
+        vscode.postMessage({ type: 'open-external-url', url: url });
+      }
+    });
+  });
+  }
+
+  function initAll() { initTrend(); initTabs(); initAcceptMissing(); initCtxFileLinks(); initExternalLinks(); }
 
   // ── Volatile UI state, preserved across a content swap ───────────────────────
   // Snapshot which collapsibles are open (by their stable data-k) and the active

@@ -1,6 +1,8 @@
 import * as crypto from 'node:crypto';
 import { renderSessionDetailHtml, renderSessionDetailContent } from '@agent-observability/core/src/views/sessionDetailHtml';
 import type { SessionDataSource } from '@agent-observability/core/src/sources/sessionSource';
+import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
+import type { SessionContextAnalysis } from '@agent-observability/core/src/context/models';
 import type { CostMode, SessionDetail } from '@agent-observability/core/src/telemetry/models';
 import { detailHeadHtml } from './theme';
 
@@ -14,14 +16,26 @@ import { detailHeadHtml } from './theme';
  *  - the BODY only for a refresh, which the document's own controller swaps in
  *    place, preserving scroll position, the active tab, and open sections.
  *
- * Parsing a detail is expensive (it reads whole transcripts), so results are
- * memoized until the session's indexed timestamp moves.
+ * Both the parse and the context analysis are expensive — the Claude path reads
+ * every subagent transcript and walks the `.claude` hierarchy on disk — so a
+ * session's work is memoized until its indexed timestamp moves.
  */
 
 export type DetailTheme = 'light' | 'dark';
 
+/** What the host must supply per render, resolved fresh each time. */
+export interface DetailContext {
+  /** Files and sources the user has accepted as legitimately missing. */
+  acceptedMissing: AcceptedMissingConfig;
+  /** The user's name for this session, when they have set one. */
+  renamedTitle?: string;
+}
+
 interface CacheEntry {
   detail: SessionDetail;
+  context: SessionContextAnalysis | undefined;
+  /** The accepted-missing lists the analysis was computed against. */
+  acceptedKey: string;
   stamp: number;
 }
 
@@ -31,14 +45,20 @@ export class DetailRenderer {
   constructor(private readonly sources: { get(id: string): SessionDataSource | undefined }) {}
 
   /** The full document, for a first open or a theme change. */
-  renderDocument(source: string, sessionId: string, theme: DetailTheme, stamp: number): string {
-    const detail = this.load(source, sessionId, stamp);
+  renderDocument(
+    source: string,
+    sessionId: string,
+    theme: DetailTheme,
+    stamp: number,
+    context: DetailContext,
+  ): string {
+    const entry = this.load(source, sessionId, stamp, context);
     const nonce = makeNonce();
     return renderSessionDetailHtml(
-      detail,
-      noDeviations(detail),
+      withTitle(entry.detail, context.renamedTitle),
+      noDeviations(entry.detail),
       nonce,
-      undefined,
+      entry.context,
       this.costMode(source),
       // Host-authored only — never interpolate session content here.
       detailHeadHtml(nonce, theme),
@@ -46,9 +66,14 @@ export class DetailRenderer {
   }
 
   /** Body-only markup, for pushing an update into an already-open document. */
-  renderBody(source: string, sessionId: string, stamp: number): string {
-    const detail = this.load(source, sessionId, stamp);
-    return renderSessionDetailContent(detail, noDeviations(detail), undefined, this.costMode(source));
+  renderBody(source: string, sessionId: string, stamp: number, context: DetailContext): string {
+    const entry = this.load(source, sessionId, stamp, context);
+    return renderSessionDetailContent(
+      withTitle(entry.detail, context.renamedTitle),
+      noDeviations(entry.detail),
+      entry.context,
+      this.costMode(source),
+    );
   }
 
   /** Drop a session's memoized parse, e.g. when its transcript changed. */
@@ -60,12 +85,21 @@ export class DetailRenderer {
     return this.sources.get(source)?.costMode ?? 'aiu';
   }
 
-  private load(source: string, sessionId: string, stamp: number): SessionDetail {
+  private load(
+    source: string,
+    sessionId: string,
+    stamp: number,
+    context: DetailContext,
+  ): CacheEntry {
     const key = `${source}:${sessionId}`;
+    const acceptedKey = acceptedFingerprint(context.acceptedMissing);
     const cached = this.cache.get(key);
-    if (cached !== undefined && cached.stamp === stamp) {
-      return cached.detail;
+    // Accepting a missing file changes what the analysis should report, so the
+    // accepted lists are part of the cache key rather than just the timestamp.
+    if (cached !== undefined && cached.stamp === stamp && cached.acceptedKey === acceptedKey) {
+      return cached;
     }
+
     const dataSource = this.sources.get(source);
     if (dataSource === undefined) {
       throw new Error(`No source registered for "${source}"`);
@@ -74,9 +108,36 @@ export class DetailRenderer {
     if (!result.ok) {
       throw new Error(result.message);
     }
-    this.cache.set(key, { detail: result.value, stamp });
-    return result.value;
+
+    // Optional per source, and allowed to fail: a session is still worth
+    // showing without its context breakdown, so a failure here hides the tab
+    // rather than the whole document.
+    let analysis: SessionContextAnalysis | undefined;
+    try {
+      analysis = dataSource.getContextAnalysis?.(sessionId, context.acceptedMissing);
+    } catch {
+      analysis = undefined;
+    }
+
+    const entry: CacheEntry = { detail: result.value, context: analysis, acceptedKey, stamp };
+    this.cache.set(key, entry);
+    return entry;
   }
+}
+
+/** Apply the user's chosen name without mutating the cached parse. */
+function withTitle(detail: SessionDetail, renamedTitle: string | undefined): SessionDetail {
+  if (renamedTitle === undefined) {
+    return detail;
+  }
+  return {
+    ...detail,
+    summary: { ...detail.summary, title: renamedTitle, titleDerived: false },
+  };
+}
+
+function acceptedFingerprint(accepted: AcceptedMissingConfig): string {
+  return `${[...accepted.files].sort().join('|')}##${[...accepted.sources].sort().join('|')}`;
 }
 
 /**

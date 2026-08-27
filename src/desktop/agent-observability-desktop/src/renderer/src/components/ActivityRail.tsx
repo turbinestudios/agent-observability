@@ -1,4 +1,5 @@
 import type { JSX } from 'react';
+import { useEffect, useState } from 'react';
 import { useThemeValue } from '../theme/ThemeContext';
 
 /**
@@ -68,6 +69,13 @@ interface Props {
 
 export function ActivityRail({ active, onSelect }: Props): JSX.Element {
   const { theme, toggle } = useThemeValue();
+  const [version, setVersion] = useState('');
+  useEffect(() => {
+    void window.desktop
+      ?.getVersion()
+      .then(setVersion)
+      .catch(() => undefined);
+  }, []);
   return (
     <nav className="rail" aria-label="Views">
       {ENTRIES.map((entry) => (
@@ -107,6 +115,16 @@ export function ActivityRail({ active, onSelect }: Props): JSX.Element {
           )}
         </svg>
       </button>
+
+      {/*
+        macOS hides the title text under `hiddenInset`, so the version needs a
+        home inside the window rather than only in the title bar.
+      */}
+      {version !== '' && (
+        <span className="rail-version" title={`Agent Observability ${version}`}>
+          v{version}
+        </span>
+      )}
     </nav>
   );
 }

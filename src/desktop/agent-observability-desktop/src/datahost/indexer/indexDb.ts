@@ -2,7 +2,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
-import type { ListSessionsParams, SessionGroup, SessionRow } from '../../shared/rpc';
+import type {
+  DayPoint,
+  ListSessionsParams,
+  OverviewData,
+  SessionGroup,
+  SessionRow,
+} from '../../shared/rpc';
 
 /**
  * The persisted session index — the reason the desktop list paints instantly.
@@ -261,6 +267,27 @@ export class IndexDb {
     return row === undefined ? undefined : toSessionRow(row);
   }
 
+  /**
+   * Rows for specific `source:sessionId` keys, newest first.
+   *
+   * Used to pull in sessions a text search can only match by their user-chosen
+   * name — the index stores the original, so SQL alone cannot find them.
+   */
+  getRowsByKey(keys: readonly string[]): SessionRow[] {
+    if (keys.length === 0) {
+      return [];
+    }
+    const placeholders = keys.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM sessions
+          WHERE source || ':' || session_id IN (${placeholders})
+          ORDER BY ended_at_ms DESC`,
+      )
+      .all(...keys) as StoredSession[];
+    return rows.map(toSessionRow);
+  }
+
   // -- writes ---------------------------------------------------------------
 
   putFileState(state: FileState): void {
@@ -340,6 +367,74 @@ export class IndexDb {
     });
     run(gone);
     return gone.map((id) => `${source}:${id}`);
+  }
+
+  /**
+   * Everything the overview shows, in four aggregate queries over the index.
+   *
+   * All of it comes from indexed columns, so this stays a few milliseconds even
+   * with thousands of sessions — the view can open instantly instead of the
+   * user watching sources be re-read.
+   */
+  overview(windowDays: number): OverviewData {
+    const totals = this.db
+      .prepare(
+        `SELECT COUNT(*) AS sessions,
+                COALESCE(SUM(interaction_count), 0) AS steps,
+                COALESCE(SUM(llm_calls), 0) AS llmCalls,
+                COALESCE(SUM(tool_calls), 0) AS toolCalls,
+                COALESCE(SUM(input_tokens), 0) AS inputTokens,
+                COALESCE(SUM(output_tokens), 0) AS outputTokens,
+                COALESCE(SUM(cached_tokens), 0) AS cachedTokens,
+                COUNT(DISTINCT CASE WHEN repository <> 'unknown' THEN repository END) AS repositories,
+                COUNT(DISTINCT CASE WHEN model <> 'unknown' THEN model END) AS models,
+                COALESCE(AVG(NULLIF(duration_ms, 0)), 0) AS avgSessionMs
+           FROM sessions`,
+      )
+      .get() as OverviewData['totals'];
+
+    const bySource = this.db
+      .prepare(
+        `SELECT source,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(interaction_count), 0) AS steps,
+                COALESCE(SUM(input_tokens), 0) AS inputTokens,
+                COALESCE(SUM(output_tokens), 0) AS outputTokens
+           FROM sessions
+          GROUP BY source
+          ORDER BY sessions DESC`,
+      )
+      .all() as OverviewData['bySource'];
+
+    // Local time, so a day boundary matches what the user considers a day.
+    // Rows with no timestamp would land on 1970 and stretch the axis.
+    const daily = this.db
+      .prepare(
+        `SELECT date(ended_at_ms / 1000, 'unixepoch', 'localtime') AS day,
+                source,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(input_tokens), 0) AS inputTokens,
+                COALESCE(SUM(output_tokens), 0) AS outputTokens
+           FROM sessions
+          WHERE ended_at_ms > 0
+            AND ended_at_ms >= ?
+          GROUP BY day, source
+          ORDER BY day ASC`,
+      )
+      .all(Date.now() - windowDays * 86_400_000) as DayPoint[];
+
+    const topRepositories = this.db
+      .prepare(
+        `SELECT repository, COUNT(*) AS sessions
+           FROM sessions
+          WHERE repository <> 'unknown'
+          GROUP BY repository
+          ORDER BY sessions DESC
+          LIMIT 5`,
+      )
+      .all() as OverviewData['topRepositories'];
+
+    return { totals, bySource, daily, windowDays, topRepositories };
   }
 
   /** A session's cached title plus the fingerprint of the file it came from. */

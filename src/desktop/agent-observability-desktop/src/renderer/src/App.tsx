@@ -1,6 +1,7 @@
 import type { JSX } from 'react';
 import { useState } from 'react';
 import { SessionsView } from './views/sessions/SessionsView';
+import { OverviewView } from './views/overview/OverviewView';
 import { PlaceholderView } from './views/PlaceholderView';
 import { ActivityRail } from './components/ActivityRail';
 import type { ViewId } from './components/ActivityRail';
@@ -27,7 +28,17 @@ export function App(): JSX.Element {
           <div className="view-layer" hidden={view !== 'sessions'}>
             <SessionsView />
           </div>
-          {view !== 'sessions' && (
+          {/*
+            Mounted on first open and kept alive after, so returning to it is
+            instant and does not re-query. Sessions stays mounted for the same
+            reason; the remaining views are still placeholders.
+          */}
+          {view === 'overview' && (
+            <div className="view-layer">
+              <OverviewView />
+            </div>
+          )}
+          {view !== 'sessions' && view !== 'overview' && (
             <div className="view-layer">
               <PlaceholderView view={view} />
             </div>

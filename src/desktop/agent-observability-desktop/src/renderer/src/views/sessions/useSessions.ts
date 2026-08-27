@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
 import type { ConnectionState } from '../../api/client';
-import type { IndexStatus, SessionRow } from '../../../../shared/rpc';
+import type { IndexStatus, SessionGroup, SessionRow } from '../../../../shared/rpc';
 import { sessionKey } from '../../../../shared/rpc';
 
 /**
@@ -19,16 +19,20 @@ const PAGE_SIZE = 300;
 
 interface UseSessionsResult {
   rows: SessionRow[];
+  groups: SessionGroup[];
   status: IndexStatus;
   connection: ConnectionState;
   loading: boolean;
   error: string | undefined;
   refresh: () => void;
   rebuild: () => void;
+  reload: () => void;
 }
 
-export function useSessions(query: string): UseSessionsResult {
+/** `source` is undefined for "All". */
+export function useSessions(query: string, source: string | undefined): UseSessionsResult {
   const [rows, setRows] = useState<SessionRow[]>([]);
+  const [groups, setGroups] = useState<SessionGroup[]>([]);
   const [status, setStatus] = useState<IndexStatus>({ indexed: 0, total: 0, phase: 'idle' });
   const [connection, setConnection] = useState<ConnectionState>(() => dataHost.connectionState());
   const [loading, setLoading] = useState(true);
@@ -39,6 +43,8 @@ export function useSessions(query: string): UseSessionsResult {
   const rowsRef = useRef<SessionRow[]>([]);
   const queryRef = useRef(query);
   queryRef.current = query;
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
 
   const applyRows = useCallback((next: SessionRow[]) => {
     rowsRef.current = next;
@@ -49,6 +55,7 @@ export function useSessions(query: string): UseSessionsResult {
     try {
       const next = await dataHost.call('sessions.list', {
         query: queryRef.current,
+        source: sourceRef.current,
         limit: PAGE_SIZE,
       });
       applyRows(next);
@@ -61,13 +68,14 @@ export function useSessions(query: string): UseSessionsResult {
     }
   }, [applyRows]);
 
-  // Re-query whenever the search text changes. Filtering happens in SQL rather
-  // than over the loaded page, so a match outside the first page is still found.
+  // Re-query whenever the search text or source filter changes. Filtering runs
+  // in SQL rather than over the loaded page, so a match outside the first page
+  // is still found.
   useEffect(() => {
     setLoading(true);
     const timer = setTimeout(() => void load(), query.length === 0 ? 0 : 150);
     return () => clearTimeout(timer);
-  }, [query, load]);
+  }, [query, source, load]);
 
   useEffect(() => {
     const offRows = dataHost.on('sessions.upserted', (event) => {
@@ -80,7 +88,14 @@ export function useSessions(query: string): UseSessionsResult {
       if (queryRef.current.length > 0) {
         return;
       }
-      applyRows(mergeRows(rowsRef.current, event.rows));
+      // A source filter, by contrast, is decidable from the row itself.
+      const incoming =
+        sourceRef.current === undefined
+          ? event.rows
+          : event.rows.filter((r) => r.source === sourceRef.current);
+      if (incoming.length > 0) {
+        applyRows(mergeRows(rowsRef.current, incoming));
+      }
     });
 
     const offRemoved = dataHost.on('sessions.removed', (event) => {
@@ -91,9 +106,22 @@ export function useSessions(query: string): UseSessionsResult {
       applyRows(rowsRef.current.filter((r) => !gone.has(sessionKey(r.source, r.sessionId))));
     });
 
+    const loadGroups = (): void => {
+      void dataHost
+        .call('sessions.groups')
+        .then(setGroups)
+        .catch(() => undefined);
+    };
+
     const offProgress = dataHost.on('index.progress', (event) => {
-      if (event.event === 'index.progress') {
-        setStatus(event.status);
+      if (event.event !== 'index.progress') {
+        return;
+      }
+      setStatus(event.status);
+      // Per-source counts only settle once a pass finishes; refreshing them
+      // mid-hydration would make the filter chips flicker upward.
+      if (event.status.phase === 'idle') {
+        loadGroups();
       }
     });
 
@@ -101,6 +129,7 @@ export function useSessions(query: string): UseSessionsResult {
     setConnection(dataHost.connectionState());
 
     void dataHost.call('index.status').then(setStatus).catch(() => undefined);
+    loadGroups();
 
     return () => {
       offRows();
@@ -124,8 +153,8 @@ export function useSessions(query: string): UseSessionsResult {
   }, [applyRows, load]);
 
   return useMemo(
-    () => ({ rows, status, connection, loading, error, refresh, rebuild }),
-    [rows, status, connection, loading, error, refresh, rebuild],
+    () => ({ rows, groups, status, connection, loading, error, refresh, rebuild, reload: load }),
+    [rows, groups, status, connection, loading, error, refresh, rebuild, load],
   );
 }
 
