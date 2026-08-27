@@ -1,4 +1,3 @@
-import * as vscode from 'vscode';
 import { WorkflowConfig } from '../deviation/models';
 import { normalizeExtensions } from '../telemetry/locAnalysis';
 import { buildRepoSyncPolicy, normalizeRepositoryList, RepoSyncPolicy } from '../aggregate/repoSyncPolicy';
@@ -153,19 +152,41 @@ export const MIN_COPILOT_AGENT_RETENTION_DAYS = 1;
 /** Milliseconds per day, for the retention conversion. */
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+/** Something that can be unsubscribed. `vscode.Disposable` satisfies this. */
+export interface SettingsSubscription {
+  dispose(): unknown;
+}
+
 /**
- * Typed accessor over the `agentObservability` workspace configuration.
+ * The host's settings store, read one key at a time.
+ *
+ * This is the only thing {@link Configuration} needs from its host, which is
+ * what keeps the whole typed-accessor layer host-independent: the extension
+ * backs it with `vscode.workspace.getConfiguration`, the desktop app with a
+ * JSON file. Keys are section-relative (e.g. `sync.enabled`), matching
+ * {@link ConfigKeys}.
+ */
+export interface SettingsReader {
+  /** Read a setting, returning `defaultValue` when unset. */
+  get<T>(key: string, defaultValue: T): T;
+  /** Subscribe to changes affecting this section. */
+  onDidChange(listener: () => void): SettingsSubscription;
+}
+
+/**
+ * Typed accessor over the `agentObservability` configuration.
  *
  * This is the seam through which all of the extension reads settings. Keeping
- * reads centralized means later phases (sync engine, SQLite adapter, aggregate
- * engine) never touch `vscode.workspace.getConfiguration` directly and never
- * hard-code setting ids.
+ * reads centralized means the sync engine, SQLite adapter, and aggregate engine
+ * never touch the host's settings API directly and never hard-code setting ids.
  */
 export class Configuration {
-  private config(): vscode.WorkspaceConfiguration {
+  constructor(private readonly settings: SettingsReader) {}
+
+  private config(): SettingsReader {
     // Read fresh each time so changes apply without caching staleness; callers
     // that need to react to changes should listen to onDidChange (below).
-    return vscode.workspace.getConfiguration(CONFIG_SECTION);
+    return this.settings;
   }
 
   /** Built-in cloud ingestion base URL (the deployed Azure dashboard). */
@@ -683,13 +704,9 @@ export class Configuration {
   /**
    * Subscribe to changes affecting this extension's configuration section.
    * Returns a disposable; the callback fires only when an `agentObservability.*`
-   * key changes.
+   * key changes (the host's {@link SettingsReader} applies that filter).
    */
-  onDidChange(listener: () => void): vscode.Disposable {
-    return vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration(CONFIG_SECTION)) {
-        listener();
-      }
-    });
+  onDidChange(listener: () => void): SettingsSubscription {
+    return this.settings.onDidChange(listener);
   }
 }

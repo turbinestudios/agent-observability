@@ -1,6 +1,6 @@
-import type * as vscode from 'vscode';
 import type { AssembledMessage } from '../conversation';
 import type { FriendlyError } from '../lmErrors';
+import type { CancellationToken } from './cancellation';
 
 /**
  * The pluggable inference seam for the AI Helper, mirroring the
@@ -8,7 +8,9 @@ import type { FriendlyError } from '../lmErrors';
  * a new backend is one class, not a provider rewrite. `ChatViewProvider` talks
  * only to this contract; which backend answers is a user setting.
  *
- * Type-only `vscode` import so this module stays loadable under vitest.
+ * Host-neutral: cancellation flows through {@link CancellationToken} rather than
+ * `vscode.CancellationToken` (which is assignable to it), so a non-VS Code host
+ * can implement backends against this contract.
  */
 
 /** Stable backend identifier (mirrors the `aiHelper.backend` setting values). */
@@ -38,7 +40,7 @@ export interface ChatBackend {
   streamChat(
     request: ChatRequest,
     onDelta: (text: string) => void,
-    token: vscode.CancellationToken,
+    token: CancellationToken,
   ): Promise<void>;
   /** Map an error thrown by `streamChat` to a friendly message. */
   describeError(err: unknown): FriendlyError;

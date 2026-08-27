@@ -1,9 +1,7 @@
-import type * as vscode from 'vscode';
-
 /**
  * Durable sync state: a window watermark plus a bounded run history.
  *
- * The engine persists two things across VS Code restarts:
+ * The engine persists two things across restarts:
  *  - the WATERMARK: the exclusive UTC end (epoch ms) of the last successfully
  *    uploaded window, so the next run resumes from there. It is an OPTIMIZATION,
  *    not a correctness requirement — re-sending an overlapping window is safe
@@ -11,10 +9,10 @@ import type * as vscode from 'vscode';
  *  - a RING BUFFER of the most recent {@link SyncRun} entries (capped) for the
  *    Sync view's history, most-recent-first when read.
  *
- * Abstracted behind {@link SyncStateStore} so tests use the in-memory impl and
- * the extension uses {@link GlobalStateSyncStateStore} over
- * `context.globalState`. No `vscode` value import — only a type import — so the
- * module loads headless under vitest.
+ * Abstracted behind {@link SyncStateStore} so tests use the in-memory impl while
+ * each host supplies its own persistence — the extension's `GlobalStateSyncStateStore`
+ * over `context.globalState`, the desktop app's over its own state file. This
+ * module is host-independent.
  */
 
 /** Discriminator of how a sync run finished (mirrors {@link SyncOutcome} kinds). */
@@ -100,47 +98,5 @@ export class InMemorySyncStateStore implements SyncStateStore {
     if (this.history.length > MAX_HISTORY) {
       this.history.splice(0, this.history.length - MAX_HISTORY);
     }
-  }
-}
-
-/**
- * Durable {@link SyncStateStore} over {@link vscode.ExtensionContext.globalState}.
- * Per-user, survives restarts, and is not a synced workspace setting.
- */
-export class GlobalStateSyncStateStore implements SyncStateStore {
-  /** globalState key for the window watermark (exclusive end, epoch ms). */
-  static readonly WATERMARK_KEY = 'agentObservability.sync.lastWindowEndMs';
-  /** globalState key for the run-history ring buffer (stored oldest-first). */
-  static readonly HISTORY_KEY = 'agentObservability.sync.runHistory';
-
-  constructor(private readonly globalState: vscode.Memento) {}
-
-  getWatermarkMs(): number | undefined {
-    const value = this.globalState.get<number>(GlobalStateSyncStateStore.WATERMARK_KEY);
-    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-  }
-
-  async setWatermarkMs(value: number): Promise<void> {
-    await this.globalState.update(GlobalStateSyncStateStore.WATERMARK_KEY, value);
-  }
-
-  async clearWatermark(): Promise<void> {
-    // Setting to undefined removes the key from globalState; getWatermarkMs then
-    // reports `undefined` and the next run starts from the earliest local row.
-    await this.globalState.update(GlobalStateSyncStateStore.WATERMARK_KEY, undefined);
-  }
-
-  getHistory(): SyncRun[] {
-    const raw = this.globalState.get<SyncRun[]>(GlobalStateSyncStateStore.HISTORY_KEY, []);
-    return Array.isArray(raw) ? [...raw].reverse() : [];
-  }
-
-  async recordRun(run: SyncRun): Promise<void> {
-    const stored = this.globalState.get<SyncRun[]>(GlobalStateSyncStateStore.HISTORY_KEY, []);
-    const next = Array.isArray(stored) ? [...stored, run] : [run];
-    if (next.length > MAX_HISTORY) {
-      next.splice(0, next.length - MAX_HISTORY);
-    }
-    await this.globalState.update(GlobalStateSyncStateStore.HISTORY_KEY, next);
   }
 }

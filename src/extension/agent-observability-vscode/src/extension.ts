@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as net from 'node:net';
 import * as fs from 'node:fs';
 import { Configuration, CONFIG_SECTION, ConfigKeys } from './config/configuration';
+import { VscodeSettingsReader } from './config/vscodeSettings';
 import { RepoSyncMode } from './aggregate/repoSyncPolicy';
 import { registerCommands, Refreshable } from './commands';
 import { OverviewViewProvider, OVERVIEW_VIEW_ID } from './views/overviewView';
@@ -18,7 +19,7 @@ import { buildBatch } from './aggregate/aggregator';
 import { getIdentityInput, computeDeveloperId } from './aggregate/pseudonymizer';
 import { FetchHttpPoster } from './sync/httpPoster';
 import { SyncClient } from './sync/syncClient';
-import { GlobalStateSyncStateStore } from './sync/syncState';
+import { GlobalStateSyncStateStore } from './sync/globalStateSyncStateStore';
 import { SyncEngine, SyncContextInsightsSource, SyncTelemetry, formatContextInsightsDiagnostics, systemClock } from './sync/syncEngine';
 import { SyncScheduler } from './sync/scheduler';
 import { registerObservabilityChatParticipant } from './chat/observabilityChat';
@@ -86,7 +87,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const logger = new OutputChannelLogger();
   context.subscriptions.push(logger);
 
-  const config = new Configuration();
+  const config = new Configuration(new VscodeSettingsReader());
   const telemetry = new TelemetryService(config);
 
   // Source registry: the Copilot SQLite path, the Claude Code JSONL path, and the

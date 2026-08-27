@@ -4,6 +4,25 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.11] - 2026-08-27
+
+### Changed
+
+- **The last three VS Code couplings in otherwise host-independent modules are
+  now behind seams**, so those modules can be shared with a standalone desktop
+  app without forking them. No behavior change; all settings, sync state, and
+  chat cancellation work exactly as before.
+  - `Configuration` reads through a new `SettingsReader` interface instead of
+    calling `vscode.workspace.getConfiguration` itself. The VS Code binding
+    moved to `config/vscodeSettings.ts`; every typed accessor is untouched.
+  - `GlobalStateSyncStateStore` moved to its own `sync/globalStateSyncStateStore.ts`,
+    leaving `sync/syncState.ts` (the store contract and its in-memory
+    implementation) free of any `vscode` reference. Each store now has its own
+    tests covering watermark round-trip and ring-buffer eviction.
+  - Chat backends take a host-neutral `CancellationToken` from
+    `chat/backends/cancellation.ts`; `vscode.CancellationToken` is structurally
+    assignable to it, so callers pass their tokens through unchanged.
+
 ## [0.9.10] - 2026-08-27
 
 ### Changed

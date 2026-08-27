@@ -1,8 +1,8 @@
 import { execFile, spawn } from 'node:child_process';
 import * as os from 'node:os';
-import type * as vscode from 'vscode';
 import { Configuration } from '../../config/configuration';
 import { FriendlyError } from '../lmErrors';
+import type { CancellationToken } from './cancellation';
 import { BackendAvailability, ChatBackend, ChatRequest, ModelChoice } from './chatBackend';
 import {
   buildClaudeArgs,
@@ -64,7 +64,7 @@ export class ClaudeCodeBackend implements ChatBackend {
   async streamChat(
     request: ChatRequest,
     onDelta: (text: string) => void,
-    token: vscode.CancellationToken,
+    token: CancellationToken,
   ): Promise<void> {
     const command = await this.resolveCommand();
     if (command === undefined) {
