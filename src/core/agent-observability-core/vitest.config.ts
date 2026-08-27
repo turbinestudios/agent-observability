@@ -10,5 +10,10 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     globals: false,
+    // Many telemetry tests copy a real SQLite fixture to temp and rewrite it
+    // through WASM SQLite before reading it back — several seconds of honest
+    // I/O that overruns vitest's 5s default under parallel load on slow CI
+    // runners. Nothing here asserts on timing, so the ceiling is generous.
+    testTimeout: 30_000,
   },
 });
