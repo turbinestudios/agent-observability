@@ -310,7 +310,7 @@ Most of what follows lives in the shared **`@agent-observability/core`** package
 `dist/extension.js` by esbuild — the paths below are relative to that package's
 `src/` unless marked *(extension)*. Importing `vscode` from core is a lint error;
 when core needs a host capability it declares an interface and the extension
-implements it. See [AGENTS.md](../../../AGENTS.md) for the full rule.
+implements it. `AGENTS.md` at the repo root states the full rule.
 
 - `config/configuration.ts` — typed accessor over `agentObservability.*`
   settings, reading through the `SettingsReader` seam. *(extension)*
