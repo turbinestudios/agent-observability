@@ -344,6 +344,18 @@
   align-items: center;
 }
 
+/* Advisory notes: informational, deliberately quieter than an error. */
+.status-bar.status-info {
+  color: var(--fg-muted);
+  align-items: flex-start;
+}
+
+.status-info svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--fg-subtle);
+}
+
 .status-text {
   display: flex;
   flex-direction: column;
@@ -527,6 +539,20 @@
   display: flex;
   overflow: auto;
   background: var(--bg);
+  position: relative;
+}
+
+/*
+ * Floats over the detail document's top-right corner. A solid chip background
+ * keeps it readable over whatever the document renders beneath it.
+ */
+.detail-refresh {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  z-index: 1;
+  height: 30px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 }
 
 /*

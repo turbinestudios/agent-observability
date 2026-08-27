@@ -41,14 +41,20 @@ export function SessionDetail({ row }: Props): JSX.Element {
   const [error, setError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const frameRef = useRef<HTMLIFrameElement>(null);
+  // Bumped by the refresh button; the ref marks the next fetch as forced so
+  // only a deliberate refresh re-parses (a theme change reuses the cache).
+  const [refreshToken, setRefreshToken] = useState(0);
+  const forceRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(undefined);
+    const force = forceRef.current;
+    forceRef.current = false;
 
     dataHost
-      .call('sessions.detail', row.source, row.sessionId, theme)
+      .call('sessions.detail', row.source, row.sessionId, theme, force)
       .then(async (doc) => {
         if (row.source === 'copilot') {
           copilotWarmed = true;
@@ -77,7 +83,7 @@ export function SessionDetail({ row }: Props): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [row.source, row.sessionId, row.indexedAtMs, theme]);
+  }, [row.source, row.sessionId, row.indexedAtMs, theme, refreshToken]);
 
   // The document posts through the shimmed `acquireVsCodeApi`; those messages
   // arrive here wrapped so they are distinguishable from anything else.
@@ -151,15 +157,30 @@ export function SessionDetail({ row }: Props): JSX.Element {
   }
 
   return (
-    <iframe
-      ref={frameRef}
-      className="detail-frame"
-      title={row.title ?? row.sessionId}
-      // Scripts only: no same-origin, so the document cannot touch this app's
-      // DOM, storage, or the preload bridge. It still enforces the strict
-      // nonce policy declared in its own markup.
-      sandbox="allow-scripts"
-      src={docUrl}
-    />
+    <>
+      <button
+        type="button"
+        className="icon-button detail-refresh"
+        title="Refresh session"
+        onClick={() => {
+          forceRef.current = true;
+          setRefreshToken((token) => token + 1);
+        }}
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 4a8 8 0 0 1 7.4 5h-2.2A6 6 0 0 0 6 12h3l-4 4.5L1 12h3a8 8 0 0 1 8-8Z" />
+        </svg>
+      </button>
+      <iframe
+        ref={frameRef}
+        className="detail-frame"
+        title={row.title ?? row.sessionId}
+        // Scripts only: no same-origin, so the document cannot touch this app's
+        // DOM, storage, or the preload bridge. It still enforces the strict
+        // nonce policy declared in its own markup.
+        sandbox="allow-scripts"
+        src={docUrl}
+      />
+    </>
   );
 }

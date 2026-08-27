@@ -1,6 +1,7 @@
 import type { JSX } from 'react';
 import type { IndexStatus } from '../../../../shared/rpc';
 import { Spinner } from '../../components/Spinner';
+import { splitNotes } from './format';
 
 /**
  * Says what the app is doing while the list fills in.
@@ -86,6 +87,29 @@ export function IndexStatusBar({ status, connection, rowCount, onRebuild }: Prop
     );
   }
 
+  // Idle with advisory notes: a skipped or turned-off source is information,
+  // not a failure — without it a locked Copilot database and "no sessions"
+  // look identical. Info styling, never error red.
+  if (status.message !== undefined) {
+    return (
+      <div className="status-bar status-info">
+        <InfoIcon />
+        <div className="status-text">
+          {rowCount > 0 && (
+            <span className="status-line">
+              {rowCount.toLocaleString()} session{rowCount === 1 ? '' : 's'}
+            </span>
+          )}
+          {splitNotes(status.message).map((note) => (
+            <span key={note} className="status-sub">
+              {note}
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   // Idle. Stay quiet unless there is something to say.
   if (rowCount === 0) {
     return null;
@@ -96,6 +120,14 @@ export function IndexStatusBar({ status, connection, rowCount, onRebuild }: Prop
         {rowCount.toLocaleString()} session{rowCount === 1 ? '' : 's'}
       </span>
     </div>
+  );
+}
+
+function InfoIcon(): JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm0 2.6a1 1 0 1 1 0 2 1 1 0 0 1 0-2Zm.9 8.4a.9.9 0 0 1-1.8 0V8a.9.9 0 0 1 1.8 0v4Z" />
+    </svg>
   );
 }
 

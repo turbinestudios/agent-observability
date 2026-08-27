@@ -33,6 +33,22 @@ describe('toolCallDetector', () => {
       });
     });
 
+    it('categorizes bare agent-instruction basenames as instruction, not unknown', () => {
+      const rows: ToolReadRow[] = [
+        { filePath: 'c:\\Projects\\example-app\\AGENTS.md', conversationId: 'conv-1', chatSessionId: 'chat-1' },
+        { filePath: '/repo/CLAUDE.md', conversationId: 'conv-1', chatSessionId: 'chat-1' },
+        { filePath: '/repo/CLAUDE.local.md', conversationId: 'conv-1', chatSessionId: 'chat-1' },
+        { filePath: '/repo/.github/copilot-instructions.md', conversationId: 'conv-1', chatSessionId: 'chat-1' },
+      ];
+
+      const result = parseToolReads(rows, new Set());
+
+      expect(result).toHaveLength(4);
+      for (const entry of result) {
+        expect(entry.category).toBe('instruction');
+      }
+    });
+
     it('skips files already known from discovery', () => {
       const rows: ToolReadRow[] = [
         {

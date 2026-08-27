@@ -49,6 +49,18 @@
   color: var(--fg-muted);
 }
 
+/* Advisory notes in the first-run empty state ("Copilot: no database found"). */
+.overview-empty-notes {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.overview-empty-notes li {
+  margin-top: 4px;
+}
+
 /* --- stat tiles ------------------------------------------------------------ */
 
 .tiles {

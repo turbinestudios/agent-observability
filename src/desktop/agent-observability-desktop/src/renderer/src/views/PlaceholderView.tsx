@@ -7,7 +7,7 @@ import type { ViewId } from '../components/ActivityRail';
  * looking like a broken screen.
  */
 
-const COPY: Record<Exclude<ViewId, 'sessions' | 'overview'>, { title: string; body: string }> = {
+const COPY: Record<Exclude<ViewId, 'sessions' | 'overview' | 'settings'>, { title: string; body: string }> = {
   hotspots: {
     title: 'Context Hotspots',
     body: 'Which instruction and customization files your agents actually load, ranked by how often they are pulled into context.',
@@ -20,16 +20,12 @@ const COPY: Record<Exclude<ViewId, 'sessions' | 'overview'>, { title: string; bo
     title: 'Sync',
     body: 'Consent, API key, and upload status for opt-in aggregate sharing. Raw session content never leaves this machine.',
   },
-  settings: {
-    title: 'Settings',
-    body: 'Source paths, live updates, retention, and appearance. Stored in ~/.agent-observability/desktop/config.json.',
-  },
 };
 
 export function PlaceholderView({
   view,
 }: {
-  view: Exclude<ViewId, 'sessions' | 'overview'>;
+  view: Exclude<ViewId, 'sessions' | 'overview' | 'settings'>;
 }): JSX.Element {
   const copy = COPY[view];
   return (

@@ -71,10 +71,18 @@ function categoryFromPath(normalized: string): ContextFileCategory {
   if (normalized.includes('/hooks/')) return 'hook';
   if (normalized.includes('/prompts/')) return 'prompt';
 
-  // Check by file name patterns
+  // Check by file name patterns. The bare-basename set mirrors the context
+  // basenames recognized during discovery (AGENTS.md, CLAUDE.md, …) — they are
+  // all agent-instruction files, wherever they live.
   const fileName = normalized.split('/').pop() ?? '';
   const lower = fileName.toLowerCase();
-  if (lower.endsWith('.instructions.md') || lower === 'copilot-instructions.md' || lower === 'claude.md') {
+  if (
+    lower.endsWith('.instructions.md') ||
+    lower === 'copilot-instructions.md' ||
+    lower === 'claude.md' ||
+    lower === 'claude.local.md' ||
+    lower === 'agents.md'
+  ) {
     return 'instruction';
   }
   if (lower === 'skill.md') return 'skill';

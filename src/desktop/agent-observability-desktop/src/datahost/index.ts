@@ -18,6 +18,7 @@ import { sessionKey } from '../shared/rpc';
 import { DetailRenderer } from './detail/detailRenderer';
 import type { DetailContext } from './detail/detailRenderer';
 import { DesktopSettingsReader } from './drivers/desktopConfig';
+import { applySettingsPatch, buildSettingsSnapshot } from './settings';
 import { ClaudeIndexer } from './indexer/claudeIndexer';
 import { CopilotIndexer } from './indexer/copilotIndexer';
 import { IndexDb } from './indexer/indexDb';
@@ -53,10 +54,11 @@ const db = new IndexDb();
 const telemetry = new TelemetryService(config);
 telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
 
-const sources = new SourceRegistry([
-  new ClaudeCodeService(config),
-  new CopilotSource(telemetry, config),
-]);
+// Held directly as well as via the registry: its directory-listing cache must
+// be dropped on every index pass, or a session created while the app is open
+// shows in the list but fails to open with "not found" until a restart.
+const claude = new ClaudeCodeService(config);
+const sources = new SourceRegistry([claude, new CopilotSource(telemetry, config)]);
 const detail = new DetailRenderer(sources);
 const renames = new RenameStore();
 const hidden = new HiddenStore();
@@ -66,6 +68,8 @@ const OVERVIEW_WINDOW_DAYS = 30;
 
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'idle' };
 let indexing = false;
+/** A pass was requested while one was running; run again when it finishes. */
+let rerunQueued = false;
 
 /** Ports the renderer is reachable on. Populated by the handshake from main. */
 const ports: MessagePortMain[] = [];
@@ -94,11 +98,18 @@ function refreshCounts(): void {
  */
 function runIndex(): IndexStatus {
   if (indexing) {
+    // A settings change landing mid-pass must still apply: queue one more pass
+    // instead of silently dropping the request.
+    rerunQueued = true;
     return status;
   }
   indexing = true;
   status = { ...status, phase: 'discovering', message: undefined };
   emit({ event: 'index.progress', status });
+
+  // The detail path keeps its own directory listing; forget it so a session
+  // created since the last pass can be opened as soon as it is listed.
+  claude.invalidateDiscovery();
 
   const notes: string[] = [];
   const onRows = (rows: SessionRow[]): void => {
@@ -124,19 +135,31 @@ function runIndex(): IndexStatus {
   // Start each pass from a clean total so a refresh does not double-count.
   status = { ...status, total: 0 };
 
-  try {
-    new ClaudeIndexer({ db, config, onDiscovered, onRows }).run();
-  } catch (err) {
-    notes.push(`Claude Code: ${errorText(err)}`);
+  // A disabled source is purged rather than skipped: its indexers would leave
+  // the previously indexed rows on screen forever otherwise.
+  if (config.isClaudeEnabled()) {
+    try {
+      new ClaudeIndexer({ db, config, onDiscovered, onRows }).run();
+    } catch (err) {
+      notes.push(`Claude Code: ${errorText(err)}`);
+    }
+  } else {
+    purgeSource('claude');
+    notes.push('Claude Code is turned off in Settings');
   }
 
-  try {
-    const copilot = new CopilotIndexer({ db, config, onDiscovered, onRows }).run();
-    if (copilot.skipped !== undefined) {
-      notes.push(`Copilot: ${copilot.skipped}`);
+  if (config.isLocalTelemetryEnabled()) {
+    try {
+      const copilot = new CopilotIndexer({ db, config, onDiscovered, onRows }).run();
+      if (copilot.skipped !== undefined) {
+        notes.push(`Copilot: ${copilot.skipped}`);
+      }
+    } catch (err) {
+      notes.push(`Copilot: ${errorText(err)}`);
     }
-  } catch (err) {
-    notes.push(`Copilot: ${errorText(err)}`);
+  } else {
+    purgeSource('copilot');
+    notes.push('Copilot is turned off in Settings');
   }
 
   refreshCounts();
@@ -149,7 +172,21 @@ function runIndex(): IndexStatus {
     message: notes.length === 0 ? undefined : notes.join(' · '),
   };
   emit({ event: 'index.progress', status });
+
+  if (rerunQueued) {
+    rerunQueued = false;
+    return runIndex();
+  }
   return status;
+}
+
+/** Drop every indexed row of a source and tell the list, so toggling a source off empties it live. */
+function purgeSource(source: string): void {
+  const keys = db.removeMissing(source, new Set());
+  if (keys.length > 0) {
+    emit({ event: 'sessions.removed', keys });
+    refreshCounts();
+  }
 }
 
 function errorText(err: unknown): string {
@@ -259,7 +296,17 @@ function handle(request: RpcRequest): unknown {
       return result;
     }
     case 'sessions.detail': {
-      const [source, sessionId, theme] = request.params;
+      const [source, sessionId, theme, force] = request.params;
+      if (force === true) {
+        // Re-read the transcript as it is on disk right now. The memoized parse
+        // is keyed by index stamp, which does not move without an index pass —
+        // dropping it (and the Claude directory listing) is what forces the
+        // fresh read for an actively running session.
+        detail.invalidate(source, sessionId);
+        if (source === 'claude') {
+          claude.invalidateDiscovery();
+        }
+      }
       return detail.renderDocument(
         source,
         sessionId,
@@ -306,6 +353,21 @@ function handle(request: RpcRequest): unknown {
       // Hidden sessions are excluded so the totals agree with the list; a
       // count that includes what the user removed reads as a bug.
       return db.overview(OVERVIEW_WINDOW_DAYS, hidden.all());
+    case 'settings.get':
+      return buildSettingsSnapshot(settings, config);
+    case 'settings.update': {
+      const changed = applySettingsPatch(settings, request.params[0]);
+      if (changed.copilot) {
+        // The read layer caches open DB handles; drop them so the detail view
+        // follows a changed sqlitePath instead of the old database.
+        telemetry.refresh();
+      }
+      if (changed.claude || changed.copilot) {
+        // Respond with the snapshot first, then bring the index in line.
+        setTimeout(() => runIndex(), 0);
+      }
+      return buildSettingsSnapshot(settings, config);
+    }
     case 'index.status':
       refreshCounts();
       return status;

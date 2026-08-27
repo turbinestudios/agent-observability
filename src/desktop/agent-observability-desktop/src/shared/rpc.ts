@@ -131,6 +131,41 @@ export interface OverviewData {
   topRepositories: { repository: string; sessions: number }[];
 }
 
+/**
+ * The desktop's editable settings plus what auto-detection currently resolves
+ * to, so the settings page can show the effective state, not just raw values.
+ */
+export interface SettingsSnapshot {
+  /** `claudeCode.enabled` */
+  claudeEnabled: boolean;
+  /** `claudeCode.projectsPath`; empty string means auto-detect. */
+  claudeProjectsPath: string;
+  /** `localTelemetry.enabled` */
+  copilotEnabled: boolean;
+  /** `sqlitePath`; empty string means auto-detect. */
+  sqlitePath: string;
+  /** Directories the Claude scan will actually read (override first; only existing dirs). */
+  resolvedClaudeDirs: string[];
+  /** True when a non-empty projects-path override does not exist on disk. */
+  claudeOverrideMissing: boolean;
+  /** The Copilot database the next index pass would open, if any. */
+  resolvedCopilotDb?: { path: string; kind: 'archive' | 'native' | 'override' };
+  /** True when a non-empty sqlitePath override does not exist on disk. */
+  sqliteOverrideMissing: boolean;
+  /** Absolute path of the desktop config file. */
+  configPath: string;
+  /** Its directory, for the "open config folder" affordance. */
+  configDir: string;
+}
+
+/** Partial settings update; omitted fields are untouched. `''` clears a path override. */
+export interface SettingsPatch {
+  claudeEnabled?: boolean;
+  claudeProjectsPath?: string;
+  copilotEnabled?: boolean;
+  sqlitePath?: string;
+}
+
 /** Request/response methods. Every one resolves off the UI thread. */
 export interface RpcMethods {
   ping(payload: string): string;
@@ -140,9 +175,10 @@ export interface RpcMethods {
   /**
    * The full detail document for a session, ready to drop into an iframe.
    * Rendering happens here rather than in the renderer because it means parsing
-   * a whole transcript.
+   * a whole transcript. `force` drops the memoized parse first, so an active
+   * session's document reflects the transcript as it is on disk right now.
    */
-  'sessions.detail'(source: string, sessionId: string, theme: DetailTheme): string;
+  'sessions.detail'(source: string, sessionId: string, theme: DetailTheme, force?: boolean): string;
   /**
    * Body-only markup for an already-open detail document. The document's own
    * controller swaps it in place, which preserves the active tab, open
@@ -175,6 +211,13 @@ export interface RpcMethods {
    */
   'sessions.delete'(source: string, sessionId: string): { ok: boolean; detail: string };
   'overview.get'(): OverviewData;
+  /** The editable settings plus what auto-detection currently resolves to. */
+  'settings.get'(): SettingsSnapshot;
+  /**
+   * Persist a partial settings update. Sources whose settings changed are
+   * re-indexed automatically; the returned snapshot reflects the new state.
+   */
+  'settings.update'(patch: SettingsPatch): SettingsSnapshot;
   'index.status'(): IndexStatus;
   'index.refresh'(): IndexStatus;
   /** Drop and rebuild the index from scratch — the recovery path. */

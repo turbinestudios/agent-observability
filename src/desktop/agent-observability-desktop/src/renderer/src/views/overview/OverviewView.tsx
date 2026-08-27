@@ -1,8 +1,8 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { dataHost } from '../../api/client';
-import type { OverviewData } from '../../../../shared/rpc';
-import { formatDuration, formatTokens, sourceLabel } from '../sessions/format';
+import type { IndexStatus, OverviewData } from '../../../../shared/rpc';
+import { formatDuration, formatTokens, sourceLabel, splitNotes } from '../sessions/format';
 import { Spinner } from '../../components/Spinner';
 import { HorizontalBars, Legend, StackedBarChart } from './charts';
 import type { SeriesStyle, StackedColumn } from './charts';
@@ -35,6 +35,7 @@ const TOKEN_SERIES: SeriesStyle[] = [
 export function OverviewView(): JSX.Element {
   const [data, setData] = useState<OverviewData | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [status, setStatus] = useState<IndexStatus | undefined>(undefined);
 
   const load = useCallback(() => {
     dataHost
@@ -48,11 +49,18 @@ export function OverviewView(): JSX.Element {
 
   useEffect(() => {
     load();
+    void dataHost
+      .call('index.status')
+      .then(setStatus)
+      .catch(() => undefined);
     // Totals shift as the indexer hydrates; refresh once a pass settles rather
     // than on every batch, which would make the numbers flicker upward.
     return dataHost.on('index.progress', (event) => {
-      if (event.event === 'index.progress' && event.status.phase === 'idle') {
-        load();
+      if (event.event === 'index.progress') {
+        setStatus(event.status);
+        if (event.status.phase === 'idle') {
+          load();
+        }
       }
     });
   }, [load]);
@@ -70,11 +78,40 @@ export function OverviewView(): JSX.Element {
     );
   }
 
-  if (data === undefined) {
+  // An empty answer mid-scan is not the real answer; keep the spinner until
+  // the pass settles so a fresh machine never flashes zeros that then fill in.
+  const scanning = status?.phase === 'discovering' || status?.phase === 'hydrating';
+  if (data === undefined || (data.totals.sessions === 0 && scanning)) {
     return (
       <div className="detail-loading" role="status" aria-live="polite">
         <Spinner size={36} stroke={3} />
         <p className="detail-loading-title">Reading totals…</p>
+      </div>
+    );
+  }
+
+  if (data.totals.sessions === 0) {
+    // First run (or every source turned off): guidance instead of zero tiles.
+    const notes = splitNotes(status?.message);
+    return (
+      <div className="placeholder">
+        <div>
+          <h2>No sessions yet</h2>
+          <p>
+            Sessions appear here once you have used Claude Code or GitHub Copilot on this machine.
+            Everything stays local — nothing is uploaded.
+          </p>
+          {notes.length > 0 && (
+            <ul className="overview-empty-notes">
+              {notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          )}
+          <p style={{ marginTop: 12, color: 'var(--fg-subtle)' }}>
+            Sources and paths can be adjusted in Settings (the gear icon).
+          </p>
+        </div>
       </div>
     );
   }

@@ -31,10 +31,33 @@ import { readCopilotTitles } from './copilotTitles';
  */
 
 /** Where to read Copilot spans from, in preference order. */
-interface Candidate {
+export interface CopilotDatabaseCandidate {
   path: string;
   /** The durable archive is preferred: it retains history Copilot rolls off. */
   archive: boolean;
+  /** True when the path came from the user's `sqlitePath` override. */
+  override: boolean;
+}
+
+/**
+ * The Copilot database the next index pass would open: the durable archive the
+ * extension maintains when it exists (it keeps history Copilot's own rolling
+ * database discards), else the first readable native/override database.
+ *
+ * Exported for the settings snapshot, so what the settings page reports can
+ * never disagree with what the indexer actually opens.
+ */
+export function pickCopilotDatabase(config: Configuration): CopilotDatabaseCandidate | undefined {
+  const archive = resolveArchiveDbPath(config);
+  if (archive !== undefined && fs.existsSync(archive) && fs.statSync(archive).size > 0) {
+    return { path: archive, archive: true, override: false };
+  }
+  for (const found of resolveDatabasePaths(config).databases) {
+    if (fs.existsSync(found.path)) {
+      return { path: found.path, archive: false, override: found.source === 'override' };
+    }
+  }
+  return undefined;
 }
 
 export interface CopilotIndexerDeps {
@@ -120,7 +143,7 @@ export class CopilotIndexer {
       return { discovered: 0, hydrated: 0, skipped: 'Copilot source is disabled' };
     }
 
-    const candidate = this.pickDatabase();
+    const candidate = pickCopilotDatabase(this.deps.config);
     if (candidate === undefined) {
       return { discovered: 0, hydrated: 0, skipped: 'No Copilot database found on this machine' };
     }
@@ -186,23 +209,6 @@ export class CopilotIndexer {
     } finally {
       db.close();
     }
-  }
-
-  /**
-   * Prefer the durable archive the extension maintains — it keeps history that
-   * Copilot's own rolling database discards — and fall back to the live file.
-   */
-  private pickDatabase(): Candidate | undefined {
-    const archive = resolveArchiveDbPath(this.deps.config);
-    if (archive !== undefined && fs.existsSync(archive) && fs.statSync(archive).size > 0) {
-      return { path: archive, archive: true };
-    }
-    for (const found of resolveDatabasePaths(this.deps.config).databases) {
-      if (fs.existsSync(found.path)) {
-        return { path: found.path, archive: false };
-      }
-    }
-    return undefined;
   }
 
   /**

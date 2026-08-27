@@ -1,0 +1,134 @@
+/* Settings view. Mirrors the overview's card language, scoped to this view. */
+
+.settings {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 22px 26px 32px;
+  max-width: 760px;
+}
+
+.settings-header h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.settings-header p {
+  margin: 4px 0 20px;
+  max-width: 70ch;
+  color: var(--fg-muted);
+}
+
+.settings-header code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+  overflow-wrap: anywhere;
+}
+
+.settings-error {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.settings-card {
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.settings-card h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.settings-toggle input {
+  accent-color: var(--accent);
+}
+
+.settings-hint {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+  max-width: 70ch;
+}
+
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 16px;
+}
+
+.settings-row:last-child {
+  margin-bottom: 0;
+}
+
+.settings-label {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.settings-input {
+  padding: 6px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-input:disabled {
+  opacity: 0.6;
+}
+
+.settings-resolved {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  overflow-wrap: anywhere;
+}
+
+.settings-warning {
+  font-size: 11px;
+  color: var(--warning);
+}
+
+.settings-action {
+  margin-top: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.settings-action:hover {
+  background: var(--hover);
+}

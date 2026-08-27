@@ -79,6 +79,20 @@ export function formatRelative(epochMs: number, nowMs: number = Date.now()): str
   });
 }
 
+/**
+ * Split the data host's advisory status message into individual notes. The
+ * host joins per-source notes with ' · ' (see `runIndex`), one note per source.
+ */
+export function splitNotes(message: string | undefined): string[] {
+  if (message === undefined) {
+    return [];
+  }
+  return message
+    .split(' · ')
+    .map((note) => note.trim())
+    .filter((note) => note.length > 0);
+}
+
 /** One decimal place, without a trailing ".0". */
 function trim(value: number): string {
   return value.toFixed(1).replace(/\.0$/, '');

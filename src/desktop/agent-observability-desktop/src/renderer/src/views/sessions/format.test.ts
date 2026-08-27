@@ -1,5 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, formatRelative, formatTokens, sourceLabel } from './format';
+import { formatDuration, formatRelative, formatTokens, sourceLabel, splitNotes } from './format';
+
+describe('splitNotes', () => {
+  it('returns nothing for an absent message', () => {
+    expect(splitNotes(undefined)).toEqual([]);
+  });
+
+  it('keeps a single note intact', () => {
+    expect(splitNotes('Copilot: No Copilot database found on this machine')).toEqual([
+      'Copilot: No Copilot database found on this machine',
+    ]);
+  });
+
+  it('splits multiple notes on the datahost joiner', () => {
+    expect(splitNotes('Claude Code is turned off in Settings · Copilot: locked')).toEqual([
+      'Claude Code is turned off in Settings',
+      'Copilot: locked',
+    ]);
+  });
+});
 
 describe('formatTokens', () => {
   it('shows exact counts below a thousand', () => {

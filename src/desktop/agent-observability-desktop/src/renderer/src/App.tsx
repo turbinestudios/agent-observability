@@ -2,6 +2,7 @@ import type { JSX } from 'react';
 import { useState } from 'react';
 import { SessionsView } from './views/sessions/SessionsView';
 import { OverviewView } from './views/overview/OverviewView';
+import { SettingsView } from './views/settings/SettingsView';
 import { PlaceholderView } from './views/PlaceholderView';
 import { ActivityRail } from './components/ActivityRail';
 import type { ViewId } from './components/ActivityRail';
@@ -37,7 +38,13 @@ export function App(): JSX.Element {
               <OverviewView />
             </div>
           )}
-          {view !== 'sessions' && view !== 'overview' && (
+          {/* Remounted per open, so the snapshot re-reads the config each time. */}
+          {view === 'settings' && (
+            <div className="view-layer">
+              <SettingsView />
+            </div>
+          )}
+          {view !== 'sessions' && view !== 'overview' && view !== 'settings' && (
             <div className="view-layer">
               <PlaceholderView view={view} />
             </div>
