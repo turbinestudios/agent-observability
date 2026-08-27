@@ -6,37 +6,37 @@
   "steps": [
     {
       "title": "Step 1 — Receive OTLP spans",
-      "file": "src/extension/agent-observability-vscode/src/otel/otlpReceiver.ts",
+      "file": "src/core/agent-observability-core/src/otel/otlpReceiver.ts",
       "line": 54,
       "description": "![3: Live updates](.tours/diagrams/d-19.svg)\n\n**▶ Step 1 of 6 in the sequence diagram — `Copilot OTLP → OtlpReceiver: POST OTLP spans`**\n\nCopilot is configured to export OTLP over HTTP to a local port. `OtlpReceiver` is that endpoint — a tiny embedded HTTP server the extension owns, listening only on localhost. Nothing leaves the machine."
     },
     {
       "title": "Step 2 — Decode and forward",
-      "file": "src/extension/agent-observability-vscode/src/otel/otlpReceiver.ts",
+      "file": "src/core/agent-observability-core/src/otel/otlpReceiver.ts",
       "line": 105,
       "description": "![3: Live updates](.tours/diagrams/d-20.svg)\n\n**▶ Step 2 of 6 in the sequence diagram — `OtlpReceiver → LiveOtlpService: decode → onSpans`**\n\nA `/v1/traces` POST is decoded and the resulting span rows are handed to the injected `onSpans` callback. The receiver knows nothing about views or databases — it just decodes and forwards."
     },
     {
       "title": "Step 3 — Ingest, then signal",
-      "file": "src/extension/agent-observability-vscode/src/otel/liveOtlpService.ts",
+      "file": "src/core/agent-observability-core/src/otel/liveOtlpService.ts",
       "line": 95,
       "description": "![3: Live updates](.tours/diagrams/d-21.svg)\n\n**▶ Step 3 of 6 in the sequence diagram — `LiveOtlpService → LiveUpdateController: signal()`**\n\n`LiveOtlpService.onSpans` ingests the rows into the live store, then calls `this.deps.signal()` to tell the shared controller new activity arrived. It never refreshes anything itself."
     },
     {
       "title": "Step 4 — The other producer signals too",
-      "file": "src/extension/agent-observability-vscode/src/live/claudeWatcher.ts",
+      "file": "src/core/agent-observability-core/src/live/claudeWatcher.ts",
       "line": 68,
       "description": "![3: Live updates](.tours/diagrams/d-22.svg)\n\n**▶ Step 4 of 6 in the sequence diagram — `ClaudeWatcher → LiveUpdateController: file change → signal()`**\n\n`ClaudeWatcher` watches Claude's transcript directories. Each filesystem event calls the same `signal()` — so Copilot spans and Claude file writes feed one controller, not two competing refresh loops."
     },
     {
       "title": "Step 5 — Coalesce with one debounce",
-      "file": "src/extension/agent-observability-vscode/src/live/liveUpdateController.ts",
+      "file": "src/core/agent-observability-core/src/live/liveUpdateController.ts",
       "line": 65,
       "description": "![3: Live updates](.tours/diagrams/d-23.svg)\n\n**▶ Step 5 of 6 in the sequence diagram — `LiveUpdateController → Views/panels: debounced refresh`**\n\n`LiveUpdateController.signal` folds a burst of signals into a single debounced flush (default 400 ms), so a storm of spans or file appends becomes one refresh instead of hundreds."
     },
     {
       "title": "Step 6 — Re-query and repaint",
-      "file": "src/extension/agent-observability-vscode/src/live/liveUpdateController.ts",
+      "file": "src/core/agent-observability-core/src/live/liveUpdateController.ts",
       "line": 21,
       "description": "![3: Live updates](.tours/diagrams/d-24.svg)\n\n**▶ Step 6 of 6 in the sequence diagram — `Views/panels → LiveUpdateController: re-query telemetry`**\n\nWhen the debounce fires, the controller invokes its `onRefresh` callback — wired by the extension to re-run the read pipeline (flow 1). The views re-query the read-only snapshot and repaint in near-real-time."
     }

@@ -6,37 +6,37 @@
   "steps": [
     {
       "title": "Step 1 — Detect for a session",
-      "file": "src/extension/agent-observability-vscode/src/deviation/localDeviations.ts",
+      "file": "src/core/agent-observability-core/src/deviation/localDeviations.ts",
       "line": 45,
       "description": "![5: Workflow deviation markers](.tours/diagrams/d-33.svg)\n\n**▶ Step 1 of 7 in the sequence diagram — `session detail → LocalDeviationDetector: detectForSession(turns)`**\n\n`LocalDeviationDetector.detectForSession` is the entry point for one session's markers. It runs entirely on local content — nothing here is ever uploaded."
     },
     {
       "title": "Step 2 — Group interactions by turn",
-      "file": "src/extension/agent-observability-vscode/src/deviation/turnGrouping.ts",
+      "file": "src/core/agent-observability-core/src/deviation/turnGrouping.ts",
       "line": 23,
       "description": "![5: Workflow deviation markers](.tours/diagrams/d-34.svg)\n\n**▶ Step 2 of 7 in the sequence diagram — `LocalDeviationDetector → turnGrouping: groupInteractionsByTurn()`**\n\n`groupInteractionsByTurn` slices the flat interaction list into per-turn buckets using the turn start timestamps, so a deviation can be attributed to the turn that caused it."
     },
     {
       "title": "Step 3 — Walk each workflow's steps",
-      "file": "src/extension/agent-observability-vscode/src/deviation/deviationDetector.ts",
+      "file": "src/core/agent-observability-core/src/deviation/deviationDetector.ts",
       "line": 108,
       "description": "![5: Workflow deviation markers](.tours/diagrams/d-35.svg)\n\n**▶ Step 3 of 7 in the sequence diagram — `LocalDeviationDetector → WorkflowDeviationDetector: detectForTurns(turns, config)`**\n\n`WorkflowDeviationDetector.detectForTurns` walks each configured workflow's ordered steps against the turn's interactions, tracking how far the actual sequence matched."
     },
     {
       "title": "Step 4 — Match a step predicate",
-      "file": "src/extension/agent-observability-vscode/src/deviation/deviationDetector.ts",
+      "file": "src/core/agent-observability-core/src/deviation/deviationDetector.ts",
       "line": 317,
       "description": "![5: Workflow deviation markers](.tours/diagrams/d-36.svg)\n\n**▶ Step 4 of 7 in the sequence diagram — `WorkflowDeviationDetector → contentMatcher: matchesPredicate / content`**\n\n`matchesPredicate` tests one interaction against a step predicate — tool name, phase, and optional content constraints. Metadata predicates work everywhere; content predicates consult the local lookup."
     },
     {
       "title": "Step 5 — Content match, on-device",
-      "file": "src/extension/agent-observability-vscode/src/deviation/contentMatcher.ts",
+      "file": "src/core/agent-observability-core/src/deviation/contentMatcher.ts",
       "line": 78,
       "description": "![5: Workflow deviation markers](.tours/diagrams/d-37.svg)\n\n**▶ Step 5 of 7 in the sequence diagram — `contentMatcher → WorkflowDeviationDetector: match result`**\n\nWhen a predicate includes a content rule, `matchesContent` applies the equals / contains / regex test against the LOCAL span or transcript text. That content is read on-device and never leaves it."
     },
     {
       "title": "Step 6 — Return per-turn deviations",
-      "file": "src/extension/agent-observability-vscode/src/deviation/localDeviations.ts",
+      "file": "src/core/agent-observability-core/src/deviation/localDeviations.ts",
       "line": 82,
       "description": "![5: Workflow deviation markers](.tours/diagrams/d-38.svg)\n\n**▶ Step 6 of 7 in the sequence diagram — `WorkflowDeviationDetector → LocalDeviationDetector: WorkflowDeviation[]`**\n\n`detectForTurns` returns the per-turn `WorkflowDeviation` lists — missing steps, out-of-order steps, or forbidden actions — back to the caller."
     },

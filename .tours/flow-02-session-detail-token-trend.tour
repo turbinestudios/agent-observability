@@ -18,13 +18,13 @@
     },
     {
       "title": "Step 3 — Service delegates to the DB",
-      "file": "src/extension/agent-observability-vscode/src/telemetry/telemetryService.ts",
+      "file": "src/core/agent-observability-core/src/telemetry/telemetryService.ts",
       "line": 426,
       "description": "![2: Session detail & token trend](.tours/diagrams/d-12.svg)\n\n**▶ Step 3 of 9 in the sequence diagram — `TelemetryService → TelemetryDatabase: getSessionDetail()`**\n\nThe Copilot source forwards to `TelemetryService.getSessionDetail`, which opens a read-only snapshot and delegates down to the database layer."
     },
     {
       "title": "Step 4 — The ONLY raw-content read",
-      "file": "src/extension/agent-observability-vscode/src/telemetry/database.ts",
+      "file": "src/core/agent-observability-core/src/telemetry/database.ts",
       "line": 639,
       "description": "![2: Session detail & token trend](.tours/diagrams/d-13.svg)\n\n**▶ Step 4 of 9 in the sequence diagram — `TelemetryDatabase → TelemetryService: SessionDetail (turns, tokens)`**\n\n`TelemetryDatabase.getSessionDetail` is, per its own comment just above (line 630), the ONLY method that reads raw content — prompts, completions, tool I/O. It assembles a `SessionDetail` that stays in-process and never reaches aggregation or sync."
     },
@@ -42,13 +42,13 @@
     },
     {
       "title": "Step 7 — Call renderTokenTrend",
-      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailHtml.ts",
+      "file": "src/core/agent-observability-core/src/views/sessionDetailHtml.ts",
       "line": 362,
       "description": "![2: Session detail & token trend](.tours/diagrams/d-16.svg)\n\n**▶ Step 7 of 9 in the sequence diagram — `sessionDetailHtml → sessionDetailHtml: renderTokenTrend(modelTurns)`**\n\nInside the content, `renderSessionDetailContent` calls `renderTokenTrend(modelTurns, trendSessions)` to draw the per-turn token trend graph."
     },
     {
       "title": "Step 8 — Build the inline SVG",
-      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailHtml.ts",
+      "file": "src/core/agent-observability-core/src/views/sessionDetailHtml.ts",
       "line": 472,
       "description": "![2: Session detail & token trend](.tours/diagrams/d-17.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `sessionDetailHtml → sessionDetailPanel: HTML + SVG trend graph`**\n\n`renderTokenTrend` (defined here) buckets the model turns and emits an inline SVG — input, cached, and output token polylines — with an empty state when there are fewer than two points. No client-side JS or chart library is involved."
     },

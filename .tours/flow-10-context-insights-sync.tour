@@ -6,13 +6,13 @@
   "steps": [
     {
       "title": "Step 1 — Best-effort secondary send",
-      "file": "src/extension/agent-observability-vscode/src/sync/syncEngine.ts",
+      "file": "src/core/agent-observability-core/src/sync/syncEngine.ts",
       "line": 388,
       "description": "![10: Context-insights sync](.tours/diagrams/d-70.svg)\n\n**▶ Step 1 of 7 in the sequence diagram — `SyncEngine → syncClient: sendContextInsights(rows)`**\n\nAfter a successful aggregate sync (flow 7), the engine sends a SEPARATE context-insights batch for the same window via `client.sendContextInsights(batch)`. It is fully isolated — any failure here never affects the aggregate result."
     },
     {
       "title": "Step 2 — POST context-insights",
-      "file": "src/extension/agent-observability-vscode/src/sync/syncClient.ts",
+      "file": "src/core/agent-observability-core/src/sync/syncClient.ts",
       "line": 132,
       "description": "![10: Context-insights sync](.tours/diagrams/d-71.svg)\n\n**▶ Step 2 of 7 in the sequence diagram — `syncClient → IngestionEndpoints: POST /api/ingest/context-insights`**\n\n`SyncClient.sendContextInsights` mirrors `sendBatch` byte-for-byte in transport, auth, and scrubbing — only the path differs: `POST {dashboardUrl}/api/ingest/context-insights`."
     },

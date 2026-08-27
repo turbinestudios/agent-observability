@@ -305,15 +305,32 @@ Packaging notes:
 
 ## Architecture seams
 
-- `src/config/configuration.ts` — typed accessor over `agentObservability.*`
-  settings. The only place that reads `vscode.workspace.getConfiguration`.
-- `src/views/*.ts` — each `TreeDataProvider` exposes a private `getRootItems()`
-  data seam where real data plugs in, and a `refresh()` event emitter.
-- `src/commands/index.ts` — command ids and handler registration.
-- `src/telemetry/*` — read-only SQLite snapshot + safe-metadata queries.
-- `src/aggregate/*` — aggregate engine, pseudonymizer, and the privacy contract test.
-- `src/consent/*`, `src/secrets/*`, `src/sync/*` — consent gating, SecretStorage key, and upload.
-- `src/cloud/*` — the **Copilot (Cloud)** source, built on the proven
+Most of what follows lives in the shared **`@agent-observability/core`** package
+(`src/core/agent-observability-core`), which is host-independent and bundled into
+`dist/extension.js` by esbuild — the paths below are relative to that package's
+`src/` unless marked *(extension)*. Importing `vscode` from core is a lint error;
+when core needs a host capability it declares an interface and the extension
+implements it. See [AGENTS.md](../../../AGENTS.md) for the full rule.
+
+- `config/configuration.ts` — typed accessor over `agentObservability.*`
+  settings, reading through the `SettingsReader` seam. *(extension)*
+  `src/config/vscodeSettings.ts` is the VS Code implementation and the only
+  place that calls `vscode.workspace.getConfiguration`.
+- *(extension)* `src/views/*.ts` — each `TreeDataProvider` exposes a private
+  `getRootItems()` data seam where real data plugs in, and a `refresh()` event
+  emitter. The HTML renderers (`views/sessionDetailHtml.ts`) are in core: pure
+  string builders with no host dependency.
+- *(extension)* `src/commands/index.ts` — command ids and handler registration.
+- `telemetry/*` — read-only SQLite snapshot + safe-metadata queries.
+- `aggregate/*` — aggregate engine, pseudonymizer, and the privacy contract test.
+- `consent/*`, `sync/*` — consent gating and upload, behind `SyncStateStore`;
+  *(extension)* `src/secrets/secretManager.ts` holds the SecretStorage key and
+  `src/sync/globalStateSyncStateStore.ts` persists sync state in `globalState`.
+- Other host adapters *(extension)*: `src/log/outputChannelLogger.ts` (`Logger`),
+  `src/live/vscodeFileWatchFactory.ts` (`FileWatchFactory`),
+  `src/consent/consentManager.ts`, and `src/chat/backends/copilotBackend.ts`
+  (the `vscode.lm` backend; the Claude CLI backend is in core).
+- `cloud/*` — the **Copilot (Cloud)** source, built on the proven
   materialize-then-read pattern: `cloudAgentPoller.ts` (lease-gated background
   loop, idle/active cadence) uses `ghAuth.ts` (per-account token + `capiBase`,
   via `gh` or a SecretStorage token) and `cloudApiClient.ts` (GitHub REST tasks +
@@ -322,3 +339,10 @@ Packaging notes:
   `SessionDataSource` that reads the sink back, with `cloudMapper.ts` /
   `sseParser.ts` turning the raw payloads into the shared session model. Nothing
   here uploads — `getAggregationRows` returns `[]`.
+
+Cross-package imports carry the `/src/` segment, which is the form tsc, esbuild,
+vitest, and Vite all resolve without extra configuration:
+
+```ts
+import { SessionSummary } from '@agent-observability/core/src/telemetry/models';
+```
