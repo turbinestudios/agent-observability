@@ -9,6 +9,24 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.9.1] - 2026-08-29
+
+### Added
+
+- **Copilot is found in VS Code–based editors too.** Every refresh now also
+  scans the app folders beside VS Code — Cursor, VSCodium, Windsurf, and any
+  other editor built on VS Code — for a Copilot database, so sessions from
+  those editors appear without pointing the app at a path by hand.
+
+### Fixed
+
+- **The What's new dialog opens again.** Clicking the sparkle in the sidebar
+  appeared to do nothing: the dialog was there, but a layout slip let a long
+  changelog push it below the bottom edge of the window. It now opens centered
+  on screen, however long the release notes grow.
+- On macOS, dialogs now appear above the title strip instead of being cut off
+  underneath it.
+
 ## [1.9.0] - 2026-08-29
 
 ### Fixed

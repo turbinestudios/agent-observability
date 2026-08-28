@@ -284,8 +284,10 @@ function CopilotResolution({ snapshot }: { snapshot: SettingsSnapshot }): JSX.El
           ))}
         </ul>
         <p>
-          Chat with Copilot in VS Code once and it will be picked up on the next refresh — or point
-          the field above at an <code>agent-traces.db</code> if yours lives somewhere else.
+          Every other VS Code–based editor next to these (Cursor, VSCodium, …) is scanned for the
+          same file automatically. Chat with Copilot in VS Code once and it will be picked up on
+          the next refresh — or point the field above at an <code>agent-traces.db</code> if yours
+          lives somewhere else.
         </p>
       </div>
     );

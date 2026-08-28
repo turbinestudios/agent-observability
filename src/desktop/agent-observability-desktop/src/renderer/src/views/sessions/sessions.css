@@ -203,7 +203,13 @@
 
 .modal {
   width: min(560px, 100%);
-  max-height: 100%;
+  /*
+   * Viewport units, not `100%`: a percentage max-height is cyclic while the
+   * grid sizes its row, so long content would push the centered dialog below
+   * the window (see .changelog-panel). 48px = the backdrop's padding, both
+   * sides.
+   */
+  max-height: calc(100vh - 48px);
   overflow-y: auto;
   padding: 18px 20px;
   border: 1px solid var(--border-strong);

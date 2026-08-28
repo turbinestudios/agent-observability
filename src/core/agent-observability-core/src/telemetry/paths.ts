@@ -15,6 +15,11 @@ import * as fs from 'node:fs';
  *   Copilot Chat writes under `~/.vscode-server/data` (or
  *   `~/.vscode-server-insiders/data`) instead of `~/.config/Code`, so those
  *   directories are additional Linux candidates (`server` / `serverInsiders`).
+ * - Every OTHER app directory beside `Code` in the platform's config root is
+ *   scanned for the same `User/globalStorage/github.copilot-chat/` layout
+ *   (`variant`), so VS Code-derived editors — Cursor, VSCodium, Windsurf, a
+ *   portable build with its own data dir name — are found without anyone
+ *   maintaining a list of them.
  *
  * Every readable database local to this environment is returned and the
  * service layer merges them. Pure I/O checks; opens nothing.
@@ -27,6 +32,7 @@ export type DatabaseSource =
   | 'insiders'
   | 'server'
   | 'serverInsiders'
+  | 'variant'
   | 'ingest'
   | 'none';
 
@@ -94,6 +100,12 @@ export interface PathEnvironment {
   env: Record<string, string | undefined>;
   homedir(): string;
   statKind(candidate: string): PathKind;
+  /**
+   * Names of the subdirectories of `dir` (empty on any error). Optional so
+   * existing test fakes keep working; without it, variant-editor discovery is
+   * simply skipped.
+   */
+  listSubdirectories?(dir: string): string[];
 }
 
 const defaultEnvironment: PathEnvironment = {
@@ -101,6 +113,16 @@ const defaultEnvironment: PathEnvironment = {
   env: process.env,
   homedir: () => os.homedir(),
   statKind,
+  listSubdirectories: (dir: string): string[] => {
+    try {
+      return fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
+    } catch {
+      return [];
+    }
+  },
 };
 
 /**
@@ -108,8 +130,9 @@ const defaultEnvironment: PathEnvironment = {
  *
  * Order: explicit override (sole result) → stable `Code` default → `Code -
  * Insiders` default → (Linux) `~/.vscode-server` / `~/.vscode-server-insiders`
- * data dirs. ALL readable candidates are returned (`databases`); `primary`
- * carries the messaging fallback when none exist.
+ * data dirs → any other config-root app directory with the Copilot layout
+ * (variant editors). ALL readable candidates are returned (`databases`);
+ * `primary` carries the messaging fallback when none exist.
  */
 export function resolveDatabasePaths(
   config: PathConfig,
@@ -127,7 +150,7 @@ export function resolveDatabasePaths(
     };
   }
 
-  const candidates = platformCandidates(environment);
+  const candidates = [...platformCandidates(environment), ...variantCandidates(environment)];
 
   const databases: ResolvedDatabase[] = [];
   const seen = new Set<string>();
@@ -180,6 +203,11 @@ export function resolveDatabasePaths(
  * read from a non-native source (the durable archive / live-ingest DB): a
  * title store can outlive its rolling telemetry DB, so the DB file's existence
  * must not gate title resolution.
+ *
+ * Deliberately EXCLUDES the variant-editor scan: this list is also what the
+ * desktop Settings page shows as "locations checked", and enumerating every
+ * app directory would drown the two paths a user can act on. Variant DBs that
+ * actually exist still surface through {@link resolveDatabasePaths}.
  */
 export function candidateDatabasePaths(
   config: PathConfig,
@@ -240,6 +268,29 @@ function platformCandidates(
 }
 
 /**
+ * Candidates from OTHER apps in the config root that use VS Code's storage
+ * layout: every subdirectory beside `Code` / `Code - Insiders` is a potential
+ * VS Code-derived editor (Cursor, VSCodium, Windsurf, …), and if it has ever
+ * run Copilot Chat it holds the same `User/globalStorage/github.copilot-chat/`
+ * tree. Enumerating beats a hardcoded list of editor names: the caller stats
+ * each candidate anyway, so a config root of N apps costs one readdir plus N
+ * stats per refresh. Sorted for a deterministic scan order.
+ */
+function variantCandidates(
+  environment: PathEnvironment,
+): Array<{ path: string; source: DatabaseSource }> {
+  const root = configRoot(environment);
+  if (root === undefined || environment.listSubdirectories === undefined) {
+    return [];
+  }
+  return environment
+    .listSubdirectories(root)
+    .filter((name) => name !== 'Code' && name !== 'Code - Insiders')
+    .sort()
+    .map((name) => ({ path: path.join(root, name, DB_RELATIVE), source: 'variant' as const }));
+}
+
+/**
  * The platform-default `agent-traces.db` path for a given VS Code variant
  * directory name (`Code` or `Code - Insiders`), or `undefined` on an
  * unsupported platform / missing home dir.
@@ -254,20 +305,29 @@ function platformDbPath(variant: string, environment: PathEnvironment): string |
 
 /** The per-user VS Code data directory for the current platform. */
 function userDataDir(variant: string, environment: PathEnvironment): string | undefined {
+  const root = configRoot(environment);
+  return root === undefined ? undefined : path.join(root, variant);
+}
+
+/**
+ * The platform directory that holds every app's per-user data dir — the parent
+ * of VS Code's `Code`, Cursor's `Cursor`, and so on.
+ */
+function configRoot(environment: PathEnvironment): string | undefined {
   switch (environment.platform) {
     case 'win32': {
       const appData = environment.env.APPDATA;
       if (appData === undefined || appData.length === 0) {
         return undefined;
       }
-      return path.join(appData, variant);
+      return appData;
     }
     case 'darwin': {
       const home = environment.homedir();
       if (home.length === 0) {
         return undefined;
       }
-      return path.join(home, 'Library', 'Application Support', variant);
+      return path.join(home, 'Library', 'Application Support');
     }
     default: {
       // Linux and other XDG-style platforms.
@@ -276,8 +336,7 @@ function userDataDir(variant: string, environment: PathEnvironment): string | un
         return undefined;
       }
       const xdg = environment.env.XDG_CONFIG_HOME;
-      const configBase = xdg !== undefined && xdg.length > 0 ? xdg : path.join(home, '.config');
-      return path.join(configBase, variant);
+      return xdg !== undefined && xdg.length > 0 ? xdg : path.join(home, '.config');
     }
   }
 }

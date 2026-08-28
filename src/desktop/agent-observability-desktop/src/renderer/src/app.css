@@ -8,7 +8,8 @@
  * sits under the traffic lights, and make that strip the drag handle — without
  * it the window cannot be moved at all. Styled as a quiet title bar rather
  * than left transparent, so the reserved space reads as chrome, not as a gap.
- * Sits below the modal overlays (z 90+): a dialog on screen wins the pointer.
+ * Sits above the views and their tooltips (z ≤ 20) but below every dialog
+ * backdrop (z 40+): a dialog on screen paints over the strip, not under it.
  */
 .app-mac {
   padding-top: 38px;
@@ -20,7 +21,7 @@
   left: 0;
   right: 0;
   height: 38px;
-  z-index: 60;
+  z-index: 30;
   -webkit-app-region: drag;
   background: var(--bg-sunken);
   border-bottom: 1px solid var(--border);
@@ -233,8 +234,15 @@
   display: flex;
   flex-direction: column;
   width: min(640px, 100%);
-  /* Tall but never taller than the window: the body scrolls, the header does not. */
-  max-height: min(680px, 100%);
+  /*
+   * Tall but never taller than the window: the body scrolls, the header does
+   * not. Viewport units, not `100%`: a percentage max-height is cyclic while
+   * the grid sizes its row, so the row grows to the panel's full unclamped
+   * content height and centering pushes the clamped panel below the window —
+   * the dialog "never opens" once the changelog is long enough. 64px = the
+   * backdrop's padding, both sides.
+   */
+  max-height: min(680px, calc(100vh - 64px));
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-elevated);

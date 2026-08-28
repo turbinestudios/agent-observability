@@ -28,6 +28,8 @@ interface EnvOptions {
   files?: string[];
   /** Paths that stat as present-but-denied. */
   denied?: string[];
+  /** Subdirectory names per directory, for the variant-editor scan. */
+  subdirs?: Record<string, string[]>;
 }
 
 function makeEnv(opts: EnvOptions): PathEnvironment {
@@ -39,6 +41,9 @@ function makeEnv(opts: EnvOptions): PathEnvironment {
     homedir: () => opts.home ?? '',
     statKind: (candidate: string): PathKind =>
       files.has(candidate) ? 'file' : denied.has(candidate) ? 'denied' : 'absent',
+    ...(opts.subdirs === undefined
+      ? {}
+      : { listSubdirectories: (dir: string) => opts.subdirs?.[dir] ?? [] }),
   };
 }
 
@@ -151,6 +156,69 @@ describe('resolveDatabasePath(s) overrides and macOS', () => {
     const env = makeEnv({ platform: 'darwin', home: LINUX_HOME, files: [serverDb] });
     const r = resolveDatabasePath(makeConfig(), env);
     expect(r.exists).toBe(false);
+  });
+});
+
+describe('variant-editor discovery', () => {
+  const MAC_HOME = LINUX_HOME;
+  const macRoot = path.join(MAC_HOME, 'Library', 'Application Support');
+  const cursorDb = path.join(macRoot, 'Cursor', DB_RELATIVE);
+  const codeDb = path.join(macRoot, 'Code', DB_RELATIVE);
+
+  it('finds a Copilot database under a VS Code-derived editor (macOS Cursor)', () => {
+    const env = makeEnv({
+      platform: 'darwin',
+      home: MAC_HOME,
+      files: [cursorDb],
+      subdirs: { [macRoot]: ['Cursor', 'Firefox', 'Slack'] },
+    });
+    const r = resolveDatabasePaths(makeConfig(), env);
+    expect(r.primary).toEqual({ path: cursorDb, exists: true, source: 'variant' });
+    expect(r.databases).toEqual([{ path: cursorDb, source: 'variant' }]);
+  });
+
+  it('ranks named VS Code candidates ahead of discovered variants', () => {
+    const env = makeEnv({
+      platform: 'darwin',
+      home: MAC_HOME,
+      files: [cursorDb, codeDb],
+      subdirs: { [macRoot]: ['Code', 'Cursor'] },
+    });
+    const r = resolveDatabasePaths(makeConfig(), env);
+    expect(r.databases).toEqual([
+      { path: codeDb, source: 'stable' },
+      { path: cursorDb, source: 'variant' },
+    ]);
+  });
+
+  it('does not duplicate the Code directories the named candidates already cover', () => {
+    const env = makeEnv({
+      platform: 'darwin',
+      home: MAC_HOME,
+      files: [codeDb],
+      subdirs: { [macRoot]: ['Code', 'Code - Insiders'] },
+    });
+    const r = resolveDatabasePaths(makeConfig(), env);
+    expect(r.databases).toEqual([{ path: codeDb, source: 'stable' }]);
+  });
+
+  it('scans %APPDATA% siblings on Windows', () => {
+    const codiumDb = path.join(APPDATA, 'VSCodium', DB_RELATIVE);
+    const env = makeEnv({
+      platform: 'win32',
+      env: { APPDATA },
+      files: [codiumDb],
+      subdirs: { [APPDATA]: ['VSCodium'] },
+    });
+    const r = resolveDatabasePath(makeConfig(), env);
+    expect(r).toEqual({ path: codiumDb, exists: true, source: 'variant' });
+  });
+
+  it('skips the scan when the environment cannot list directories', () => {
+    // No `subdirs` -> the fake has no listSubdirectories, like older seams.
+    const env = makeEnv({ platform: 'darwin', home: MAC_HOME, files: [cursorDb] });
+    const r = resolveDatabasePaths(makeConfig(), env);
+    expect(r.databases).toEqual([]);
   });
 });
 
