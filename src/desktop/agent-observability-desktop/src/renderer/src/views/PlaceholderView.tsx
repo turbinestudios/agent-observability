@@ -12,10 +12,6 @@ const COPY: Record<PlaceholderViewId, { title: string; body: string }> = {
     title: 'AI Helper',
     body: 'A chat assistant grounded in your local session data, running against the Claude Code CLI on this machine.',
   },
-  sync: {
-    title: 'Sync',
-    body: 'Consent, API key, and upload status for opt-in aggregate sharing. Raw session content never leaves this machine.',
-  },
 };
 
 /** The destinations that are still stand-ins, narrowed as each one lands. */

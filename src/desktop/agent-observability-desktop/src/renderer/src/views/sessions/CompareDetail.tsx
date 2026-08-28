@@ -101,53 +101,58 @@ export function CompareDetail({ refs, onClose }: Props): JSX.Element {
     );
   }
 
+  // A labelled way out, in a toolbar of its own rather than floating over the
+  // document — an unlabelled × in the same corner as the single-session Refresh
+  // button read as a different action than it was. Escape still works too.
+  const toolbar = (
+    <div className="compare-toolbar">
+      <span className="compare-title">Comparing {refs.length} sessions</span>
+      <button type="button" className="compare-go" title="Close comparison (Esc)" onClick={onClose}>
+        Close comparison
+      </button>
+    </div>
+  );
+
   if (loading || docUrl === undefined) {
+    // The toolbar is already here while the sessions parse, so the exit is
+    // visible during the one stretch where a user most wants it.
     return (
-      <div className="detail-loading" role="status" aria-live="polite">
-        <Spinner size={44} stroke={3} />
-        <p className="detail-loading-title">Reading {refs.length} sessions…</p>
-        <p className="detail-loading-note">
-          Each one is read in full, so this takes longer than opening a single session.
-        </p>
+      <div className="compare-layout">
+        {toolbar}
+        <div className="detail-loading" role="status" aria-live="polite">
+          <Spinner size={44} stroke={3} />
+          <p className="detail-loading-title">Reading {refs.length} sessions…</p>
+          <p className="detail-loading-note">
+            Each one is read in full, so this takes longer than opening a single session.
+          </p>
+        </div>
       </div>
     );
   }
 
+  // The pane lays its children out in a row; the notes belong above the frame.
   return (
-    <>
-      <button
-        type="button"
-        className="icon-button detail-refresh compare-close"
-        aria-label="Close comparison"
-        title="Close comparison (Esc)"
-        onClick={onClose}
-      >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.3-6.3 1.41 1.42Z" />
-        </svg>
-      </button>
-      {/* The pane lays its children out in a row; the notes belong above the frame. */}
-      <div className="compare-layout">
-        {(costNote !== undefined || skipped > 0) && (
-          <div className="compare-notes">
-            {costNote !== undefined && <p>{costNote}</p>}
-            {skipped > 0 && (
-              <p>
-                {skipped} of the selected sessions could not be read and{' '}
-                {skipped === 1 ? 'is' : 'are'} not included.
-              </p>
-            )}
-          </div>
-        )}
-        <iframe
-          className="detail-frame"
-          title={`${refs.length} sessions combined`}
-          // Same sandbox as a single session: scripts, but no same-origin, so
-          // the document cannot reach this app's DOM or the preload bridge.
-          sandbox="allow-scripts"
-          src={docUrl}
-        />
-      </div>
-    </>
+    <div className="compare-layout">
+      {toolbar}
+      {(costNote !== undefined || skipped > 0) && (
+        <div className="compare-notes">
+          {costNote !== undefined && <p>{costNote}</p>}
+          {skipped > 0 && (
+            <p>
+              {skipped} of the selected sessions could not be read and{' '}
+              {skipped === 1 ? 'is' : 'are'} not included.
+            </p>
+          )}
+        </div>
+      )}
+      <iframe
+        className="detail-frame"
+        title={`${refs.length} sessions combined`}
+        // Same sandbox as a single session: scripts, but no same-origin, so
+        // the document cannot reach this app's DOM or the preload bridge.
+        sandbox="allow-scripts"
+        src={docUrl}
+      />
+    </div>
   );
 }

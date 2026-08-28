@@ -175,6 +175,25 @@ describe('DetailRenderer.renderCombinedDocument', () => {
     expect(single.costNote).toBeUndefined();
   });
 
+  it('marks the off-basis session as not cost-comparable in the comparison table', () => {
+    const renderer = makeRenderer(
+      registry(
+        stubSource('claude', 'Claude Code', 'usd', [A]),
+        stubSource('copilot', 'Copilot', 'aiu', [B]),
+      ),
+    );
+
+    const html = renderer.renderCombinedDocument(
+      [request('claude', A.summary.sessionId), request('copilot', B.summary.sessionId)],
+      'dark',
+    ).html;
+
+    // The per-section costMode flowed through: the diff table renders, and the
+    // minority-basis session's cost row is an honest em dash with the note.
+    expect(html).toContain('class="compare-table"');
+    expect(html).toContain('is billed in a different unit');
+  });
+
   it('leaves out a session it cannot read, and counts it', () => {
     const renderer = makeRenderer(registry(stubSource('claude', 'Claude Code', 'usd', [A])));
 

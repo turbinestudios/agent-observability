@@ -269,6 +269,55 @@ describe('session content', () => {
     expect(db.listSessions({ source: 'copilot' })[0].repository).toBe('unknown');
   });
 
+  it('derives cost from the billed AIU on chat spans — 2 AIU is $0.02', () => {
+    writeSourceDb(
+      [
+        { span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' },
+        { span_id: 's2', chat_session_id: UUID_A, operation_name: 'chat' },
+      ],
+      [
+        ['s1', 'copilot_chat.copilot_usage_nano_aiu', '1500000000'],
+        ['s2', 'copilot_chat.copilot_usage_nano_aiu', '500000000'],
+      ],
+    );
+
+    run();
+    // 2 AIU × $0.01/AIU = $0.02 = 20,000 micro-USD.
+    expect(db.listSessions({ source: 'copilot' })[0].costMicros).toBe(20_000);
+  });
+
+  it('leaves a session with no AIU attribute unpriced — n/a, not free', () => {
+    writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }]);
+    run();
+    expect(db.listSessions({ source: 'copilot' })[0].costMicros).toBeUndefined();
+  });
+
+  it('ignores AIU recorded on non-chat spans', () => {
+    writeSourceDb(
+      [
+        { span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' },
+        { span_id: 's2', chat_session_id: UUID_A, operation_name: 'execute_tool' },
+      ],
+      [
+        ['s1', 'copilot_chat.copilot_usage_nano_aiu', '1000000000'],
+        ['s2', 'copilot_chat.copilot_usage_nano_aiu', '9000000000'],
+      ],
+    );
+
+    run();
+    // Only the chat span's 1 AIU counts: $0.01 = 10,000 micro-USD.
+    expect(db.listSessions({ source: 'copilot' })[0].costMicros).toBe(10_000);
+  });
+
+  it('keeps a recorded zero as a genuine $0.00, distinct from untracked', () => {
+    writeSourceDb(
+      [{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }],
+      [['s1', 'copilot_chat.copilot_usage_nano_aiu', '0']],
+    );
+    run();
+    expect(db.listSessions({ source: 'copilot' })[0].costMicros).toBe(0);
+  });
+
   it('resolves from the workspace store when the spans carry no attribute', () => {
     // Copilot records the repository on a span only sometimes. Without this
     // fallback a whole organisation's sessions read as "unknown" even though

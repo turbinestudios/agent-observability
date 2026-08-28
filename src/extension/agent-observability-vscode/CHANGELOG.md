@@ -4,6 +4,19 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-08-28
+
+### Added
+
+- **Comparing sessions now shows a real diff.** The combined view opens with a
+  comparison table: one row per figure — duration, model turns, tool calls,
+  tokens, errors, cost, lines added and removed — and one column per session,
+  earliest first as the baseline. Every later session carries its change
+  against that baseline, as a percentage where one makes sense, coloured green
+  when the run did better and red when it did worse. Line counts stay neutral —
+  writing more code is a difference, not a verdict. The merged totals and
+  per-session sections are still there, below the table.
+
 ## [0.9.16] - 2026-08-28
 
 ### Fixed

@@ -30,7 +30,12 @@ export interface SessionRow {
   agentModes: string[];
   stateLabel?: string;
   externalUrl?: string;
-  /** Precomputed so list rows never recompute pricing. */
+  /**
+   * Precomputed so list rows never recompute pricing. Integer micro-USD:
+   * estimated token×rate for `claude`, derived from billed AIU for `copilot`.
+   * ABSENT means unpriced (unknown model / AIU untracked), which is not the
+   * same statement as a genuine 0.
+   */
   costMicros?: number;
   /**
    * The source's own name for the session, present only when the user has
@@ -142,6 +147,8 @@ export interface DayPoint {
   sessions: number;
   inputTokens: number;
   outputTokens: number;
+  /** Estimated micro-USD that day; unpriced sessions contribute nothing. */
+  costMicros: number;
 }
 
 /** Totals plus the series the overview view charts. */
@@ -154,19 +161,46 @@ export interface OverviewData {
     inputTokens: number;
     outputTokens: number;
     cachedTokens: number;
+    /** Estimated micro-USD over the PRICED sessions only. */
+    costMicros: number;
+    /**
+     * Sessions with a known cost — the honesty denominator for the cost tile
+     * ("covers N of M sessions"); the rest could not be priced.
+     */
+    costSessions: number;
     repositories: number;
     models: number;
     /** Mean wall-clock length of a session, in ms. */
     avgSessionMs: number;
   };
   /** Per-source totals, ordered by session count. */
-  bySource: { source: string; sessions: number; steps: number; inputTokens: number; outputTokens: number }[];
+  bySource: {
+    source: string;
+    sessions: number;
+    steps: number;
+    inputTokens: number;
+    outputTokens: number;
+    /** Estimated micro-USD for the source's priced sessions. */
+    costMicros: number;
+  }[];
   /** Daily activity for the window below, oldest first, sparse (no empty days). */
   daily: DayPoint[];
   /** How many days `daily` covers. */
   windowDays: number;
   /** Busiest repositories by session count. */
   topRepositories: { repository: string; sessions: number }[];
+  /**
+   * Cost/usage by dominant session model, priciest first. A NULL cost means no
+   * session of that model could be priced — "n/a", never rendered as free.
+   */
+  byModel: {
+    model: string;
+    sessions: number;
+    llmCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    costMicros: number | null;
+  }[];
 }
 
 /**

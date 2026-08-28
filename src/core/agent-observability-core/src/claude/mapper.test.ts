@@ -123,6 +123,48 @@ describe('buildSessionSummary (main thread only)', () => {
     expect(s.titleDerived).toBe(false);
     expect(s.agentModes).toEqual(['agent']);
   });
+
+  it('prices the main thread with the same per-turn code the detail view sums', () => {
+    const s = buildSessionSummary(input());
+    // Exactly the two main-thread turns, priced turn by turn — the sub-agent is
+    // excluded here just like its tokens are.
+    expect(s.costMicros).toBe(
+      claudeCostMicros(OPUS, { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 100, cache_creation_input_tokens: 50 }) +
+        claudeCostMicros(OPUS, { input_tokens: 5, output_tokens: 8 }),
+    );
+  });
+
+  it('reports a session priced by no known model as UNPRICED, not $0', () => {
+    const records = mainRecords().map((r) =>
+      r.type === 'assistant'
+        ? { ...r, message: { ...(r as { message: { model?: string } }).message, model: 'totally-unknown-model' } }
+        : r,
+    ) as TranscriptRecord[];
+    const s = buildSessionSummary({ ...input(), mainRecords: records });
+    expect(s.costMicros).toBeUndefined();
+  });
+
+  it('reports a session with no LLM turns as a genuine 0', () => {
+    const s = buildSessionSummary({
+      ...input(),
+      mainRecords: [
+        { type: 'user', timestamp: '2026-05-01T10:00:00.000Z', cwd: '/repo', message: { role: 'user', content: 'hi' } },
+      ],
+    });
+    expect(s.costMicros).toBe(0);
+  });
+
+  it('sums the priceable turns when models are mixed, matching the detail rollup', () => {
+    const records = mainRecords();
+    // Rewrite ONE assistant turn to an unpriceable model; the other stays Opus.
+    const firstAssistant = records.findIndex((r) => r.type === 'assistant');
+    const target = records[firstAssistant] as TranscriptRecord & { message: { model?: string } };
+    target.message.model = 'totally-unknown-model';
+
+    const s = buildSessionSummary({ ...input(), mainRecords: records });
+    // The unknown turn contributes nothing — same as the detail view's rollups.
+    expect(s.costMicros).toBe(claudeCostMicros(OPUS, { input_tokens: 5, output_tokens: 8 }));
+  });
 });
 
 describe('buildSessionDetail (whole tree)', () => {

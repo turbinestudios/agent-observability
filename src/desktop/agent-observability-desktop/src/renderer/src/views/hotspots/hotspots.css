@@ -6,6 +6,10 @@
  */
 
 .hotspots {
+  /* Fill the flex .view-layer, or the pane shrink-wraps the table and the
+   * scrollbar floats mid-window instead of hugging the right edge. */
+  flex: 1;
+  min-width: 0;
   height: 100%;
   overflow-y: auto;
   padding: 24px 28px 40px;

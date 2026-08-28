@@ -8,9 +8,17 @@ import {
   SessionTimelineEntry,
   SessionTurn,
   SessionModelTurnPoint,
+  SessionSummary,
 } from '../telemetry/models';
-import { WorkflowDeviation } from '../deviation/models';
+import { DeviationType, WorkflowDeviation } from '../deviation/models';
 import { SessionContextAnalysis, AgentContextAnalysis, ContextFileEntry } from '../context/models';
+import {
+  computeSessionComparison,
+  ComparisonCell,
+  ComparisonRow,
+  MetricId,
+  SessionComparison,
+} from '../telemetry/sessionComparison';
 import { aiuToUsd } from '../telemetry/pricing';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 import { OVERSIZED_THRESHOLD_TOKENS } from '../context/sizeEstimator';
@@ -69,6 +77,14 @@ export interface CombinedSessionSection {
    * `detail.turns` and rendered as chips inside the timeline (no overview section).
    */
   turnDeviations: readonly (readonly WorkflowDeviation[])[];
+  /**
+   * THIS session's own cost basis, when the host mixes sources in one comparison
+   * (the desktop app can select Copilot and Claude sessions together). The
+   * comparison table uses it to mark a session whose basis differs from the
+   * render's chosen one as not cost-comparable, instead of showing a false 0.
+   * Absent means "same as the chosen basis" (the extension's uniform case).
+   */
+  costMode?: CostMode;
 }
 
 /**
@@ -181,7 +197,7 @@ export function renderSessionDetailContent(
     <button class="tab-btn" data-tab="tab-context">Context Analysis</button>
   </nav>` : ''}
   <div class="tab-panel${hasContext ? '' : ' tab-panel-only'}" id="tab-overview">
-  ${renderHeader(detail)}
+  ${renderHeader(detail, turnDeviations)}
   ${renderTreeSummary(detail.treeStats, detail.treeModelTurns, undefined, costMode)}
   ${renderMainAgentUsage(detail.agentUsage, costMode)}
   ${renderSubAgentUsage(detail.agentUsage, costMode)}
@@ -267,6 +283,7 @@ export function renderCombinedSessionDetailContent(
   }));
 
   return `${renderCombinedHeader(combined.summary)}
+  ${renderComparisonTable(sections, costMode)}
   ${renderTreeSummary(combined.treeStats, mergedModelTurns, trendSessions, costMode)}
   ${renderMainAgentUsage(combined.agentUsage, costMode)}
   ${renderSubAgentUsage(combined.agentUsage, costMode)}
@@ -293,6 +310,146 @@ function renderCombinedHeader(summary: CombinedSummary): string {
       <div><dt>Duration</dt><dd>${escapeHtml(formatDuration(summary.spanMs))}</dd></div>
     </dl>
   </header>`;
+}
+
+/** Format one comparison value (or absolute delta magnitude) per its row. */
+function comparisonValue(row: ComparisonRow, value: number, comparison: SessionComparison): string {
+  if (row.format === 'duration') {
+    return escapeHtml(formatDuration(value));
+  }
+  if (row.format === 'cost') {
+    if (comparison.costMode === 'usd') {
+      return formatUsdMicros(value);
+    }
+    if (comparison.costMode === 'credits') {
+      return formatCredits(value, comparison.creditUnit);
+    }
+    return formatAiu(value);
+  }
+  return formatInt(value);
+}
+
+/**
+ * One cell's delta badge: direction glyph plus the percentage change against
+ * the baseline — or the absolute change when a percentage is meaningless (the
+ * baseline was 0, e.g. errors going 0 → 2). The tooltip always carries the
+ * absolute change. `=` marks no change; neutral rows (line counts) keep their
+ * badge uncoloured because more code is not better or worse, just different.
+ */
+function comparisonDelta(row: ComparisonRow, cell: ComparisonCell, comparison: SessionComparison): string {
+  const delta = cell.delta;
+  if (delta === undefined) {
+    return '';
+  }
+  const absText = comparisonValue(row, Math.abs(delta.abs), comparison);
+  if (delta.sentiment === 'same') {
+    return `<span class="compare-delta compare-same" title="No change vs. the baseline">=</span>`;
+  }
+  const arrow = delta.abs > 0 ? '▲' : '▼';
+  const sign = delta.abs > 0 ? '+' : '−';
+  const badge =
+    delta.pct !== undefined
+      ? `${arrow} ${formatInt(Math.round(Math.abs(delta.pct)))}%`
+      : `${arrow} ${absText}`;
+  return `<span class="compare-delta compare-${delta.sentiment}" title="${sign}${absText} vs. the baseline">${badge}</span>`;
+}
+
+/**
+ * The comparison table — the diff the combined view opens with. Rows are
+ * metrics; one column per session in the caller's start-time order, the
+ * earliest being the BASELINE every other column's delta badge is measured
+ * against ({@link computeSessionComparison} owns the delta semantics). The
+ * merged totals, usage tables and trend stay below as the aggregate reading;
+ * this table is the side-by-side one.
+ *
+ * A session billed on a different basis than the render's shows an em dash in
+ * the cost row (never a fabricated 0), with one note under the table naming the
+ * excluded sessions. Returns '' for fewer than two sections — a single
+ * remaining session (the others failed to load) has nothing to diff against.
+ */
+function renderComparisonTable(
+  sections: readonly CombinedSessionSection[],
+  costMode: CostMode,
+): string {
+  if (sections.length < 2) {
+    return '';
+  }
+  const comparison = computeSessionComparison(
+    sections.map((s) => ({
+      detail: s.detail,
+      ...(s.costMode !== undefined ? { costMode: s.costMode } : {}),
+    })),
+    costMode,
+  );
+
+  const headerCells = comparison.columns
+    .map((col) => {
+      const id = shortId(col.sessionId);
+      const tooltip = `${col.title !== undefined && col.title.length > 0 ? `${truncate(col.title, 80)} · ` : ''}${
+        col.sessionId
+      } · started ${formatLocal(col.startedAtMs)}`;
+      const baseBadge = col.isBaseline ? '<span class="compare-col-base">baseline</span>' : '';
+      return `<th class="compare-col${col.isBaseline ? ' compare-baseline-col' : ''}" title="${escapeHtml(tooltip)}">
+        <span class="compare-col-id">${escapeHtml(id)}</span>
+        <span class="compare-col-time">${escapeHtml(formatTime(col.startedAtMs))}</span>
+        ${baseBadge}
+      </th>`;
+    })
+    .join('\n');
+
+  const costLabel =
+    costMode === 'usd'
+      ? { label: 'Est. cost (USD)', help: 'Estimated USD cost (token×rate) over the whole agent tree' }
+      : costMode === 'credits'
+        ? {
+            label: creditUnitLabel(comparison.creditUnit),
+            help: 'GitHub cloud coding-agent credit usage — the billed unit; no published $ rate',
+          }
+        : { label: 'Copilot usage (AIU)', help: 'AIU (premium-request units) — the actual billed usage, with the derived cost at $0.01/AIU' };
+
+  const bodyRows = comparison.rows
+    .map((row) => {
+      const meta = row.id === 'cost' ? costLabel : COMPARISON_LABELS[row.id];
+      const cells = row.cells
+        .map((cell) => {
+          if (cell.value === undefined) {
+            return `<td class="n"><span title="This session bills in a different unit; see the note below">—</span></td>`;
+          }
+          return `<td class="n">${comparisonValue(row, cell.value, comparison)}${comparisonDelta(row, cell, comparison)}</td>`;
+        })
+        .join('\n');
+      return `<tr>
+        <td class="compare-metric" title="${escapeHtml(meta.help)}">${escapeHtml(meta.label)}</td>
+        ${cells}
+      </tr>`;
+    })
+    .join('\n');
+
+  const excluded = comparison.columns.filter((col) => col.costExcluded);
+  const costNote =
+    excluded.length > 0
+      ? `<p class="muted compare-cost-note">Cost for ${excluded
+          .map((col) => escapeHtml(shortId(col.sessionId)))
+          .join(', ')} is billed in a different unit and is not comparable here.</p>`
+      : '';
+
+  return `<section class="panel">
+    <div class="panel-heading"><h2>Comparison</h2><span>changes measured against the earliest session (baseline)</span></div>
+    <div class="compare-table-wrap">
+      <table class="compare-table">
+        <thead>
+          <tr>
+            <th class="compare-metric">Metric</th>
+            ${headerCells}
+          </tr>
+        </thead>
+        <tbody>
+          ${bodyRows}
+        </tbody>
+      </table>
+    </div>
+    ${costNote}
+  </section>`;
 }
 
 /** One covered repository and how many of its sessions loaded into the aggregate. */
@@ -463,8 +620,12 @@ function renderSessionSection(
       ? `<span class="turn-tokens">$${aiuToUsd(detail.treeStats.aiuNano).toFixed(2)}</span>`
       : '';
   })();
+  const flaggedDot =
+    turnDeviations.some((list) => list.length > 0)
+      ? '<span class="deviation-dot" title="This session was flagged — open it for the reason"></span>'
+      : '';
   const summaryRow =
-    `<span class="time">${escapeHtml(formatTime(s.startedAtMs))}</span>${titleLabel}` +
+    `<span class="time">${escapeHtml(formatTime(s.startedAtMs))}</span>${titleLabel}${flaggedDot}` +
     `<span class="mode">${id} · ${num(detail.turns.length)} turn(s) · ${num(s.llmCalls)} LLM · ${num(s.toolCalls)} tool</span>${costLabel}`;
 
   const meta = `<dl class="meta section-meta">
@@ -476,7 +637,9 @@ function renderSessionSection(
   return `<details class="turn-request session-section"${open ? ' open' : ''} data-k="s${num(index)}">
     <summary>${summaryRow}</summary>
     <div class="section-body">
+      ${renderRenameNote(s)}
       ${meta}
+      ${renderDeviationSummary(turnDeviations, detail.turns.length)}
       ${renderTurns(detail.turns, turnDeviations, `s${num(index)}t`)}
     </div>
   </details>`;
@@ -493,7 +656,10 @@ function renderSessionSection(
  * The repository is omitted rather than shown as "unknown": a session whose
  * remote could not be resolved is common and saying so adds nothing.
  */
-function renderHeader(detail: SessionDetail): string {
+function renderHeader(
+  detail: SessionDetail,
+  turnDeviations: readonly (readonly WorkflowDeviation[])[] = [],
+): string {
   const s = detail.summary;
   const title = s.title !== undefined && s.title.length > 0 ? s.title : undefined;
   // When titled, the id moves up into the eyebrow so it stays discoverable.
@@ -512,6 +678,7 @@ function renderHeader(detail: SessionDetail): string {
   return `<header class="header">
     <p class="eyebrow">${escapeHtml(eyebrow)}</p>
     <h1>${escapeHtml(heading)}</h1>
+    ${renderRenameNote(s)}
     <dl class="meta">
       ${repoRow}
       <div><dt>Started</dt><dd>${escapeHtml(formatLocal(s.startedAtMs))}</dd></div>
@@ -519,7 +686,107 @@ function renderHeader(detail: SessionDetail): string {
       <div><dt>Duration</dt><dd>${escapeHtml(formatDuration(s.durationMs))}</dd></div>
       ${externalRow}
     </dl>
+    ${renderDeviationSummary(turnDeviations, detail.turns.length)}
   </header>`;
+}
+
+/**
+ * A note saying the title on screen is the user's own, with the name it
+ * replaced.
+ *
+ * The Sessions list marks a renamed session with a dot; without this, opening
+ * that session shows the new name and nothing else, so the mark has no
+ * explanation anywhere and the original name is unrecoverable from the view.
+ * The dot here is the same shape and colour as the list's, which is what tells
+ * a reader the two marks are the same statement.
+ *
+ * Returns '' unless the session was renamed.
+ */
+function renderRenameNote(summary: SessionSummary): string {
+  const original = summary.titleOriginal;
+  if (original === undefined || original.length === 0) {
+    return '';
+  }
+  return `<p class="rename-note"><span class="rename-dot" aria-hidden="true"></span>Renamed by you — originally <span class="rename-original">${escapeHtml(
+    truncate(original, 80),
+  )}</span></p>`;
+}
+
+/**
+ * Plain-language name for each deviation type.
+ *
+ * The card on the turn shows the raw type as a badge, which is precise but only
+ * meaningful to someone who already knows the taxonomy. The header banner is
+ * where a reader meets the flag FIRST — coming from a dot in the session list
+ * that told them nothing — so it says what happened in words instead.
+ */
+const DEVIATION_LABEL: Record<string, string> = {
+  [DeviationType.TimeoutExceeded]: 'Ran long',
+  [DeviationType.ToolUsageAnomaly]: 'Tools mostly failing',
+  [DeviationType.SequenceDeviation]: 'Steps out of order',
+  [DeviationType.MissingSteps]: 'Steps skipped',
+};
+
+/** Reasons listed in the header before the rest are rolled into a count. */
+const HEADER_DEVIATION_LIMIT = 4;
+
+/**
+ * Why this session is flagged, stated at the top where the reader is looking.
+ *
+ * Without this the only explanation lives on the offending turn, inside a
+ * collapsed disclosure some way down the page — so a session marked in the list
+ * opens on a header that says nothing about the mark, and the feature reads as
+ * decoration. The banner carries the SAME dot and colour as the list row, which
+ * is what connects the two.
+ *
+ * Returns '' when the session is clean, so an unflagged header is untouched.
+ */
+function renderDeviationSummary(
+  turnDeviations: readonly (readonly WorkflowDeviation[])[],
+  turnCount: number,
+): string {
+  const flagged: Array<{ turn: number; deviation: WorkflowDeviation }> = [];
+  turnDeviations.forEach((list, index) => {
+    for (const deviation of list) {
+      flagged.push({ turn: index + 1, deviation });
+    }
+  });
+  if (flagged.length === 0) {
+    return '';
+  }
+
+  const turnsAffected = new Set(flagged.map((f) => f.turn)).size;
+  const headline =
+    turnsAffected === 1
+      ? `1 of ${num(turnCount)} turn(s) diverged`
+      : `${num(turnsAffected)} of ${num(turnCount)} turn(s) diverged`;
+
+  const items = flagged
+    .slice(0, HEADER_DEVIATION_LIMIT)
+    .map((f) => {
+      const label = DEVIATION_LABEL[f.deviation.type] ?? f.deviation.type;
+      const local = f.deviation.contentDerived === true
+        ? ' <span class="badge badge-local" title="Derived from local-only content. Never eligible for sync.">Local only</span>'
+        : '';
+      return `<li><strong>Turn ${num(f.turn)}</strong> · ${escapeHtml(label)} — ${escapeHtml(
+        f.deviation.description,
+      )}${local}</li>`;
+    })
+    .join('\n');
+  const more =
+    flagged.length > HEADER_DEVIATION_LIMIT
+      ? `<li class="muted">and ${num(flagged.length - HEADER_DEVIATION_LIMIT)} more, marked on their turns below</li>`
+      : '';
+
+  return `<div class="deviation-summary" role="status">
+    <p class="deviation-summary-head"><span class="deviation-dot" aria-hidden="true"></span>Flagged — ${escapeHtml(
+      headline,
+    )}</p>
+    <ul class="deviation-summary-list">
+      ${items}
+      ${more}
+    </ul>
+  </div>`;
 }
 
 /**
@@ -649,6 +916,32 @@ const TREND_SERIES_HELP: Record<'input' | 'cached' | 'output', string> = {
 function metricTitle(acronym: string, label: string): string {
   return METRIC_HELP[acronym] ?? label;
 }
+
+/**
+ * Row label + hover help for each comparison metric. Tooltips reuse
+ * {@link METRIC_HELP} so a shorthand means the same thing on every surface; the
+ * two rows whose scope differs from the tree-scoped rest say so in their label
+ * (duration is per-session wall clock, LLM calls are main-thread only).
+ * Declared after {@link METRIC_HELP}, which it reads at module load.
+ */
+const COMPARISON_LABELS: Record<Exclude<MetricId, 'cost'>, { label: string; help: string }> = {
+  duration: { label: 'Duration', help: 'Wall-clock duration of the session, start to end' },
+  modelTurns: { label: 'Model turns', help: METRIC_HELP.MT },
+  toolCalls: { label: 'Tool calls', help: METRIC_HELP.TC },
+  llmCalls: {
+    label: 'LLM calls (main thread)',
+    help: 'Main-thread LLM calls only — spawned sub-agents are excluded here, unlike the token rows',
+  },
+  inputTokens: { label: 'Input tokens', help: METRIC_HELP.TIN },
+  outputTokens: { label: 'Output tokens', help: METRIC_HELP.TOUT },
+  cachedTokens: { label: 'Cached tokens', help: METRIC_HELP.TCI },
+  totalTokens: { label: 'Total tokens', help: METRIC_HELP.TT },
+  errors: { label: 'Errors', help: METRIC_HELP.ERR },
+  loc: { label: 'LoC added', help: METRIC_HELP.LOC },
+  lod: { label: 'LoD added', help: METRIC_HELP.LOD },
+  nloc: { label: 'LoC removed', help: METRIC_HELP.nLOC },
+  nlod: { label: 'LoD removed', help: METRIC_HELP.nLOD },
+};
 
 /**
  * "Agent run totals" card without the token trend: just the stat tiles, spread
@@ -1874,12 +2167,44 @@ const STYLE = `
   .badge-local { background: var(--vscode-inputValidation-warningBackground, transparent); color: var(--vscode-editorWarning-foreground, #c90); border: 1px solid var(--vscode-editorWarning-foreground, #c90); }
   .seq { font-size: .82rem; color: var(--vscode-descriptionForeground); }
   .turn-deviations { display: flex; flex-direction: column; gap: .4rem; padding: .5rem .6rem; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
+  /* The flag, restated where the reader lands. The dot is deliberately the same
+     shape and colour as the one the session list puts on a flagged row — that
+     match is what tells a reader the two marks mean the same thing. */
+  .deviation-summary { margin-top: .9rem; padding: .55rem .7rem; border-left: 3px solid var(--vscode-editorWarning-foreground, #c90); border-radius: 0 4px 4px 0; background: var(--vscode-inputValidation-warningBackground, transparent); }
+  .deviation-summary-head { display: flex; align-items: center; gap: .45rem; margin: 0; font-weight: 600; color: var(--vscode-editorWarning-foreground, #c90); }
+  .deviation-summary-list { margin: .35rem 0 0; padding-left: 1.1rem; }
+  .deviation-summary-list li { margin: .15rem 0; }
+  .deviation-dot { flex: none; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-editorWarning-foreground, #c90); }
+  .session-section .deviation-dot { margin-left: .1rem; }
+  /* The rename mark, matching the accent dot the session list puts on a renamed
+     row. Quiet by design: it explains a mark, it is not itself a finding. */
+  .rename-note { display: flex; align-items: center; gap: .45rem; margin: .3rem 0 0; color: var(--vscode-descriptionForeground); font-size: .85rem; }
+  .rename-dot { flex: none; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-textLink-foreground); }
+  .rename-original { color: var(--vscode-foreground); font-style: italic; }
   table { width: 100%; border-collapse: collapse; font-size: .85rem; }
   th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
   thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); font-weight: 600; }
   td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
   td.model { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }
   tfoot td { font-weight: 600; border-bottom: none; border-top: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border)); }
+  /* ─── Comparison table (combined view) ────────────────────
+     One column per session, so the table scrolls sideways inside its wrap while
+     the metric column stays pinned — its background must be opaque (the panel's
+     own) or values ghost beneath the labels while scrolling. Better/worse reuse
+     the ✓/✗ colours, which both hosts define in light and dark. */
+  .compare-table-wrap { overflow-x: auto; }
+  .compare-table { width: max-content; min-width: 100%; }
+  .compare-table th, .compare-table td { white-space: nowrap; }
+  .compare-table td.compare-metric, .compare-table th.compare-metric { text-align: left; position: sticky; left: 0; z-index: 1; background: var(--vscode-editorWidget-background); }
+  .compare-col { text-align: right; }
+  .compare-col-id { display: block; font-family: var(--vscode-editor-font-family, monospace); text-transform: none; letter-spacing: normal; }
+  .compare-col-time { display: block; font-weight: 400; color: var(--vscode-descriptionForeground); }
+  .compare-col-base { display: inline-block; font-size: .62rem; padding: 0 .3rem; border-radius: 3px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); text-transform: lowercase; letter-spacing: normal; }
+  .compare-delta { display: block; font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .compare-delta.compare-better { color: var(--vscode-testing-iconPassed, #3a3); }
+  .compare-delta.compare-worse { color: var(--vscode-testing-iconFailed, #d33); }
+  .compare-delta.compare-same, .compare-delta.compare-neutral { color: var(--vscode-descriptionForeground); }
+  .compare-cost-note { font-size: .78rem; margin: .4rem 0 0; }
   .section-body { padding: 0 .6rem .6rem; }
   .section-body .panel { background: transparent; }
   .section-meta { margin: .6rem 0; }

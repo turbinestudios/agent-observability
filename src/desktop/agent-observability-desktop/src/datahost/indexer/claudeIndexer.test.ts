@@ -192,6 +192,55 @@ describe('incremental passes', () => {
   });
 });
 
+describe('cost', () => {
+  // The fixture's every assistant turn is claude-sonnet-4 with usage
+  // {input 100, output 50, cache read 10}: 100×$3/M + 50×$15/M + 10×$3/M×0.1
+  // = 1,053 micro-USD per turn — the same token×rate pricing the detail view
+  // uses, so the row and the detail agree.
+  const MICROS_PER_TURN = 1_053;
+
+  it('prices a hydrated session from its parsed turns', () => {
+    writeTranscript('sess-a', 3);
+    runIndexer();
+
+    expect(db.listSessions({})[0].costMicros).toBe(3 * MICROS_PER_TURN);
+  });
+
+  it('stores NULL for a session no known model can price — n/a, not free', () => {
+    const dir = path.join(projects, '-work-app');
+    fs.mkdirSync(dir, { recursive: true });
+    const line = JSON.stringify({
+      type: 'assistant',
+      cwd: path.join(root, 'work', 'app'),
+      sessionId: 'sess-unknown',
+      timestamp: new Date(1_700_000_000_000).toISOString(),
+      message: {
+        role: 'assistant',
+        model: 'totally-unknown-model',
+        content: [{ type: 'text', text: 'answer' }],
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    });
+    fs.writeFileSync(path.join(dir, 'sess-unknown.jsonl'), line + '\n', 'utf8');
+
+    runIndexer();
+
+    expect(db.listSessions({})[0].costMicros).toBeUndefined();
+  });
+
+  it('re-prices the whole session when the transcript grows', () => {
+    const file = writeTranscript('sess-a', 2);
+    runIndexer();
+    expect(db.listSessions({})[0].costMicros).toBe(2 * MICROS_PER_TURN);
+
+    // The appended turn uses {input 5, output 5}: 5×$3/M + 5×$15/M = 90 micro-USD.
+    appendTurn(file, 'sess-a');
+    runIndexer();
+
+    expect(db.listSessions({})[0].costMicros).toBe(2 * MICROS_PER_TURN + 90);
+  });
+});
+
 describe('resilience', () => {
   it('skips a corrupt transcript without failing the pass', () => {
     writeTranscript('good', 2);

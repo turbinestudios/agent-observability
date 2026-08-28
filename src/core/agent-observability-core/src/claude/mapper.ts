@@ -38,7 +38,7 @@ import { mapToolName } from '../aggregate/builtinTools';
 import { sanitizeModelId } from '../aggregate/modelId';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 import { countClaudeWrittenLines, WriteLineDelta } from '../telemetry/locAnalysis';
-import { claudeCostMicros } from './pricing';
+import { claudeCostMicros, isKnownModel } from './pricing';
 import {
   ContentBlock,
   TranscriptMessage,
@@ -154,14 +154,27 @@ export function buildSessionSummary(
   let outputTokens = 0;
   let cachedTokens = 0;
   let toolCalls = 0;
+  let costMicros = 0;
+  let pricedTurns = 0;
   const modelCounts = new Map<string, number>();
   for (const turn of turns) {
     inputTokens += turn.inputTokens;
     outputTokens += turn.outputTokens;
     cachedTokens += turn.cachedTokens;
     toolCalls += turn.tools.length;
+    // Per-turn cost is already priced by the same code the detail view sums
+    // (an unknown model contributes 0), so list and detail agree by
+    // construction. Tracking how many turns WERE priceable is what separates
+    // "genuinely free" from "could not be priced".
+    costMicros += turn.costMicros;
+    if (isKnownModel(turn.model)) {
+      pricedTurns += 1;
+    }
     modelCounts.set(turn.model, (modelCounts.get(turn.model) ?? 0) + 1);
   }
+  // A session with LLM turns but no priceable model is UNPRICED (absent), never
+  // a fabricated $0; a session with no LLM turns at all genuinely cost 0.
+  const unpriced = turns.length > 0 && pricedTurns === 0;
 
   const title = resolveTitle(input.mainRecords);
   return {
@@ -176,6 +189,7 @@ export function buildSessionSummary(
     inputTokens,
     outputTokens,
     cachedTokens,
+    ...(unpriced ? {} : { costMicros }),
     model: dominantModel(modelCounts),
     agentModes: [CLAUDE_AGENT_MODE],
     source: CLAUDE_SOURCE,

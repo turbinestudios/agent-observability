@@ -127,6 +127,15 @@ export interface SessionSummary {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  /**
+   * LOCAL-ONLY estimated main-thread cost in INTEGER micro-USD (1 USD = 1e6).
+   * Set by the Claude Code source (token×rate over the same per-turn usage the
+   * detail view prices — see `../claude/pricing.ts`), so a list row and the
+   * detail's Main agent row agree by construction. ABSENT means the session had
+   * LLM calls but none could be priced (unknown model) — "unpriced", which is
+   * not the same statement as a true `0`. Never on the aggregate/sync path.
+   */
+  costMicros?: number;
   /** Responding model (`sessions.model`), else `unknown`. */
   model: string;
   /** Distinct mapped agent modes seen in the session. */
@@ -143,6 +152,16 @@ export interface SessionSummary {
   title?: string;
   /** `true` when {@link title} was derived from the first request's text. */
   titleDerived?: boolean;
+  /**
+   * LOCAL-ONLY: the name this session had BEFORE the user renamed it, present
+   * only when they did. Lets the detail view say the title on screen is the
+   * user's own — a session marked as renamed in the list would otherwise open on
+   * a header that gives no sign of it, and no way back to the original name.
+   *
+   * Same privacy class as {@link title}: local display only, never on the
+   * aggregate/sync path.
+   */
+  titleOriginal?: string;
   /**
    * Which agent tool produced this session ({@link AgentSourceId}). Absent for
    * Copilot sessions (treated as `copilot`); set to `claude` by the Claude Code

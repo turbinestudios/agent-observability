@@ -230,6 +230,7 @@ export class ClaudeIndexer {
       inputTokens: summary.inputTokens,
       outputTokens: summary.outputTokens,
       cachedTokens: summary.cachedTokens,
+      costMicros: summary.costMicros,
       model: summary.model,
       agentModes: [...summary.agentModes],
       stateLabel: summary.stateLabel,

@@ -123,6 +123,18 @@
   white-space: nowrap;
 }
 
+/* A caveat under a card's table (e.g. how model cost attribution works). */
+.card-caption {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+
+/* "n/a" cost cells: unpriced, deliberately quieter than a real figure. */
+.cost-na {
+  color: var(--fg-subtle);
+}
+
 .overview-split {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));

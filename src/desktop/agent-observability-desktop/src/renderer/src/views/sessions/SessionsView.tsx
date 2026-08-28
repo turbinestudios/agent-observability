@@ -10,9 +10,10 @@ import { CompareDetail } from './CompareDetail';
 import { CompareBar } from './CompareBar';
 import { IndexStatusBar } from './IndexStatusBar';
 import { SourceFilter } from './SourceFilter';
+import { Spinner } from '../../components/Spinner';
 import { DeleteDialog } from './DeleteDialog';
 import { toggleSelection } from './selection';
-import { formatDuration, formatRelative, formatTokens, sourceLabel } from './format';
+import { formatCost, formatDuration, formatRelative, formatTokens, sourceLabel } from './format';
 import './sessions.css';
 
 /**
@@ -205,11 +206,17 @@ export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent })
 
         <div className="sessions-scroll" ref={scrollRef}>
           {/*
-            "No sessions yet" is only true once nothing is still arriving.
-            Showing it during the first index pass would flash a wrong answer
-            before the rows land.
+            An empty list has three quite different meanings, and showing the
+            wrong one is worse than showing nothing: still working, genuinely
+            empty, or filtered to nothing. "No sessions yet" is only true once
+            nothing is still arriving — during the first index pass it would
+            flash a wrong answer before the rows land — so the working case gets
+            a spinner of its own here, in the list, where the user is looking
+            for the rows.
           */}
-          {rows.length === 0 && !loading && !busy ? (
+          {rows.length === 0 && (loading || busy) ? (
+            <ListLoading busy={busy} />
+          ) : rows.length === 0 ? (
             <EmptyState query={query} />
           ) : (
             <div className="sessions-virtual" style={{ height: virtualizer.getTotalSize() }}>
@@ -281,6 +288,20 @@ export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent })
 function toRef(key: string): SessionRef {
   const at = key.indexOf(':');
   return { source: key.slice(0, at), sessionId: key.slice(at + 1) };
+}
+
+/**
+ * The list is working. Deliberately brief: while the index is building, the
+ * status bar directly above already explains what is happening and how far
+ * along it is, so repeating it here would just be louder, not clearer.
+ */
+function ListLoading({ busy }: { busy: boolean }): JSX.Element {
+  return (
+    <div className="sessions-loading" role="status" aria-live="polite">
+      <Spinner size={22} stroke={2.5} />
+      <p>{busy ? 'Finding your sessions…' : 'Loading sessions…'}</p>
+    </div>
+  );
 }
 
 function EmptyState({ query }: { query: string }): JSX.Element {
@@ -461,6 +482,9 @@ function SessionRowItem({
           <span className="session-meta">
             {row.interactionCount.toLocaleString()} steps · {formatTokens(row.inputTokens + row.outputTokens)} ·{' '}
             {formatDuration(row.durationMs)}
+            {/* Silence, not "n/a", when unpriced: the meta line would say it on
+                every unpriced row; the Dashboard carries the explicit n/a. */}
+            {row.costMicros !== undefined && <> · {formatCost(row.costMicros)}</>}
           </span>
         )}
       </div>

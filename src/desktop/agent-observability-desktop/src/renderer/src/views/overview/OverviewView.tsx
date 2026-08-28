@@ -2,7 +2,7 @@ import type { JSX } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { dataHost } from '../../api/client';
 import type { IndexStatus, OverviewData } from '../../../../shared/rpc';
-import { formatDuration, formatTokens, sourceLabel, splitNotes } from '../sessions/format';
+import { formatCost, formatDuration, formatTokens, sourceLabel, splitNotes } from '../sessions/format';
 import { Spinner } from '../../components/Spinner';
 import { HorizontalBars, Legend, StackedBarChart } from './charts';
 import type { SeriesStyle, StackedColumn } from './charts';
@@ -130,6 +130,11 @@ export function OverviewView(): JSX.Element {
       { key: 'output', value: day.outputTokens },
     ],
   }));
+  const costColumns: StackedColumn[] = days.map((day) => ({
+    label: day.short,
+    fullLabel: day.long,
+    segments: SOURCE_SERIES.map((s) => ({ key: s.key, value: day.costBySource[s.key] ?? 0 })),
+  }));
 
   return (
     <div className="overview">
@@ -144,12 +149,31 @@ export function OverviewView(): JSX.Element {
       <section className="tiles" aria-label="Totals">
         <Tile label="Sessions" value={totals.sessions.toLocaleString()} />
         <Tile label="Steps" value={totals.steps.toLocaleString()} />
+        <Tile
+          label="LLM calls"
+          value={totals.llmCalls.toLocaleString()}
+          hint="Model calls across every session"
+        />
+        <Tile
+          label="Tool calls"
+          value={totals.toolCalls.toLocaleString()}
+          hint="Tool executions across every session (file edits, searches, commands)"
+        />
         <Tile label="Input tokens" value={formatTokens(totals.inputTokens).replace(' tokens', '')} />
         <Tile label="Output tokens" value={formatTokens(totals.outputTokens).replace(' tokens', '')} />
         <Tile
           label="Cached"
           value={formatTokens(totals.cachedTokens).replace(' tokens', '')}
           hint="Prompt tokens served from cache rather than re-read"
+        />
+        <Tile
+          label="Est. cost"
+          value={totals.costSessions === 0 ? 'n/a' : formatCost(totals.costMicros)}
+          hint={
+            `Estimated from token rates (Claude Code) and billed premium-unit usage (Copilot). ` +
+            `Covers ${totals.costSessions.toLocaleString()} of ${totals.sessions.toLocaleString()} sessions; ` +
+            `the rest could not be priced.`
+          }
         />
         <Tile label="Repositories" value={totals.repositories.toLocaleString()} />
         <Tile label="Models" value={totals.models.toLocaleString()} />
@@ -183,6 +207,19 @@ export function OverviewView(): JSX.Element {
           series={TOKEN_SERIES}
           formatValue={(v) => formatTokens(v).replace(' tokens', '')}
           emptyMessage={`No token usage recorded in the last ${data.windowDays} days.`}
+        />
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h2>Cost per day</h2>
+          <Legend series={SOURCE_SERIES} />
+        </div>
+        <StackedBarChart
+          columns={costColumns}
+          series={SOURCE_SERIES}
+          formatValue={(v) => formatCost(v) || '$0.00'}
+          emptyMessage={`No cost data in the last ${data.windowDays} days.`}
         />
       </section>
 
@@ -225,6 +262,7 @@ export function OverviewView(): JSX.Element {
                 <th scope="col" className="n">Sessions</th>
                 <th scope="col" className="n">Steps</th>
                 <th scope="col" className="n">Tokens</th>
+                <th scope="col" className="n">Est. cost</th>
               </tr>
             </thead>
             <tbody>
@@ -242,10 +280,58 @@ export function OverviewView(): JSX.Element {
                   <td className="n">
                     {formatTokens(row.inputTokens + row.outputTokens).replace(' tokens', '')}
                   </td>
+                  <td className="n">{formatCost(row.costMicros) || '$0.00'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2>Cost by model</h2>
+            {data.totals.models > data.byModel.length && (
+              <span className="card-note">
+                top {data.byModel.length} of {data.totals.models}
+              </span>
+            )}
+          </div>
+          <table className="source-table">
+            <thead>
+              <tr>
+                <th scope="col">Model</th>
+                <th scope="col" className="n">Sessions</th>
+                <th scope="col" className="n">LLM calls</th>
+                <th scope="col" className="n">Tokens</th>
+                <th scope="col" className="n">Est. cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.byModel.map((row) => (
+                <tr key={row.model}>
+                  <th scope="row" title={row.model}>{row.model}</th>
+                  <td className="n">{row.sessions.toLocaleString()}</td>
+                  <td className="n">{row.llmCalls.toLocaleString()}</td>
+                  <td className="n">
+                    {formatTokens(row.inputTokens + row.outputTokens).replace(' tokens', '')}
+                  </td>
+                  <td className="n">
+                    {row.costMicros === null ? (
+                      <span className="cost-na" title="No session of this model could be priced">
+                        n/a
+                      </span>
+                    ) : (
+                      formatCost(row.costMicros) || '$0.00'
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="card-caption">
+            A session's cost is attributed to its most-used model. "n/a" means the model could not
+            be priced — not that it was free.
+          </p>
         </section>
       </div>
     </div>
@@ -267,6 +353,8 @@ interface DayBucket {
   sessionsBySource: Record<string, number>;
   inputTokens: number;
   outputTokens: number;
+  /** Estimated micro-USD per source; unpriced sessions contribute nothing. */
+  costBySource: Record<string, number>;
 }
 
 /**
@@ -289,6 +377,7 @@ function buildDays(data: OverviewData): DayBucket[] {
       sessionsBySource: {},
       inputTokens: 0,
       outputTokens: 0,
+      costBySource: {},
     });
   }
 
@@ -300,6 +389,7 @@ function buildDays(data: OverviewData): DayBucket[] {
     bucket.sessionsBySource[point.source] = (bucket.sessionsBySource[point.source] ?? 0) + point.sessions;
     bucket.inputTokens += point.inputTokens;
     bucket.outputTokens += point.outputTokens;
+    bucket.costBySource[point.source] = (bucket.costBySource[point.source] ?? 0) + point.costMicros;
   }
 
   return [...byDay.values()];

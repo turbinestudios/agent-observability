@@ -31,7 +31,7 @@ import type { SessionAnalysis } from '../analysis/sessionAnalyzer';
  */
 
 /** Bump to invalidate every existing index (drop-and-rebuild, no migration). */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * How many of the most recent sessions the background analysis reads.
@@ -55,6 +55,9 @@ export const HOTSPOT_ROW_LIMIT = 200;
  * off the bottom for no reason a reader can see.
  */
 export const TOP_REPOSITORY_LIMIT = 10;
+
+/** How many models the overview's cost-by-model table ranks. */
+export const TOP_MODEL_LIMIT = 10;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -506,6 +509,10 @@ export class IndexDb {
     const andExcl = excl === '' ? '' : `AND ${excl}`;
     const hk = hiddenKeys;
 
+    // Cost sums SKIP NULLs by SQL semantics, which is the honesty rule: an
+    // unpriced session (NULL cost_micros) contributes nothing rather than a
+    // fake 0, and COUNT(cost_micros) — non-NULL rows only — is the "covers N of
+    // M sessions" denominator the tile footnotes with.
     const totals = this.db
       .prepare(
         `SELECT COUNT(*) AS sessions,
@@ -515,6 +522,8 @@ export class IndexDb {
                 COALESCE(SUM(input_tokens), 0) AS inputTokens,
                 COALESCE(SUM(output_tokens), 0) AS outputTokens,
                 COALESCE(SUM(cached_tokens), 0) AS cachedTokens,
+                COALESCE(SUM(cost_micros), 0) AS costMicros,
+                COUNT(cost_micros) AS costSessions,
                 COUNT(DISTINCT CASE WHEN repository <> 'unknown' THEN repository END) AS repositories,
                 COUNT(DISTINCT CASE WHEN model <> 'unknown' THEN model END) AS models,
                 COALESCE(AVG(NULLIF(duration_ms, 0)), 0) AS avgSessionMs
@@ -528,7 +537,8 @@ export class IndexDb {
                 COUNT(*) AS sessions,
                 COALESCE(SUM(interaction_count), 0) AS steps,
                 COALESCE(SUM(input_tokens), 0) AS inputTokens,
-                COALESCE(SUM(output_tokens), 0) AS outputTokens
+                COALESCE(SUM(output_tokens), 0) AS outputTokens,
+                COALESCE(SUM(cost_micros), 0) AS costMicros
            FROM sessions ${whereExcl}
           GROUP BY source
           ORDER BY sessions DESC`,
@@ -543,7 +553,8 @@ export class IndexDb {
                 source,
                 COUNT(*) AS sessions,
                 COALESCE(SUM(input_tokens), 0) AS inputTokens,
-                COALESCE(SUM(output_tokens), 0) AS outputTokens
+                COALESCE(SUM(output_tokens), 0) AS outputTokens,
+                COALESCE(SUM(cost_micros), 0) AS costMicros
            FROM sessions
           WHERE ended_at_ms > 0
             AND ended_at_ms >= ?
@@ -568,7 +579,31 @@ export class IndexDb {
       )
       .all(...hk, TOP_REPOSITORY_LIMIT) as OverviewData['topRepositories'];
 
-    return { totals, bySource, daily, windowDays, topRepositories };
+    // Cost by DOMINANT session model: sessions.model is the session's most-used
+    // model, so a multi-model session's whole cost lands on that one row —
+    // acceptable at this grain (the detail view has the exact per-model split).
+    // A NULL costMicros here means NO session of that model could be priced
+    // ("n/a"), which SUM's NULL-skipping distinguishes from a genuine 0. The
+    // NULL-last ordering is spelled out so unpriced models sink without relying
+    // on NULLS LAST support; sessions + name break ties deterministically.
+    const byModel = this.db
+      .prepare(
+        `SELECT model,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(llm_calls), 0) AS llmCalls,
+                COALESCE(SUM(input_tokens), 0) AS inputTokens,
+                COALESCE(SUM(output_tokens), 0) AS outputTokens,
+                SUM(cost_micros) AS costMicros
+           FROM sessions
+          WHERE 1 = 1
+            ${andExcl}
+          GROUP BY model
+          ORDER BY (costMicros IS NULL) ASC, costMicros DESC, sessions DESC, model ASC
+          LIMIT ?`,
+      )
+      .all(...hk, TOP_MODEL_LIMIT) as OverviewData['byModel'];
+
+    return { totals, bySource, daily, windowDays, topRepositories, byModel };
   }
 
   // -- background analysis ---------------------------------------------------

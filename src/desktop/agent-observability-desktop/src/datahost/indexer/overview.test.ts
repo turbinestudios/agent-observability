@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { IndexDb, TOP_REPOSITORY_LIMIT } from './indexDb';
+import { IndexDb, TOP_MODEL_LIMIT, TOP_REPOSITORY_LIMIT } from './indexDb';
 import type { SessionRow } from '../../shared/rpc';
 
 /**
@@ -203,6 +203,107 @@ describe('top repositories', () => {
       'mango',
       'zebra',
     ]);
+  });
+});
+
+describe('cost', () => {
+  it('sums only priced sessions and counts them, so unpriced is never a fake $0', () => {
+    db.upsertSessions([
+      row({ sessionId: 'a', costMicros: 1_000 }),
+      row({ sessionId: 'b', costMicros: 500 }),
+      row({ sessionId: 'c' }), // unpriced: NULL in the index
+    ]);
+
+    const { totals } = db.overview(30);
+    expect(totals.costMicros).toBe(1_500);
+    expect(totals.costSessions).toBe(2);
+    expect(totals.sessions).toBe(3);
+  });
+
+  it('reports zeroes on an empty index', () => {
+    const { totals } = db.overview(30);
+    expect(totals.costMicros).toBe(0);
+    expect(totals.costSessions).toBe(0);
+  });
+
+  it('buckets cost by local day and source, like the other daily series', () => {
+    const today = Date.now();
+    db.upsertSessions([
+      row({ sessionId: 'a', endedAtMs: today, costMicros: 700 }),
+      row({ sessionId: 'b', endedAtMs: today, source: 'copilot', costMicros: 300 }),
+      row({ sessionId: 'c', endedAtMs: today }), // unpriced contributes nothing
+    ]);
+
+    const { daily } = db.overview(30);
+    expect(daily.find((d) => d.day === isoDay(today) && d.source === 'claude')?.costMicros).toBe(700);
+    expect(daily.find((d) => d.day === isoDay(today) && d.source === 'copilot')?.costMicros).toBe(300);
+  });
+
+  it('splits cost per source in the by-source rollup', () => {
+    db.upsertSessions([
+      row({ sessionId: 'a', source: 'claude', costMicros: 1_000 }),
+      row({ sessionId: 'b', source: 'copilot', costMicros: 250 }),
+    ]);
+
+    const { bySource } = db.overview(30);
+    expect(bySource.find((s) => s.source === 'claude')?.costMicros).toBe(1_000);
+    expect(bySource.find((s) => s.source === 'copilot')?.costMicros).toBe(250);
+  });
+});
+
+describe('cost by model', () => {
+  it('ranks models priciest first, with an all-unpriced model as null, not 0', () => {
+    db.upsertSessions([
+      row({ sessionId: 'a', model: 'cheap', costMicros: 100 }),
+      row({ sessionId: 'b', model: 'dear', costMicros: 5_000 }),
+      row({ sessionId: 'c', model: 'dear', costMicros: 1_000 }),
+      row({ sessionId: 'd', model: 'mystery' }), // never priced
+    ]);
+
+    const { byModel } = db.overview(30);
+    expect(byModel.map((m) => m.model)).toEqual(['dear', 'cheap', 'mystery']);
+    expect(byModel[0]).toMatchObject({ sessions: 2, costMicros: 6_000 });
+    // NULL survives the pipe: "could not be priced" must never read as free.
+    expect(byModel[2].costMicros).toBeNull();
+  });
+
+  it('sums usage per model alongside the cost', () => {
+    db.upsertSessions([
+      row({ sessionId: 'a', model: 'm1', llmCalls: 4, inputTokens: 100, outputTokens: 50, costMicros: 1 }),
+      row({ sessionId: 'b', model: 'm1', llmCalls: 6, inputTokens: 200, outputTokens: 70, costMicros: 1 }),
+    ]);
+
+    const [m1] = db.overview(30).byModel;
+    expect(m1).toMatchObject({ model: 'm1', llmCalls: 10, inputTokens: 300, outputTokens: 120 });
+  });
+
+  it('caps the list at the model limit', () => {
+    db.upsertSessions(
+      Array.from({ length: TOP_MODEL_LIMIT + 3 }, (_, i) =>
+        row({ sessionId: `s${i}`, model: `model-${i}`, costMicros: i }),
+      ),
+    );
+    expect(db.overview(30).byModel).toHaveLength(TOP_MODEL_LIMIT);
+  });
+
+  it('breaks cost ties by session count then name, so the ranking is stable', () => {
+    db.upsertSessions([
+      row({ sessionId: 'a', model: 'zebra', costMicros: 100 }),
+      row({ sessionId: 'b', model: 'alpha', costMicros: 100 }),
+    ]);
+    expect(db.overview(30).byModel.map((m) => m.model)).toEqual(['alpha', 'zebra']);
+  });
+
+  it('honours hidden sessions like every other aggregate', () => {
+    db.upsertSessions([
+      row({ sessionId: 'shown', model: 'm1', costMicros: 1_000 }),
+      row({ sessionId: 'hidden', model: 'm1', costMicros: 9_000 }),
+    ]);
+
+    const data = db.overview(30, ['claude:hidden']);
+    expect(data.totals.costMicros).toBe(1_000);
+    expect(data.totals.costSessions).toBe(1);
+    expect(data.byModel[0].costMicros).toBe(1_000);
   });
 });
 

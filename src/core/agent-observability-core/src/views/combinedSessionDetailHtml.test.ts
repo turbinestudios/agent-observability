@@ -270,3 +270,127 @@ describe('renderCombinedSessionDetailHtml', () => {
     expect(renderCombinedSessionDetailHtml(viewFor([session({})]), NONCE)).not.toContain(head);
   });
 });
+
+describe('the comparison table', () => {
+  it('renders one column per session in the given order, with a baseline badge on the first', () => {
+    const a = session({ sessionId: 'aaaa-1111', startedAtMs: 1_000 });
+    const b = session({ sessionId: 'bbbb-2222', startedAtMs: 5_000 });
+
+    const html = renderCombinedSessionDetailHtml(viewFor([a, b]), NONCE);
+
+    expect(html).toContain('class="compare-table"');
+    expect(html).toMatch(/class="compare-col-id">aaaa</);
+    expect(html).toMatch(/class="compare-col-id">bbbb</);
+    // The badge marks the earliest (first) session as what deltas measure against.
+    expect(html).toContain('compare-baseline-col');
+    expect(html.indexOf('aaaa')).toBeLessThan(html.indexOf('bbbb'));
+    expect(html).toContain('measured against the earliest session');
+  });
+
+  it('marks an improvement green-classed with ▼ and a regression with ▲, as percentages', () => {
+    const a = session({ sessionId: 'a-1' }, {
+      treeStats: {
+        modelTurns: 0, toolCalls: 0, inputTokens: 100, outputTokens: 40,
+        cachedTokens: 0, totalTokens: 140, errorCount: 0, aiuNano: 0,
+        linesOfCode: 0, linesOfDoc: 0, linesOfCodeRemoved: 0, linesOfDocRemoved: 0,
+      },
+    });
+    const b = session({ sessionId: 'b-2' }, {
+      treeStats: {
+        modelTurns: 0, toolCalls: 0, inputTokens: 50, outputTokens: 44,
+        cachedTokens: 0, totalTokens: 94, errorCount: 0, aiuNano: 0,
+        linesOfCode: 0, linesOfDoc: 0, linesOfCodeRemoved: 0, linesOfDocRemoved: 0,
+      },
+    });
+
+    const html = renderCombinedSessionDetailHtml(viewFor([a, b]), NONCE);
+
+    // Input halved: an improvement, marked ▼ 50%.
+    expect(html).toContain('compare-delta compare-better');
+    expect(html).toContain('▼ 50%');
+    // Output up 10%: a regression, marked ▲ 10%.
+    expect(html).toContain('compare-delta compare-worse');
+    expect(html).toContain('▲ 10%');
+  });
+
+  it('shows the absolute change when the baseline is zero — errors 0 → 2 reads "▲ 2"', () => {
+    const a = session({ sessionId: 'a-1' });
+    const b = session({ sessionId: 'b-2' }, {
+      treeStats: {
+        modelTurns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0,
+        cachedTokens: 0, totalTokens: 0, errorCount: 2, aiuNano: 0,
+        linesOfCode: 0, linesOfDoc: 0, linesOfCodeRemoved: 0, linesOfDocRemoved: 0,
+      },
+    });
+
+    const html = renderCombinedSessionDetailHtml(viewFor([a, b]), NONCE);
+
+    expect(html).toContain('▲ 2</span>');
+    expect(html).not.toContain('▲ Infinity');
+    expect(html).not.toContain('NaN');
+  });
+
+  it('keeps line-count deltas neutral — more code is different, not better or worse', () => {
+    const a = session({ sessionId: 'a-1' }, {
+      treeStats: {
+        modelTurns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0,
+        cachedTokens: 0, totalTokens: 0, errorCount: 0, aiuNano: 0,
+        linesOfCode: 100, linesOfDoc: 0, linesOfCodeRemoved: 0, linesOfDocRemoved: 0,
+      },
+    });
+    const b = session({ sessionId: 'b-2' }, {
+      treeStats: {
+        modelTurns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0,
+        cachedTokens: 0, totalTokens: 0, errorCount: 0, aiuNano: 0,
+        linesOfCode: 220, linesOfDoc: 0, linesOfCodeRemoved: 0, linesOfDocRemoved: 0,
+      },
+    });
+
+    const html = renderCombinedSessionDetailHtml(viewFor([a, b]), NONCE);
+
+    expect(html).toContain('compare-delta compare-neutral');
+  });
+
+  it('shows an em dash and one note for a session billed on a different basis', () => {
+    const a = session({ sessionId: 'aaaa-1111' }, {
+      treeStats: {
+        modelTurns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0,
+        cachedTokens: 0, totalTokens: 0, errorCount: 0, aiuNano: 0,
+        costUsdMicros: 1_500_000,
+        linesOfCode: 0, linesOfDoc: 0, linesOfCodeRemoved: 0, linesOfDocRemoved: 0,
+      },
+    });
+    const b = session({ sessionId: 'bbbb-2222' }, {
+      treeStats: {
+        modelTurns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0,
+        cachedTokens: 0, totalTokens: 0, errorCount: 0, aiuNano: 4_000_000_000,
+        linesOfCode: 0, linesOfDoc: 0, linesOfCodeRemoved: 0, linesOfDocRemoved: 0,
+      },
+    });
+    const view = viewFor([a, b]);
+    const sections = view.sections.map((s, i) => ({ ...s, costMode: i === 0 ? ('usd' as const) : ('aiu' as const) }));
+
+    const html = renderCombinedSessionDetailHtml({ ...view, sections }, NONCE, 'usd');
+
+    // The USD session prices normally; the AIU session's cost is honestly absent.
+    expect(html).toContain('$1.50');
+    expect(html).toContain('bills in a different unit');
+    expect(html).toContain('Cost for bbbb is billed in a different unit');
+  });
+
+  it('renders no comparison table when only one session survived loading', () => {
+    // The body markup, not the full document — the stylesheet always carries
+    // the .compare-table rules.
+    const content = renderCombinedSessionDetailContent(viewFor([session({ sessionId: 'a-1' })]));
+    expect(content).not.toContain('class="compare-table"');
+  });
+
+  it('escapes a malicious title in the column-header tooltip', () => {
+    const evil = session({ sessionId: 'x-1', title: '"><script>alert(1)</script>' });
+    const html = renderCombinedSessionDetailHtml(
+      viewFor([evil, session({ sessionId: 'y-2' })]),
+      NONCE,
+    );
+    expect(html).not.toContain('"><script>alert(1)</script>');
+  });
+});

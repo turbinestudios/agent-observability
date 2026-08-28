@@ -133,7 +133,10 @@ export class DetailRenderer {
         continue;
       }
       const detail = withTitle(entry.detail, request.context.renamedTitle);
-      sections.push({ detail, turnDeviations: entry.deviations });
+      // Each section carries its OWN basis: when the selection mixes sources,
+      // the comparison table marks off-basis sessions as not cost-comparable
+      // instead of showing them as free.
+      sections.push({ detail, turnDeviations: entry.deviations, costMode: this.costMode(request.source) });
       costSources.push({
         costMode: this.costMode(request.source),
         label: this.sources.get(request.source)?.label ?? request.source,
@@ -230,14 +233,31 @@ export class DetailRenderer {
   }
 }
 
-/** Apply the user's chosen name without mutating the cached parse. */
+/**
+ * Apply the user's chosen name without mutating the cached parse.
+ *
+ * The name it replaced is carried along rather than discarded: the list marks a
+ * renamed session with a dot, and a header that showed only the new name would
+ * leave that mark unexplained and the original name unrecoverable. Mirrors what
+ * `RenameStore.apply` does for list rows.
+ */
 function withTitle(detail: SessionDetail, renamedTitle: string | undefined): SessionDetail {
   if (renamedTitle === undefined) {
     return detail;
   }
+  const original = detail.summary.title;
   return {
     ...detail,
-    summary: { ...detail.summary, title: renamedTitle, titleDerived: false },
+    summary: {
+      ...detail.summary,
+      title: renamedTitle,
+      titleDerived: false,
+      // A source with no name of its own leaves nothing to say "originally…"
+      // about, and claiming a rename from nothing would be noise.
+      ...(original !== undefined && original.length > 0 && original !== renamedTitle
+        ? { titleOriginal: original }
+        : {}),
+    },
   };
 }
 

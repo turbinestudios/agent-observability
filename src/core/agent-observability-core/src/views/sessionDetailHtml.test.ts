@@ -849,3 +849,127 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     }
   });
 });
+
+/** Two turns, so a per-turn flag has somewhere to point. */
+const twoTurnDetail: SessionDetail = { ...detail, turns: [turnFixture, turnFixture] };
+
+describe('renderSessionDetailHtml — the flag in the header', () => {
+  const deviation = (type: DeviationType, description: string): WorkflowDeviation => ({
+    repository: 'https://github.com/acme/app',
+    workflowName: 'default',
+    type,
+    description,
+    detectedAt: 1_000,
+  });
+
+  it('says why the session is flagged, at the top, without expanding anything', () => {
+    const html = renderSessionDetailHtml(
+      twoTurnDetail,
+      [[], [deviation(DeviationType.TimeoutExceeded, 'Workflow duration (90.5 min) exceeded maximum (60 min).')]],
+      NONCE,
+    );
+
+    // The banner sits inside the header, before the turns it summarizes.
+    const banner = html.indexOf('deviation-summary');
+    expect(banner).toBeGreaterThan(-1);
+    expect(banner).toBeLessThan(html.indexOf('class="turn"'));
+    // Plain language, not the raw type name, plus the numbers behind it.
+    expect(html).toContain('Ran long');
+    expect(html).toContain('Workflow duration (90.5 min) exceeded maximum (60 min).');
+    // And it points at the turn, so the card below is findable.
+    expect(html).toContain('Turn 2');
+  });
+
+  it('carries the same dot the session list marks the row with', () => {
+    const html = renderSessionDetailHtml(
+      twoTurnDetail,
+      [[deviation(DeviationType.ToolUsageAnomaly, 'High failure rate detected (67%).')], []],
+      NONCE,
+    );
+
+    expect(html).toContain('class="deviation-dot"');
+    // Same colour as the list's dot, which is what links the two marks.
+    expect(html).toContain('.deviation-dot { flex: none; display: inline-block;');
+    expect(html).toContain('Tools mostly failing');
+  });
+
+  it('counts the turns affected, not the deviations, and rolls up a long list', () => {
+    const many = [
+      [deviation(DeviationType.TimeoutExceeded, 'a'), deviation(DeviationType.ToolUsageAnomaly, 'b')],
+      [deviation(DeviationType.TimeoutExceeded, 'c')],
+    ];
+
+    const html = renderSessionDetailHtml(twoTurnDetail, many, NONCE);
+
+    // Two turns, three deviations: the headline is about turns.
+    expect(html).toContain('2 of 2 turn(s) diverged');
+  });
+
+  it('leaves a clean session\u2019s header untouched', () => {
+    const html = renderSessionDetailHtml(twoTurnDetail, [[], []], NONCE);
+
+    expect(html).not.toContain('class="deviation-summary"');
+    expect(html).not.toContain('Flagged —');
+  });
+});
+
+describe('renderSessionDetailHtml — the rename mark in the header', () => {
+  const renamed: SessionDetail = {
+    ...detail,
+    summary: {
+      ...detail.summary,
+      title: 'Create a plan for US 8',
+      titleDerived: false,
+      titleOriginal: 'Crea',
+    },
+  };
+
+  it('says the name on screen is the user\u2019s, and what it replaced', () => {
+    const html = renderSessionDetailHtml(renamed, [], NONCE);
+
+    expect(html).toContain('Renamed by you');
+    // The original has to be recoverable: the list keeps it, and the detail
+    // would otherwise be the one place it disappears.
+    expect(html).toContain('Crea');
+    expect(html).toContain('class="rename-dot"');
+  });
+
+  it('puts the note under the name it is talking about, not adrift in the meta', () => {
+    const html = renderSessionDetailHtml(renamed, [], NONCE);
+
+    const heading = html.indexOf('Create a plan for US 8');
+    const note = html.indexOf('class="rename-note"');
+    expect(note).toBeGreaterThan(heading);
+    expect(note).toBeLessThan(html.indexOf('<dl class="meta">'));
+  });
+
+  it('stays quiet for a session the user never renamed', () => {
+    expect(renderSessionDetailHtml(detail, [], NONCE)).not.toContain('class="rename-note"');
+  });
+
+  it('says nothing when the source had no name of its own to replace', () => {
+    // Renaming an untitled Claude session leaves no "originally" to report, and
+    // inventing one would be noise.
+    const noOriginal: SessionDetail = {
+      ...detail,
+      summary: { ...detail.summary, title: 'My name', titleDerived: false },
+    };
+
+    expect(renderSessionDetailHtml(noOriginal, [], NONCE)).not.toContain('class="rename-note"');
+  });
+
+  it('carries the mark into a comparison, where each session keeps its own header', () => {
+    const html = renderCombinedSessionDetailHtml(
+      {
+        combined: combineSessionDetails([renamed, detail]),
+        sections: [
+          { detail: renamed, turnDeviations: [] },
+          { detail, turnDeviations: [] },
+        ],
+      },
+      NONCE,
+    );
+
+    expect(html).toContain('Renamed by you');
+  });
+});

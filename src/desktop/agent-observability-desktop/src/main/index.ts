@@ -12,6 +12,7 @@ import {
 } from 'electron';
 import type { UtilityProcess } from 'electron';
 import { initAutoUpdater } from './updater';
+import { installApplicationMenu } from './menu';
 
 /**
  * Scheme the session-detail document is served over.
@@ -144,6 +145,10 @@ app.whenReady().then(() => {
   // the first frame instead of flashing light chrome around a dark page. The
   // renderer re-asserts the stored choice once it mounts (theme:set below).
   nativeTheme.themeSource = 'dark';
+
+  // Before the window: setting it after would let Electron install its own
+  // default menu first, so the item this replaces would flash into existence.
+  installApplicationMenu();
 
   startDataHost();
   createWindow();

@@ -9,6 +9,40 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-08-28
+
+### Added
+
+- **Comparing sessions now shows a real diff.** The comparison opens with a
+  table: one row per figure — duration, model turns, tool calls, tokens,
+  errors, cost, lines added and removed — and one column per session, earliest
+  first as the baseline. Every later session carries the change against that
+  baseline, as a percentage where one makes sense, coloured green when the run
+  did better and red when it did worse. Line counts stay neutral — writing more
+  code is a difference, not a verdict — and a session billed in a different
+  unit shows a dash for cost rather than pretending to be free. The merged
+  totals and per-session sections are still there, below the table.
+- **See what your sessions cost.** Each session row now shows its estimated
+  cost — priced from published token rates for Claude Code and from billed
+  premium-unit usage for Copilot — and the Dashboard gains an estimated-cost
+  tile, a cost-per-day chart, a cost-by-model table, and a cost column in the
+  by-source table. Sessions that cannot be priced say **n/a** rather than
+  pretending to be free, and none of it ever leaves your machine.
+- **LLM calls and tool calls at a glance.** Two new Dashboard tiles show how
+  many model calls and tool calls your sessions add up to.
+
+### Changed
+
+- **The comparison closes from a labelled button.** A "Close comparison"
+  button now sits in the comparison's own header row — instead of an unlabelled
+  × floating over the content in the same spot as the Refresh button — and it
+  is there from the moment the sessions start loading. Esc still works.
+
+### Fixed
+
+- **The Context Hotspots scrollbar sits at the window edge.** It used to float
+  mid-window, at the edge of the table instead of the edge of the view.
+
 ## [1.5.0] - 2026-08-28
 
 ### Added
@@ -25,6 +59,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **A renamed session says so when you open it.** The blue dot in the list
+  marked a session as renamed, but opening it showed only the new name — with no
+  hint the mark referred to anything, and no way to see what the session used to
+  be called. The header now carries the same blue dot and the name it replaced.
 - **The shorthand on the session view explains itself.** Hovering **LoC**,
   **LoD**, **nLoC**, **nLoD**, or any of the other abbreviations on the agent
   run totals — **MT**, **TC**, **TIN**, **TOUT**, **TCI**, **TT**, **ERR** — now
@@ -43,11 +81,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
   **Flagged** chip appears above it so you can see only those — the answer to
   "which of last week's runs should I look at first?" without opening any of
   them. This needs no setup.
-- **The timeline says what went wrong, and where.** Opening a flagged session
-  puts a card on the exact request that diverged, naming the problem and the
-  numbers behind it, and the Timeline heading counts them alongside the turns.
-  Comparisons show the same cards, so a flagged run stands out next to a clean
-  one.
+- **The session says why it was flagged, at the top.** Opening a flagged
+  session leads with the reason — the same amber dot as the list, then which
+  turn diverged and what happened, in words: "Turn 4 · Ran long — Workflow
+  duration (90.5 min) exceeded maximum (60 min)". A card also sits on the
+  offending request further down, and the Timeline heading counts them alongside
+  the turns. In a comparison, a flagged session keeps its dot while collapsed
+  and gives the same explanation when you open it.
 - **Settings has an Analysis section** with the turn-length limit behind the
   overlong check, set to 60 minutes to begin with. Changing it re-checks every
   session against the new value.

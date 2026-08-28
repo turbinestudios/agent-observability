@@ -1,4 +1,4 @@
-| Planned |  || Planned |  || Planned |  || Planned |  || Planned |  || Planned |  || Planned |  || Completed (1.3.0) |  || Planned |  || Planned |  || Planned |  || Planned |  || Planned |  || Planned |  || Planned |  || Completed (1.3.0) |  || Planned |  || Planned |  || Planned |  || Planned |  || Planned |  || Planned |  || Planned |  || Completed (1.3.0) |  |# Desktop App — Research-Functionality Proposals
+# Desktop App — Research-Functionality Proposals
 
 Eight proposals for new functionality in the **Agent Observability desktop app**
 (`src/desktop/agent-observability-desktop`), aimed at two goals: better
@@ -20,7 +20,7 @@ add genuinely new research capability.
 | 1 | [Session comparison view](01-session-comparison.md) | Compare two or more runs of the same task side by side | Completed (1.3.0) | S/M | Core's combined-session renderer, fully built and unwired |
 | 2 | [Workflow deviation detection](02-deviation-detection.md) | Abnormal runs get flagged automatically so I know where to look | Completed (1.4.0) | M | Core's deviation engine, stubbed off in the desktop app |
 | 3 | [Context Hotspots view](03-context-hotspots.md) | See which instruction/skill files agents actually load, skip, or overload | Completed (1.5.0) | M | Core's hotspots provider; replaces a sidebar placeholder |
-| 4 | [Cost & efficiency analytics](04-cost-analytics.md) | See what sessions, models, and repos actually cost | Planned | M | Dead `costMicros` plumbing + core pricing in three modes |
+| 4 | [Cost & efficiency analytics](04-cost-analytics.md) | See what sessions, models, and repos actually cost | Completed (1.6.0) | M | Dead `costMicros` plumbing + core pricing in three modes |
 | 5 | [Time ranges, filters & drill-down](05-time-ranges-filters-drilldown.md) | Slice any view by time and repository; click a chart to see the sessions behind it | Planned | M | Repository filter already implemented in SQL, unused |
 | 6 | [Session tagging & research notes](06-tagging-notes.md) | Label runs ("experiment-A", "bad-run") and build corpora to compare | Planned | M | The `RenameStore`/`HiddenStore` JSON-store pattern |
 | 7 | [Tool usage analytics](07-tool-analytics.md) | Per-tool call volume, failure rates, and durations — find friction tools | Planned | M/L | Per-tool data all sources already parse and discard |

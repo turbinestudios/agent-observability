@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, formatRelative, formatTokens, sourceLabel, splitNotes } from './format';
+import { formatCost, formatDuration, formatRelative, formatTokens, sourceLabel, splitNotes } from './format';
 
 describe('splitNotes', () => {
   it('returns nothing for an absent message', () => {
@@ -35,6 +35,29 @@ describe('formatTokens', () => {
   it('treats missing or negative totals as zero', () => {
     expect(formatTokens(Number.NaN)).toBe('0 tokens');
     expect(formatTokens(-5)).toBe('0 tokens');
+  });
+});
+
+describe('formatCost', () => {
+  it('renders nothing for an absent cost — unknown is not free', () => {
+    expect(formatCost(undefined)).toBe('');
+    expect(formatCost(null)).toBe('');
+    expect(formatCost(Number.NaN)).toBe('');
+    expect(formatCost(-5)).toBe('');
+  });
+
+  it('keeps a genuine zero as $0.00', () => {
+    expect(formatCost(0)).toBe('$0.00');
+  });
+
+  it('floors tiny costs at <$0.01 rather than rounding them invisible', () => {
+    expect(formatCost(4_200)).toBe('<$0.01');
+  });
+
+  it('shows cents below a thousand dollars and whole dollars above', () => {
+    expect(formatCost(423_000)).toBe('$0.42');
+    expect(formatCost(12_340_000)).toBe('$12.34');
+    expect(formatCost(1_234_000_000)).toBe('$1,234');
   });
 });
 

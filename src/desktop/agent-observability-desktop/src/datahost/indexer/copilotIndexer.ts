@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { resolveDatabasePaths } from '@agent-observability/core/src/telemetry/paths';
+import { aiuToUsd } from '@agent-observability/core/src/telemetry/pricing';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
 import { sanitizeRepositoryUrl } from '@agent-observability/core/src/telemetry/repositoryUrl';
 import { buildGlobalSessionRepositories } from '@agent-observability/core/src/telemetry/globalWorkspaceRepos';
@@ -131,6 +132,25 @@ const REPO_SQL = `
   ORDER BY s.start_time_ms ASC
 `;
 
+/**
+ * Billed premium-request usage per session: Σ nano-AIU over the session's chat
+ * spans — the same attribute and scope core's detail path sums, so a row's cost
+ * agrees with the detail view. A session with no AIU attribute at all yields no
+ * row here and stays UNPRICED (n/a), which is a different statement from a
+ * session whose recorded AIU sums to a genuine 0 (free/included calls).
+ */
+const AIU_SQL = `
+  SELECT COALESCE(s.conversation_id, s.chat_session_id) AS session_id,
+         SUM(CAST(a.value AS INTEGER)) AS aiu_nano
+  FROM spans s
+  JOIN span_attributes a
+    ON a.span_id = s.span_id
+   AND a.key = 'copilot_chat.copilot_usage_nano_aiu'
+  WHERE s.operation_name = 'chat'
+    AND COALESCE(s.conversation_id, s.chat_session_id) IS NOT NULL
+  GROUP BY COALESCE(s.conversation_id, s.chat_session_id)
+`;
+
 export class CopilotIndexer {
   private readonly now: () => number;
 
@@ -185,6 +205,7 @@ export class CopilotIndexer {
       const repositories = this.resolveRepositories(db);
       const byWorkspace = this.workspaceRepositories();
       const titles = readCopilotTitles(this.deps.db, this.deps.config);
+      const aiu = this.sessionAiu(db);
       const excluded = this.deps.config.getExcludedRepositories();
 
       const rows: SessionRow[] = [];
@@ -198,7 +219,14 @@ export class CopilotIndexer {
         if (excluded.has(repository)) {
           continue;
         }
-        rows.push(this.toRow(aggregate, repository, titles.get(aggregate.session_id)));
+        rows.push(
+          this.toRow(
+            aggregate,
+            repository,
+            titles.get(aggregate.session_id),
+            aiu.get(aggregate.session_id),
+          ),
+        );
       }
 
       this.deps.db.upsertSessions(rows);
@@ -276,10 +304,31 @@ export class CopilotIndexer {
     return resolved;
   }
 
+  /**
+   * Session id → Σ nano-AIU over its chat spans. Best-effort: an older or
+   * partial database without `span_attributes` leaves every session unpriced
+   * (n/a) rather than failing the index pass.
+   */
+  private sessionAiu(db: Database.Database): Map<string, number> {
+    const map = new Map<string, number>();
+    try {
+      const rows = db.prepare(AIU_SQL).all() as { session_id: string; aiu_nano: number | null }[];
+      for (const row of rows) {
+        if (row.aiu_nano !== null) {
+          map.set(row.session_id, row.aiu_nano);
+        }
+      }
+    } catch {
+      // No span_attributes table (or an unreadable one): cost degrades to n/a.
+    }
+    return map;
+  }
+
   private toRow(
     aggregate: SessionAggregate,
     repository: string,
     title: { title: string; derived: boolean } | undefined,
+    aiuNano: number | undefined,
   ): SessionRow {
     return {
       source: 'copilot',
@@ -296,6 +345,9 @@ export class CopilotIndexer {
       inputTokens: aggregate.total_input_tokens ?? 0,
       outputTokens: aggregate.total_output_tokens ?? 0,
       cachedTokens: aggregate.total_cached_tokens ?? 0,
+      // Micro-USD derived from the billed AIU at the fixed published rate — the
+      // same conversion the detail view shows, so the two figures agree.
+      costMicros: aiuNano === undefined ? undefined : Math.round(aiuToUsd(aiuNano) * 1_000_000),
       model: aggregate.model ?? 'unknown',
       agentModes: splitAgentNames(aggregate.agent_names),
       indexedAtMs: this.now(),

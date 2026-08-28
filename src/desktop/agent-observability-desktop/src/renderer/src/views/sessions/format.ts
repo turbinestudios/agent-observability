@@ -44,6 +44,30 @@ export function formatDuration(ms: number): string {
 }
 
 /**
+ * Micro-USD as compact dollars: `$0.42`, `<$0.01`, `$1,234`. Empty for an
+ * absent or invalid value — an unpriced session is UNKNOWN cost, not free, so
+ * a row simply says nothing rather than claiming a number.
+ */
+export function formatCost(micros: number | undefined | null): string {
+  if (micros === undefined || micros === null || !Number.isFinite(micros) || micros < 0) {
+    return '';
+  }
+  const usd = micros / 1_000_000;
+  if (usd === 0) {
+    return '$0.00';
+  }
+  if (usd < 0.01) {
+    return '<$0.01';
+  }
+  if (usd < 1000) {
+    return `$${usd.toFixed(2)}`;
+  }
+  // Fixed comma grouping, not toLocaleString: the dollar figure should render
+  // the same on every machine locale.
+  return `$${String(Math.round(usd)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+}
+
+/**
  * Relative time for list rows: "now", "14m", "3h", "yesterday", "12 Mar".
  * Recency is what the list sorts by, so it is what a row should show.
  */
