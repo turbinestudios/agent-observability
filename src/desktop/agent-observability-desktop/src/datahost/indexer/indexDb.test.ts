@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { IndexDb } from './indexDb';
 import type { SessionRow } from '../../shared/rpc';
 import type { AnalyzedContextFile, SessionAnalysis } from '../analysis/sessionAnalyzer';
+import type { RetrospectiveCounts } from '@agent-observability/core/src/analysis/retrospective';
 
 /**
  * Index behavior that the UI depends on: ordering, filtering, and — most
@@ -460,5 +461,103 @@ describe('schema version', () => {
     // And it is usable again immediately, not left half-dropped.
     db.upsertSessions([row({ sessionId: 'b' })]);
     expect(db.staleAnalysis(10).map((t) => t.sessionId)).toEqual(['b']);
+  });
+});
+
+/** A retro counts projection with every number zeroed, for overriding. */
+function retroCounts(over: Partial<RetrospectiveCounts> = {}): RetrospectiveCounts {
+  return {
+    verdict: 'smooth',
+    outcome: 'unclear',
+    correctionTurns: 0,
+    repeatedPromptTurns: 0,
+    interruptions: 0,
+    errorStreaks: 0,
+    maxErrorStreak: 0,
+    longTailTurns: 0,
+    compactions: 0,
+    churnRatioPct: 0,
+    planModeUsed: false,
+    tipCount: 0,
+    ...over,
+  };
+}
+
+describe('retrospective verdicts', () => {
+  it('carries the stored verdict onto the row, and leaves an unjudged session absent', () => {
+    db.upsertSessions([row({ sessionId: 'rough' }), row({ sessionId: 'unread' }), row({ sessionId: 'broken' })]);
+    db.putAnalysis('claude', 'rough', analysis({ retro: retroCounts({ verdict: 'struggled' }) }), 5_000, 9_000);
+    // An analysis whose retrospective could not be built stores NULL, which
+    // must read back as absent — never as smooth.
+    db.putAnalysis('claude', 'broken', analysis(), 5_000, 9_000);
+
+    const rows = db.listSessions({});
+    expect(rows.find((r) => r.sessionId === 'rough')?.verdict).toBe('struggled');
+    expect(rows.find((r) => r.sessionId === 'unread')?.verdict).toBeUndefined();
+    expect(rows.find((r) => r.sessionId === 'broken')?.verdict).toBeUndefined();
+  });
+
+  it('narrows the list to struggled and abandoned sessions only', () => {
+    db.upsertSessions([
+      row({ sessionId: 'struggled' }),
+      row({ sessionId: 'gone' }),
+      row({ sessionId: 'fine' }),
+      row({ sessionId: 'unjudged' }),
+    ]);
+    db.putAnalysis('claude', 'struggled', analysis({ retro: retroCounts({ verdict: 'struggled' }) }), 5_000, 9_000);
+    db.putAnalysis('claude', 'gone', analysis({ retro: retroCounts({ verdict: 'abandoned' }) }), 5_000, 9_000);
+    db.putAnalysis('claude', 'fine', analysis({ retro: retroCounts({ verdict: 'bumpy' }) }), 5_000, 9_000);
+    db.putAnalysis('claude', 'unjudged', analysis(), 5_000, 9_000);
+
+    expect(
+      db
+        .listSessions({ friction: true })
+        .map((r) => r.sessionId)
+        .sort(),
+    ).toEqual(['gone', 'struggled']);
+    expect(db.countSessions({ friction: true })).toBe(2);
+  });
+});
+
+describe('retro ranking', () => {
+  it('orders worst verdict tier first, most recent first within a tier', () => {
+    db.upsertSessions([
+      row({ sessionId: 'smooth-new', endedAtMs: 9_000 }),
+      row({ sessionId: 'gone-old', endedAtMs: 1_000 }),
+      row({ sessionId: 'rough-new', endedAtMs: 8_000 }),
+      row({ sessionId: 'rough-old', endedAtMs: 2_000 }),
+      row({ sessionId: 'unjudged', endedAtMs: 9_500 }),
+    ]);
+    db.putAnalysis('claude', 'smooth-new', analysis({ retro: retroCounts() }), 5_000, 9_000);
+    db.putAnalysis('claude', 'gone-old', analysis({ retro: retroCounts({ verdict: 'abandoned' }) }), 5_000, 9_000);
+    db.putAnalysis('claude', 'rough-new', analysis({ retro: retroCounts({ verdict: 'struggled', correctionTurns: 3 }) }), 5_000, 9_000);
+    db.putAnalysis('claude', 'rough-old', analysis({ retro: retroCounts({ verdict: 'struggled' }) }), 5_000, 9_000);
+    db.putAnalysis('claude', 'unjudged', analysis(), 5_000, 9_000);
+
+    const result = db.retro();
+    expect(result.rows.map((r) => r.sessionId)).toEqual([
+      'gone-old',
+      'rough-new',
+      'rough-old',
+      'smooth-new',
+    ]);
+    // The counts ride along for the table's friction column.
+    expect(result.rows[1].correctionTurns).toBe(3);
+    expect(result.repositories).toEqual(['github.com/acme/app']);
+  });
+
+  it('excludes hidden sessions and honours the repository filter', () => {
+    db.upsertSessions([
+      row({ sessionId: 'kept' }),
+      row({ sessionId: 'hidden' }),
+      row({ sessionId: 'elsewhere', repository: 'github.com/acme/other' }),
+    ]);
+    for (const id of ['kept', 'hidden', 'elsewhere']) {
+      db.putAnalysis('claude', id, analysis({ retro: retroCounts({ verdict: 'bumpy' }) }), 5_000, 9_000);
+    }
+
+    const filtered = db.retro({ repository: 'github.com/acme/app' }, ['claude:hidden']);
+    expect(filtered.rows.map((r) => r.sessionId)).toEqual(['kept']);
+    expect(filtered.repositories).toEqual(['github.com/acme/app']);
   });
 });

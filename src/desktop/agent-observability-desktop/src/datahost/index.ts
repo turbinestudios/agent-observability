@@ -5,6 +5,9 @@ import { TelemetryService } from '@agent-observability/core/src/telemetry/teleme
 import { CopilotSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
 import { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
+import { sweepSnapshotDirs } from '@agent-observability/core/src/telemetry/snapshot';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
 import type {
   ContextAction,
@@ -30,6 +33,10 @@ import type { AnalysisTarget } from './indexer/indexDb';
 import { RenameStore } from './renames';
 import { HiddenStore } from './hidden';
 import { describeDeletion, deleteSession } from './deletion';
+import { DeepRetroStore, toLlmVerdict } from './deepRetros';
+import { DEEP_RETRO_ENABLED_KEY, runDeepRetrospective } from './deepRetro';
+import { AiBackendHolder } from './aiBackends';
+import { AiHelperController } from './aiHelper';
 
 /**
  * The data host: a utilityProcess that owns every expensive operation.
@@ -59,6 +66,19 @@ const db = new IndexDb();
 const telemetry = new TelemetryService(config);
 telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
 
+// Copilot snapshot copies live in OUR data directory, not the OS temp dir, and
+// every launch sweeps whatever the previous run left behind. The read layer
+// only cleans a snapshot up on a graceful dispose, but this process is stopped
+// with kill() — so before this sweep, every app exit stranded a copy of the
+// (gigabyte-plus) archive in %TEMP%, which Windows never reclaims, until the
+// disk filled. The temp-dir sweep heals those historical leaks too, with an
+// age gate so a concurrently running VS Code extension's fresh snapshot is
+// never raced.
+const snapshotRoot = path.join(os.homedir(), '.agent-observability', 'desktop', 'snapshots');
+telemetry.setSnapshotRoot(snapshotRoot);
+sweepSnapshotDirs(snapshotRoot);
+sweepSnapshotDirs(os.tmpdir(), 60 * 60_000);
+
 // Held directly as well as via the registry: its directory-listing cache must
 // be dropped on every index pass, or a session created while the app is open
 // shows in the list but fails to open with "not found" until a restart.
@@ -72,6 +92,21 @@ const deviations = new LocalDeviationDetector(config);
 const detail = new DetailRenderer(sources, deviations);
 const renames = new RenameStore();
 const hidden = new HiddenStore();
+const deepRetros = new DeepRetroStore();
+
+// One backend wiring for everything that talks to the user's `claude` CLI —
+// the deep retrospective and the AI Helper share its probe cache, and an AI
+// settings change rebuilds it (a cached probe would ignore a changed path).
+const aiBackends = new AiBackendHolder(config);
+const aiHelper = new AiHelperController({
+  db,
+  sources,
+  settings,
+  renames,
+  hidden,
+  backend: () => aiBackends.active(),
+  emit,
+});
 
 /** How far back the overview charts look. */
 const OVERVIEW_WINDOW_DAYS = 30;
@@ -259,7 +294,15 @@ function acceptedMissing(): AcceptedMissingConfig {
 }
 
 function detailContext(source: string, sessionId: string): DetailContext {
-  return { acceptedMissing: acceptedMissing(), renamedTitle: renames.get(source, sessionId) };
+  const stored = deepRetros.get(source, sessionId);
+  return {
+    acceptedMissing: acceptedMissing(),
+    renamedTitle: renames.get(source, sessionId),
+    deepRetro: {
+      enabled: settings.get<boolean>(DEEP_RETRO_ENABLED_KEY, false) === true,
+      ...(stored !== undefined ? { stored: toLlmVerdict(stored) } : {}),
+    },
+  };
 }
 
 /**
@@ -439,8 +482,48 @@ function handle(request: RpcRequest): unknown {
       const [file, params] = request.params;
       return db.hotspotSessions(file, params ?? {}, hidden.all());
     }
+    case 'retro.get': {
+      const params = request.params[0] ?? {};
+      const { rows, repositories } = db.retro(params, hidden.all());
+      // User-chosen names are layered on here exactly as the list does it —
+      // the index stores the source's own titles.
+      const named = rows.map((row) => {
+        const renamed = renames.get(row.source, row.sessionId);
+        return renamed === undefined ? row : { ...row, title: renamed };
+      });
+      return { rows: named, repositories, status: analysis.status() };
+    }
+    case 'retro.deep': {
+      const [source, sessionId] = request.params;
+      return runDeepRetrospective(source, sessionId, {
+        sources,
+        store: deepRetros,
+        config,
+        settings,
+        backend: aiBackends.active(),
+      }).then((result) => {
+        if (result.verdict !== undefined) {
+          // The open document renders the stored verdict, so the cached
+          // markup is stale the moment a new one lands.
+          detail.invalidate(source, sessionId);
+        }
+        return result;
+      });
+    }
     case 'analysis.status':
       return analysis.status();
+    case 'ai.availability':
+      return aiBackends.active().isAvailable();
+    case 'ai.state':
+      return aiHelper.state();
+    case 'ai.send':
+      return aiHelper.send(request.params[0]);
+    case 'ai.stop':
+      return aiHelper.stop();
+    case 'ai.reset':
+      return aiHelper.reset();
+    case 'ai.acknowledge':
+      return aiHelper.acknowledge();
     case 'overview.get':
       // Hidden sessions are excluded so the totals agree with the list; a
       // count that includes what the user removed reads as a bug.
@@ -459,6 +542,16 @@ function handle(request: RpcRequest): unknown {
         // open document carries cards drawn from it.
         db.clearDeviations();
         detail.invalidateAll();
+      }
+      if (changed.deepRetro) {
+        // The retrospective card's deep-retro affordance is baked into the
+        // rendered document, so toggling the gate must re-render.
+        detail.invalidateAll();
+      }
+      if (changed.ai) {
+        // The backend caches a successful CLI probe for its lifetime; a new
+        // path/model/effort needs a fresh backend or "Check again" would lie.
+        aiBackends.reload();
       }
       if (changed.claude || changed.copilot) {
         // Respond with the snapshot first, then bring the index in line.
@@ -494,14 +587,29 @@ function attach(port: MessagePortMain): void {
     if (request === null || typeof request !== 'object' || typeof request.id !== 'number') {
       return;
     }
-    try {
-      port.postMessage({ id: request.id, ok: true, value: handle(request) } satisfies RpcResponse);
-    } catch (err) {
+    const fail = (err: unknown): void => {
       port.postMessage({
         id: request.id,
         ok: false,
         error: err instanceof Error ? err.message : String(err),
       } satisfies RpcResponse);
+    };
+    try {
+      const value = handle(request);
+      // Almost every method is synchronous; the deep retrospective is not.
+      // A promise is resolved before the response goes back, so the renderer
+      // never has to know which methods are which.
+      if (value instanceof Promise) {
+        value
+          .then((resolved) =>
+            port.postMessage({ id: request.id, ok: true, value: resolved } satisfies RpcResponse),
+          )
+          .catch(fail);
+      } else {
+        port.postMessage({ id: request.id, ok: true, value } satisfies RpcResponse);
+      }
+    } catch (err) {
+      fail(err);
     }
   });
   port.start();

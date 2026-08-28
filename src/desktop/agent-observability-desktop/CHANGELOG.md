@@ -9,6 +9,83 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] - 2026-08-28
+
+### Added
+
+- **Ask your sessions anything.** The AI Helper has arrived: a chat that
+  answers questions about your own sessions — what you worked on, which runs
+  struggled and why, where the tokens and cost went — grounded in your local
+  data and streamed live, with follow-up questions understood in context.
+  Answers cite the sessions they draw on by name; click a citation and the
+  session opens, scrolled into view in the list. It runs through your own
+  Claude Code CLI login on this machine, and a one-time notice explains
+  exactly what each message sends before anything is sent at all.
+- **Ask about one session in particular.** An **Ask AI** button on the
+  session detail attaches that session to the conversation, so "why did this
+  run struggle?" gets answered from its actual transcript.
+- **A new AI section in Settings.** Point the app at a custom Claude CLI
+  install, and pick the model and reasoning effort the AI features use.
+- **The app now tells you clearly when the Claude Code CLI is missing.**
+  The AI Helper, the deep-retrospective dialog, and Settings all show an
+  unmissable warning with the install command and a "Check again" button —
+  instead of a cryptic failure after the fact.
+
+### Fixed
+
+- The "Claude Code CLI not found" message no longer points at a VS Code
+  setting that does not exist in this app — it now points at Settings here.
+- Changing the Claude CLI path now takes effect immediately; previously a
+  corrected path could be ignored until the app was restarted.
+
+## [1.7.0] - 2026-08-28
+
+### Added
+
+- **Every session now gets a retrospective.** Open a session and a card under
+  the header tells the story: what it set out to do, how it went — went
+  smoothly, some friction, struggled, or left unfinished — and the moments
+  that decided it, from corrections and interruptions to error streaks and
+  rework, each one linking straight to the turn where it happened. It closes
+  with up to three suggestions for what to try differently next time. All of
+  it is read from your own sessions, on this machine.
+- **The list marks the sessions that fought you.** Runs judged struggled or
+  left unfinished carry a small chip, and a **Struggled** filter narrows the
+  list to just those.
+- **A new Retro view.** One table of your recent sessions, worst first: the
+  verdict, the friction behind it, and a click straight through to the
+  session's full story. Filter by verdict or repository; partial results show
+  honestly while the background analysis is still reading.
+- **A deep retrospective, strictly opt-in.** Turn it on in Settings and a
+  session's retrospective card gains a button that asks your own Claude Code
+  login to judge the run — the goal, whether it was reached, and a short
+  critique of the opening prompt, written by the model. Every run first shows
+  exactly what would be sent and asks you to confirm; the written verdict is
+  stored only on this machine.
+- **The app explains itself while starting — and keeps you company.** The
+  first scan after a launch now says what is happening — finding your
+  sessions, then reading them with a running count, then preparing the session
+  list and dashboard — instead of a silent window that ignores clicks until it
+  finishes. The overlay lifts only once both are ready, so the first thing you
+  click responds immediately. Longer waits rotate through playful status
+  lines, and opening a session gets the same treatment while it loads.
+
+### Fixed
+
+- **The app no longer fills your disk with Copilot data copies.** Reading
+  Copilot sessions works from a temporary copy of their database, and copies
+  stranded by a crash or an app quit piled up in the system temp folder forever
+  — gigabytes each — until the disk ran out. Copies now live in the app's own
+  data folder, every launch cleans up leftovers (including old strandings in
+  the temp folder), and running out of room now says plainly how much space is
+  needed instead of failing with a cryptic error.
+- **The session list says when it is updating.** A slow search or filter
+  change used to replace the rows with no sign anything was happening; a
+  spinner now floats over the middle of the list while it works, and the rows
+  underneath stay scrollable. The filter chips are also organized into two
+  rows — sources on one, **Flagged**, **Struggled**, and **Hidden** on their
+  own — instead of one strip that pushed the newest chip out of reach.
+
 ## [1.6.0] - 2026-08-28
 
 ### Added

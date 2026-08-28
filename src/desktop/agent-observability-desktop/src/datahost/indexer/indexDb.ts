@@ -8,6 +8,8 @@ import type {
   HotspotSessionRow,
   ListSessionsParams,
   OverviewData,
+  RetroListRow,
+  RetroVerdict,
   SessionGroup,
   SessionRow,
 } from '../../shared/rpc';
@@ -31,7 +33,7 @@ import type { SessionAnalysis } from '../analysis/sessionAnalyzer';
  */
 
 /** Bump to invalidate every existing index (drop-and-rebuild, no migration). */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * How many of the most recent sessions the background analysis reads.
@@ -48,6 +50,9 @@ export const ANALYSIS_SESSION_LIMIT = 300;
 
 /** Rows returned by one hotspots query — far more than a ranking is read past. */
 export const HOTSPOT_ROW_LIMIT = 200;
+
+/** Rows returned by one Retro-view query — same rationale as the hotspots cap. */
+export const RETRO_ROW_LIMIT = 200;
 
 /**
  * How many repositories the overview ranks. Ten rather than a handful: with a
@@ -131,6 +136,23 @@ CREATE TABLE IF NOT EXISTS session_analysis (
   session_id      TEXT NOT NULL,
   deviation_count INTEGER NOT NULL DEFAULT 0,
   error_count     INTEGER NOT NULL DEFAULT 0,
+  -- Session retrospective projection (counts and enum labels only — never
+  -- content strings). verdict NULL means "not judged": rows written before the
+  -- feature existed, or a session whose retrospective could not be built.
+  -- NULL must never render as 'smooth'.
+  verdict              TEXT,
+  outcome              TEXT,
+  correction_turns     INTEGER NOT NULL DEFAULT 0,
+  repeated_prompt_turns INTEGER NOT NULL DEFAULT 0,
+  interruptions        INTEGER NOT NULL DEFAULT 0,
+  error_streaks        INTEGER NOT NULL DEFAULT 0,
+  max_error_streak     INTEGER NOT NULL DEFAULT 0,
+  long_tail_turns      INTEGER NOT NULL DEFAULT 0,
+  compactions          INTEGER NOT NULL DEFAULT 0,
+  churn_ratio_pct      INTEGER NOT NULL DEFAULT 0,
+  plan_mode_used       INTEGER NOT NULL DEFAULT 0,
+  first_prompt_rating  TEXT,
+  tip_count            INTEGER NOT NULL DEFAULT 0,
   indexed_at_ms   INTEGER NOT NULL DEFAULT 0,
   analyzed_at_ms  INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (source, session_id)
@@ -170,7 +192,7 @@ const SESSION_OWNED_TABLES = ['sessions', 'files', 'session_analysis', 'context_
  * so a row carries its deviation count without a second query and the Deviations
  * chip can filter in SQL. LEFT, not INNER: an unanalyzed session must still list.
  */
-const SESSION_SELECT = 's.*, a.deviation_count AS deviation_count';
+const SESSION_SELECT = 's.*, a.deviation_count AS deviation_count, a.verdict AS verdict';
 const SESSION_FROM =
   'FROM sessions s LEFT JOIN session_analysis a' +
   ' ON a.source = s.source AND a.session_id = s.session_id';
@@ -201,6 +223,8 @@ export interface StoredSession {
   indexed_at_ms: number;
   /** Joined from `session_analysis`; null while the session is unanalyzed. */
   deviation_count?: number | null;
+  /** Joined from `session_analysis`; null while unanalyzed or unjudgeable. */
+  verdict?: string | null;
 }
 
 /** One session the background analysis still has to read. */
@@ -663,11 +687,28 @@ export class IndexDb {
   ): void {
     const putSession = this.db.prepare(
       `INSERT INTO session_analysis
-         (source, session_id, deviation_count, error_count, indexed_at_ms, analyzed_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?)
+         (source, session_id, deviation_count, error_count,
+          verdict, outcome, correction_turns, repeated_prompt_turns, interruptions,
+          error_streaks, max_error_streak, long_tail_turns, compactions,
+          churn_ratio_pct, plan_mode_used, first_prompt_rating, tip_count,
+          indexed_at_ms, analyzed_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(source, session_id) DO UPDATE SET
          deviation_count = excluded.deviation_count,
          error_count = excluded.error_count,
+         verdict = excluded.verdict,
+         outcome = excluded.outcome,
+         correction_turns = excluded.correction_turns,
+         repeated_prompt_turns = excluded.repeated_prompt_turns,
+         interruptions = excluded.interruptions,
+         error_streaks = excluded.error_streaks,
+         max_error_streak = excluded.max_error_streak,
+         long_tail_turns = excluded.long_tail_turns,
+         compactions = excluded.compactions,
+         churn_ratio_pct = excluded.churn_ratio_pct,
+         plan_mode_used = excluded.plan_mode_used,
+         first_prompt_rating = excluded.first_prompt_rating,
+         tip_count = excluded.tip_count,
          indexed_at_ms = excluded.indexed_at_ms,
          analyzed_at_ms = excluded.analyzed_at_ms`,
     );
@@ -683,7 +724,30 @@ export class IndexDb {
     );
 
     this.db.transaction(() => {
-      putSession.run(source, sessionId, analysis.deviationCount, analysis.errorCount, indexedAtMs, nowMs);
+      // retro === undefined means the retrospective could not be built: store
+      // NULLs, never zeros pretending to be a smooth verdict.
+      const retro = analysis.retro;
+      putSession.run(
+        source,
+        sessionId,
+        analysis.deviationCount,
+        analysis.errorCount,
+        retro?.verdict ?? null,
+        retro?.outcome ?? null,
+        retro?.correctionTurns ?? 0,
+        retro?.repeatedPromptTurns ?? 0,
+        retro?.interruptions ?? 0,
+        retro?.errorStreaks ?? 0,
+        retro?.maxErrorStreak ?? 0,
+        retro?.longTailTurns ?? 0,
+        retro?.compactions ?? 0,
+        retro?.churnRatioPct ?? 0,
+        retro?.planModeUsed === true ? 1 : 0,
+        retro?.firstPromptRating ?? null,
+        retro?.tipCount ?? 0,
+        indexedAtMs,
+        nowMs,
+      );
       clearFiles.run(source, sessionId);
       for (const file of analysis.contextFiles) {
         putFile.run(
@@ -704,10 +768,85 @@ export class IndexDb {
    *
    * Deviation counts depend on the duration threshold, so changing it makes them
    * all wrong at once. Dropping the analysis rows marks those sessions stale and
-   * the background pass recomputes them.
+   * the background pass recomputes them. Retrospective verdicts ride along
+   * deliberately: a "Ran long" deviation can feed a verdict, so a threshold
+   * change re-judges those too.
    */
   clearDeviations(): void {
     this.db.exec('DELETE FROM session_analysis;');
+  }
+
+  // -- session retrospectives ------------------------------------------------
+
+  /**
+   * The Retro view's ranking: every judged session, worst verdict tier first
+   * (abandoned, struggled, bumpy, smooth), most recent first within a tier.
+   *
+   * Only rows with a verdict qualify — NULL means "not judged", which belongs
+   * in neither tier. The repository list ships WITH the rows because both come
+   * from the same scan; a second call could disagree with what is on screen.
+   */
+  retro(
+    params: { repository?: string } = {},
+    hiddenKeys: readonly string[] = [],
+  ): { rows: RetroListRow[]; repositories: string[] } {
+    const clauses = ['a.verdict IS NOT NULL'];
+    const args: unknown[] = [];
+    if (params.repository !== undefined && params.repository.length > 0) {
+      clauses.push('s.repository = ?');
+      args.push(params.repository);
+    }
+    if (hiddenKeys.length > 0) {
+      clauses.push(`s.source || ':' || s.session_id NOT IN (${hiddenKeys.map(() => '?').join(', ')})`);
+      args.push(...hiddenKeys);
+    }
+    const where = `WHERE ${clauses.join(' AND ')}`;
+    const from =
+      'FROM session_analysis a JOIN sessions s ON s.source = a.source AND s.session_id = a.session_id';
+
+    const stored = this.db
+      .prepare(
+        `SELECT s.source AS source, s.session_id AS sessionId, s.repository AS repository,
+                s.title AS title, s.ended_at_ms AS endedAtMs,
+                a.verdict AS verdict, a.outcome AS outcome,
+                a.correction_turns AS correctionTurns,
+                a.repeated_prompt_turns AS repeatedPromptTurns,
+                a.interruptions AS interruptions,
+                a.max_error_streak AS maxErrorStreak,
+                a.churn_ratio_pct AS churnRatioPct,
+                a.compactions AS compactions,
+                a.tip_count AS tipCount
+           ${from} ${where}
+          ORDER BY CASE a.verdict
+                     WHEN 'abandoned' THEN 0
+                     WHEN 'struggled' THEN 1
+                     WHEN 'bumpy' THEN 2
+                     ELSE 3
+                   END ASC,
+                   s.ended_at_ms DESC
+          LIMIT ?`,
+      )
+      .all(...args, RETRO_ROW_LIMIT) as (Omit<RetroListRow, 'title' | 'verdict'> & {
+      title: string | null;
+      verdict: string;
+    })[];
+
+    const rows: RetroListRow[] = [];
+    for (const row of stored) {
+      const verdict = toVerdict(row.verdict);
+      if (verdict === undefined) {
+        continue;
+      }
+      rows.push({ ...row, verdict, title: row.title ?? undefined });
+    }
+
+    const repositories = (
+      this.db
+        .prepare(`SELECT DISTINCT s.repository AS repository ${from} ${where} ORDER BY 1`)
+        .all(...args) as { repository: string }[]
+    ).map((r) => r.repository);
+
+    return { rows, repositories };
   }
 
   // -- context hotspots ------------------------------------------------------
@@ -903,6 +1042,11 @@ function buildFilter(
   if (params.deviations === true) {
     clauses.push('COALESCE(a.deviation_count, 0) > 0');
   }
+  // Same honesty rule: a NULL verdict is "not judged", which must never pass
+  // a friction filter as if it were smooth — or as if it were struggled.
+  if (params.friction === true) {
+    clauses.push(`a.verdict IN ('struggled', 'abandoned')`);
+  }
   const query = params.query?.trim();
   if (query !== undefined && query.length > 0) {
     // ESCAPE is required for the backslashes below to mean anything: without it
@@ -971,9 +1115,17 @@ function toSessionRow(row: StoredSession): SessionRow {
     externalUrl: row.external_url ?? undefined,
     costMicros: row.cost_micros ?? undefined,
     deviationCount: row.deviation_count ?? undefined,
+    verdict: toVerdict(row.verdict),
     indexedAtMs: row.indexed_at_ms,
     pending: row.pending === 1 ? true : undefined,
   };
+}
+
+/** Narrow a stored verdict to the typed union; anything else reads unjudged. */
+function toVerdict(raw: string | null | undefined): RetroVerdict | undefined {
+  return raw === 'smooth' || raw === 'bumpy' || raw === 'struggled' || raw === 'abandoned'
+    ? raw
+    : undefined;
 }
 
 function parseModes(raw: string): string[] {

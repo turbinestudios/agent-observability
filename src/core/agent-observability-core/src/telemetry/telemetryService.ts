@@ -190,6 +190,8 @@ export class TelemetryService {
    * auto-detecting Copilot's short-lived native DB(s).
    */
   private archiveDbPath: string | undefined;
+  /** Host-owned home for snapshot copies; OS temp dir when unset. */
+  private snapshotRoot: string | undefined;
 
   constructor(config: ServiceConfig | Configuration, environment?: PathEnvironment) {
     this.config = config;
@@ -237,6 +239,16 @@ export class TelemetryService {
     }
     this.archiveDbPath = dbPath;
     this.refresh();
+  }
+
+  /**
+   * Put snapshot copies under a host-owned directory instead of the OS temp
+   * dir, so the host's boot-time sweep (`sweepSnapshotDirs`) can heal any copy
+   * an unclean exit stranded. Matters most on Windows, where the temp dir is
+   * never reclaimed and a stranded copy of a large archive stays forever.
+   */
+  setSnapshotRoot(root: string | undefined): void {
+    this.snapshotRoot = root;
   }
 
   /**
@@ -799,7 +811,7 @@ export class TelemetryService {
         changed = true;
       }
       try {
-        const snapshot = createReadonlySnapshot(target.path);
+        const snapshot = createReadonlySnapshot(target.path, { root: this.snapshotRoot });
         // The copy is ours and disposable; index it so the first query does not
         // full-scan span_attributes. A no-op when the source already has them.
         ensureSnapshotIndexes(snapshot.dbPath);

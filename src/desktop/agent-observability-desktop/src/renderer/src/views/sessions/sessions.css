@@ -49,11 +49,25 @@
 
 /* --- source filter --------------------------------------------------------- */
 
-.source-filter {
+/*
+ * Two chip rows: sources on the first, analysis/state chips (Flagged,
+ * Struggled, Hidden) on the second — they answer a different question than
+ * "which tool", so they get their own line. The second row only exists when
+ * one of its chips does.
+ */
+.session-filters {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  gap: 6px;
   padding: 0 10px 9px;
   border-bottom: 1px solid var(--border);
+}
+
+.filter-row {
+  display: flex;
+  /* Narrow panes still wrap within a row rather than clipping chips. */
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .filter-chip {
@@ -282,6 +296,32 @@
   margin-top: 14px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+
+/* Blocking notice inside a modal (e.g. the CLI the action depends on is missing). */
+.modal-warning {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.modal-warning p {
+  margin: 0 0 8px;
+}
+
+.modal-warning code {
+  font-family: var(--font-mono);
+  background: var(--bg-sunken);
+  padding: 1px 6px;
+  border-radius: 4px;
+  user-select: all;
+}
+
+.modal-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .modal-btn {
@@ -555,6 +595,56 @@
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 }
 
+/* "Ask AI": attach this session to the AI Helper. Sits beside the refresh chip. */
+.detail-ask-ai {
+  position: absolute;
+  top: 10px;
+  right: 56px;
+  z-index: 1;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.detail-ask-ai:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+/*
+ * Deep-retrospective progress/error, floating beside the refresh chip. Kept
+ * outside the frame: the document cannot be trusted to report on work the app
+ * is doing on its behalf.
+ */
+.deep-retro-status {
+  position: absolute;
+  top: 10px;
+  right: 132px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 60%;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  font-size: 12px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.deep-retro-error {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
 /*
  * The detail document brings its own styles and scrolling, so the frame just
  * fills the pane. No border: it should read as part of the app, not an embed.
@@ -771,6 +861,68 @@
   height: 5px;
   border-radius: 50%;
   background: var(--warning);
+}
+
+/*
+ * The retrospective's verdict, on the two worst tiers only. A worded chip, not
+ * a third dot: this row already carries two dot marks, and "Struggled" is the
+ * claim itself where another color would just be a riddle.
+ */
+.verdict-chip {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.verdict-struggled {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.verdict-abandoned {
+  color: var(--fg-subtle);
+  background: color-mix(in srgb, var(--fg-subtle) 14%, transparent);
+}
+
+/*
+ * Wraps the scrolling list so the loading overlay below has something to
+ * anchor to; takes over the flex sizing the scroll container had.
+ */
+.sessions-list-area {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * The rows-on-screen counterpart of .sessions-loading: floats a big spinner
+ * over the middle of the list while a re-query replaces it. pointer-events
+ * off — the stale rows stay scrollable underneath.
+ */
+.sessions-list-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.sessions-list-loading-chip {
+  display: flex;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  color: var(--fg-subtle);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
 }
 
 /*

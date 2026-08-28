@@ -10,6 +10,7 @@ import { defaultFs, resolveClaudeProjectsDirs, type ClaudeFs } from '@agent-obse
 import type { SettingsPatch, SettingsSnapshot } from '../shared/rpc';
 import type { DesktopSettingsReader } from './drivers/desktopConfig';
 import { resolveConfigPath } from './drivers/desktopConfig';
+import { DEEP_RETRO_ENABLED_KEY } from './deepRetro';
 import { pickCopilotDatabase, type CopilotDatabaseCandidate } from './indexer/copilotIndexer';
 
 /**
@@ -59,6 +60,11 @@ export function buildSettingsSnapshot(
     // Read through Configuration rather than the raw store, so the page shows
     // the clamped value the detector will actually use.
     maxSessionMinutes: config.getMaxSessionMinutes(),
+    deepRetroEnabled: storedBoolean(settings, DEEP_RETRO_ENABLED_KEY, false),
+    claudeCliPath: storedString(settings, ConfigKeys.aiHelperClaudeCliPath),
+    // Effective values (defaulted/clamped), same reasoning as maxSessionMinutes.
+    claudeModel: config.getAiHelperClaudeModel(),
+    claudeEffort: config.getAiHelperClaudeEffort(),
     configPath,
     configDir: path.dirname(configPath),
   };
@@ -73,9 +79,9 @@ export function buildSettingsSnapshot(
 export function applySettingsPatch(
   settings: DesktopSettingsReader,
   patch: SettingsPatch,
-): { claude: boolean; copilot: boolean; deviation: boolean } {
+): { claude: boolean; copilot: boolean; deviation: boolean; deepRetro: boolean; ai: boolean } {
   const update: Record<string, unknown> = {};
-  const changed = { claude: false, copilot: false, deviation: false };
+  const changed = { claude: false, copilot: false, deviation: false, deepRetro: false, ai: false };
 
   if (typeof patch.claudeEnabled === 'boolean' && patch.claudeEnabled !== storedBoolean(settings, ConfigKeys.claudeEnabled, ConfigDefaults.claudeEnabled)) {
     update[ConfigKeys.claudeEnabled] = patch.claudeEnabled;
@@ -110,7 +116,42 @@ export function applySettingsPatch(
     }
   }
 
-  if (changed.claude || changed.copilot || changed.deviation) {
+  // The deep-retrospective gate: a consent surface, so it is stored only on a
+  // real boolean and never inferred.
+  if (
+    typeof patch.deepRetroEnabled === 'boolean' &&
+    patch.deepRetroEnabled !== storedBoolean(settings, DEEP_RETRO_ENABLED_KEY, false)
+  ) {
+    update[DEEP_RETRO_ENABLED_KEY] = patch.deepRetroEnabled;
+    changed.deepRetro = true;
+  }
+
+  // The AI keys. `changed.ai` makes the caller rebuild the backend registry:
+  // a successful CLI probe is cached per backend instance, so a changed path
+  // would otherwise be ignored until the app restarts.
+  if (typeof patch.claudeCliPath === 'string') {
+    const next = patch.claudeCliPath.trim();
+    if (next !== storedString(settings, ConfigKeys.aiHelperClaudeCliPath)) {
+      update[ConfigKeys.aiHelperClaudeCliPath] = next.length > 0 ? next : undefined;
+      changed.ai = true;
+    }
+  }
+  if (typeof patch.claudeModel === 'string') {
+    const next = patch.claudeModel.trim();
+    if (next !== storedString(settings, ConfigKeys.aiHelperClaudeModel)) {
+      update[ConfigKeys.aiHelperClaudeModel] = next.length > 0 ? next : undefined;
+      changed.ai = true;
+    }
+  }
+  if (typeof patch.claudeEffort === 'string') {
+    const next = patch.claudeEffort.trim();
+    if (next !== storedString(settings, ConfigKeys.aiHelperClaudeEffort)) {
+      update[ConfigKeys.aiHelperClaudeEffort] = next.length > 0 ? next : undefined;
+      changed.ai = true;
+    }
+  }
+
+  if (changed.claude || changed.copilot || changed.deviation || changed.deepRetro || changed.ai) {
     settings.update(update);
   }
   return changed;

@@ -13,6 +13,7 @@ import type {
 } from '../telemetry/models';
 import type { SessionContextAnalysis } from '../context/models';
 import { analyzeContext, type AcceptedMissingConfig } from '../context/contextAnalyzer';
+import type { SessionRetrospective } from '../analysis/retrospective';
 
 /**
  * A pluggable agent-telemetry source feeding the unified views.
@@ -89,6 +90,18 @@ export interface SessionDataSource {
     sessionKey: string,
     acceptedMissing: AcceptedMissingConfig,
   ): SessionContextAnalysis | undefined;
+
+  /**
+   * Optional LOCAL-ONLY session retrospective — the heuristic goal/verdict/
+   * findings read behind the detail card and the friction filter (see
+   * {@link ../analysis/retrospective.buildSessionRetrospective}). Lives on the
+   * source because a source may enrich the shared turn-level analysis with
+   * signals only its raw data carries (Claude: interruptions, compactions,
+   * plan mode). A source without the method still gets a degraded
+   * retrospective via `buildSessionRetrospective(detail)` at the call site.
+   * Content-derived: never syncs, like everything else marked LOCAL-ONLY.
+   */
+  getSessionRetrospective?(sessionKey: string): Result<SessionRetrospective>;
 }
 
 /**

@@ -118,6 +118,36 @@
   color: var(--warning);
 }
 
+/* The unmissable variant: a bordered block for "this feature cannot work" states. */
+.settings-warning-block {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.settings-warning-block p {
+  margin: 0;
+  font-size: 12.5px;
+  max-width: 70ch;
+}
+
+.settings-warning-block code {
+  font-family: var(--font-mono);
+  background: var(--bg-sunken);
+  padding: 1px 6px;
+  border-radius: 4px;
+  user-select: all;
+}
+
+/* Dropdowns sized for their labels, not for paths. */
+.settings-select {
+  width: auto;
+  min-width: 12em;
+  font-family: var(--font);
+}
+
 .settings-action {
   margin-top: 10px;
   padding: 6px 12px;

@@ -1,6 +1,6 @@
 # Desktop App — Research-Functionality Proposals
 
-Eight proposals for new functionality in the **Agent Observability desktop app**
+Ten proposals for new functionality in the **Agent Observability desktop app**
 (`src/desktop/agent-observability-desktop`), aimed at two goals: better
 **research into how agents behaved**, and better **feedback into our own
 processes** (prompts, instruction files, workflows, cost).
@@ -12,7 +12,7 @@ embed the concrete file paths and existing assets they build on, so no
 re-exploration is needed.
 
 Proposals 1–4 are mostly wiring capability that **already exists in core** but
-was never connected to the desktop app — high value, low risk. Proposals 5–8
+was never connected to the desktop app — high value, low risk. Proposals 5–10
 add genuinely new research capability.
 
 | # | Proposal | User story in one line | Status | Effort | Builds on |
@@ -25,6 +25,8 @@ add genuinely new research capability.
 | 6 | [Session tagging & research notes](06-tagging-notes.md) | Label runs ("experiment-A", "bad-run") and build corpora to compare | Planned | M | The `RenameStore`/`HiddenStore` JSON-store pattern |
 | 7 | [Tool usage analytics](07-tool-analytics.md) | Per-tool call volume, failure rates, and durations — find friction tools | Planned | M/L | Per-tool data all sources already parse and discard |
 | 8 | [Rework & churn quality signals](08-rework-churn.md) | Distinguish productive runs from thrashing — the first quality proxy | Planned | L | Per-turn LoC data + Claude `structuredPatch`, unused today |
+| 9 | [Session retrospective](09-session-retrospective.md) | Each session tells me what it set out to do, how it went, and what to change | Completed (1.7.0) | M/L | Unread transcript markers + the turn data every source already parses |
+| 10 | [AI Helper](10-ai-helper.md) | Ask questions about my own sessions and get grounded, cited answers | Completed (1.8.0) | M/L | Core's chat stack + the Claude CLI backend the deep retrospective already spawns |
 
 **Suggested order:** 1 → 4 → 5 → 2 → 3 → 6 → 7 → 8. Proposal 5's cross-view
 navigation ("open Sessions pre-filtered") is reused by 3, 7, and 8 — build it
@@ -47,12 +49,6 @@ intent; proposal 5 should generalize that rather than re-invent it.
   make findings shareable in retros. Local file writes only, user-initiated;
   note `docs/plans/completed/workflow-predicate-dsl.md` already stipulates any
   export path excludes content-derived deviations by construction.
-- **AI Helper.** The sidebar placeholder promises "a chat assistant grounded in
-  your local session data, running against the Claude Code CLI". Core's
-  `src/core/agent-observability-core/src/chat/` stack (conversation, quick
-  commands, `claudeCodeBackend`) and the extension's
-  `src/extension/agent-observability-vscode/src/chat/chatViewProvider.ts` are
-  the building blocks.
 - **Repository detail view.** Core's
   `src/core/agent-observability-core/src/views/sessionDetailHtml.ts` exports
   `renderRepositoryDetailHtml` (whole-repository rollups) — unwired in the
@@ -64,7 +60,12 @@ intent; proposal 5 should generalize that rather than re-invent it.
    I/O, file paths, identities) never leaves the machine. Every feature in
    this folder is **local-only**. Never add fields to the aggregate/sync paths
    (`src/core/agent-observability-core/src/aggregate/*`, `…/src/sync/*`) or to
-   `schemas/*.json`. See `docs/privacy-validation.md`.
+   `schemas/*.json`. See `docs/privacy-validation.md`. The two sanctioned,
+   gated exceptions — both strictly the user's **own `claude` CLI login**,
+   user-initiated, never in the background — are proposal 9's opt-in Deep
+   Retrospective (default-off setting plus per-invocation confirmation) and
+   proposal 10's AI Helper (one-time first-use notice; every send an explicit
+   user action). Nothing else may cite them as precedent.
 2. **Core vs. host boundary.** Host-independent logic (parsing, metrics,
    rendering) goes in `src/core/agent-observability-core`; importing `vscode`
    there is a lint error. Desktop-only wiring stays in the desktop package.

@@ -332,3 +332,44 @@
 .changelog-section li a {
   color: var(--accent);
 }
+
+/*
+ * Startup overlay: covers the app during the first index pass, when the data
+ * host cannot answer anything. Translucent on purpose — the session list keeps
+ * filling in behind it, which is itself the progress report.
+ */
+.startup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 65%, transparent);
+  backdrop-filter: blur(1.5px);
+}
+
+.startup-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  min-width: 280px;
+  padding: 28px 36px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.startup-stage {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.startup-note {
+  margin: 0;
+  color: var(--fg-subtle);
+  font-size: 12px;
+}

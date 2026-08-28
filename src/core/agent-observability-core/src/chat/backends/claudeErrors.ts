@@ -11,6 +11,32 @@ import { FriendlyError } from '../lmErrors';
  * `isCancellation()` before ever reaching this function.
  */
 
+/**
+ * Host-specific phrasing for where a custom CLI path can be configured. The
+ * install hint is universal; where the "or point at it here" clause sends the
+ * user differs per host (a VS Code setting id versus the desktop Settings view).
+ */
+export interface ClaudeCliHints {
+  /** Imperative clause, e.g. "set `agentObservability.aiHelper.claudeCliPath`". */
+  cliPathHint: string;
+}
+
+/** Default hints: the VS Code extension's setting id. */
+export const VSCODE_CLI_HINTS: ClaudeCliHints = {
+  cliPathHint: 'set `agentObservability.aiHelper.claudeCliPath`',
+};
+
+/**
+ * The one "CLI missing" sentence, shared by `isAvailable()` and the ENOENT
+ * error mapping so the two can never drift apart.
+ */
+export function cliMissingMessage(hints: ClaudeCliHints): string {
+  return (
+    'Claude Code CLI not found — install it (`npm install -g @anthropic-ai/claude-code`) ' +
+    `or ${hints.cliPathHint}.`
+  );
+}
+
 /** Structured failure thrown by the Claude backend around a CLI run. */
 export class ClaudeCliError extends Error {
   code?: string;
@@ -27,15 +53,13 @@ export class ClaudeCliError extends Error {
 }
 
 /** Map any thrown Claude CLI error to a friendly message + recoverability. */
-export function describeClaudeError(err: unknown): FriendlyError {
+export function describeClaudeError(err: unknown, hints: ClaudeCliHints = VSCODE_CLI_HINTS): FriendlyError {
   const { code, message, stderrTail } = read(err);
   const probe = `${code} ${message} ${stderrTail}`;
 
   if (probe.includes('enoent')) {
     return {
-      message:
-        'Claude Code CLI was not found. Install Claude Code (`npm install -g @anthropic-ai/claude-code`) ' +
-        'or set `agentObservability.aiHelper.claudeCliPath`, then try again.',
+      message: `${cliMissingMessage(hints)} Then try again.`,
       recoverable: false,
     };
   }

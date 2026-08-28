@@ -15,7 +15,7 @@ const { DatabaseSync } = createRequire(__filename)('node:sqlite') as {
     close(): void;
   };
 };
-import { createReadonlySnapshot } from './snapshot';
+import { SNAPSHOT_DIR_PREFIX, createReadonlySnapshot, sweepSnapshotDirs } from './snapshot';
 import { TelemetryDatabase } from './database';
 import { TelemetryService, ServiceConfig } from './telemetryService';
 import { FIXTURE_DB } from './testSupport';
@@ -210,5 +210,71 @@ describe('TelemetryService over a WAL-flagged source', () => {
       svc.dispose();
       src.cleanup();
     }
+  });
+});
+
+describe('snapshot housekeeping', () => {
+  it('creates the snapshot under a caller-supplied root, and dispose removes it', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-obs-root-'));
+    try {
+      const snapshot = createReadonlySnapshot(FIXTURE_DB, { root });
+      expect(snapshot.dbPath.startsWith(root)).toBe(true);
+      expect(path.basename(path.dirname(snapshot.dbPath)).startsWith(SNAPSHOT_DIR_PREFIX)).toBe(true);
+      snapshot.dispose();
+      expect(fs.readdirSync(root)).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses with a plain sentence when the disk lacks room, creating nothing', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-obs-root-'));
+    try {
+      expect(() => createReadonlySnapshot(FIXTURE_DB, { root, diskFree: () => 1024 })).toThrow(
+        /free disk space/,
+      );
+      // A refused snapshot must not leave a dir behind either.
+      expect(fs.readdirSync(root)).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('sweeps leftover snapshot dirs and nothing else', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-obs-root-'));
+    try {
+      for (const name of ['agent-obs-a', 'agent-obs-b', 'unrelated-dir']) {
+        fs.mkdirSync(path.join(root, name));
+        fs.writeFileSync(path.join(root, name, 'agent-traces.db'), 'x');
+      }
+      // A stray FILE with the prefix is not a snapshot dir and is left alone.
+      fs.writeFileSync(path.join(root, 'agent-obs-file'), 'x');
+
+      expect(sweepSnapshotDirs(root)).toBe(2);
+      expect(fs.readdirSync(root).sort()).toEqual(['agent-obs-file', 'unrelated-dir']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('an age gate spares fresh dirs — a concurrent process may still be copying', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-obs-root-'));
+    try {
+      const old = path.join(root, 'agent-obs-old');
+      const fresh = path.join(root, 'agent-obs-fresh');
+      fs.mkdirSync(old);
+      fs.mkdirSync(fresh);
+      const twoHoursAgo = (Date.now() - 2 * 60 * 60_000) / 1000;
+      fs.utimesSync(old, twoHoursAgo, twoHoursAgo);
+
+      expect(sweepSnapshotDirs(root, 60 * 60_000)).toBe(1);
+      expect(fs.readdirSync(root)).toEqual(['agent-obs-fresh']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('sweeping a root that does not exist is a quiet no-op', () => {
+    expect(sweepSnapshotDirs(path.join(os.tmpdir(), 'agent-obs-nope-nope'))).toBe(0);
   });
 });

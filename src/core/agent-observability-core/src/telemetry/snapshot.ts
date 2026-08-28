@@ -39,6 +39,30 @@ export interface ReadonlySnapshot {
 const WAL_SUFFIX = '-wal';
 const SHM_SUFFIX = '-shm';
 
+/** Every snapshot dir carries this prefix, so a sweep can identify its own. */
+export const SNAPSHOT_DIR_PREFIX = 'agent-obs-';
+
+/**
+ * Copy headroom beyond the source's size: the WAL replay grows the copy and
+ * SQLite wants working room; running a disk to its literal last byte helps
+ * nobody either way.
+ */
+const FREE_SPACE_HEADROOM_BYTES = 64 * 1024 * 1024;
+
+/** Options for {@link createReadonlySnapshot}. */
+export interface SnapshotOptions {
+  /**
+   * Directory to create snapshot dirs under, instead of the OS temp dir. A
+   * host that owns a data directory should point here so its boot-time
+   * {@link sweepSnapshotDirs} bounds any leak from an unclean exit — on
+   * Windows nothing ever reclaims the temp dir, so "the OS will clean it up"
+   * is not a plan there.
+   */
+  root?: string;
+  /** Free-bytes probe, injectable for tests; `undefined` skips the check. */
+  diskFree?: (dir: string) => number | undefined;
+}
+
 /**
  * SQLite database header: the file-format write/read version bytes (offsets 18
  * and 19). Both are `2` for a WAL-mode DB and `1` for a rollback-journal DB.
@@ -69,19 +93,48 @@ const WAL_MAGIC_BIG_ENDIAN = 0x377f0683;
  * service layer classifies the error code, e.g. ENOENT → missingDb,
  * EACCES/EPERM → permission).
  */
-export function createReadonlySnapshot(dbPath: string): ReadonlySnapshot {
+export function createReadonlySnapshot(dbPath: string, options: SnapshotOptions = {}): ReadonlySnapshot {
   // Capture source mtime first; surfaces ENOENT/EACCES before any temp work.
   const sourceStat = fs.statSync(dbPath);
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-obs-'));
+  const root = options.root ?? os.tmpdir();
+  fs.mkdirSync(root, { recursive: true });
+
+  // A full disk fails here with a plain sentence instead of a mid-copy ENOSPC
+  // that leaves a partial snapshot behind. The archive can be gigabytes, so
+  // this is a real failure mode, not paranoia.
+  const neededBytes =
+    sourceStat.size + fileSize(dbPath + WAL_SUFFIX) + FREE_SPACE_HEADROOM_BYTES;
+  const freeBytes = (options.diskFree ?? defaultDiskFree)(root);
+  if (freeBytes !== undefined && freeBytes < neededBytes) {
+    throw new Error(
+      `Not enough free disk space to open the Copilot data: a working copy needs about ` +
+        `${gigabytes(neededBytes)} GB, but only ${gigabytes(freeBytes)} GB is free at ${root}.`,
+    );
+  }
+
+  const tempDir = fs.mkdtempSync(path.join(root, SNAPSHOT_DIR_PREFIX));
   const baseName = path.basename(dbPath);
   const destDb = path.join(tempDir, baseName);
 
   // Copy main DB first, then sidecars. Sidecars are optional (a cleanly
-  // checkpointed DB may have none); copy them only when present.
-  fs.copyFileSync(dbPath, destDb);
-  copyIfExists(dbPath + WAL_SUFFIX, destDb + WAL_SUFFIX);
-  copyIfExists(dbPath + SHM_SUFFIX, destDb + SHM_SUFFIX);
+  // checkpointed DB may have none); copy them only when present. A copy that
+  // fails partway (disk filled despite the check, source vanished) must not
+  // leave its half-written dir behind.
+  try {
+    fs.copyFileSync(dbPath, destDb);
+    copyIfExists(dbPath + WAL_SUFFIX, destDb + WAL_SUFFIX);
+    copyIfExists(dbPath + SHM_SUFFIX, destDb + SHM_SUFFIX);
+  } catch (err) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if ((err as NodeJS.ErrnoException).code === 'ENOSPC') {
+      throw new Error(
+        `The disk filled up while copying the Copilot data (about ${gigabytes(neededBytes)} GB ` +
+          `needed at ${root}). Free some space and try again.`,
+      );
+    }
+    throw err;
+  }
 
   // Make the copy openable by the WAL-incapable bundled driver. On any failure
   // (including a pending-WAL bail-out) clean up the temp dir before rethrowing.
@@ -318,4 +371,62 @@ export function sourceMtime(dbPath: string): number | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Delete leftover snapshot dirs (`agent-obs-*`) under `root` that are older
+ * than `maxAgeMs`. Returns how many were removed.
+ *
+ * This is how a leak from an UNCLEAN exit gets healed: {@link ReadonlySnapshot.dispose}
+ * only runs when the owning process shuts down gracefully, but the desktop app
+ * kills its data host and a crash skips everything — and on Windows nothing
+ * ever reclaims the temp dir, so before this sweep existed those copies (a
+ * gigabyte-plus each) accumulated until the disk was full.
+ *
+ * Safe against a CONCURRENT instance holding a snapshot open: on Windows,
+ * deleting an open file fails and that dir is skipped (per-entry errors are
+ * swallowed); on POSIX an unlinked-but-open file keeps serving its reader.
+ * Callers still pass a non-zero `maxAgeMs` when sweeping the SHARED OS temp
+ * dir, so another process's snapshot mid-creation is not raced.
+ */
+export function sweepSnapshotDirs(root: string, maxAgeMs = 0): number {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return 0; // Missing/unreadable root: nothing to sweep.
+  }
+  const cutoff = Date.now() - maxAgeMs;
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(SNAPSHOT_DIR_PREFIX)) {
+      continue;
+    }
+    const dir = path.join(root, entry.name);
+    try {
+      if (maxAgeMs > 0 && fs.statSync(dir).mtimeMs > cutoff) {
+        continue;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+      removed++;
+    } catch {
+      // In use by a live instance, or vanished mid-sweep — skip it.
+    }
+  }
+  return removed;
+}
+
+/** Free bytes on the volume holding `dir`, or `undefined` when unknowable. */
+function defaultDiskFree(dir: string): number | undefined {
+  try {
+    const stat = fs.statfsSync(dir);
+    return stat.bavail * stat.bsize;
+  } catch {
+    return undefined; // Older runtime or exotic volume: skip the check.
+  }
+}
+
+/** Bytes as a one-decimal GB string for error messages. */
+function gigabytes(bytes: number): string {
+  return (bytes / 1_073_741_824).toFixed(1);
 }

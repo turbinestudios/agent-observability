@@ -115,7 +115,7 @@ describe('applySettingsPatch', () => {
       sqlitePath: '  /custom/traces.db  ',
     });
 
-    expect(changed).toEqual({ claude: true, copilot: true, deviation: false });
+    expect(changed).toEqual({ claude: true, copilot: true, deviation: false, deepRetro: false, ai: false });
     // Round-trip through a fresh reader: the write really hit the disk.
     const reread = new DesktopSettingsReader(file);
     expect(reread.get('claudeCode.enabled', true)).toBe(false);
@@ -139,9 +139,13 @@ describe('applySettingsPatch', () => {
       copilotEnabled: true,
       claudeProjectsPath: '',
       sqlitePath: '',
+      deepRetroEnabled: false,
+      claudeCliPath: '',
+      claudeModel: '',
+      claudeEffort: '',
     });
 
-    expect(changed).toEqual({ claude: false, copilot: false, deviation: false });
+    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: false, ai: false });
     // Nothing changed, so nothing was written — first save is what creates the file.
     expect(fs.existsSync(file)).toBe(false);
   });
@@ -151,10 +155,56 @@ describe('applySettingsPatch', () => {
     const changed = applySettingsPatch(settings, {
       claudeEnabled: 'yes' as unknown as boolean,
       sqlitePath: 42 as unknown as string,
+      deepRetroEnabled: 'on' as unknown as boolean,
+      claudeCliPath: 7 as unknown as string,
     });
 
-    expect(changed).toEqual({ claude: false, copilot: false, deviation: false });
+    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: false, ai: false });
     expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('persists the deep-retrospective consent only from a real boolean', () => {
+    const settings = new DesktopSettingsReader(file);
+    const changed = applySettingsPatch(settings, { deepRetroEnabled: true });
+
+    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: true, ai: false });
+    const reread = new DesktopSettingsReader(file);
+    expect(reread.get('retrospective.deepEnabled', false)).toBe(true);
+  });
+
+  it('round-trips the AI keys and reports the ai domain', () => {
+    const settings = new DesktopSettingsReader(file);
+    const changed = applySettingsPatch(settings, {
+      claudeCliPath: '  C:\\tools\\claude.exe  ',
+      claudeModel: 'haiku',
+      claudeEffort: 'medium',
+    });
+
+    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: false, ai: true });
+    const reread = new DesktopSettingsReader(file);
+    expect(reread.get('aiHelper.claudeCliPath', '')).toBe('C:\\tools\\claude.exe');
+    expect(reread.get('aiHelper.claudeModel', '')).toBe('haiku');
+    expect(reread.get('aiHelper.claudeEffort', '')).toBe('medium');
+
+    const snapshot = buildSettingsSnapshot(reread, new Configuration(reread), seams());
+    expect(snapshot.claudeCliPath).toBe('C:\\tools\\claude.exe');
+    expect(snapshot.claudeModel).toBe('haiku');
+    expect(snapshot.claudeEffort).toBe('medium');
+  });
+
+  it('deletes an AI key when its value is cleared, so the default returns', () => {
+    const settings = new DesktopSettingsReader(file);
+    settings.update({ 'aiHelper.claudeCliPath': '/custom/claude' });
+    const changed = applySettingsPatch(settings, { claudeCliPath: '' });
+
+    expect(changed.ai).toBe(true);
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    expect('aiHelper.claudeCliPath' in raw).toBe(false);
+    // The snapshot shows the effective defaults again.
+    const snapshot = buildSettingsSnapshot(settings, new Configuration(settings), seams());
+    expect(snapshot.claudeCliPath).toBe('');
+    expect(snapshot.claudeModel).toBe('sonnet');
+    expect(snapshot.claudeEffort).toBe('high');
   });
 });
 

@@ -12,6 +12,7 @@ import {
 } from '../telemetry/models';
 import { DeviationType, WorkflowDeviation } from '../deviation/models';
 import { SessionContextAnalysis, AgentContextAnalysis, ContextFileEntry } from '../context/models';
+import type { RetrospectiveFinding, SessionRetrospective } from '../analysis/retrospective';
 import {
   computeSessionComparison,
   ComparisonCell,
@@ -145,6 +146,7 @@ export function renderSessionDetailHtml(
   contextAnalysis?: SessionContextAnalysis,
   costMode: CostMode = 'aiu',
   extraHeadHtml = '',
+  retrospective?: RetrospectiveView,
 ): string {
   const { summary } = detail;
   const csp = [
@@ -170,7 +172,7 @@ export function renderSessionDetailHtml(
   ${extraHeadHtml}
 </head>
 <body>
-  <div id="live-root">${renderSessionDetailContent(detail, turnDeviations, contextAnalysis, costMode)}</div>
+  <div id="live-root">${renderSessionDetailContent(detail, turnDeviations, contextAnalysis, costMode, retrospective)}</div>
   <script nonce="${nonce}">${WEBVIEW_CONTROLLER}</script>
 </body>
 </html>`;
@@ -190,6 +192,7 @@ export function renderSessionDetailContent(
   turnDeviations: readonly (readonly WorkflowDeviation[])[],
   contextAnalysis?: SessionContextAnalysis,
   costMode: CostMode = 'aiu',
+  retrospective?: RetrospectiveView,
 ): string {
   const hasContext = contextAnalysis !== undefined;
   return `${hasContext ? `<nav class="tab-bar">
@@ -198,6 +201,7 @@ export function renderSessionDetailContent(
   </nav>` : ''}
   <div class="tab-panel${hasContext ? '' : ' tab-panel-only'}" id="tab-overview">
   ${renderHeader(detail, turnDeviations)}
+  ${renderRetrospective(retrospective)}
   ${renderTreeSummary(detail.treeStats, detail.treeModelTurns, undefined, costMode)}
   ${renderMainAgentUsage(detail.agentUsage, costMode)}
   ${renderSubAgentUsage(detail.agentUsage, costMode)}
@@ -787,6 +791,146 @@ function renderDeviationSummary(
       ${more}
     </ul>
   </div>`;
+}
+
+/**
+ * The retrospective as the host hands it to the renderer: the heuristic result
+ * plus whether the host offers the opt-in deep retrospective (a stored
+ * CLI-written verdict, when one exists, arrives merged on `retro.llmVerdict`).
+ */
+export interface RetrospectiveView {
+  retro: SessionRetrospective;
+  /** Whether the "ask for a deep retrospective" affordance should render. */
+  deepEnabled?: boolean;
+}
+
+/** Plain-language names for the verdicts, mirroring {@link DEVIATION_LABEL}. */
+const RETRO_VERDICT_LABEL: Record<string, string> = {
+  smooth: 'Went smoothly',
+  bumpy: 'Some friction',
+  struggled: 'Struggled',
+  abandoned: 'Left unfinished',
+};
+
+const RETRO_OUTCOME_LABEL: Record<string, string> = {
+  'likely-fulfilled': 'goal likely fulfilled',
+  partially: 'goal partially met',
+  unclear: 'outcome unclear',
+  'likely-unfulfilled': 'goal likely unfulfilled',
+};
+
+/** Findings listed on the card before the rest fold into a count. */
+const RETRO_FINDING_LIMIT = 6;
+
+/**
+ * The retrospective card: what the session set out to do, how it went, the
+ * moments that decided that, and what to try differently — the story a reader
+ * wants BEFORE the numbers, which is why it sits directly under the header.
+ *
+ * Everything shown is LOCAL-ONLY content-derived analysis (finding sentences
+ * are generic; each links to the turn holding the raw evidence instead of
+ * quoting it). Returns '' when the host supplied no retrospective, so older
+ * callers and Copilot documents render untouched.
+ */
+function renderRetrospective(view?: RetrospectiveView): string {
+  if (view === undefined) {
+    return '';
+  }
+  const retro = view.retro;
+  const verdictLabel = RETRO_VERDICT_LABEL[retro.verdict] ?? retro.verdict;
+  const outcomeLabel = RETRO_OUTCOME_LABEL[retro.outcome] ?? retro.outcome;
+
+  const goal =
+    retro.goal !== undefined && retro.goal.length > 0
+      ? `<p class="retro-goal"><strong>Goal</strong> — ${escapeHtml(truncate(retro.goal, 160))}${
+          retro.goalSource === 'first-prompt' ? '<span class="muted"> (from the first prompt)</span>' : ''
+        }</p>`
+      : '';
+
+  const shown = retro.findings.slice(0, RETRO_FINDING_LIMIT);
+  const items = shown.map(renderRetroFinding).join('\n');
+  const more =
+    retro.findings.length > RETRO_FINDING_LIMIT
+      ? `<li class="muted">and ${num(retro.findings.length - RETRO_FINDING_LIMIT)} more</li>`
+      : '';
+  const findings =
+    shown.length > 0 ? `<ul class="retro-findings">${items}${more}</ul>` : '';
+
+  const tips =
+    retro.tips.length > 0
+      ? `<details class="retro-tips" data-k="retro-tips"><summary>What to try differently (${num(
+          retro.tips.length,
+        )})</summary><ul>${retro.tips
+          .map((tip) => `<li>${escapeHtml(tip.text)}</li>`)
+          .join('\n')}</ul></details>`
+      : '';
+
+  return `<section class="retro retro-${escapeHtml(retro.verdict)}" role="note">
+    <p class="retro-head"><span class="retro-chip retro-chip-${escapeHtml(retro.verdict)}">${escapeHtml(
+      verdictLabel,
+    )}</span><span class="retro-outcome">${escapeHtml(outcomeLabel)}</span></p>
+    ${goal}
+    ${findings}
+    ${tips}
+    ${renderLlmVerdict(retro)}
+    ${renderDeepRetroFooter(view)}
+  </section>`;
+}
+
+/** One finding row, linking to its turn's disclosure when it has one. */
+function renderRetroFinding(finding: RetrospectiveFinding): string {
+  const turnLink =
+    finding.turnIndex !== undefined
+      ? `<button type="button" class="retro-turn-link" data-turn="t${num(finding.turnIndex)}r">Turn ${num(
+          finding.turnIndex + 1,
+        )}</button> · `
+      : '';
+  return `<li class="retro-f-${escapeHtml(finding.severity)}">${turnLink}${escapeHtml(
+    finding.description,
+  )}</li>`;
+}
+
+/** The CLI-written deep retrospective, when one has been generated and stored. */
+function renderLlmVerdict(retro: SessionRetrospective): string {
+  const verdict = retro.llmVerdict;
+  if (verdict === undefined) {
+    return '';
+  }
+  const narrative =
+    verdict.narrative !== undefined ? `<p>${escapeHtml(verdict.narrative)}</p>` : '';
+  const critique =
+    verdict.promptCritique !== undefined
+      ? `<p><strong>On the prompt</strong> — ${escapeHtml(verdict.promptCritique)}</p>`
+      : '';
+  const advice =
+    verdict.advice !== undefined && verdict.advice.length > 0
+      ? `<ul>${verdict.advice.map((a) => `<li>${escapeHtml(a)}</li>`).join('\n')}</ul>`
+      : '';
+  return `<div class="retro-deep">
+    <p class="retro-deep-head">Deep retrospective <span class="muted">— written by ${escapeHtml(
+      verdict.model,
+    )} on your Claude login</span></p>
+    ${narrative}
+    ${critique}
+    ${advice}
+  </div>`;
+}
+
+/**
+ * The opt-in deep-retrospective affordance. Renders only when the host says
+ * the Settings gate is on; the click posts to the host, which shows the
+ * per-invocation confirmation BEFORE anything runs — the button itself sends
+ * nothing anywhere.
+ */
+function renderDeepRetroFooter(view: RetrospectiveView): string {
+  if (view.deepEnabled !== true) {
+    return '';
+  }
+  const label = view.retro.llmVerdict !== undefined ? 'Re-run the deep retrospective' : 'Ask for a deep retrospective';
+  return `<p class="retro-deep-run-row">
+    <button type="button" class="retro-deep-run">${escapeHtml(label)}</button>
+    <span class="muted">Sends this session's prompts and responses to Anthropic via your own Claude Code login — you confirm first.</span>
+  </p>`;
 }
 
 /**
@@ -2174,6 +2318,33 @@ const STYLE = `
   .deviation-summary-head { display: flex; align-items: center; gap: .45rem; margin: 0; font-weight: 600; color: var(--vscode-editorWarning-foreground, #c90); }
   .deviation-summary-list { margin: .35rem 0 0; padding-left: 1.1rem; }
   .deviation-summary-list li { margin: .15rem 0; }
+  .retro { margin: .9rem 0 0; padding: .7rem .85rem; border-left: 3px solid var(--vscode-descriptionForeground, #888); border-radius: 0 4px 4px 0; background: var(--vscode-textBlockQuote-background, transparent); }
+  .retro-smooth { border-left-color: var(--vscode-testing-iconPassed, #2da44e); }
+  .retro-bumpy { border-left-color: var(--vscode-editorWarning-foreground, #c90); }
+  .retro-struggled { border-left-color: var(--vscode-errorForeground, #c33); }
+  .retro-abandoned { border-left-color: var(--vscode-descriptionForeground, #888); }
+  .retro-head { display: flex; align-items: center; gap: .55rem; margin: 0; font-weight: 600; }
+  .retro-chip { padding: .1rem .55rem; border-radius: 999px; font-size: .78rem; font-weight: 600; color: var(--vscode-editor-background, #fff); }
+  .retro-chip-smooth { background: var(--vscode-testing-iconPassed, #2da44e); }
+  .retro-chip-bumpy { background: var(--vscode-editorWarning-foreground, #c90); }
+  .retro-chip-struggled { background: var(--vscode-errorForeground, #c33); }
+  .retro-chip-abandoned { background: var(--vscode-descriptionForeground, #888); }
+  .retro-outcome { color: var(--vscode-descriptionForeground); font-weight: 400; font-size: .85rem; }
+  .retro-goal { margin: .45rem 0 0; }
+  .retro-findings { margin: .45rem 0 0; padding-left: 1.1rem; }
+  .retro-findings li { margin: .15rem 0; }
+  .retro-f-info { color: var(--vscode-descriptionForeground); }
+  .retro-turn-link { background: none; border: none; padding: 0; color: var(--vscode-textLink-foreground, #3794ff); cursor: pointer; font: inherit; text-decoration: underline; }
+  .retro-tips { margin-top: .5rem; }
+  .retro-tips summary { cursor: pointer; font-weight: 600; font-size: .85rem; }
+  .retro-tips ul { margin: .35rem 0 0; padding-left: 1.1rem; }
+  .retro-tips li { margin: .15rem 0; }
+  .retro-deep { margin-top: .6rem; padding-top: .5rem; border-top: 1px solid var(--vscode-widget-border, rgba(128,128,128,.25)); }
+  .retro-deep-head { margin: 0 0 .3rem; font-weight: 600; font-size: .85rem; }
+  .retro-deep p { margin: .3rem 0 0; }
+  .retro-deep ul { margin: .35rem 0 0; padding-left: 1.1rem; }
+  .retro-deep-run-row { display: flex; align-items: center; gap: .55rem; margin: .55rem 0 0; font-size: .82rem; }
+  .retro-deep-run { background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #fff); border: none; border-radius: 4px; padding: .3rem .7rem; font: inherit; font-size: .82rem; cursor: pointer; }
   .deviation-dot { flex: none; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-editorWarning-foreground, #c90); }
   .session-section .deviation-dot { margin-left: .1rem; }
   /* The rename mark, matching the accent dot the session list puts on a renamed
@@ -2645,7 +2816,30 @@ const WEBVIEW_CONTROLLER = `
   });
   }
 
-  function initAll() { initTrend(); initTabs(); initAcceptMissing(); initCtxFileLinks(); initExternalLinks(); }
+  // ── Retrospective card (turn links + the opt-in deep-retro button) ───────────
+  // Turn links open the linked turn's own disclosure and scroll to it — fully
+  // in-document, so a missing target (turn count changed under a live update)
+  // is a silent no-op. The deep-retro button only POSTS to the host; the host
+  // shows the consent dialog before anything runs.
+  function initRetro() {
+  (root || document).querySelectorAll('.retro-turn-link').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var k = btn.getAttribute('data-turn');
+      var d = k && (root || document).querySelector('details[data-k="' + k + '"]');
+      if (d) {
+        d.open = true;
+        d.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+  (root || document).querySelectorAll('.retro-deep-run').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      vscode.postMessage({ type: 'deep-retrospective' });
+    });
+  });
+  }
+
+  function initAll() { initTrend(); initTabs(); initAcceptMissing(); initCtxFileLinks(); initExternalLinks(); initRetro(); }
 
   // ── Volatile UI state, preserved across a content swap ───────────────────────
   // Snapshot which collapsibles are open (by their stable data-k) and the active

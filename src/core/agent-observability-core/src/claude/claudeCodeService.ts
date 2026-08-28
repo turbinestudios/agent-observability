@@ -23,6 +23,8 @@ import {
 import { ParseResult, readTranscriptFile } from './parser';
 import { GitRemoteResolver } from './gitRemote';
 import { TranscriptRecord, contentBlocks } from './transcript';
+import { buildSessionRetrospective, type SessionRetrospective } from '../analysis/retrospective';
+import { extractRetrospectiveSignals } from './retrospectiveSignals';
 import {
   ClaudeSessionInput,
   ClaudeSubagentTranscript,
@@ -256,6 +258,26 @@ export class ClaudeCodeService implements SessionDataSource {
     } catch (err) {
       return { ok: false, reason: 'error', message: messageOf(err) };
     }
+  }
+
+  /**
+   * LOCAL-ONLY session retrospective (see {@link buildSessionRetrospective}):
+   * the heuristic goal/verdict/findings/tips read for the detail card and the
+   * counts the desktop index persists. Combines the shared turn-level analysis
+   * with the transcript-only signals ({@link extractRetrospectiveSignals}) the
+   * generic model cannot see — interruptions, compactions, plan mode.
+   */
+  getSessionRetrospective(sessionKey: string): Result<SessionRetrospective> {
+    return this.guard(() => {
+      const input = this.loadSessionInput(sessionKey, true);
+      if (input === undefined) {
+        throw new Error(`Claude Code session ${sessionKey} not found.`);
+      }
+      return buildSessionRetrospective(
+        buildSessionDetail(input),
+        extractRetrospectiveSignals(input.mainRecords),
+      );
+    });
   }
 
   /**

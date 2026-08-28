@@ -48,6 +48,12 @@ export interface SessionRow {
    * as zero, so the list shows a badge only for a number greater than zero.
    */
   deviationCount?: number;
+  /**
+   * The retrospective's one-word judgement of how the session went. Absent
+   * while unanalyzed or when the retrospective could not be built — which is
+   * not the same as smooth, so the list marks only rows that carry a verdict.
+   */
+  verdict?: RetroVerdict;
   /** Epoch ms this row was last written by the indexer. */
   indexedAtMs: number;
   /**
@@ -77,7 +83,16 @@ export interface ListSessionsParams {
   hidden?: boolean;
   /** Only sessions the analysis flagged, for the Deviations chip. */
   deviations?: boolean;
+  /** Only sessions the retrospective judged struggled or abandoned. */
+  friction?: boolean;
 }
+
+/**
+ * How the retrospective judged a session. Mirrors core's `SessionVerdict`
+ * (kept as a local union so this contract file stays import-free; the datahost
+ * assignment from core's type makes drift a compile error).
+ */
+export type RetroVerdict = 'smooth' | 'bumpy' | 'struggled' | 'abandoned';
 
 /** What deleting a session would actually remove, for the confirmation dialog. */
 export interface DeletionPlan {
@@ -267,6 +282,99 @@ export interface HotspotsResult {
   status: AnalysisStatus;
 }
 
+/** One judged session in the Retro view's ranking. */
+export interface RetroListRow {
+  source: string;
+  sessionId: string;
+  repository: string;
+  title?: string;
+  endedAtMs: number;
+  verdict: RetroVerdict;
+  /** Core's `SessionOutcome` label (`likely-fulfilled`, `unclear`, …). */
+  outcome: string;
+  correctionTurns: number;
+  repeatedPromptTurns: number;
+  interruptions: number;
+  maxErrorStreak: number;
+  churnRatioPct: number;
+  compactions: number;
+  tipCount: number;
+}
+
+/** The Retro ranking plus how complete it currently is. */
+export interface RetroResult {
+  /** Worst verdict tier first, most recent first within a tier. */
+  rows: RetroListRow[];
+  /** Same-scan repository list, for the same reason as {@link HotspotsResult}. */
+  repositories: string[];
+  status: AnalysisStatus;
+}
+
+/**
+ * A deep retrospective as the user's own `claude` CLI wrote it. Everything here
+ * is model output about LOCAL session content; it is stored only in the local
+ * JSON store and never crosses the aggregate/sync path.
+ */
+export interface DeepRetroVerdict {
+  goal?: string;
+  outcome?: string;
+  narrative?: string;
+  promptCritique?: string;
+  advice?: string[];
+  model: string;
+  generatedAtMs: number;
+}
+
+/** What a deep-retrospective run produced, or why it could not. */
+export interface DeepRetroResult {
+  verdict?: DeepRetroVerdict;
+  error?: string;
+}
+
+/** Whether the AI backend (the user's own `claude` CLI) can currently serve requests. */
+export interface AiAvailability {
+  available: boolean;
+  /** User-facing explanation when not available. */
+  reason?: string;
+}
+
+/** One AI Helper transcript entry as the view renders it. */
+export interface AiChatMessage {
+  role: 'user' | 'assistant';
+  /** The raw text (what was typed, or what the model wrote). */
+  text: string;
+  /** Host-rendered markup for assistant turns; the renderer owns no markdown parser. */
+  html?: string;
+}
+
+/** The AI Helper chat as it stands, for a view that just (re)mounted. */
+export interface AiChatState {
+  messages: AiChatMessage[];
+  /** A send is streaming right now; deltas for it carry {@link AiChatState.runId}. */
+  busy: boolean;
+  /** Increments per send; the view drops deltas from earlier runs. */
+  runId: number;
+  /** The one-time first-use notice has been accepted. */
+  acknowledged: boolean;
+  /** Session whose transcript digest is attached to the next send, if any. */
+  focus?: SessionRef;
+}
+
+/** One AI Helper send: free text, or a quick prompt by id, plus an optional focus session. */
+export interface AiSendParams {
+  text?: string;
+  quickPromptId?: string;
+  focus?: SessionRef;
+}
+
+/** How a send ended. Error-as-value, mirroring {@link DeepRetroResult} — never a throw across IPC. */
+export interface AiSendResult {
+  ok: boolean;
+  error?: string;
+  /** The user pressed Stop; any partial answer was kept in the transcript. */
+  cancelled?: boolean;
+}
+
 /**
  * The desktop's editable settings plus what auto-detection currently resolves
  * to, so the settings page can show the effective state, not just raw values.
@@ -293,6 +401,19 @@ export interface SettingsSnapshot {
    * analysis calls it overlong.
    */
   maxSessionMinutes: number;
+  /**
+   * `retrospective.deepEnabled` — whether the opt-in Deep retrospective button
+   * is available. OFF by default: enabling it is the first consent gate for
+   * the deep-retrospective flow, which sends session content to Anthropic via
+   * the user's own Claude Code CLI login (each run still confirms per session).
+   */
+  deepRetroEnabled: boolean;
+  /** `aiHelper.claudeCliPath`; empty string means `claude` on PATH. */
+  claudeCliPath: string;
+  /** `aiHelper.claudeModel` as the backend will use it (blank resolves to the default alias). */
+  claudeModel: string;
+  /** `aiHelper.claudeEffort`, clamped to a valid effort level. */
+  claudeEffort: string;
   /** Absolute path of the desktop config file. */
   configPath: string;
   /** Its directory, for the "open config folder" affordance. */
@@ -306,6 +427,10 @@ export interface SettingsPatch {
   copilotEnabled?: boolean;
   sqlitePath?: string;
   maxSessionMinutes?: number;
+  deepRetroEnabled?: boolean;
+  claudeCliPath?: string;
+  claudeModel?: string;
+  claudeEffort?: string;
 }
 
 /** Request/response methods. Every one resolves off the UI thread. */
@@ -375,8 +500,45 @@ export interface RpcMethods {
   'hotspots.get'(params?: { repository?: string }): HotspotsResult;
   /** The sessions behind one hotspot row, newest first. */
   'hotspots.sessions'(file: string, params?: { repository?: string }): HotspotSessionRow[];
+  /**
+   * The Retro ranking — every judged session, worst first — aggregated in SQL
+   * over what the background analysis has read so far, with the same
+   * partial-results honesty as the hotspots ranking.
+   */
+  'retro.get'(params?: { repository?: string }): RetroResult;
+  /**
+   * Run the opt-in Deep retrospective for one session: build a transcript
+   * digest, ask the user's own `claude` CLI to judge it, store the verdict in
+   * the local JSON store, and return it. Gated twice — the settings toggle and
+   * a per-invocation confirmation the RENDERER must show before calling this;
+   * the datahost additionally refuses when the toggle is off.
+   */
+  'retro.deep'(source: string, sessionId: string): DeepRetroResult;
   /** Progress of the background analysis pass. */
   'analysis.status'(): AnalysisStatus;
+  /**
+   * Whether the AI backend (the user's own `claude` CLI) can serve requests.
+   * Cheap: a missing binary fails its probe instantly, and a working one is
+   * cached — call freely from any surface that needs the CLI.
+   */
+  'ai.availability'(): AiAvailability;
+  /** The AI Helper chat as it stands, for a view that just (re)mounted. */
+  'ai.state'(): AiChatState;
+  /**
+   * Send one AI Helper message. Grounding (recent-session summary, plus the
+   * focus session's transcript digest when one is attached) is assembled here
+   * and streamed through the user's own `claude` CLI; the answer arrives as
+   * `ai.assistantDelta` events and the returned promise settles when the
+   * stream ends. Refused until the first-use notice is acknowledged — the
+   * datahost enforces the gate independently of the renderer.
+   */
+  'ai.send'(params: AiSendParams): AiSendResult;
+  /** Cancel the in-flight send, keeping any partial answer in the transcript. */
+  'ai.stop'(): void;
+  /** Start a new chat: clears the in-memory thread and any focus session. */
+  'ai.reset'(): void;
+  /** Record that the user accepted the one-time first-use notice. */
+  'ai.acknowledge'(): void;
   /** The editable settings plus what auto-detection currently resolves to. */
   'settings.get'(): SettingsSnapshot;
   /**
@@ -409,7 +571,13 @@ export type RpcEvent =
   | { event: 'sessions.upserted'; rows: SessionRow[] }
   | { event: 'sessions.removed'; keys: string[] }
   | { event: 'index.progress'; status: IndexStatus }
-  | { event: 'analysis.progress'; status: AnalysisStatus };
+  | { event: 'analysis.progress'; status: AnalysisStatus }
+  /**
+   * The in-flight AI Helper answer so far, host-rendered to HTML. Each tick
+   * carries the WHOLE accumulated answer, so the view replaces rather than
+   * appends and a dropped event can never corrupt the markup.
+   */
+  | { event: 'ai.assistantDelta'; runId: number; html: string };
 
 export type RpcEventName = RpcEvent['event'];
 

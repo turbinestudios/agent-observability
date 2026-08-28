@@ -6,7 +6,9 @@ import type {
   ContextFileEntry,
   ContextFileStatus,
 } from '@agent-observability/core/src/context/models';
+import type { RetrospectiveCounts } from '@agent-observability/core/src/analysis/retrospective';
 import { detectTurnDeviations } from './turnDeviations';
+import { retrospectiveFor } from './sessionRetrospective';
 
 /**
  * Everything one session yields to the two views that need it read rather than
@@ -39,6 +41,13 @@ export interface SessionAnalysis {
   deviationCount: number;
   /** Interactions that failed — the hotspots view's error co-occurrence signal. */
   errorCount: number;
+  /**
+   * The retrospective's compact projection — verdict, correction and
+   * interruption counts, churn — behind the list's verdict chip and the Retro
+   * view. `undefined` when the retrospective could not be built, which the
+   * index stores as NULL: "not judged" must never read as "smooth".
+   */
+  retro?: RetrospectiveCounts;
   contextFiles: AnalyzedContextFile[];
 }
 
@@ -78,7 +87,21 @@ export function analyzeSession(
     ? interactions.value.filter((i) => !i.success).length
     : 0;
 
-  return { deviationCount, errorCount, contextFiles: contextFilesOf(source, sessionId, deps) };
+  // A retrospective failure must not cost the deviation badge: the two ride
+  // the same analysis row but are independent results.
+  let retro: RetrospectiveCounts | undefined;
+  try {
+    retro = retrospectiveFor(source, sessionId, detail.value).counts;
+  } catch {
+    retro = undefined;
+  }
+
+  return {
+    deviationCount,
+    errorCount,
+    ...(retro !== undefined ? { retro } : {}),
+    contextFiles: contextFilesOf(source, sessionId, deps),
+  };
 }
 
 /**

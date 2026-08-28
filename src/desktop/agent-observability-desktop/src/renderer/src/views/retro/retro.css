@@ -1,0 +1,167 @@
+/*
+ * Retro: judged sessions, worst first.
+ *
+ * Same construction as the hotspots table — the table scrolls inside its own
+ * wrapper rather than pushing the page sideways, and rows are the interaction
+ * (each opens its session).
+ */
+
+.retro-view {
+  /* Fill the flex .view-layer, or the pane shrink-wraps the table and the
+   * scrollbar floats mid-window instead of hugging the right edge. */
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding: 24px 28px 40px;
+}
+
+.retro-view-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.retro-view-header p {
+  margin: 6px 0 0;
+  max-width: 70ch;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.retro-view-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.retro-view-tiers {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.retro-view-repo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.retro-view-repo select {
+  max-width: 32ch;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.retro-view-coverage,
+.retro-view-progress {
+  color: var(--fg-subtle);
+  font-size: 12px;
+}
+
+.retro-view-progress {
+  margin: 8px 0 0;
+}
+
+.retro-view-table-wrap {
+  margin-top: 16px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.retro-view-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.retro-view-table th,
+.retro-view-table td {
+  padding: 8px 12px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.retro-view-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+.retro-view-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.retro-view-table .n {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.retro-view-row {
+  cursor: pointer;
+}
+
+.retro-view-row:hover,
+.retro-view-row:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+
+.retro-view-title,
+.retro-view-repo-cell {
+  max-width: 30ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The friction column carries a sentence, not a number — let it breathe. */
+.retro-view-friction {
+  max-width: 48ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-muted);
+}
+
+.retro-view-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.retro-view-chip-smooth {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.retro-view-chip-bumpy {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+.retro-view-chip-struggled {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.retro-view-chip-abandoned {
+  color: var(--fg-subtle);
+  background: color-mix(in srgb, var(--fg-subtle) 14%, transparent);
+}

@@ -4,10 +4,13 @@ import { SessionsView } from './views/sessions/SessionsView';
 import { OverviewView } from './views/overview/OverviewView';
 import { SettingsView } from './views/settings/SettingsView';
 import { HotspotsView } from './views/hotspots/HotspotsView';
-import { PlaceholderView } from './views/PlaceholderView';
+import { RetroView } from './views/retro/RetroView';
+import { AssistantView } from './views/assistant/AssistantView';
+import type { AskAiIntent } from './views/assistant/AssistantView';
 import type { OpenSessionIntent } from './views/sessions/SessionsView';
 import { ActivityRail } from './components/ActivityRail';
 import { ChangelogDialog } from './components/ChangelogDialog';
+import { StartupOverlay } from './components/StartupOverlay';
 import type { ViewId } from './components/ActivityRail';
 import { ThemeProvider } from './theme/ThemeContext';
 import './app.css';
@@ -28,6 +31,9 @@ import './app.css';
 export function App(): JSX.Element {
   const [view, setView] = useState<ViewId>('overview');
   const [openIntent, setOpenIntent] = useState<OpenSessionIntent | undefined>(undefined);
+  // "Ask AI about this session": held here like the open intent, because the
+  // Sessions view raises it while the AI Helper consumes it.
+  const [askIntent, setAskIntent] = useState<AskAiIntent | undefined>(undefined);
   // A dialog, not a view: it overlays whatever you were looking at and returns
   // you to it, so it must not disturb `view`.
   const [changelogOpen, setChangelogOpen] = useState(false);
@@ -38,12 +44,19 @@ export function App(): JSX.Element {
         <ActivityRail active={view} onSelect={setView} onShowChangelog={() => setChangelogOpen(true)} />
         <main className="app-main">
           <div className="view-layer" hidden={view !== 'sessions'}>
-            <SessionsView openIntent={openIntent} />
+            <SessionsView
+              openIntent={openIntent}
+              onAskAi={(source, sessionId) => {
+                setAskIntent({ source, sessionId, at: Date.now() });
+                setView('assistant');
+              }}
+            />
           </div>
           {/*
             Mounted on first open and kept alive after, so returning to it is
             instant and does not re-query. Sessions stays mounted for the same
-            reason; the remaining views are still placeholders.
+            reason; the AI Helper's thread lives in the datahost, so it can
+            afford to remount.
           */}
           {view === 'overview' && (
             <div className="view-layer">
@@ -60,19 +73,36 @@ export function App(): JSX.Element {
               />
             </div>
           )}
+          {view === 'retro' && (
+            <div className="view-layer">
+              <RetroView
+                onOpenSession={(source, sessionId) => {
+                  setOpenIntent({ source, sessionId, at: Date.now() });
+                  setView('sessions');
+                }}
+              />
+            </div>
+          )}
+          {view === 'assistant' && (
+            <div className="view-layer">
+              <AssistantView
+                askIntent={askIntent}
+                onOpenSession={(source, sessionId) => {
+                  setOpenIntent({ source, sessionId, at: Date.now() });
+                  setView('sessions');
+                }}
+              />
+            </div>
+          )}
           {/* Remounted per open, so the snapshot re-reads the config each time. */}
           {view === 'settings' && (
             <div className="view-layer">
               <SettingsView />
             </div>
           )}
-          {view !== 'sessions' && view !== 'overview' && view !== 'hotspots' && view !== 'settings' && (
-            <div className="view-layer">
-              <PlaceholderView view={view} />
-            </div>
-          )}
         </main>
         {changelogOpen && <ChangelogDialog onClose={() => setChangelogOpen(false)} />}
+        <StartupOverlay />
       </div>
     </ThemeProvider>
   );

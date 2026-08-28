@@ -3,13 +3,19 @@ import type { SessionGroup } from '../../../../shared/rpc';
 import { sourceLabel } from './format';
 
 /**
- * Narrows the list to one agent tool.
+ * Narrows the list, in two rows that answer two different questions:
+ * WHICH TOOL (All / Claude Code / Copilot) on the first, and WHAT STATE
+ * (Flagged / Struggled / Hidden) on the second — mixing them in one strip read
+ * as if "Flagged" were a source.
  *
- * The choices are fixed rather than derived from what happens to be indexed, so
- * the filter does not appear and disappear between runs — a source with no
- * sessions yet shows a zero, which answers "is Copilot being picked up?" that
- * an absent chip would leave open. Any source found in the index but not listed
- * here is appended, so a new one is never silently unreachable.
+ * The source choices are fixed rather than derived from what happens to be
+ * indexed, so the filter does not appear and disappear between runs — a source
+ * with no sessions yet shows a zero, which answers "is Copilot being picked
+ * up?" that an absent chip would leave open. Any source found in the index but
+ * not listed here is appended, so a new one is never silently unreachable. The
+ * state chips keep the opposite rule — offered only once they would select
+ * something — so the second row vanishes entirely when there is nothing to
+ * narrow to.
  */
 
 const KNOWN_SOURCES = ['claude', 'copilot'];
@@ -26,6 +32,10 @@ interface Props {
   deviationCount: number;
   showingDeviations: boolean;
   onToggleDeviations: () => void;
+  /** How many sessions the retrospective judged struggled or abandoned. */
+  frictionCount: number;
+  showingFriction: boolean;
+  onToggleFriction: () => void;
 }
 
 export function SourceFilter({
@@ -38,6 +48,9 @@ export function SourceFilter({
   deviationCount,
   showingDeviations,
   onToggleDeviations,
+  frictionCount,
+  showingFriction,
+  onToggleFriction,
 }: Props): JSX.Element {
   const counts = new Map<string, number>();
   for (const group of groups) {
@@ -47,43 +60,56 @@ export function SourceFilter({
   const sources = [...KNOWN_SOURCES, ...extras];
   const total = [...counts.values()].reduce((sum, n) => sum + n, 0);
 
+  const hasStateChips = deviationCount > 0 || frictionCount > 0 || hiddenCount > 0;
+
   return (
-    <div className="source-filter" role="group" aria-label="Filter by source">
-      <Chip label="All" count={total} selected={active === undefined} onClick={() => onSelect(undefined)} />
-      {sources.map((id) => (
-        <Chip
-          key={id}
-          label={sourceLabel(id)}
-          count={counts.get(id) ?? 0}
-          selected={active === id}
-          onClick={() => onSelect(id)}
-        />
-      ))}
-      {/*
-        Like Hidden, offered only once it would select something: a chip reading
-        zero invites the reader to wonder what is wrong, when the honest answer
-        is that nothing has been flagged.
-      */}
-      {deviationCount > 0 && (
-        <Chip
-          label="Flagged"
-          count={deviationCount}
-          selected={showingDeviations}
-          onClick={onToggleDeviations}
-          title="Sessions where a turn failed unusually often or ran unusually long. Only the most recent sessions are analyzed."
-        />
-      )}
-      {/*
-        Only offered once something is hidden — otherwise it is a control that
-        does nothing, and it would imply sessions are missing when none are.
-      */}
-      {hiddenCount > 0 && (
-        <Chip
-          label="Hidden"
-          count={hiddenCount}
-          selected={showingHidden}
-          onClick={onToggleHidden}
-        />
+    <div className="session-filters">
+      <div className="filter-row" role="group" aria-label="Filter by source">
+        <Chip label="All" count={total} selected={active === undefined} onClick={() => onSelect(undefined)} />
+        {sources.map((id) => (
+          <Chip
+            key={id}
+            label={sourceLabel(id)}
+            count={counts.get(id) ?? 0}
+            selected={active === id}
+            onClick={() => onSelect(id)}
+          />
+        ))}
+      </div>
+      {hasStateChips && (
+        <div className="filter-row" role="group" aria-label="Filter by state">
+          {/*
+            Each offered only once it would select something: a chip reading
+            zero invites the reader to wonder what is wrong, when the honest
+            answer is that nothing has been flagged (or hidden).
+          */}
+          {deviationCount > 0 && (
+            <Chip
+              label="Flagged"
+              count={deviationCount}
+              selected={showingDeviations}
+              onClick={onToggleDeviations}
+              title="Sessions where a turn failed unusually often or ran unusually long. Only the most recent sessions are analyzed."
+            />
+          )}
+          {frictionCount > 0 && (
+            <Chip
+              label="Struggled"
+              count={frictionCount}
+              selected={showingFriction}
+              onClick={onToggleFriction}
+              title="Sessions the retrospective judged struggled or left unfinished. Only the most recent sessions are analyzed."
+            />
+          )}
+          {hiddenCount > 0 && (
+            <Chip
+              label="Hidden"
+              count={hiddenCount}
+              selected={showingHidden}
+              onClick={onToggleHidden}
+            />
+          )}
+        </div>
       )}
     </div>
   );

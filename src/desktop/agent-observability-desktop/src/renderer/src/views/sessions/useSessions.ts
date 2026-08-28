@@ -14,8 +14,11 @@ import { sessionKey } from '../../../../shared/rpc';
  * user or losing scroll position.
  */
 
-/** Rows fetched per page. Large enough that scrolling rarely waits. */
-const PAGE_SIZE = 300;
+/**
+ * Rows fetched per page. Large enough that scrolling rarely waits. Exported so
+ * the startup overlay's warm-up issues the identical first-page query.
+ */
+export const PAGE_SIZE = 300;
 
 interface UseSessionsResult {
   rows: SessionRow[];
@@ -28,6 +31,8 @@ interface UseSessionsResult {
   hiddenCount: number;
   /** How many analyzed sessions carry at least one deviation. */
   deviationCount: number;
+  /** How many sessions the retrospective judged struggled or abandoned. */
+  frictionCount: number;
   refresh: () => void;
   rebuild: () => void;
   reload: () => void;
@@ -42,6 +47,7 @@ export function useSessions(
   source: string | undefined,
   showHidden = false,
   onlyDeviations = false,
+  onlyFriction = false,
 ): UseSessionsResult {
   const [rows, setRows] = useState<SessionRow[]>([]);
   const [groups, setGroups] = useState<SessionGroup[]>([]);
@@ -51,6 +57,7 @@ export function useSessions(
   const [error, setError] = useState<string | undefined>(undefined);
   const [hiddenCount, setHiddenCount] = useState(0);
   const [deviationCount, setDeviationCount] = useState(0);
+  const [frictionCount, setFrictionCount] = useState(0);
 
   // Held in a ref so the event subscription can merge without being torn down
   // and re-created on every render.
@@ -69,6 +76,8 @@ export function useSessions(
   hiddenRef.current = showHidden;
   const deviationsRef = useRef(onlyDeviations);
   deviationsRef.current = onlyDeviations;
+  const frictionRef = useRef(onlyFriction);
+  frictionRef.current = onlyFriction;
 
   const load = useCallback(async () => {
     try {
@@ -77,6 +86,7 @@ export function useSessions(
         source: sourceRef.current,
         hidden: hiddenRef.current,
         ...(deviationsRef.current ? { deviations: true } : {}),
+        ...(frictionRef.current ? { friction: true } : {}),
         limit: PAGE_SIZE,
       });
       applyRows(next);
@@ -97,7 +107,7 @@ export function useSessions(
     setLoading(true);
     const timer = setTimeout(() => void load(), query.length === 0 ? 0 : 150);
     return () => clearTimeout(timer);
-  }, [query, source, showHidden, onlyDeviations, load]);
+  }, [query, source, showHidden, onlyDeviations, onlyFriction, load]);
 
   useEffect(() => {
     const offRows = dataHost.on('sessions.upserted', (event) => {
@@ -115,11 +125,11 @@ export function useSessions(
       if (hiddenRef.current) {
         return;
       }
-      // The Flagged filter is decided by the background analysis, and a push can
-      // both add a session to it and take one out of it. Rather than reproduce
-      // that here, let the re-query below settle it — otherwise a clean row
-      // would slide into a list that is supposed to hold only flagged ones.
-      if (deviationsRef.current) {
+      // The Flagged and Struggled filters are decided by the background
+      // analysis, and a push can both add a session and take one out. Rather
+      // than reproduce that here, let the re-query below settle it — otherwise
+      // a clean row would slide into a list that should only hold flagged ones.
+      if (deviationsRef.current || frictionRef.current) {
         return;
       }
       // A source filter, by contrast, is decidable from the row itself.
@@ -149,6 +159,10 @@ export function useSessions(
         .call('sessions.count', { deviations: true })
         .then(setDeviationCount)
         .catch(() => undefined);
+      void dataHost
+        .call('sessions.count', { friction: true })
+        .then(setFrictionCount)
+        .catch(() => undefined);
     };
 
     const offProgress = dataHost.on('index.progress', (event) => {
@@ -170,9 +184,9 @@ export function useSessions(
         return;
       }
       loadGroups();
-      // A list filtered to flagged sessions is defined by what that pass just
-      // decided, so it has to be re-read rather than patched.
-      if (deviationsRef.current) {
+      // A list filtered to flagged/struggled sessions is defined by what that
+      // pass just decided, so it has to be re-read rather than patched.
+      if (deviationsRef.current || frictionRef.current) {
         void load();
       }
     });
@@ -215,6 +229,7 @@ export function useSessions(
       error,
       hiddenCount,
       deviationCount,
+      frictionCount,
       refresh,
       rebuild,
       reload: load,
@@ -228,6 +243,7 @@ export function useSessions(
       error,
       hiddenCount,
       deviationCount,
+      frictionCount,
       refresh,
       rebuild,
       load,

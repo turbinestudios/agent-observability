@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ClaudeCliError, describeClaudeError } from './claudeErrors';
+import { ClaudeCliError, VSCODE_CLI_HINTS, cliMissingMessage, describeClaudeError } from './claudeErrors';
 import { isCancellation } from '../lmErrors';
 
 describe('describeClaudeError', () => {
@@ -7,6 +7,19 @@ describe('describeClaudeError', () => {
     const e = describeClaudeError(new ClaudeCliError('spawn claude ENOENT', { code: 'ENOENT' }));
     expect(e.recoverable).toBe(false);
     expect(e.message).toContain('claudeCliPath');
+  });
+
+  it('lets a host swap in its own "where to fix it" hint', () => {
+    const hints = { cliPathHint: 'set the Claude CLI path in Settings' };
+    const e = describeClaudeError(new ClaudeCliError('spawn claude ENOENT', { code: 'ENOENT' }), hints);
+    expect(e.message).toContain('Settings');
+    // The VS Code setting id must never leak into another host's UI.
+    expect(e.message).not.toContain('agentObservability.');
+  });
+
+  it('availability and the ENOENT mapping share one sentence, so they cannot drift', () => {
+    const e = describeClaudeError(new ClaudeCliError('spawn claude ENOENT', { code: 'ENOENT' }));
+    expect(e.message).toContain(cliMissingMessage(VSCODE_CLI_HINTS));
   });
 
   it('maps auth failures to a sign-in hint', () => {

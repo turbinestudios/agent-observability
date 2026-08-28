@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Conversation, assembleMessages } from './conversation';
+import { Conversation, assembleMessages, truncateHistory } from './conversation';
 
 describe('Conversation', () => {
   it('starts empty and records turns in order', () => {
@@ -35,6 +35,41 @@ describe('Conversation', () => {
     const snap = c.history;
     c.append('assistant', 'later');
     expect(snap).toHaveLength(1);
+  });
+});
+
+describe('truncateHistory', () => {
+  it('returns everything untouched while under the budget', () => {
+    const history = [
+      { role: 'user' as const, text: 'q1' },
+      { role: 'assistant' as const, text: 'a1' },
+    ];
+    expect(truncateHistory(history, 100)).toEqual({ history, truncated: false });
+  });
+
+  it('drops whole oldest turns first and flags the truncation', () => {
+    const history = [
+      { role: 'user' as const, text: 'x'.repeat(50) },
+      { role: 'assistant' as const, text: 'y'.repeat(50) },
+      { role: 'user' as const, text: 'z'.repeat(50) },
+    ];
+    const result = truncateHistory(history, 120);
+    expect(result.truncated).toBe(true);
+    expect(result.history).toEqual(history.slice(1));
+  });
+
+  it('always keeps the newest turn, even alone over budget', () => {
+    const history = [
+      { role: 'user' as const, text: 'old' },
+      { role: 'user' as const, text: 'n'.repeat(500) },
+    ];
+    const result = truncateHistory(history, 100);
+    expect(result.history).toEqual([history[1]]);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('handles an empty history', () => {
+    expect(truncateHistory([], 100)).toEqual({ history: [], truncated: false });
   });
 });
 

@@ -16,6 +16,19 @@ reference for auditing the privacy-first refactor.
 > context-insights batch carries the **repository-relative paths of
 > customization files only** (instructions/skills/prompts/agents/hooks), with
 > counts and never contents, so teams can review context-engineering hotspots.
+> Two further deliberate, narrow exceptions exist for **content**, both
+> confined to the desktop app and to the user's own local `claude` CLI login
+> (never an API key of this product), both only ever user-initiated and never
+> background, and both entirely independent of the aggregate/context-insights
+> upload paths, which never carry raw content. The opt-in **Deep
+> Retrospective** sends one session's transcript digest to Anthropic — only
+> after the user enables it in Settings (off by default) **and** confirms a
+> per-session dialog naming exactly what is sent. The **AI Helper** chat sends
+> each message the user explicitly submits — their question, a summary of
+> recent sessions (titles, repositories, verdicts, token and cost figures),
+> and, when the user attaches a session, capped excerpts of its prompts and
+> responses — after a one-time first-use notice in the view naming exactly
+> that, enforced again in the data host.
 
 The guarantee is enforced by **defense in depth**: the client never emits raw
 fields, the shared schema rejects unexpected fields, and the server re-validates

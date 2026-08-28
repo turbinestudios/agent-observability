@@ -1,10 +1,16 @@
 import type { JSX } from 'react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 // From the parser rather than `Configuration`: the class pulls the whole
 // settings surface — sync policy, chat backends — into the renderer bundle for
 // the sake of one number.
 import { MIN_SESSION_MINUTES } from '@agent-observability/core/src/config/workflowParsing';
-import type { SettingsSnapshot } from '../../../../shared/rpc';
+// Pure constants (no node imports), safe for the renderer bundle.
+import {
+  CLAUDE_EFFORT_LEVELS,
+  CLAUDE_MODEL_CHOICES,
+} from '@agent-observability/core/src/chat/backends/claudeCliArgs';
+import type { AiAvailability, SettingsSnapshot } from '../../../../shared/rpc';
+import { dataHost } from '../../api/client';
 import { Spinner } from '../../components/Spinner';
 import { useSettings } from './useSettings';
 import './settings.css';
@@ -20,6 +26,20 @@ import './settings.css';
 
 export function SettingsView(): JSX.Element {
   const { snapshot, error, saving, save } = useSettings();
+  const [availability, setAvailability] = useState<AiAvailability | undefined>(undefined);
+
+  const checkAvailability = useCallback(() => {
+    dataHost
+      .call('ai.availability')
+      .then(setAvailability)
+      .catch((err: Error) => setAvailability({ available: false, reason: err.message }));
+  }, []);
+
+  // Re-probed when the AI settings change: a corrected CLI path should clear
+  // the warning without leaving the page.
+  useEffect(() => {
+    checkAvailability();
+  }, [checkAvailability, snapshot?.claudeCliPath]);
 
   if (snapshot === undefined) {
     return error !== undefined ? (
@@ -127,6 +147,88 @@ export function SettingsView(): JSX.Element {
             Sessions are also flagged when a turn's tool calls fail more often than they succeed.
             Only the most recent sessions are analyzed, in the background.
           </span>
+        </div>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.deepRetroEnabled}
+            disabled={saving}
+            onChange={(e) => save({ deepRetroEnabled: e.target.checked })}
+          />
+          Allow the deep retrospective
+        </label>
+        <p className="settings-hint">
+          Adds an "Ask for a deep retrospective" button to a session's retrospective card. Running
+          it sends that session's prompts and responses to Anthropic through your own Claude Code
+          login — never in the background, and each run asks you to confirm first. Everything else
+          in this app stays on this machine.
+        </p>
+      </section>
+
+      <section className="settings-card" aria-label="AI">
+        <h2>AI</h2>
+        <p className="settings-hint">
+          The AI Helper and the deep retrospective run through your own Claude Code CLI login on
+          this machine — no API key of this app is involved.
+        </p>
+        {availability !== undefined && !availability.available && (
+          <div className="settings-warning-block" role="alert">
+            <p>
+              <strong>The Claude Code CLI was not found.</strong> The AI Helper and the deep
+              retrospective need it. Install it with{' '}
+              <code>npm install -g @anthropic-ai/claude-code</code>, or set the path below.
+            </p>
+            <button type="button" className="settings-action" onClick={checkAvailability}>
+              Check again
+            </button>
+          </div>
+        )}
+        <div className="settings-row">
+          <span className="settings-label">Claude CLI path</span>
+          <PathInput
+            value={snapshot.claudeCliPath}
+            disabled={saving}
+            ariaLabel="Claude CLI path"
+            onCommit={(value) => save({ claudeCliPath: value })}
+          />
+          <span className="settings-resolved">
+            Leave empty to use <code>claude</code> from PATH.
+          </span>
+        </div>
+        <div className="settings-row">
+          <span className="settings-label">Model</span>
+          <select
+            className="settings-input settings-select"
+            aria-label="Claude model for AI features"
+            value={snapshot.claudeModel}
+            disabled={saving}
+            onChange={(e) => save({ claudeModel: e.target.value })}
+          >
+            {CLAUDE_MODEL_CHOICES.map((choice) => (
+              <option key={choice.id} value={choice.id}>
+                {choice.label}
+              </option>
+            ))}
+            {!CLAUDE_MODEL_CHOICES.some((choice) => choice.id === snapshot.claudeModel) && (
+              <option value={snapshot.claudeModel}>{snapshot.claudeModel}</option>
+            )}
+          </select>
+        </div>
+        <div className="settings-row">
+          <span className="settings-label">Reasoning effort</span>
+          <select
+            className="settings-input settings-select"
+            aria-label="Reasoning effort for AI features"
+            value={snapshot.claudeEffort}
+            disabled={saving}
+            onChange={(e) => save({ claudeEffort: e.target.value })}
+          >
+            {CLAUDE_EFFORT_LEVELS.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
         </div>
       </section>
 

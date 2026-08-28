@@ -4,6 +4,8 @@ import {
   renderSessionDetailContent,
   renderCombinedSessionDetailHtml,
 } from './sessionDetailHtml';
+import type { RetrospectiveView } from './sessionDetailHtml';
+import type { SessionRetrospective } from '../analysis/retrospective';
 import { combineSessionDetails } from '../telemetry/combinedSessionDetail';
 import {
   SessionDetail,
@@ -971,5 +973,113 @@ describe('renderSessionDetailHtml — the rename mark in the header', () => {
     );
 
     expect(html).toContain('Renamed by you');
+  });
+});
+
+describe('renderSessionDetailHtml — the retrospective card', () => {
+  const retroFixture: SessionRetrospective = {
+    sessionId: 'abc-123',
+    goal: 'Fix the <login> bug',
+    goalSource: 'ai-title',
+    goalConfidence: 'medium',
+    verdict: 'struggled',
+    verdictReasons: ['correction-reprompt'],
+    outcome: 'partially',
+    findings: [
+      {
+        id: 'correction-reprompt',
+        severity: 'friction',
+        description: "The follow-up prompt reads as a correction of the previous turn's work.",
+        turnIndex: 1,
+        contentDerived: true,
+      },
+    ],
+    tips: [
+      {
+        id: 'state-expected-outcome',
+        text: 'State the end state & constraints up front.',
+        evidence: ['correction-reprompt'],
+      },
+    ],
+    counts: {
+      verdict: 'struggled',
+      outcome: 'partially',
+      correctionTurns: 3,
+      repeatedPromptTurns: 0,
+      interruptions: 0,
+      errorStreaks: 0,
+      maxErrorStreak: 0,
+      longTailTurns: 0,
+      compactions: 0,
+      churnRatioPct: 0,
+      planModeUsed: false,
+      tipCount: 1,
+    },
+    contentDerived: true,
+  };
+  const view: RetrospectiveView = { retro: retroFixture };
+
+  it('tells the story under the header: verdict, outcome, goal, and the tip', () => {
+    const html = renderSessionDetailHtml(detailWithTurn, [], NONCE, undefined, 'aiu', '', view);
+    expect(html).toContain('Struggled');
+    expect(html).toContain('goal partially met');
+    expect(html).toContain('Fix the &lt;login&gt; bug');
+    expect(html).toContain('What to try differently (1)');
+    expect(html).toContain('State the end state &amp; constraints up front.');
+  });
+
+  it('links a finding to the turn that holds its evidence', () => {
+    const html = renderSessionDetailHtml(detailWithTurn, [], NONCE, undefined, 'aiu', '', view);
+    // The link's target key must match the turn disclosure's own data-k.
+    expect(html).toContain('data-turn="t1r"');
+    expect(html).toContain('class="retro-turn-link"');
+  });
+
+  it('keeps the tips disclosure stable across in-place body swaps', () => {
+    const html = renderSessionDetailContent(detailWithTurn, [], undefined, 'aiu', view);
+    expect(html).toContain('data-k="retro-tips"');
+  });
+
+  it('renders no card at all when the host supplied no retrospective', () => {
+    expect(renderSessionDetailHtml(detailWithTurn, [], NONCE)).not.toContain('class="retro ');
+  });
+
+  it('mounts the controller wiring for the turn links', () => {
+    const html = renderSessionDetailHtml(detailWithTurn, [], NONCE, undefined, 'aiu', '', view);
+    expect(html).toContain('initRetro');
+  });
+
+  it('offers the deep retrospective only when the host says the gate is on', () => {
+    const withGate = renderSessionDetailHtml(detailWithTurn, [], NONCE, undefined, 'aiu', '', {
+      retro: retroFixture,
+      deepEnabled: true,
+    });
+    expect(withGate).toContain('Ask for a deep retrospective');
+    expect(withGate).toContain('you confirm first');
+
+    const withoutGate = renderSessionDetailHtml(detailWithTurn, [], NONCE, undefined, 'aiu', '', view);
+    expect(withoutGate).not.toContain('Ask for a deep retrospective');
+  });
+
+  it('shows a stored deep verdict with its model, and offers a re-run', () => {
+    const judged: RetrospectiveView = {
+      retro: {
+        ...retroFixture,
+        llmVerdict: {
+          narrative: 'The session recovered after two <wrong> turns.',
+          promptCritique: 'The opening prompt lacked the expected outcome.',
+          advice: ['Name the file up front.'],
+          outcome: 'partially',
+          model: 'sonnet',
+          generatedAtMs: 1,
+        },
+      },
+      deepEnabled: true,
+    };
+    const html = renderSessionDetailHtml(detailWithTurn, [], NONCE, undefined, 'aiu', '', judged);
+    expect(html).toContain('Deep retrospective');
+    expect(html).toContain('written by sonnet');
+    expect(html).toContain('The session recovered after two &lt;wrong&gt; turns.');
+    expect(html).toContain('Re-run the deep retrospective');
   });
 });

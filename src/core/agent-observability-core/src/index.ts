@@ -64,6 +64,22 @@ export type {
 } from './telemetry/models';
 
 // ---------------------------------------------------------------------------
+// Session retrospective (local heuristic analysis — see docs/proposals/09).
+// ---------------------------------------------------------------------------
+export { buildSessionRetrospective, sessionCodeChurn } from './analysis/retrospective';
+export type {
+  SessionRetrospective,
+  RetrospectiveCounts,
+  RetrospectiveSignals,
+  RetrospectiveFinding,
+  RetrospectiveTip,
+  RetrospectiveLlmVerdict,
+  SessionVerdict,
+  SessionOutcome,
+} from './analysis/retrospective';
+export { extractRetrospectiveSignals } from './claude/retrospectiveSignals';
+
+// ---------------------------------------------------------------------------
 // Live updates.
 // ---------------------------------------------------------------------------
 export { LiveUpdateController } from './live/liveUpdateController';

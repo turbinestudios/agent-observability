@@ -13,6 +13,7 @@ import { SourceFilter } from './SourceFilter';
 import { Spinner } from '../../components/Spinner';
 import { DeleteDialog } from './DeleteDialog';
 import { toggleSelection } from './selection';
+import { showsVerdictChip, verdictLabel } from './retro';
 import { formatCost, formatDuration, formatRelative, formatTokens, sourceLabel } from './format';
 import './sessions.css';
 
@@ -34,7 +35,14 @@ export interface OpenSessionIntent {
  * and the desktop app deliberately does not cap them the way the extension must
  * — with an index behind it there is no per-row parsing cost to bound.
  */
-export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent }): JSX.Element {
+export function SessionsView({
+  openIntent,
+  onAskAi,
+}: {
+  openIntent?: OpenSessionIntent;
+  /** Attach a session to the AI Helper and switch to it. */
+  onAskAi?: (source: string, sessionId: string) => void;
+}): JSX.Element {
   const [query, setQuery] = useState('');
   const [source, setSource] = useState<string | undefined>(undefined);
   const [selected, setSelected] = useState<string | undefined>(undefined);
@@ -53,6 +61,7 @@ export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent })
   const [showHidden, setShowHidden] = useState(false);
   // Orthogonal to the source chips: it narrows whichever set is on screen.
   const [onlyDeviations, setOnlyDeviations] = useState(false);
+  const [onlyFriction, setOnlyFriction] = useState(false);
   const {
     rows,
     groups,
@@ -65,7 +74,8 @@ export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent })
     reload,
     hiddenCount,
     deviationCount,
-  } = useSessions(query, source, showHidden, onlyDeviations);
+    frictionCount,
+  } = useSessions(query, source, showHidden, onlyDeviations, onlyFriction);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -125,6 +135,24 @@ export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent })
       cancelled = true;
     };
   }, [openIntent]);
+
+  // …and bring the list to it, so the selection is visible, not just the
+  // detail pane. Rows may still be loading when the intent lands, hence the
+  // rows dependency; the ref makes each intent scroll once, so live row
+  // updates afterwards don't yank the list back.
+  const scrolledIntentAt = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (openIntent === undefined || scrolledIntentAt.current === openIntent.at) {
+      return;
+    }
+    const index = rows.findIndex(
+      (r) => r.source === openIntent.source && r.sessionId === openIntent.sessionId,
+    );
+    if (index >= 0) {
+      scrolledIntentAt.current = openIntent.at;
+      virtualizer.scrollToIndex(index, { align: 'center' });
+    }
+  }, [openIntent, rows, virtualizer]);
 
   const restore = useCallback(
     (row: SessionRow) => {
@@ -186,6 +214,9 @@ export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent })
           deviationCount={deviationCount}
           showingDeviations={onlyDeviations}
           onToggleDeviations={() => setOnlyDeviations((v) => !v)}
+          frictionCount={frictionCount}
+          showingFriction={onlyFriction}
+          onToggleFriction={() => setOnlyFriction((v) => !v)}
         />
 
         <IndexStatusBar
@@ -204,7 +235,21 @@ export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent })
           </div>
         )}
 
-        <div className="sessions-scroll" ref={scrollRef}>
+        <div className="sessions-list-area">
+          {/*
+            A slow re-query with rows already on screen (a search, a filter
+            chip) replaces them with no other sign of life — this floats a big
+            spinner over the middle of the list so the wait is unmistakable.
+            pointer-events stays off: the stale rows remain scrollable.
+          */}
+          {loading && rows.length > 0 && (
+            <div className="sessions-list-loading" role="status" aria-label="Updating list">
+              <span className="sessions-list-loading-chip">
+                <Spinner size={44} stroke={3} />
+              </span>
+            </div>
+          )}
+          <div className="sessions-scroll" ref={scrollRef}>
           {/*
             An empty list has three quite different meanings, and showing the
             wrong one is worse than showing nothing: still working, genuinely
@@ -254,6 +299,7 @@ export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent })
               })}
             </div>
           )}
+          </div>
         </div>
 
         <CompareBar
@@ -277,7 +323,11 @@ export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent })
             </div>
           </div>
         ) : (
-          <SessionDetail key={`${selectedRow.source}:${selectedRow.sessionId}`} row={selectedRow} />
+          <SessionDetail
+            key={`${selectedRow.source}:${selectedRow.sessionId}`}
+            row={selectedRow}
+            onAskAi={onAskAi}
+          />
         )}
       </section>
     </>
@@ -298,7 +348,7 @@ function toRef(key: string): SessionRef {
 function ListLoading({ busy }: { busy: boolean }): JSX.Element {
   return (
     <div className="sessions-loading" role="status" aria-live="polite">
-      <Spinner size={22} stroke={2.5} />
+      <Spinner size={36} stroke={3} />
       <p>{busy ? 'Finding your sessions…' : 'Loading sessions…'}</p>
     </div>
   );
@@ -429,6 +479,18 @@ function SessionRowItem({
                 : `${row.deviationCount} turns diverged — open the session to see why`
             }
           />
+        )}
+        {/*
+          Only the two worst verdicts mark a row (see showsVerdictChip) —
+          the retrospective card in the detail still states the others.
+        */}
+        {showsVerdictChip(row.verdict) && (
+          <span
+            className={`verdict-chip verdict-${row.verdict}`}
+            title={`${verdictLabel(row.verdict)} — open the session for the retrospective`}
+          >
+            {verdictLabel(row.verdict)}
+          </span>
         )}
         <span
           className="row-rename"

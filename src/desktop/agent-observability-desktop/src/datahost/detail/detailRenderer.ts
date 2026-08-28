@@ -12,8 +12,14 @@ import type { WorkflowDeviation } from '@agent-observability/core/src/deviation/
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
 import type { SessionContextAnalysis } from '@agent-observability/core/src/context/models';
 import type { CostMode, SessionDetail } from '@agent-observability/core/src/telemetry/models';
+import type {
+  RetrospectiveLlmVerdict,
+  SessionRetrospective,
+} from '@agent-observability/core/src/analysis/retrospective';
+import type { RetrospectiveView } from '@agent-observability/core/src/views/sessionDetailHtml';
 import type { CombinedDetailResult } from '../../shared/rpc';
 import { detectTurnDeviations } from '../analysis/turnDeviations';
+import { retrospectiveFor } from '../analysis/sessionRetrospective';
 import { chooseCostBasis } from './costBasis';
 import { detailHeadHtml } from './theme';
 
@@ -40,6 +46,13 @@ export interface DetailContext {
   acceptedMissing: AcceptedMissingConfig;
   /** The user's name for this session, when they have set one. */
   renamedTitle?: string;
+  /**
+   * Deep-retrospective state for THIS session: whether the settings gate is on
+   * (shows the button) and any stored CLI-written verdict (rendered in the
+   * card). Not part of the cache key — the datahost invalidates the session
+   * when a verdict lands and everything when the gate toggles.
+   */
+  deepRetro?: { enabled: boolean; stored?: RetrospectiveLlmVerdict };
 }
 
 /** One session in a combined view, resolved by the caller like a single render. */
@@ -55,6 +68,12 @@ interface CacheEntry {
   context: SessionContextAnalysis | undefined;
   /** Per-turn workflow deviations, aligned by index to `detail.turns`. */
   deviations: WorkflowDeviation[][];
+  /**
+   * The session retrospective, computed with the parse through the same
+   * helper the background analyzer uses — so the card and the list's verdict
+   * chip can never disagree. `undefined` hides the card, not the document.
+   */
+  retro: SessionRetrospective | undefined;
   /** The accepted-missing lists the analysis was computed against. */
   acceptedKey: string;
   stamp: number;
@@ -86,6 +105,7 @@ export class DetailRenderer {
       this.costMode(source),
       // Host-authored only — never interpolate session content here.
       detailHeadHtml(nonce, theme),
+      retrospectiveView(entry, context),
     );
   }
 
@@ -97,6 +117,7 @@ export class DetailRenderer {
       entry.deviations,
       entry.context,
       this.costMode(source),
+      retrospectiveView(entry, context),
     );
   }
 
@@ -218,6 +239,15 @@ export class DetailRenderer {
       analysis = undefined;
     }
 
+    // Allowed to fail like the context analysis: a retrospective that cannot
+    // be built hides the card, never the document.
+    let retro: SessionRetrospective | undefined;
+    try {
+      retro = retrospectiveFor(dataSource, sessionId, result.value);
+    } catch {
+      retro = undefined;
+    }
+
     const entry: CacheEntry = {
       detail: result.value,
       context: analysis,
@@ -225,6 +255,7 @@ export class DetailRenderer {
       // render (full document and body-only refresh) need the same arrays, and
       // detection re-reads the session's interactions.
       deviations: detectTurnDeviations(dataSource, sessionId, result.value, this.deviations),
+      retro,
       acceptedKey,
       stamp,
     };
@@ -258,6 +289,22 @@ function withTitle(detail: SessionDetail, renamedTitle: string | undefined): Ses
         ? { titleOriginal: original }
         : {}),
     },
+  };
+}
+
+/**
+ * The card's inputs: the memoized heuristic retrospective with any stored
+ * CLI-written verdict merged on, plus whether the deep-retro button renders.
+ * `undefined` (no retrospective could be built) keeps the card out entirely.
+ */
+function retrospectiveView(entry: CacheEntry, context: DetailContext): RetrospectiveView | undefined {
+  if (entry.retro === undefined) {
+    return undefined;
+  }
+  const stored = context.deepRetro?.stored;
+  return {
+    retro: stored !== undefined ? { ...entry.retro, llmVerdict: stored } : entry.retro,
+    deepEnabled: context.deepRetro?.enabled === true,
   };
 }
 

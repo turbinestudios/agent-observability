@@ -12,7 +12,13 @@ import {
   CLAUDE_MODEL_CHOICES,
 } from './claudeCliArgs';
 import { ClaudeStreamParser, ClaudeEvent } from './claudeStreamParser';
-import { ClaudeCliError, describeClaudeError } from './claudeErrors';
+import {
+  ClaudeCliError,
+  ClaudeCliHints,
+  VSCODE_CLI_HINTS,
+  cliMissingMessage,
+  describeClaudeError,
+} from './claudeErrors';
 
 /** Timeout for the `--version` availability probe. */
 const PROBE_TIMEOUT_MS = 5000;
@@ -37,22 +43,22 @@ export class ClaudeCodeBackend implements ChatBackend {
   /** Cached probe result; failures re-probe so installing the CLI mid-session recovers. */
   private probed: { command: string } | undefined;
 
+  private readonly hints: ClaudeCliHints;
+
   constructor(
     private readonly config: Pick<
       Configuration,
       'getAiHelperClaudeModel' | 'getAiHelperClaudeEffort' | 'getAiHelperClaudeCliPath'
     >,
-  ) {}
+    options?: { hints?: ClaudeCliHints },
+  ) {
+    this.hints = options?.hints ?? VSCODE_CLI_HINTS;
+  }
 
   async isAvailable(): Promise<BackendAvailability> {
     const command = await this.resolveCommand();
     if (command === undefined) {
-      return {
-        available: false,
-        reason:
-          'Claude Code CLI not found — install it (`npm install -g @anthropic-ai/claude-code`) ' +
-          'or set `agentObservability.aiHelper.claudeCliPath`.',
-      };
+      return { available: false, reason: cliMissingMessage(this.hints) };
     }
     return { available: true };
   }
@@ -151,7 +157,7 @@ export class ClaudeCodeBackend implements ChatBackend {
   }
 
   describeError(err: unknown): FriendlyError {
-    return describeClaudeError(err);
+    return describeClaudeError(err, this.hints);
   }
 
   /**

@@ -59,3 +59,26 @@ export function assembleMessages(
 ): AssembledMessage[] {
   return [{ role: 'user', text: preamble }, ...history];
 }
+
+/**
+ * Cap the history replayed to the model. Whole turns are kept newest-first
+ * until the character budget runs out — a partial turn would misquote either
+ * side — and the newest user turn is always kept, over budget or not, because
+ * dropping the question being asked would make the request meaningless.
+ */
+export function truncateHistory(
+  history: readonly ChatMessage[],
+  maxChars: number,
+): { history: ChatMessage[]; truncated: boolean } {
+  const kept: ChatMessage[] = [];
+  let used = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const message = history[i];
+    if (kept.length > 0 && used + message.text.length > maxChars) {
+      return { history: kept, truncated: true };
+    }
+    kept.unshift(message);
+    used += message.text.length;
+  }
+  return { history: kept, truncated: false };
+}

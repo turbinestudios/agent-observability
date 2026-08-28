@@ -10,7 +10,7 @@ import { UpdateIndicator } from './UpdateIndicator';
  * at the bottom, separated from the destinations above it.
  */
 
-export type ViewId = 'sessions' | 'overview' | 'hotspots' | 'assistant' | 'settings';
+export type ViewId = 'sessions' | 'overview' | 'hotspots' | 'retro' | 'assistant' | 'settings';
 
 interface RailEntry {
   id: ViewId;
@@ -46,6 +46,14 @@ const ENTRIES: RailEntry[] = [
     id: 'hotspots',
     label: 'Context Hotspots',
     icon: <path d="M12 2c2.5 3.5 6 5.5 6 10a6 6 0 1 1-12 0c0-4.5 3.5-6.5 6-10Zm0 16a4 4 0 0 0 4-4c0-2.2-1.6-3.6-4-6.6-2.4 3-4 4.4-4 6.6a4 4 0 0 0 4 4Z" />,
+  },
+  {
+    id: 'retro',
+    label: 'Retro',
+    // A backwards-looping arrow: looking back over what already ran.
+    icon: (
+      <path d="M12 4.5V1.6L6.8 6l5.2 4.4V7.5a6 6 0 1 1-5.9 7.1l-2.5.5A8.5 8.5 0 1 0 12 4.5Z" />
+    ),
   },
   {
     id: 'assistant',

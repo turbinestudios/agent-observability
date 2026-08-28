@@ -1,0 +1,340 @@
+/* The AI Helper chat. Tokens come from theme/tokens.css. */
+
+/*
+ * The view must fill its flex .view-layer (flex: 1) — otherwise it shrinks to
+ * content width and the transcript's scrollbar floats mid-window instead of
+ * hugging the right edge. The scroll container spans the full width; an inner
+ * column caps the line length and centers the content.
+ */
+.assistant-view {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.assistant-header {
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.assistant-header-inner {
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.assistant-header h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.assistant-header p {
+  margin: 0;
+  color: var(--fg-muted);
+  max-width: 640px;
+}
+
+/* ---- Transcript ---- */
+
+.assistant-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 24px;
+}
+
+.assistant-log-inner {
+  max-width: 860px;
+  width: 100%;
+  min-height: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.assistant-bubble {
+  max-width: 720px;
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  overflow-wrap: anywhere;
+}
+
+.assistant-bubble-user {
+  align-self: flex-end;
+  background: var(--selection);
+  white-space: pre-wrap;
+}
+
+.assistant-bubble-model {
+  align-self: flex-start;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+
+.assistant-bubble-model p {
+  margin: 0 0 8px;
+}
+
+.assistant-bubble-model p:last-child {
+  margin-bottom: 0;
+}
+
+.assistant-bubble-model pre {
+  background: var(--bg-sunken);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.assistant-bubble-model code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.assistant-bubble-model a {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+/* Citation chips: a cited session rendered as a small clickable tag with its name. */
+.assistant-bubble-model a.session-ref {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 11px;
+  text-decoration: none;
+  background: var(--bg-sunken);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.assistant-bubble-model a.session-ref:hover {
+  background: var(--hover);
+}
+
+.assistant-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+}
+
+/* ---- Empty state ---- */
+
+.assistant-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.assistant-quick {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.assistant-quick-chip {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.assistant-quick-chip:hover {
+  background: var(--hover);
+}
+
+/* ---- Errors ---- */
+
+.assistant-error {
+  margin: 0 auto 8px;
+  max-width: 860px;
+  width: calc(100% - 48px);
+  padding: 8px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assistant-error button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* ---- Composer ---- */
+
+.assistant-composer {
+  border-top: 1px solid var(--border);
+  padding: 10px 24px 14px;
+}
+
+.assistant-composer-inner {
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assistant-focus {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.assistant-focus strong {
+  color: var(--fg);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-focus button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.assistant-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.assistant-input {
+  flex: 1;
+  resize: none;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.assistant-input:focus {
+  outline: 1px solid var(--accent);
+}
+
+.assistant-send,
+.assistant-stop {
+  border-radius: var(--radius);
+  padding: 8px 16px;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+}
+
+.assistant-send {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.assistant-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.assistant-stop {
+  background: var(--bg-elevated);
+}
+
+.assistant-footnote {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--fg-subtle);
+  font-size: 11px;
+}
+
+.assistant-new-chat {
+  background: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 3px 10px;
+  cursor: pointer;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.assistant-new-chat:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- Hero states (CLI missing, first-use notice) ---- */
+
+.assistant-hero {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.assistant-hero > div {
+  max-width: 560px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  padding: 20px 24px;
+}
+
+.assistant-hero h2 {
+  margin: 0 0 8px;
+}
+
+.assistant-hero p {
+  color: var(--fg-muted);
+}
+
+.assistant-hero code {
+  font-family: var(--font-mono);
+  background: var(--bg-sunken);
+  padding: 1px 6px;
+  border-radius: 4px;
+  user-select: all;
+}
+
+.assistant-hero-action {
+  margin-top: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 7px 16px;
+  cursor: pointer;
+}
+
+.assistant-notice > div {
+  border-color: var(--border-strong);
+}
