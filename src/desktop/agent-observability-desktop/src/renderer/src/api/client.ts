@@ -5,6 +5,7 @@ import type {
   RpcMethods,
   RpcResponse,
 } from '../../../shared/rpc';
+import type { UpdateStatus } from '../../../shared/updates';
 
 /**
  * Promise-shaped client over the data-host MessagePort.
@@ -32,6 +33,7 @@ declare global {
       showItem(path: string): Promise<void>;
       getVersion(): Promise<string>;
       setNativeTheme(theme: 'dark' | 'light'): void;
+      onUpdateStatus(listener: (status: UpdateStatus) => void): () => void;
       stashDetail(html: string): Promise<string | undefined>;
     };
   }

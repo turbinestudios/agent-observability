@@ -75,6 +75,46 @@
   margin-top: auto;
 }
 
+/* Update progress, shown in the rail above the version while one downloads. */
+.rail-update {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+  padding: 0 8px 4px;
+}
+
+.rail-progress {
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.rail-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  /* Progress arrives in bursts, so ease between them rather than stepping. */
+  transition: width 220ms ease-out;
+}
+
+.rail-update-text {
+  font-size: 9px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-update-text.ready {
+  color: var(--accent);
+}
+
+.rail-update-text.failed {
+  color: var(--danger);
+}
+
 .rail-version {
   padding-bottom: 8px;
   font-size: 9px;

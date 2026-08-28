@@ -16,12 +16,12 @@ const html = renderToStaticMarkup(createElement(ChangelogDialog, { onClose: () =
 
 describe('ChangelogDialog', () => {
   it('renders the newest release with its date', () => {
-    expect(html).toContain('1.1.0');
+    expect(html).toContain('1.2.0');
     expect(html).toContain('2026-08-28');
   });
 
   it('renders every release in the file, not just the newest', () => {
-    for (const version of ['1.1.0', '1.0.1', '0.2.0', '0.1.0']) {
+    for (const version of ['1.2.0', '1.1.0', '1.0.3', '1.0.1', '1.0.0']) {
       expect(html).toContain(version);
     }
   });

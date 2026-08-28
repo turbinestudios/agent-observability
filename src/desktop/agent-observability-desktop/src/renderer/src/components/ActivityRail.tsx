@@ -1,6 +1,8 @@
 import type { JSX } from 'react';
 import { useEffect, useState } from 'react';
 import { useThemeValue } from '../theme/ThemeContext';
+import { useUpdateStatus } from '../updates/useUpdateStatus';
+import { UpdateIndicator } from './UpdateIndicator';
 
 /**
  * The view switcher. Dashboard sits first and is the app's default; everything
@@ -71,6 +73,7 @@ interface Props {
 
 export function ActivityRail({ active, onSelect, onShowChangelog }: Props): JSX.Element {
   const { theme, toggle } = useThemeValue();
+  const update = useUpdateStatus();
   const [version, setVersion] = useState('');
   useEffect(() => {
     void window.desktop
@@ -133,6 +136,9 @@ export function ActivityRail({ active, onSelect, onShowChangelog }: Props): JSX.
           )}
         </svg>
       </button>
+
+      {/* Above the version, and only while an update is in flight. */}
+      {update !== undefined && <UpdateIndicator status={update} />}
 
       {/*
         macOS hides the title text under `hiddenInset`, so the version needs a

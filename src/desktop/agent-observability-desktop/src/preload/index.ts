@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { UPDATE_STATUS_CHANNEL } from '../shared/updates';
+import type { UpdateStatus } from '../shared/updates';
 
 /**
  * The only bridge between the renderer and Node.
@@ -57,6 +59,19 @@ const api = {
 
   getVersion(): Promise<string> {
     return ipcRenderer.invoke('app:get-version');
+  },
+
+  /**
+   * Subscribe to update progress. Returns an unsubscribe function — React
+   * mounts effects twice under StrictMode, so a listener that could not be
+   * removed would double up and the sidebar would fight itself.
+   */
+  onUpdateStatus(listener: (status: UpdateStatus) => void): () => void {
+    const handler = (_event: unknown, status: UpdateStatus): void => listener(status);
+    ipcRenderer.on(UPDATE_STATUS_CHANNEL, handler);
+    return () => {
+      ipcRenderer.off(UPDATE_STATUS_CHANNEL, handler);
+    };
   },
 
   /** Mirror the app's theme into the native window chrome (title bar, menus). */

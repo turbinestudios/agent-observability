@@ -83,6 +83,6 @@ describe('the shipped CHANGELOG.md', () => {
   });
 
   it('leads with the newest release', () => {
-    expect(RELEASES[0].version).toBe('1.1.0');
+    expect(RELEASES[0].version).toBe('1.2.0');
   });
 });
