@@ -9,6 +9,17 @@
  * uploaded to the cloud sync path.
  */
 
+/**
+ * Estimated tokens above which a context file is called oversized and worth
+ * splitting up.
+ *
+ * Lives here rather than beside the estimator that applies it because the
+ * threshold is part of the vocabulary — several views label a file by it — while
+ * the estimator reads files from disk. A browser-side view that needs only the
+ * number can then import it without dragging `node:fs` along.
+ */
+export const OVERSIZED_THRESHOLD_TOKENS = 2000;
+
 /** Category of a context file based on its discovery source / file type. */
 export type ContextFileCategory =
   | 'instruction'

@@ -22,6 +22,10 @@ interface Props {
   hiddenCount: number;
   showingHidden: boolean;
   onToggleHidden: () => void;
+  /** How many analyzed sessions the detector flagged. */
+  deviationCount: number;
+  showingDeviations: boolean;
+  onToggleDeviations: () => void;
 }
 
 export function SourceFilter({
@@ -31,6 +35,9 @@ export function SourceFilter({
   hiddenCount,
   showingHidden,
   onToggleHidden,
+  deviationCount,
+  showingDeviations,
+  onToggleDeviations,
 }: Props): JSX.Element {
   const counts = new Map<string, number>();
   for (const group of groups) {
@@ -53,6 +60,20 @@ export function SourceFilter({
         />
       ))}
       {/*
+        Like Hidden, offered only once it would select something: a chip reading
+        zero invites the reader to wonder what is wrong, when the honest answer
+        is that nothing has been flagged.
+      */}
+      {deviationCount > 0 && (
+        <Chip
+          label="Flagged"
+          count={deviationCount}
+          selected={showingDeviations}
+          onClick={onToggleDeviations}
+          title="Sessions where a turn failed unusually often or ran unusually long. Only the most recent sessions are analyzed."
+        />
+      )}
+      {/*
         Only offered once something is hidden — otherwise it is a control that
         does nothing, and it would imply sessions are missing when none are.
       */}
@@ -73,14 +94,22 @@ function Chip({
   count,
   selected,
   onClick,
+  title,
 }: {
   label: string;
   count: number;
   selected: boolean;
   onClick: () => void;
+  title?: string;
 }): JSX.Element {
   return (
-    <button type="button" className="filter-chip" aria-pressed={selected} onClick={onClick}>
+    <button
+      type="button"
+      className="filter-chip"
+      aria-pressed={selected}
+      onClick={onClick}
+      title={title}
+    >
       {label}
       <span className="filter-count">{count.toLocaleString()}</span>
     </button>

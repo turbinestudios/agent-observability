@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseChangelog, parseInline } from './parseChangelog';
 import { RELEASES } from './releases';
+import { version } from '../../../../package.json';
 
 const DOC = `# Changelog
 
@@ -82,7 +83,10 @@ describe('the shipped CHANGELOG.md', () => {
     expect(RELEASES[0].sections.length).toBeGreaterThan(0);
   });
 
-  it('leads with the newest release', () => {
-    expect(RELEASES[0].version).toBe('1.2.0');
+  it('leads with the release the app reports as its version', () => {
+    // Pinned to package.json rather than a literal: the dialog is what tells a
+    // user what they just got, so shipping a version with no entry — or an
+    // entry for a version nobody is running — is the failure worth catching.
+    expect(RELEASES[0].version).toBe(version);
   });
 });

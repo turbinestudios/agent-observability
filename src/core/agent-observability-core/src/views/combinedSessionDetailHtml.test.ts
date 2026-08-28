@@ -257,4 +257,16 @@ describe('renderCombinedSessionDetailHtml', () => {
     expect(html).toContain('session a deviated');
     expect(html).toContain('wf-a');
   });
+
+  it('injects host-supplied head markup before </head>, and nothing when omitted', () => {
+    // The desktop app defines the --vscode-* variables this document's CSS reads
+    // and shims acquireVsCodeApi through this seam; without it the combined view
+    // renders unstyled and its controller script throws on load.
+    const head = `<style nonce="${NONCE}">:root { --vscode-foreground: #111; }</style>`;
+    const withHead = renderCombinedSessionDetailHtml(viewFor([session({})]), NONCE, 'aiu', head);
+
+    expect(withHead).toContain(head);
+    expect(withHead.indexOf(head)).toBeLessThan(withHead.indexOf('</head>'));
+    expect(renderCombinedSessionDetailHtml(viewFor([session({})]), NONCE)).not.toContain(head);
+  });
 });

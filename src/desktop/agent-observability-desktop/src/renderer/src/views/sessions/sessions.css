@@ -611,3 +611,146 @@
   color: var(--fg-subtle);
   font-size: 12px;
 }
+
+/* --- comparing sessions ---------------------------------------------------- */
+
+/*
+ * The tick box follows the rename and remove buttons: hidden until the row is
+ * hovered or active, so an untouched list stays quiet. Once ticked it stays
+ * visible, otherwise a selection would vanish as the pointer moved away.
+ */
+.row-check {
+  flex: none;
+  display: none;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  color: var(--bg);
+  cursor: pointer;
+}
+
+.session-row:hover .row-check,
+.session-row[aria-current='true'] .row-check,
+.row-check[aria-checked='true'] {
+  display: grid;
+}
+
+.row-check[aria-checked='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.row-check:hover {
+  border-color: var(--accent);
+}
+
+.session-row-checked {
+  background: var(--hover);
+}
+
+/*
+ * Pinned below the list rather than above it: the bar appears and disappears
+ * as rows are ticked, and anywhere higher would shift the list mid-selection.
+ */
+.compare-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.compare-count {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.compare-reason {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.compare-go {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.compare-go:disabled {
+  border-color: var(--border);
+  background: var(--bg-sunken);
+  color: var(--fg-subtle);
+  cursor: default;
+}
+
+.compare-clear {
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: var(--fg-subtle);
+  cursor: pointer;
+}
+
+.compare-clear:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+/* The detail pane is a row; a comparison stacks its notes above the frame. */
+.compare-layout {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * What the merge could not do. Padded clear of the close button floating in
+ * the same corner.
+ */
+.compare-notes {
+  flex: none;
+  padding: 9px 56px 9px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.compare-notes p {
+  margin: 0;
+}
+
+.compare-notes p + p {
+  margin-top: 4px;
+}
+
+/*
+ * A flagged session. Warning-coloured rather than the accent used for a rename:
+ * the two dots sit side by side on the same row and must not read as the same
+ * kind of mark.
+ */
+.deviation-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warning);
+}

@@ -211,3 +211,104 @@ describe('LocalDeviationDetector explicit config', () => {
     expect(detector.detectForSession([span], [base], lookup)).toHaveLength(0);
   });
 });
+
+describe('LocalDeviationDetector.detectForTurnsWithDefaults', () => {
+  const base = 1_000_000;
+
+  it('flags a mostly-failing turn with no workflow configured at all', () => {
+    const detector = new LocalDeviationDetector(fakeConfig([]));
+    const turn = [
+      interaction('coder', base, false),
+      interaction('coder', base + 1_000, false),
+      interaction('coder', base + 2_000, true),
+    ];
+
+    const [deviations] = detector.detectForTurnsWithDefaults([turn], REPO);
+
+    expect(deviations.map((d) => d.type)).toContain(DeviationType.ToolUsageAnomaly);
+    expect(deviations[0].workflowName).toBe('default');
+  });
+
+  it('leaves a healthy turn alone, so the timeline stays quiet', () => {
+    const detector = new LocalDeviationDetector(fakeConfig([]));
+    const turn = [
+      interaction('coder', base, true),
+      interaction('coder', base + 1_000, true),
+      interaction('coder', base + 2_000, true),
+    ];
+
+    expect(detector.detectForTurnsWithDefaults([turn], REPO)).toEqual([[]]);
+  });
+
+  it('aligns results by index, including empty turns', () => {
+    const detector = new LocalDeviationDetector(fakeConfig([]));
+    const failing = [
+      interaction('coder', base, false),
+      interaction('coder', base + 1_000, false),
+      interaction('coder', base + 2_000, false),
+    ];
+
+    const result = detector.detectForTurnsWithDefaults([[], failing, []], REPO);
+
+    expect(result).toHaveLength(3);
+    expect(result[0]).toEqual([]);
+    expect(result[1].length).toBeGreaterThan(0);
+    expect(result[2]).toEqual([]);
+  });
+
+  it('lets an explicit config for the repository replace the default outright', () => {
+    // The explicit workflow turns the anomaly check OFF, which the default has on.
+    // Seeing nothing proves the default did not run alongside it.
+    const detector = new LocalDeviationDetector(
+      fakeConfig([
+        {
+          repository: REPO,
+          workflows: [
+            {
+              name: 'mine',
+              expectedSequence: [],
+              maxDurationMs: 60 * 60_000,
+              sequenceDeviationAlert: false,
+              timeoutExceededAlert: false,
+              toolUsageAnomalyAlert: false,
+            },
+          ],
+        },
+      ]),
+    );
+    const turn = [
+      interaction('coder', base, false),
+      interaction('coder', base + 1_000, false),
+      interaction('coder', base + 2_000, false),
+    ];
+
+    expect(detector.detectForTurnsWithDefaults([turn], REPO)).toEqual([[]]);
+  });
+
+  it('matches the repository case-insensitively, as the detector does', () => {
+    const detector = new LocalDeviationDetector(
+      fakeConfig([
+        {
+          repository: REPO.toUpperCase(),
+          workflows: [
+            {
+              name: 'mine',
+              expectedSequence: [],
+              maxDurationMs: 60 * 60_000,
+              sequenceDeviationAlert: false,
+              timeoutExceededAlert: false,
+              toolUsageAnomalyAlert: false,
+            },
+          ],
+        },
+      ]),
+    );
+    const turn = [
+      interaction('coder', base, false),
+      interaction('coder', base + 1_000, false),
+      interaction('coder', base + 2_000, false),
+    ];
+
+    expect(detector.detectForTurnsWithDefaults([turn], REPO)).toEqual([[]]);
+  });
+});

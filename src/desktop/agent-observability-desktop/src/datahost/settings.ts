@@ -1,7 +1,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Configuration } from '@agent-observability/core/src/config/configuration';
-import { ConfigDefaults, ConfigKeys } from '@agent-observability/core/src/config/configuration';
+import {
+  ConfigDefaults,
+  ConfigKeys,
+  Configuration,
+  MIN_SESSION_MINUTES,
+} from '@agent-observability/core/src/config/configuration';
 import { defaultFs, resolveClaudeProjectsDirs, type ClaudeFs } from '@agent-observability/core/src/claude/paths';
 import type { SettingsPatch, SettingsSnapshot } from '../shared/rpc';
 import type { DesktopSettingsReader } from './drivers/desktopConfig';
@@ -52,6 +56,9 @@ export function buildSettingsSnapshot(
         }
       : {}),
     sqliteOverrideMissing: sqlitePath !== '' && !exists(sqlitePath),
+    // Read through Configuration rather than the raw store, so the page shows
+    // the clamped value the detector will actually use.
+    maxSessionMinutes: config.getMaxSessionMinutes(),
     configPath,
     configDir: path.dirname(configPath),
   };
@@ -66,9 +73,9 @@ export function buildSettingsSnapshot(
 export function applySettingsPatch(
   settings: DesktopSettingsReader,
   patch: SettingsPatch,
-): { claude: boolean; copilot: boolean } {
+): { claude: boolean; copilot: boolean; deviation: boolean } {
   const update: Record<string, unknown> = {};
-  const changed = { claude: false, copilot: false };
+  const changed = { claude: false, copilot: false, deviation: false };
 
   if (typeof patch.claudeEnabled === 'boolean' && patch.claudeEnabled !== storedBoolean(settings, ConfigKeys.claudeEnabled, ConfigDefaults.claudeEnabled)) {
     update[ConfigKeys.claudeEnabled] = patch.claudeEnabled;
@@ -93,10 +100,29 @@ export function applySettingsPatch(
     }
   }
 
-  if (changed.claude || changed.copilot) {
+  // The duration threshold decides what counts as an overlong turn, so every
+  // stored deviation verdict is recomputed against the new value.
+  if (typeof patch.maxSessionMinutes === 'number' && Number.isFinite(patch.maxSessionMinutes)) {
+    const next = Math.max(MIN_SESSION_MINUTES, Math.floor(patch.maxSessionMinutes));
+    if (next !== effectiveConfig(settings).getMaxSessionMinutes()) {
+      update[ConfigKeys.maxSessionMinutes] = next;
+      changed.deviation = true;
+    }
+  }
+
+  if (changed.claude || changed.copilot || changed.deviation) {
     settings.update(update);
   }
   return changed;
+}
+
+/**
+ * The effective configuration over a settings store — used to compare a patch
+ * against the CLAMPED current value rather than the raw one, so re-sending the
+ * same number is not mistaken for a change.
+ */
+function effectiveConfig(settings: DesktopSettingsReader): Configuration {
+  return new Configuration(settings);
 }
 
 /** The stored string for a key, trimmed; non-strings read as unset. */

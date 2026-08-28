@@ -27,10 +27,11 @@ export interface DeviationConfig {
  *    Only an explicit config may supply a non-empty `expectedSequence`, so
  *    sequence and missing-step checks activate ONLY when the user configures
  *    them.
- * 2. Otherwise ({@link detectForSession} only) a synthesized DEFAULT workflow per
- *    repository: empty `expectedSequence`, `maxDurationMs` from
- *    `deviation.maxSessionMinutes`, timeout + tool-usage-anomaly alerts on,
- *    sequence-deviation alert off.
+ * 2. Otherwise a synthesized DEFAULT workflow per repository: empty
+ *    `expectedSequence`, `maxDurationMs` from `deviation.maxSessionMinutes`,
+ *    timeout + tool-usage-anomaly alerts on, sequence-deviation alert off. Only
+ *    {@link detectForSession} and {@link detectForTurnsWithDefaults} fall back to
+ *    it; plain {@link detectForTurns} stays silent without an explicit config.
  *
  * All detection runs on-machine; the detector is pure and content-free.
  */
@@ -68,21 +69,9 @@ export class LocalDeviationDetector {
       return [];
     }
 
-    const repository = interactions[0].repository;
-    const configs = this.config.getWorkflowConfigs();
-    const explicit = configs.find(
-      (c) => c.repository.toLowerCase() === repository.toLowerCase(),
-    );
-
-    const config: WorkflowConfig =
-      explicit ?? {
-        repository,
-        workflows: [this.defaultWorkflow()],
-      };
-
     const turns = groupInteractionsByTurn(interactions, turnStartsMs);
     return this.detector
-      .detectForTurns(turns, [config], contentLookup)
+      .detectForTurns(turns, this.configsWithDefault(interactions[0].repository), contentLookup)
       .flat()
       .filter((d) => d.contentDerived !== true);
   }
@@ -106,6 +95,49 @@ export class LocalDeviationDetector {
     contentLookup?: ContentLookup,
   ): WorkflowDeviation[][] {
     return this.detector.detectForTurns(turns, this.config.getWorkflowConfigs(), contentLookup);
+  }
+
+  /**
+   * Per-TURN detection WITH the synthesized default workflow — the entry point for
+   * a host that wants ZERO-CONFIG baseline anomaly detection in its own timeline
+   * (the desktop app), rather than {@link detectForTurns}'s configured-only
+   * behaviour (the VS Code extension and the divergence notifier, which must stay
+   * quiet until the user defines a workflow).
+   *
+   * Precedence is identical to {@link detectForSession}: an explicit
+   * {@link WorkflowConfig} for `repository` wins OUTRIGHT — the default is
+   * synthesized only when the repository has none — so configuring a workflow
+   * replaces the baseline checks rather than doubling up with them.
+   *
+   * Results are aligned by index to `turns`. Unlike {@link detectForSession},
+   * content-derived deviations are KEPT: this feeds a local view, never sync.
+   *
+   * @param repository the session's repository (every turn of a session shares it)
+   */
+  detectForTurnsWithDefaults(
+    turns: readonly Interaction[][],
+    repository: string,
+    contentLookup?: ContentLookup,
+  ): WorkflowDeviation[][] {
+    return this.detector.detectForTurns(
+      turns,
+      this.configsWithDefault(repository),
+      contentLookup,
+    );
+  }
+
+  /**
+   * The workflows to analyze `repository` against: its explicit configuration when
+   * it has one, else a single synthesized default. Shared by the two baseline paths
+   * so their precedence can never drift apart.
+   */
+  private configsWithDefault(repository: string): WorkflowConfig[] {
+    const explicit = this.config
+      .getWorkflowConfigs()
+      .find((c) => c.repository.toLowerCase() === repository.toLowerCase());
+    return explicit !== undefined
+      ? [explicit]
+      : [{ repository, workflows: [this.defaultWorkflow()] }];
   }
 
   /**

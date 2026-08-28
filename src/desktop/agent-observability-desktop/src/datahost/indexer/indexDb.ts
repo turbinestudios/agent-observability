@@ -4,11 +4,14 @@ import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import type {
   DayPoint,
+  HotspotRow,
+  HotspotSessionRow,
   ListSessionsParams,
   OverviewData,
   SessionGroup,
   SessionRow,
 } from '../../shared/rpc';
+import type { SessionAnalysis } from '../analysis/sessionAnalyzer';
 
 /**
  * The persisted session index — the reason the desktop list paints instantly.
@@ -28,7 +31,23 @@ import type {
  */
 
 /** Bump to invalidate every existing index (drop-and-rebuild, no migration). */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+
+/**
+ * How many of the most recent sessions the background analysis reads.
+ *
+ * Analysis means PARSING a session — for Claude, its transcript plus a walk of
+ * the `.claude` tree — so it cannot cover unbounded history without burning CPU
+ * for hours after every rebuild. Core's comparable bound for the same job is
+ * `HOTSPOT_SESSION_LIMIT` (150); this is larger because one pass here serves two
+ * features. Sessions outside the window keep whatever analysis they already had
+ * and are otherwise left alone — the UI says so rather than implying full
+ * coverage.
+ */
+export const ANALYSIS_SESSION_LIMIT = 300;
+
+/** Rows returned by one hotspots query — far more than a ranking is read past. */
+export const HOTSPOT_ROW_LIMIT = 200;
 
 /**
  * How many repositories the overview ranks. Ten rather than a handful: with a
@@ -101,6 +120,34 @@ CREATE TABLE IF NOT EXISTS titles (
   src_mtime_ms REAL NOT NULL
 );
 
+-- What the background analysis found in a session, keyed to the indexed row it
+-- was computed from: when indexed_at_ms no longer matches the session's, the
+-- transcript changed and the analysis is stale.
+CREATE TABLE IF NOT EXISTS session_analysis (
+  source          TEXT NOT NULL,
+  session_id      TEXT NOT NULL,
+  deviation_count INTEGER NOT NULL DEFAULT 0,
+  error_count     INTEGER NOT NULL DEFAULT 0,
+  indexed_at_ms   INTEGER NOT NULL DEFAULT 0,
+  analyzed_at_ms  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (source, session_id)
+);
+
+-- One row per (session, customization file) — the grain the Context Hotspots
+-- ranking folds over. LOCAL-ONLY: absolute paths live here exactly as
+-- sessions.main_path already does, and nothing in this table feeds sync.
+CREATE TABLE IF NOT EXISTS context_files (
+  source     TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  file       TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  category   TEXT NOT NULL,
+  status     TEXT NOT NULL,
+  est_tokens INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (source, session_id, file)
+);
+CREATE INDEX IF NOT EXISTS idx_context_files_file ON context_files (file);
+
 -- Resolving a git remote means walking up to a .git/config; cache it per cwd.
 CREATE TABLE IF NOT EXISTS repo_cache (
   cwd            TEXT PRIMARY KEY,
@@ -108,6 +155,22 @@ CREATE TABLE IF NOT EXISTS repo_cache (
   resolved_at_ms INTEGER NOT NULL
 );
 `;
+
+/**
+ * Every table keyed by `(source, session_id)`. Deleting a session walks this
+ * list, so adding a per-session table cannot leave orphans behind.
+ */
+const SESSION_OWNED_TABLES = ['sessions', 'files', 'session_analysis', 'context_files'] as const;
+
+/**
+ * The session list reads its rows through a LEFT JOIN onto the analysis table,
+ * so a row carries its deviation count without a second query and the Deviations
+ * chip can filter in SQL. LEFT, not INNER: an unanalyzed session must still list.
+ */
+const SESSION_SELECT = 's.*, a.deviation_count AS deviation_count';
+const SESSION_FROM =
+  'FROM sessions s LEFT JOIN session_analysis a' +
+  ' ON a.source = s.source AND a.session_id = s.session_id';
 
 /** Row shape as stored; mapped to {@link SessionRow} on read. */
 export interface StoredSession {
@@ -133,6 +196,32 @@ export interface StoredSession {
   main_path: string | null;
   pending: number;
   indexed_at_ms: number;
+  /** Joined from `session_analysis`; null while the session is unanalyzed. */
+  deviation_count?: number | null;
+}
+
+/** One session the background analysis still has to read. */
+export interface AnalysisTarget {
+  source: string;
+  sessionId: string;
+  /** The indexed row version this analysis will be pinned to. */
+  indexedAtMs: number;
+}
+
+/** Sessions listed per expanded hotspot row — long enough to spot a pattern. */
+const HOTSPOT_SESSION_ROW_LIMIT = 50;
+
+/** Raw shape of a hotspot session before the counts become booleans. */
+interface StoredHotspotSession {
+  source: string;
+  sessionId: string;
+  repository: string;
+  title: string | null;
+  endedAtMs: number;
+  status: string;
+  estTokens: number;
+  errors: number;
+  deviations: number;
 }
 
 /** Per-file fingerprint plus the resume state for incremental parsing. */
@@ -182,7 +271,11 @@ export class IndexDb {
       return;
     }
     if (found !== undefined) {
-      this.db.exec('DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS titles; DROP TABLE IF EXISTS repo_cache;');
+      this.db.exec(
+        'DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS titles;' +
+          ' DROP TABLE IF EXISTS repo_cache; DROP TABLE IF EXISTS session_analysis;' +
+          ' DROP TABLE IF EXISTS context_files;',
+      );
       this.db.exec(SCHEMA);
     }
     this.db
@@ -193,7 +286,10 @@ export class IndexDb {
 
   /** Erase all indexed data, keeping the schema. Backs the rebuild command. */
   clear(): void {
-    this.db.exec('DELETE FROM files; DELETE FROM sessions; DELETE FROM titles; DELETE FROM repo_cache;');
+    this.db.exec(
+      'DELETE FROM files; DELETE FROM sessions; DELETE FROM titles; DELETE FROM repo_cache;' +
+        ' DELETE FROM session_analysis; DELETE FROM context_files;',
+    );
   }
 
   close(): void {
@@ -208,7 +304,8 @@ export class IndexDb {
     const offset = Math.max(0, params.offset ?? 0);
     const rows = this.db
       .prepare(
-        `SELECT * FROM sessions ${where} ORDER BY ended_at_ms DESC, session_id DESC LIMIT ? OFFSET ?`,
+        `SELECT ${SESSION_SELECT} ${SESSION_FROM} ${where}
+          ORDER BY s.ended_at_ms DESC, s.session_id DESC LIMIT ? OFFSET ?`,
       )
       .all(...args, limit, offset) as StoredSession[];
     return rows.map(toSessionRow);
@@ -216,7 +313,7 @@ export class IndexDb {
 
   countSessions(params: ListSessionsParams, hiddenKeys: readonly string[] = []): number {
     const { where, args } = buildFilter(params, hiddenKeys);
-    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM sessions ${where}`).get(...args) as {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n ${SESSION_FROM} ${where}`).get(...args) as {
       n: number;
     };
     return row.n;
@@ -239,8 +336,9 @@ export class IndexDb {
 
   /** Forget a session entirely, so a deleted one does not linger in the index. */
   removeSession(source: string, sessionId: string): void {
-    this.db.prepare('DELETE FROM sessions WHERE source = ? AND session_id = ?').run(source, sessionId);
-    this.db.prepare('DELETE FROM files WHERE source = ? AND session_id = ?').run(source, sessionId);
+    for (const table of SESSION_OWNED_TABLES) {
+      this.db.prepare(`DELETE FROM ${table} WHERE source = ? AND session_id = ?`).run(source, sessionId);
+    }
   }
 
   /** Counts for the progress indicator: total rows and how many are hydrated. */
@@ -281,7 +379,7 @@ export class IndexDb {
 
   getRow(source: string, sessionId: string): SessionRow | undefined {
     const row = this.db
-      .prepare('SELECT * FROM sessions WHERE source = ? AND session_id = ?')
+      .prepare(`SELECT ${SESSION_SELECT} ${SESSION_FROM} WHERE s.source = ? AND s.session_id = ?`)
       .get(source, sessionId) as StoredSession | undefined;
     return row === undefined ? undefined : toSessionRow(row);
   }
@@ -299,9 +397,9 @@ export class IndexDb {
     const placeholders = keys.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
-        `SELECT * FROM sessions
-          WHERE source || ':' || session_id IN (${placeholders})
-          ORDER BY ended_at_ms DESC`,
+        `SELECT ${SESSION_SELECT} ${SESSION_FROM}
+          WHERE s.source || ':' || s.session_id IN (${placeholders})
+          ORDER BY s.ended_at_ms DESC`,
       )
       .all(...keys) as StoredSession[];
     return rows.map(toSessionRow);
@@ -376,12 +474,14 @@ export class IndexDb {
     if (gone.length === 0) {
       return [];
     }
-    const del = this.db.prepare('DELETE FROM sessions WHERE source = ? AND session_id = ?');
-    const delFiles = this.db.prepare('DELETE FROM files WHERE source = ? AND session_id = ?');
+    const statements = SESSION_OWNED_TABLES.map((table) =>
+      this.db.prepare(`DELETE FROM ${table} WHERE source = ? AND session_id = ?`),
+    );
     const run = this.db.transaction((ids: string[]) => {
       for (const id of ids) {
-        del.run(source, id);
-        delFiles.run(source, id);
+        for (const statement of statements) {
+          statement.run(source, id);
+        }
       }
     });
     run(gone);
@@ -471,6 +571,199 @@ export class IndexDb {
     return { totals, bySource, daily, windowDays, topRepositories };
   }
 
+  // -- background analysis ---------------------------------------------------
+
+  /**
+   * Sessions inside the analysis window whose analysis is missing or stale,
+   * newest first, capped at `batch`.
+   *
+   * The window is applied BEFORE the staleness test, so a rebuild works forward
+   * from the most recent sessions and an old session going stale can never
+   * displace a recent one. A session still awaiting hydration is skipped: its
+   * counts are placeholders, so analyzing it would only have to be redone.
+   */
+  staleAnalysis(batch: number, window: number = ANALYSIS_SESSION_LIMIT): AnalysisTarget[] {
+    return this.db
+      .prepare(
+        `WITH recent AS (
+           SELECT source, session_id, indexed_at_ms FROM sessions
+            WHERE pending = 0 ORDER BY ended_at_ms DESC LIMIT ?
+         )
+         SELECT r.source AS source, r.session_id AS sessionId, r.indexed_at_ms AS indexedAtMs
+           FROM recent r
+           LEFT JOIN session_analysis a ON a.source = r.source AND a.session_id = r.session_id
+          WHERE a.indexed_at_ms IS NULL OR a.indexed_at_ms <> r.indexed_at_ms
+          LIMIT ?`,
+      )
+      .all(window, batch) as AnalysisTarget[];
+  }
+
+  /** How much of the analysis window has current results, for the progress note. */
+  analysisCounts(window: number = ANALYSIS_SESSION_LIMIT): { analyzed: number; total: number } {
+    return this.db
+      .prepare(
+        `WITH recent AS (
+           SELECT source, session_id, indexed_at_ms FROM sessions
+            WHERE pending = 0 ORDER BY ended_at_ms DESC LIMIT ?
+         )
+         SELECT COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN a.indexed_at_ms = r.indexed_at_ms THEN 1 ELSE 0 END), 0) AS analyzed
+           FROM recent r
+           LEFT JOIN session_analysis a ON a.source = r.source AND a.session_id = r.session_id`,
+      )
+      .get(window) as { analyzed: number; total: number };
+  }
+
+  /**
+   * Record one session's analysis, replacing whatever was there. Its
+   * context-file rows are rewritten wholesale rather than merged: a file that
+   * dropped out of context must leave the ranking, not linger in it.
+   */
+  putAnalysis(
+    source: string,
+    sessionId: string,
+    analysis: SessionAnalysis,
+    indexedAtMs: number,
+    nowMs: number,
+  ): void {
+    const putSession = this.db.prepare(
+      `INSERT INTO session_analysis
+         (source, session_id, deviation_count, error_count, indexed_at_ms, analyzed_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(source, session_id) DO UPDATE SET
+         deviation_count = excluded.deviation_count,
+         error_count = excluded.error_count,
+         indexed_at_ms = excluded.indexed_at_ms,
+         analyzed_at_ms = excluded.analyzed_at_ms`,
+    );
+    const clearFiles = this.db.prepare(
+      'DELETE FROM context_files WHERE source = ? AND session_id = ?',
+    );
+    const putFile = this.db.prepare(
+      `INSERT INTO context_files (source, session_id, file, name, category, status, est_tokens)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(source, session_id, file) DO UPDATE SET
+         name = excluded.name, category = excluded.category, status = excluded.status,
+         est_tokens = MAX(context_files.est_tokens, excluded.est_tokens)`,
+    );
+
+    this.db.transaction(() => {
+      putSession.run(source, sessionId, analysis.deviationCount, analysis.errorCount, indexedAtMs, nowMs);
+      clearFiles.run(source, sessionId);
+      for (const file of analysis.contextFiles) {
+        putFile.run(
+          source,
+          sessionId,
+          file.filePath ?? file.name,
+          file.name,
+          file.category,
+          file.status,
+          file.estTokens,
+        );
+      }
+    })();
+  }
+
+  /**
+   * Forget every deviation verdict, keeping the context-file rows.
+   *
+   * Deviation counts depend on the duration threshold, so changing it makes them
+   * all wrong at once. Dropping the analysis rows marks those sessions stale and
+   * the background pass recomputes them.
+   */
+  clearDeviations(): void {
+    this.db.exec('DELETE FROM session_analysis;');
+  }
+
+  // -- context hotspots ------------------------------------------------------
+
+  /**
+   * The Context Hotspots ranking: one row per customization file, folded over
+   * every analyzed session that had it in context.
+   *
+   * Ranked busiest-first — contributing sessions, then heaviest, then path —
+   * matching core's `buildContextHotspots`. `name` and `category` are taken with
+   * MIN only to be deterministic: a file's classification comes from where it was
+   * discovered, which does not vary between sessions in practice.
+   */
+  hotspots(params: { repository?: string } = {}, hiddenKeys: readonly string[] = []): HotspotRow[] {
+    const { where, args } = hotspotFilter(params, hiddenKeys);
+    return this.db
+      .prepare(
+        `SELECT cf.file AS file,
+                MIN(cf.name) AS name,
+                MIN(cf.category) AS category,
+                COUNT(*) AS sessionCount,
+                COALESCE(SUM(CASE WHEN cf.status = 'applied' THEN 1 ELSE 0 END), 0) AS appliedCount,
+                COALESCE(SUM(CASE WHEN cf.status = 'skipped' THEN 1 ELSE 0 END), 0) AS skippedCount,
+                COALESCE(SUM(CASE WHEN cf.status = 'read' THEN 1 ELSE 0 END), 0) AS readCount,
+                COALESCE(MAX(cf.est_tokens), 0) AS estTokensMax,
+                COALESCE(SUM(CASE WHEN COALESCE(a.error_count, 0) > 0 THEN 1 ELSE 0 END), 0) AS errorSessions,
+                COALESCE(SUM(CASE WHEN COALESCE(a.deviation_count, 0) > 0 THEN 1 ELSE 0 END), 0) AS deviationSessions,
+                COALESCE(MAX(s.ended_at_ms), 0) AS lastSeenMs
+           FROM context_files cf
+           JOIN sessions s ON s.source = cf.source AND s.session_id = cf.session_id
+           LEFT JOIN session_analysis a ON a.source = cf.source AND a.session_id = cf.session_id
+           ${where}
+          GROUP BY cf.file
+          ORDER BY sessionCount DESC, estTokensMax DESC, cf.file ASC
+          LIMIT ?`,
+      )
+      .all(...args, HOTSPOT_ROW_LIMIT) as HotspotRow[];
+  }
+
+  /** The sessions behind one hotspot row, newest first. */
+  hotspotSessions(
+    file: string,
+    params: { repository?: string } = {},
+    hiddenKeys: readonly string[] = [],
+    limit = HOTSPOT_SESSION_ROW_LIMIT,
+  ): HotspotSessionRow[] {
+    const { where, args } = hotspotFilter(params, hiddenKeys, file);
+    const rows = this.db
+      .prepare(
+        `SELECT cf.source AS source, cf.session_id AS sessionId, s.repository AS repository,
+                s.title AS title, s.ended_at_ms AS endedAtMs, cf.status AS status,
+                cf.est_tokens AS estTokens,
+                COALESCE(a.error_count, 0) AS errors,
+                COALESCE(a.deviation_count, 0) AS deviations
+           FROM context_files cf
+           JOIN sessions s ON s.source = cf.source AND s.session_id = cf.session_id
+           LEFT JOIN session_analysis a ON a.source = cf.source AND a.session_id = cf.session_id
+           ${where}
+          ORDER BY s.ended_at_ms DESC
+          LIMIT ?`,
+      )
+      .all(...args, limit) as StoredHotspotSession[];
+
+    return rows.map((row) => ({
+      source: row.source,
+      sessionId: row.sessionId,
+      repository: row.repository,
+      title: row.title ?? undefined,
+      endedAtMs: row.endedAtMs,
+      status: row.status,
+      estTokens: row.estTokens,
+      hadError: row.errors > 0,
+      hadDeviation: row.deviations > 0,
+    }));
+  }
+
+  /** Repositories the ranking can be narrowed to — only ones with analysis behind them. */
+  hotspotRepositories(hiddenKeys: readonly string[] = []): string[] {
+    const { where, args } = hotspotFilter({}, hiddenKeys);
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT s.repository AS repository
+           FROM context_files cf
+           JOIN sessions s ON s.source = cf.source AND s.session_id = cf.session_id
+           ${where}
+          ORDER BY s.repository ASC`,
+      )
+      .all(...args) as { repository: string }[];
+    return rows.map((r) => r.repository);
+  }
+
   /** A session's cached title plus the fingerprint of the file it came from. */
   getTitle(sessionId: string): { title?: string; derived: boolean; srcPath: string; srcMtimeMs: number } | undefined {
     const row = this.db.prepare('SELECT * FROM titles WHERE session_id = ?').get(sessionId) as
@@ -554,7 +847,7 @@ function buildFilter(
   // page of results is not silently short once some of it is filtered away.
   if (hiddenKeys.length > 0) {
     const placeholders = hiddenKeys.map(() => '?').join(', ');
-    const key = `source || ':' || session_id`;
+    const key = `s.source || ':' || s.session_id`;
     clauses.push(`${key} ${params.hidden === true ? 'IN' : 'NOT IN'} (${placeholders})`);
     args.push(...hiddenKeys);
   } else if (params.hidden === true) {
@@ -563,12 +856,17 @@ function buildFilter(
     clauses.push('1 = 0');
   }
   if (params.source !== undefined && params.source.length > 0) {
-    clauses.push('source = ?');
+    clauses.push('s.source = ?');
     args.push(params.source);
   }
   if (params.repository !== undefined && params.repository.length > 0) {
-    clauses.push('repository = ?');
+    clauses.push('s.repository = ?');
     args.push(params.repository);
+  }
+  // A session with no analysis row yet is unread, not clean, so the chip shows
+  // only what the analysis actually flagged.
+  if (params.deviations === true) {
+    clauses.push('COALESCE(a.deviation_count, 0) > 0');
   }
   const query = params.query?.trim();
   if (query !== undefined && query.length > 0) {
@@ -576,13 +874,45 @@ function buildFilter(
     // SQLite treats them as literal characters and a search for "100%" matches
     // everything instead of the one session that says it.
     clauses.push(
-      `(title LIKE ? ESCAPE '\\' OR repository LIKE ? ESCAPE '\\' OR session_id LIKE ? ESCAPE '\\')`,
+      `(s.title LIKE ? ESCAPE '\\' OR s.repository LIKE ? ESCAPE '\\' OR s.session_id LIKE ? ESCAPE '\\')`,
     );
     const like = `%${query.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
     args.push(like, like, like);
   }
   return { where: clauses.length === 0 ? '' : `WHERE ${clauses.join(' AND ')}`, args };
 }
+/**
+ * The WHERE clause shared by every hotspots query, so the ranking, the expanded
+ * sessions, and the repository list can never disagree about what they cover.
+ * Hidden sessions are excluded here for the same reason the overview excludes
+ * them: a count that includes what the user removed reads as a bug.
+ */
+function hotspotFilter(
+  params: { repository?: string },
+  hiddenKeys: readonly string[],
+  file?: string,
+): { where: string; args: unknown[] } {
+  const clauses: string[] = [];
+  const args: unknown[] = [];
+
+  if (file !== undefined) {
+    clauses.push('cf.file = ?');
+    args.push(file);
+  }
+  if (params.repository !== undefined && params.repository.length > 0) {
+    clauses.push('s.repository = ?');
+    args.push(params.repository);
+  }
+  if (hiddenKeys.length > 0) {
+    clauses.push(
+      `cf.source || ':' || cf.session_id NOT IN (${hiddenKeys.map(() => '?').join(', ')})`,
+    );
+    args.push(...hiddenKeys);
+  }
+
+  return { where: clauses.length === 0 ? '' : `WHERE ${clauses.join(' AND ')}`, args };
+}
+
 
 function toSessionRow(row: StoredSession): SessionRow {
   return {
@@ -605,6 +935,7 @@ function toSessionRow(row: StoredSession): SessionRow {
     stateLabel: row.state_label ?? undefined,
     externalUrl: row.external_url ?? undefined,
     costMicros: row.cost_micros ?? undefined,
+    deviationCount: row.deviation_count ?? undefined,
     indexedAtMs: row.indexed_at_ms,
     pending: row.pending === 1 ? true : undefined,
   };

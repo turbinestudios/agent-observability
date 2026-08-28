@@ -1,5 +1,9 @@
 import type { JSX } from 'react';
 import { useEffect, useState } from 'react';
+// From the parser rather than `Configuration`: the class pulls the whole
+// settings surface — sync policy, chat backends — into the renderer bundle for
+// the sake of one number.
+import { MIN_SESSION_MINUTES } from '@agent-observability/core/src/config/workflowParsing';
 import type { SettingsSnapshot } from '../../../../shared/rpc';
 import { Spinner } from '../../components/Spinner';
 import { useSettings } from './useSettings';
@@ -110,6 +114,22 @@ export function SettingsView(): JSX.Element {
         </div>
       </section>
 
+      <section className="settings-card" aria-label="Analysis">
+        <h2>Analysis</h2>
+        <div className="settings-row">
+          <span className="settings-label">Flag a turn longer than</span>
+          <MinutesInput
+            value={snapshot.maxSessionMinutes}
+            disabled={saving}
+            onCommit={(value) => save({ maxSessionMinutes: value })}
+          />
+          <span className="settings-resolved">
+            Sessions are also flagged when a turn's tool calls fail more often than they succeed.
+            Only the most recent sessions are analyzed, in the background.
+          </span>
+        </div>
+      </section>
+
       <section className="settings-card" aria-label="Configuration">
         <h2>Configuration</h2>
         <p className="settings-hint">
@@ -151,6 +171,62 @@ function describeCopilotResolution(snapshot: SettingsSnapshot): string {
   const kind =
     db.kind === 'archive' ? 'durable archive' : db.kind === 'override' ? 'override' : 'VS Code storage';
   return `Reading from: ${db.path} (${kind})`;
+}
+
+/**
+ * The turn-duration threshold, in minutes. Commits on blur or Enter and reverts
+ * on Escape, like the path fields; an unusable value reverts rather than being
+ * saved, since the data host would only clamp it back and the page would appear
+ * to ignore what was typed.
+ */
+function MinutesInput({
+  value,
+  disabled,
+  onCommit,
+}: {
+  value: number;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+}): JSX.Element {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = (): void => {
+    const next = Number(draft.trim());
+    if (!Number.isFinite(next) || next < MIN_SESSION_MINUTES) {
+      setDraft(String(value));
+      return;
+    }
+    if (Math.floor(next) !== value) {
+      onCommit(Math.floor(next));
+    }
+  };
+
+  return (
+    <div className="settings-inline">
+      <input
+        className="settings-input settings-input-narrow"
+        type="number"
+        min={MIN_SESSION_MINUTES}
+        value={draft}
+        aria-label="Flag a turn longer than, in minutes"
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.currentTarget.blur();
+          } else if (e.key === 'Escape') {
+            setDraft(String(value));
+          }
+        }}
+      />
+      <span className="settings-unit">minutes</span>
+    </div>
+  );
 }
 
 /**

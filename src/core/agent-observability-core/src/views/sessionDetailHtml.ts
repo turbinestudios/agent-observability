@@ -200,11 +200,20 @@ export function renderSessionDetailContent(
  * section per session holding that session's meta, deviations, and turns (the
  * first section is open). All section helpers are shared with the single-session
  * renderer.
+ *
+ * `extraHeadHtml` is the same host-supplied seam as on
+ * {@link renderSessionDetailHtml}: injected verbatim before `</head>`, for
+ * host-authored `<style>`/`<script>` tags carrying the same nonce. The desktop
+ * app uses it to define the `--vscode-*` variables this document's CSS reads and
+ * to shim `acquireVsCodeApi` outside VS Code — without it a combined document
+ * renders unstyled and its controller script throws on load. It is HOST-AUTHORED
+ * markup and is NOT escaped, so never pass session content through it.
  */
 export function renderCombinedSessionDetailHtml(
   view: CombinedSessionView,
   nonce: string,
   costMode: CostMode = 'aiu',
+  extraHeadHtml = '',
 ): string {
   const csp = [
     "default-src 'none'",
@@ -222,6 +231,7 @@ export function renderCombinedSessionDetailHtml(
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Combined sessions (${num(view.combined.summary.sessionCount)})</title>
   <style nonce="${nonce}">${STYLE}</style>
+  ${extraHeadHtml}
 </head>
 <body>
   <div id="live-root">${renderCombinedSessionDetailContent(view, costMode)}</div>
@@ -572,8 +582,9 @@ function treeTotalsRows(stats: SessionTreeStats, costMode: CostMode): string {
             value: formatCredits(stats.creditsNano, stats.creditUnit),
           }
         : { acr: 'AIU', label: 'Copilot Usage (AIU)', value: formatAiu(stats.aiuNano) };
-  // Flat right-aligned totals, each labelled by a short acronym (full name kept in
-  // the `title` so the shorthand stays discoverable). TIN/TOUT/TCI = total
+  // Flat right-aligned totals, each labelled by a short acronym with a plain
+  // explanation on hover ({@link METRIC_HELP}), so the shorthand that keeps the
+  // card compact never has to be guessed at. TIN/TOUT/TCI = total
   // input/output/cached-input tokens; TT = total tokens; MT = model turns.
   const totals: Array<{ acr: string; label: string; value: string }> = [
     { acr: 'MT', label: 'Model Turns', value: formatInt(stats.modelTurns) },
@@ -592,9 +603,51 @@ function treeTotalsRows(stats: SessionTreeStats, costMode: CostMode): string {
   return totals
     .map(
       (t) =>
-        `<div class="tt-row"><dt title="${escapeHtml(t.label)}">${escapeHtml(t.acr)}</dt><dd>${t.value}</dd></div>`,
+        `<div class="tt-row"><dt title="${escapeHtml(
+          metricTitle(t.acr, t.label),
+        )}">${escapeHtml(t.acr)}</dt><dd>${t.value}</dd></div>`,
     )
     .join('\n');
+}
+
+/**
+ * What each shorthand on the totals card and the trend legend actually means.
+ *
+ * The card labels every figure with a terse acronym to stay compact, which is
+ * only workable if hovering explains it — so the explanations live here, in one
+ * place, and every surface that shows one of these figures (the totals tiles,
+ * the trend legend, the per-model table headers) reads from it. Kept as full
+ * sentences rather than expanded acronyms: "TCI" expanding to "Total Cached
+ * Input Tokens" still leaves a reader wondering what was cached.
+ */
+const METRIC_HELP: Record<string, string> = {
+  MT: 'Model turns — how many times a model was called, across the whole agent tree',
+  TC: 'Tool calls — how many tools the agents ran (file edits, searches, commands)',
+  TIN: 'Total input tokens — everything sent to the models, including the context window on each turn',
+  TOUT: 'Total output tokens — everything the models generated',
+  TCI: 'Total cached input tokens — input served from the prompt cache instead of being re-read, and charged at a lower rate',
+  TT: 'Total tokens — input plus output',
+  ERR: 'Errors — tool calls and model turns that failed',
+  LOC: "Lines of Code — source-code lines the agents' file-writing tool calls ADDED, classified by file extension",
+  LOD: "Lines of Documentation — documentation lines the agents' file-writing tool calls ADDED",
+  nLOC: "Lines of Code removed — source-code lines the agents' file-writing tool calls REMOVED",
+  nLOD: "Lines of Documentation removed — documentation lines the agents' file-writing tool calls REMOVED",
+};
+
+/** What the three token lines on the trend plot represent, per model turn. */
+const TREND_SERIES_HELP: Record<'input' | 'cached' | 'output', string> = {
+  input: 'Input tokens sent on this model turn, including the context window',
+  cached: 'Input tokens served from the prompt cache on this model turn',
+  output: 'Tokens the model generated on this model turn',
+};
+
+/**
+ * Hover text for a figure: its explanation when there is one, else the label
+ * itself — so a cost tile, whose acronym varies by pricing basis, still says
+ * something rather than nothing.
+ */
+function metricTitle(acronym: string, label: string): string {
+  return METRIC_HELP[acronym] ?? label;
 }
 
 /**
@@ -1039,21 +1092,25 @@ function renderTokenTrend(
     })
     .join('\n');
   // Token-line keys plus the four line-count bar keys (additions then removals).
-  const barKeys: Array<{ key: string; label: string }> = [
-    { key: 'loc', label: 'LoC' },
-    { key: 'lod', label: 'LoD' },
-    { key: 'nloc', label: 'LoC removed' },
-    { key: 'nlod', label: 'LoD removed' },
+  // Each carries the same explanation the totals tiles use, so the abbreviations
+  // are answerable wherever the reader meets them first.
+  const barKeys: Array<{ key: string; label: string; help: string }> = [
+    { key: 'loc', label: 'LoC', help: METRIC_HELP.LOC },
+    { key: 'lod', label: 'LoD', help: METRIC_HELP.LOD },
+    { key: 'nloc', label: 'LoC removed', help: METRIC_HELP.nLOC },
+    { key: 'nlod', label: 'LoD removed', help: METRIC_HELP.nLOD },
   ];
   const allKeys = [
-    ...series.map((s) => ({ key: s.key, label: s.label })),
+    ...series.map((s) => ({ key: s.key, label: s.label, help: TREND_SERIES_HELP[s.key] })),
     ...barKeys,
   ];
   const legend =
     allKeys
       .map(
         (s) =>
-          `<span class="trend-key" data-series="${s.key}" role="button" tabindex="0"><span class="trend-swatch trend-${s.key}"></span>${s.label}</span>`,
+          `<span class="trend-key" data-series="${s.key}" role="button" tabindex="0" title="${escapeHtml(
+            `${s.help} · click to show only this series`,
+          )}"><span class="trend-swatch trend-${s.key}"></span>${s.label}</span>`,
       )
       .join('') +
     `<span class="trend-reset" role="button" tabindex="0">Reset filter</span>` +
@@ -1240,10 +1297,10 @@ function renderAgentUsage(
           <th class="n">Input</th>
           <th class="n">Output</th><th class="n">Cached</th>
           ${costHeader}
-          <th class="n" title="Lines of Code added to source-code files by this agent/model's file-writing tool calls">LoC</th>
-          <th class="n" title="Lines of Documentation added to doc files by this agent/model's file-writing tool calls">LoD</th>
-          <th class="n" title="Lines of Code removed from source-code files by this agent/model's file-writing tool calls">nLoC</th>
-          <th class="n" title="Lines of Documentation removed from doc files by this agent/model's file-writing tool calls">nLoD</th>
+          <th class="n" title="${escapeHtml(METRIC_HELP.LOC)}">LoC</th>
+          <th class="n" title="${escapeHtml(METRIC_HELP.LOD)}">LoD</th>
+          <th class="n" title="${escapeHtml(METRIC_HELP.nLOC)}">nLoC</th>
+          <th class="n" title="${escapeHtml(METRIC_HELP.nLOD)}">nLoD</th>
         </tr>
       </thead>
       <tbody>

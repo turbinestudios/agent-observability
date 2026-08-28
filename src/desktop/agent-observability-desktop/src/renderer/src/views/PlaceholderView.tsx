@@ -7,11 +7,7 @@ import type { ViewId } from '../components/ActivityRail';
  * looking like a broken screen.
  */
 
-const COPY: Record<Exclude<ViewId, 'sessions' | 'overview' | 'settings'>, { title: string; body: string }> = {
-  hotspots: {
-    title: 'Context Hotspots',
-    body: 'Which instruction and customization files your agents actually load, ranked by how often they are pulled into context.',
-  },
+const COPY: Record<PlaceholderViewId, { title: string; body: string }> = {
   assistant: {
     title: 'AI Helper',
     body: 'A chat assistant grounded in your local session data, running against the Claude Code CLI on this machine.',
@@ -22,11 +18,10 @@ const COPY: Record<Exclude<ViewId, 'sessions' | 'overview' | 'settings'>, { titl
   },
 };
 
-export function PlaceholderView({
-  view,
-}: {
-  view: Exclude<ViewId, 'sessions' | 'overview' | 'settings'>;
-}): JSX.Element {
+/** The destinations that are still stand-ins, narrowed as each one lands. */
+type PlaceholderViewId = Exclude<ViewId, 'sessions' | 'overview' | 'hotspots' | 'settings'>;
+
+export function PlaceholderView({ view }: { view: PlaceholderViewId }): JSX.Element {
   const copy = COPY[view];
   return (
     <div className="placeholder">

@@ -132,3 +132,19 @@
 .settings-action:hover {
   background: var(--hover);
 }
+
+/* A short numeric field with its unit beside it, rather than a full-width path. */
+.settings-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-input-narrow {
+  width: 6em;
+}
+
+.settings-unit {
+  color: var(--fg-subtle);
+  font-size: 12px;
+}

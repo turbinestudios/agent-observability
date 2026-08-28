@@ -115,7 +115,7 @@ describe('applySettingsPatch', () => {
       sqlitePath: '  /custom/traces.db  ',
     });
 
-    expect(changed).toEqual({ claude: true, copilot: true });
+    expect(changed).toEqual({ claude: true, copilot: true, deviation: false });
     // Round-trip through a fresh reader: the write really hit the disk.
     const reread = new DesktopSettingsReader(file);
     expect(reread.get('claudeCode.enabled', true)).toBe(false);
@@ -141,7 +141,7 @@ describe('applySettingsPatch', () => {
       sqlitePath: '',
     });
 
-    expect(changed).toEqual({ claude: false, copilot: false });
+    expect(changed).toEqual({ claude: false, copilot: false, deviation: false });
     // Nothing changed, so nothing was written — first save is what creates the file.
     expect(fs.existsSync(file)).toBe(false);
   });
@@ -153,7 +153,7 @@ describe('applySettingsPatch', () => {
       sqlitePath: 42 as unknown as string,
     });
 
-    expect(changed).toEqual({ claude: false, copilot: false });
+    expect(changed).toEqual({ claude: false, copilot: false, deviation: false });
     expect(fs.existsSync(file)).toBe(false);
   });
 });

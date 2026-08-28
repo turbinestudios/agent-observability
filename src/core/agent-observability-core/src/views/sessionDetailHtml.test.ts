@@ -591,23 +591,32 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     const html = renderSessionDetailHtml(treeDetail, [], NONCE);
     expect(html).toContain('Agent run totals');
     expect(html).toContain('incl. spawned sub-agents');
-    // Acronym labels, with the full name preserved in the title for discoverability.
-    for (const [acr, label] of [
-      ['MT', 'Model Turns'],
-      ['TC', 'Tool Calls'],
-      ['TIN', 'Total Input Tokens'],
-      ['TOUT', 'Total Output Tokens'],
-      ['TCI', 'Total Cached Input Tokens'],
-      ['TT', 'Total Tokens'],
-      ['ERR', 'Errors'],
+    // Acronym labels, each explained on hover: the card is only compact enough
+    // to read because the figures are abbreviated, which is only fair if the
+    // abbreviation is answerable without leaving the page.
+    for (const [acr, explanation] of [
+      ['MT', 'Model turns —'],
+      ['TC', 'Tool calls —'],
+      ['TIN', 'Total input tokens —'],
+      ['TOUT', 'Total output tokens —'],
+      ['TCI', 'Total cached input tokens —'],
+      ['TT', 'Total tokens —'],
+      ['ERR', 'Errors —'],
+      // The cost tile's acronym varies with the pricing basis, so it has no
+      // entry of its own and falls back to its label.
       ['AIU', 'Copilot Usage (AIU)'],
-      ['LOC', 'Lines of Code (added)'],
-      ['LOD', 'Lines of Documentation (added)'],
-      ['nLOC', 'Lines of Code (removed)'],
-      ['nLOD', 'Lines of Documentation (removed)'],
+      ['LOC', 'Lines of Code —'],
+      ['LOD', 'Lines of Documentation —'],
+      ['nLOC', 'Lines of Code removed —'],
+      ['nLOD', 'Lines of Documentation removed —'],
     ]) {
-      expect(html).toContain(`title="${label}">${acr}</dt>`);
+      expect(html).toContain(`>${acr}</dt>`);
+      expect(html).toContain(`title="${explanation}`);
     }
+    // LoC and nLoC differ by one word, so each has to explain itself rather than
+    // leaving the reader to infer the difference from the leading "n".
+    expect(html).toContain('title="Lines of Code — source-code lines');
+    expect(html).toContain('title="Lines of Code removed — source-code lines');
     // Values with thousands separators, matching GitHub's Agent Debug Logs.
     expect(html).toContain('<dd>183</dd>');
     expect(html).toContain('<dd>289</dd>');
@@ -746,6 +755,10 @@ describe('renderSessionDetailHtml — Agent run totals card', () => {
     // Legend gains the four line-count swatches.
     expect(html).toContain('class="trend-swatch trend-loc"');
     expect(html).toContain('class="trend-swatch trend-nlod"');
+    // Each key explains its metric on hover, using the same wording as the
+    // totals card, and says what clicking it does.
+    expect(html).toContain('Lines of Documentation removed — documentation lines');
+    expect(html).toContain('click to show only this series');
     // Still CSP-safe (geometry + classes only).
     expect(html).not.toContain('style="');
   });

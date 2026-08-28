@@ -3,6 +3,7 @@ import { Configuration } from '@agent-observability/core/src/config/configuratio
 import { ClaudeCodeService } from '@agent-observability/core/src/claude/claudeCodeService';
 import { TelemetryService } from '@agent-observability/core/src/telemetry/telemetryService';
 import { CopilotSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
+import { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
 import type {
@@ -12,17 +13,20 @@ import type {
   RpcEvent,
   RpcRequest,
   RpcResponse,
+  SessionRef,
   SessionRow,
 } from '../shared/rpc';
-import { sessionKey } from '../shared/rpc';
+import { MAX_COMPARE_SESSIONS, sessionKey } from '../shared/rpc';
 import { DetailRenderer } from './detail/detailRenderer';
-import type { DetailContext } from './detail/detailRenderer';
+import type { CombinedRequest, DetailContext } from './detail/detailRenderer';
+import { AnalysisQueue } from './analysis/analysisQueue';
 import { DesktopSettingsReader } from './drivers/desktopConfig';
 import { applySettingsPatch, buildSettingsSnapshot } from './settings';
 import { ClaudeIndexer } from './indexer/claudeIndexer';
 import { CopilotIndexer } from './indexer/copilotIndexer';
 import { ensureArchiveIndexes } from './archiveIndexes';
 import { IndexDb } from './indexer/indexDb';
+import type { AnalysisTarget } from './indexer/indexDb';
 import { RenameStore } from './renames';
 import { HiddenStore } from './hidden';
 import { describeDeletion, deleteSession } from './deletion';
@@ -60,7 +64,12 @@ telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
 // shows in the list but fails to open with "not found" until a restart.
 const claude = new ClaudeCodeService(config);
 const sources = new SourceRegistry([claude, new CopilotSource(telemetry, config)]);
-const detail = new DetailRenderer(sources);
+
+// One detector for the whole process: it is stateless and reads the live config
+// on every call, so the detail view and the background pass always agree about
+// what counts as a deviation.
+const deviations = new LocalDeviationDetector(config);
+const detail = new DetailRenderer(sources, deviations);
 const renames = new RenameStore();
 const hidden = new HiddenStore();
 
@@ -76,6 +85,36 @@ let archiveIndexesEnsured = false;
 
 /** Ports the renderer is reachable on. Populated by the handshake from main. */
 const ports: MessagePortMain[] = [];
+
+/**
+ * Reads sessions in the background for the two things the index cannot answer
+ * on its own: whether a session went wrong, and what it pulled into context.
+ * Started after each index pass rather than during one, so parsing never
+ * competes with the list filling in.
+ */
+const analysis = new AnalysisQueue({
+  db,
+  sources,
+  detector: deviations,
+  acceptedMissing,
+  onProgress: (status) => emit({ event: 'analysis.progress', status }),
+  onAnalyzed: pushAnalyzedRows,
+});
+
+/**
+ * Push the list rows whose analysis just landed, so a deviation badge appears
+ * without the user refreshing. Hidden sessions are dropped here exactly as the
+ * indexer's own pushes drop them.
+ */
+function pushAnalyzedRows(targets: readonly AnalysisTarget[]): void {
+  const rows = targets
+    .filter((t) => !hidden.isHidden(t.source, t.sessionId))
+    .map((t) => db.getRow(t.source, t.sessionId))
+    .filter((row): row is SessionRow => row !== undefined);
+  if (rows.length > 0) {
+    emit({ event: 'sessions.upserted', rows: renames.apply(rows) });
+  }
+}
 
 function post(message: RpcResponse | RpcEvent): void {
   for (const port of ports) {
@@ -189,6 +228,9 @@ function runIndex(): IndexStatus {
     rerunQueued = false;
     return runIndex();
   }
+  // Only once the pass has settled: reading transcripts while the indexer is
+  // still writing rows would put two heavy jobs on this one thread at once.
+  analysis.start();
   return status;
 }
 
@@ -327,6 +369,24 @@ function handle(request: RpcRequest): unknown {
         detailContext(source, sessionId),
       );
     }
+    case 'sessions.combinedDetail': {
+      const [keys, theme] = request.params;
+      // Enforced here as well as in the UI: the button is only one way in, and
+      // parsing an unbounded selection would block every other call meanwhile.
+      if (keys.length < 2) {
+        throw new Error('Comparing needs at least two sessions.');
+      }
+      if (keys.length > MAX_COMPARE_SESSIONS) {
+        throw new Error(`At most ${MAX_COMPARE_SESSIONS} sessions can be compared at once.`);
+      }
+      const requests: CombinedRequest[] = keys.map((key: SessionRef) => ({
+        source: key.source,
+        sessionId: key.sessionId,
+        stamp: stampOf(key.source, key.sessionId),
+        context: detailContext(key.source, key.sessionId),
+      }));
+      return detail.renderCombinedDocument(requests, theme);
+    }
     case 'sessions.detailBody': {
       const [source, sessionId] = request.params;
       return detail.renderBody(
@@ -361,6 +421,26 @@ function handle(request: RpcRequest): unknown {
       emit({ event: 'sessions.upserted', rows: [patched] });
       return patched;
     }
+    case 'sessions.row': {
+      const [source, sessionId] = request.params;
+      const row = db.getRow(source, sessionId);
+      return row === undefined ? undefined : renames.apply([row])[0];
+    }
+    case 'hotspots.get': {
+      const params = request.params[0] ?? {};
+      const hiddenKeys = hidden.all();
+      return {
+        rows: db.hotspots(params, hiddenKeys),
+        repositories: db.hotspotRepositories(hiddenKeys),
+        status: analysis.status(),
+      };
+    }
+    case 'hotspots.sessions': {
+      const [file, params] = request.params;
+      return db.hotspotSessions(file, params ?? {}, hidden.all());
+    }
+    case 'analysis.status':
+      return analysis.status();
     case 'overview.get':
       // Hidden sessions are excluded so the totals agree with the list; a
       // count that includes what the user removed reads as a bug.
@@ -374,9 +454,17 @@ function handle(request: RpcRequest): unknown {
         // follows a changed sqlitePath instead of the old database.
         telemetry.refresh();
       }
+      if (changed.deviation) {
+        // Every stored verdict was measured against the old threshold, and the
+        // open document carries cards drawn from it.
+        db.clearDeviations();
+        detail.invalidateAll();
+      }
       if (changed.claude || changed.copilot) {
         // Respond with the snapshot first, then bring the index in line.
         setTimeout(() => runIndex(), 0);
+      } else if (changed.deviation) {
+        setTimeout(() => analysis.start(), 0);
       }
       return buildSettingsSnapshot(settings, config);
     }

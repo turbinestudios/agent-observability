@@ -9,6 +9,71 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-08-28
+
+### Added
+
+- **Context Hotspots is a real view.** It ranks the instruction, skill, agent,
+  hook, and prompt files your agents actually pull into context, busiest first,
+  with how many sessions used each one, how often it was applied rather than
+  skipped or merely read, and how heavy it was. Files over the 2,000-token
+  guideline are flagged **Oversized**, and two columns show how often a file was
+  in play when a session hit errors or was flagged — the files worth reviewing
+  first. Narrow it to one repository, expand a file to see the sessions behind
+  it, and click one to open it. All of it is read from your own sessions and
+  none of it leaves the machine.
+
+### Changed
+
+- **The shorthand on the session view explains itself.** Hovering **LoC**,
+  **LoD**, **nLoC**, **nLoD**, or any of the other abbreviations on the agent
+  run totals — **MT**, **TC**, **TIN**, **TOUT**, **TCI**, **TT**, **ERR** — now
+  says what the figure actually counts rather than just spelling the acronym
+  out. The keys under the token trend explain themselves the same way, and
+  mention that clicking one filters the plot to that series.
+
+## [1.4.0] - 2026-08-28
+
+### Added
+
+- **Runs that went badly are now flagged for you.** Every recent session is read
+  in the background and checked for two things: a request whose tool calls
+  failed more often than they succeeded, and a request that ran far longer than
+  expected. Sessions with either get a small amber dot in the list, and a
+  **Flagged** chip appears above it so you can see only those — the answer to
+  "which of last week's runs should I look at first?" without opening any of
+  them. This needs no setup.
+- **The timeline says what went wrong, and where.** Opening a flagged session
+  puts a card on the exact request that diverged, naming the problem and the
+  numbers behind it, and the Timeline heading counts them alongside the turns.
+  Comparisons show the same cards, so a flagged run stands out next to a clean
+  one.
+- **Settings has an Analysis section** with the turn-length limit behind the
+  overlong check, set to 60 minutes to begin with. Changing it re-checks every
+  session against the new value.
+- If you already describe your workflows in the config file, those checks run
+  too — expected steps that were skipped or ran out of order, with the actual
+  and expected sequences on the card. Anything derived from the text of a prompt
+  or a tool call is marked **Local only**, because it is: none of this leaves
+  your machine.
+
+## [1.3.0] - 2026-08-28
+
+### Added
+
+- **Compare several sessions in one view.** Tick two or more sessions in the
+  list — the box appears on hover, or hold **Ctrl**/**Cmd** while clicking a
+  row — and choose **Compare**. You get a single view with the totals added up,
+  a token trend marking where each run starts and ends, and every session below
+  it as a section you can open, so it is finally possible to see at a glance
+  which run burned more tokens, took more turns, or wrote more code. Searching
+  and filtering do not disturb what you have ticked, and **Esc** takes you back
+  to the session you were on. Up to ten sessions at a time.
+- Claude Code and Copilot sessions can be compared together. They price their
+  work differently, so the view picks one basis for the cost figure and says
+  which sessions it therefore leaves out of it — everything else, tokens and
+  turns and lines of code, still counts every session.
+
 ## [1.2.0] - 2026-08-28
 
 ### Added

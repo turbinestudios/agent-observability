@@ -1,16 +1,30 @@
 import type { JSX } from 'react';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { SessionRow } from '../../../../shared/rpc';
+import type { SessionRef, SessionRow } from '../../../../shared/rpc';
 import { sessionKey } from '../../../../shared/rpc';
 import { dataHost } from '../../api/client';
 import { useSessions } from './useSessions';
 import { SessionDetail } from './SessionDetail';
+import { CompareDetail } from './CompareDetail';
+import { CompareBar } from './CompareBar';
 import { IndexStatusBar } from './IndexStatusBar';
 import { SourceFilter } from './SourceFilter';
 import { DeleteDialog } from './DeleteDialog';
+import { toggleSelection } from './selection';
 import { formatDuration, formatRelative, formatTokens, sourceLabel } from './format';
 import './sessions.css';
+
+/**
+ * A session another view asked to open. The timestamp is what makes a repeat
+ * request register: asking twice for the same session must open it twice, which
+ * comparing source and id alone could not tell apart.
+ */
+export interface OpenSessionIntent {
+  source: string;
+  sessionId: string;
+  at: number;
+}
 
 /**
  * Sessions: the app's primary view and its left-hand navigation.
@@ -19,15 +33,38 @@ import './sessions.css';
  * and the desktop app deliberately does not cap them the way the extension must
  * — with an index behind it there is no per-row parsing cost to bound.
  */
-export function SessionsView(): JSX.Element {
+export function SessionsView({ openIntent }: { openIntent?: OpenSessionIntent }): JSX.Element {
   const [query, setQuery] = useState('');
   const [source, setSource] = useState<string | undefined>(undefined);
   const [selected, setSelected] = useState<string | undefined>(undefined);
+  // Ticked for comparison. Kept as keys rather than rows, so narrowing the list
+  // with a search or a source filter hides rows without untickng them.
+  const [checked, setChecked] = useState<readonly string[]>([]);
+  // The comparison currently open, frozen at the moment Compare was pressed —
+  // so ticking more sessions afterwards does not redraw it underneath the user.
+  const [comparing, setComparing] = useState<readonly string[] | undefined>(undefined);
   const [renaming, setRenaming] = useState<string | undefined>(undefined);
+  // A session opened from another view. Held separately from the list because
+  // it may be outside the loaded page, or filtered out of it entirely — the
+  // detail pane must still show it rather than silently doing nothing.
+  const [pinned, setPinned] = useState<SessionRow | undefined>(undefined);
   const [confirming, setConfirming] = useState<SessionRow | undefined>(undefined);
   const [showHidden, setShowHidden] = useState(false);
-  const { rows, groups, status, connection, loading, error, refresh, rebuild, reload, hiddenCount } =
-    useSessions(query, source, showHidden);
+  // Orthogonal to the source chips: it narrows whichever set is on screen.
+  const [onlyDeviations, setOnlyDeviations] = useState(false);
+  const {
+    rows,
+    groups,
+    status,
+    connection,
+    loading,
+    error,
+    refresh,
+    rebuild,
+    reload,
+    hiddenCount,
+    deviationCount,
+  } = useSessions(query, source, showHidden, onlyDeviations);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -37,7 +74,14 @@ export function SessionsView(): JSX.Element {
     overscan: 12,
   });
 
-  const selectedRow = rows.find((r) => sessionKey(r.source, r.sessionId) === selected);
+  const selectedRow =
+    rows.find((r) => sessionKey(r.source, r.sessionId) === selected) ??
+    (pinned !== undefined && sessionKey(pinned.source, pinned.sessionId) === selected
+      ? pinned
+      : undefined);
+  const toggleChecked = useCallback((key: string) => {
+    setChecked((current) => toggleSelection(current, key));
+  }, []);
   const busy =
     connection === 'connecting' || status.phase === 'discovering' || status.phase === 'hydrating';
 
@@ -58,6 +102,29 @@ export function SessionsView(): JSX.Element {
     [query, reload],
   );
 
+  // Another view asked for a session: fetch its row by key rather than hoping
+  // it is on the current page, and close any comparison so the pane shows it.
+  useEffect(() => {
+    if (openIntent === undefined) {
+      return;
+    }
+    let cancelled = false;
+    void dataHost
+      .call('sessions.row', openIntent.source, openIntent.sessionId)
+      .then((row) => {
+        if (cancelled || row === undefined) {
+          return;
+        }
+        setPinned(row);
+        setSelected(sessionKey(row.source, row.sessionId));
+        setComparing(undefined);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [openIntent]);
+
   const restore = useCallback(
     (row: SessionRow) => {
       void dataHost
@@ -75,9 +142,11 @@ export function SessionsView(): JSX.Element {
           row={confirming}
           onClose={() => setConfirming(undefined)}
           onRemoved={() => {
-            if (selected === sessionKey(confirming.source, confirming.sessionId)) {
+            const gone = sessionKey(confirming.source, confirming.sessionId);
+            if (selected === gone) {
               setSelected(undefined);
             }
+            setChecked((current) => current.filter((k) => k !== gone));
             reload();
           }}
         />
@@ -108,7 +177,14 @@ export function SessionsView(): JSX.Element {
           onToggleHidden={() => {
             setShowHidden((v) => !v);
             setSelected(undefined);
+            // The hidden list is a different set of sessions; carrying a
+            // selection across would compare rows the user can no longer see.
+            setChecked([]);
+            setComparing(undefined);
           }}
+          deviationCount={deviationCount}
+          showingDeviations={onlyDeviations}
+          onToggleDeviations={() => setOnlyDeviations((v) => !v)}
         />
 
         <IndexStatusBar
@@ -149,9 +225,17 @@ export function SessionsView(): JSX.Element {
                     <SessionRowItem
                       row={row}
                       selected={key === selected}
+                      checked={checked.includes(key)}
                       renaming={renaming === key}
                       hidden={showHidden}
-                      onSelect={() => setSelected(key)}
+                      // Opening a session closes a comparison: the pane shows
+                      // one or the other, and a click that changed nothing on
+                      // screen would read as a dead row.
+                      onSelect={() => {
+                        setSelected(key);
+                        setComparing(undefined);
+                      }}
+                      onToggleCheck={() => toggleChecked(key)}
                       onStartRename={() => setRenaming(key)}
                       onCancelRename={() => setRenaming(undefined)}
                       onCommitRename={(title) => commitRename(row, title)}
@@ -164,10 +248,21 @@ export function SessionsView(): JSX.Element {
             </div>
           )}
         </div>
+
+        <CompareBar
+          keys={checked}
+          onCompare={() => setComparing(checked)}
+          onClear={() => {
+            setChecked([]);
+            setComparing(undefined);
+          }}
+        />
       </aside>
 
       <section className="detail-pane">
-        {selectedRow === undefined ? (
+        {comparing !== undefined ? (
+          <CompareDetail refs={comparing.map(toRef)} onClose={() => setComparing(undefined)} />
+        ) : selectedRow === undefined ? (
           <div className="placeholder">
             <div>
               <h2>No session selected</h2>
@@ -180,6 +275,12 @@ export function SessionsView(): JSX.Element {
       </section>
     </>
   );
+}
+
+/** Split a `sessionKey()` string back into its parts. Session ids carry no colon. */
+function toRef(key: string): SessionRef {
+  const at = key.indexOf(':');
+  return { source: key.slice(0, at), sessionId: key.slice(at + 1) };
 }
 
 function EmptyState({ query }: { query: string }): JSX.Element {
@@ -200,9 +301,11 @@ function EmptyState({ query }: { query: string }): JSX.Element {
 function SessionRowItem({
   row,
   selected,
+  checked,
   renaming,
   hidden,
   onSelect,
+  onToggleCheck,
   onStartRename,
   onCancelRename,
   onCommitRename,
@@ -211,10 +314,13 @@ function SessionRowItem({
 }: {
   row: SessionRow;
   selected: boolean;
+  /** Ticked for comparison — independent of `selected`, which opens the session. */
+  checked: boolean;
   renaming: boolean;
   /** True while the list is showing hidden sessions, where the action is restore. */
   hidden: boolean;
   onSelect: () => void;
+  onToggleCheck: () => void;
   onStartRename: () => void;
   onCancelRename: () => void;
   onCommitRename: (title: string) => void;
@@ -244,9 +350,11 @@ function SessionRowItem({
   return (
     <button
       type="button"
-      className="session-row"
+      className={`session-row${checked ? ' session-row-checked' : ''}`}
       aria-current={selected}
-      onClick={onSelect}
+      // Ctrl/Cmd-click is the list convention for adding to a selection rather
+      // than replacing it, and saves aiming at the tick box.
+      onClick={(e) => (e.ctrlKey || e.metaKey ? onToggleCheck() : onSelect())}
       // F2 is the conventional rename key, and a double-click is what people
       // try first; both beat hunting for the hover button.
       onDoubleClick={onStartRename}
@@ -259,9 +367,47 @@ function SessionRowItem({
       title={tooltip}
     >
       <div className="session-row-top">
+        {/*
+          A span, not an <input type="checkbox">: the row is itself a button,
+          and nesting a control inside one is invalid. Same shape as the rename
+          and remove affordances below.
+        */}
+        <span
+          className="row-check"
+          role="checkbox"
+          tabIndex={-1}
+          aria-checked={checked}
+          aria-label="Select for comparison"
+          title="Select for comparison"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleCheck();
+          }}
+        >
+          {checked && (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2Z" />
+            </svg>
+          )}
+        </span>
         <span className="session-title">{title}</span>
         {row.originalTitle !== undefined && (
           <span className="renamed-dot" aria-label="Renamed" title="Renamed" />
+        )}
+        {/*
+          Only for a count above zero: an unanalyzed session has no count at
+          all, and marking it would claim something nobody has checked.
+        */}
+        {row.deviationCount !== undefined && row.deviationCount > 0 && (
+          <span
+            className="deviation-dot"
+            aria-label={`${row.deviationCount} deviation(s)`}
+            title={
+              row.deviationCount === 1
+                ? '1 turn diverged — open the session to see why'
+                : `${row.deviationCount} turns diverged — open the session to see why`
+            }
+          />
         )}
         <span
           className="row-rename"

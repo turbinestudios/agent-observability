@@ -14,13 +14,13 @@
  */
 
 import * as fs from 'node:fs';
-import type { ContextFileEntry } from './models';
+import { OVERSIZED_THRESHOLD_TOKENS, type ContextFileEntry } from './models';
 
 /** Approximate characters per token for estimation. */
 const CHARS_PER_TOKEN = 4;
 
-/** Default threshold for flagging oversized files (in estimated tokens). */
-export const OVERSIZED_THRESHOLD_TOKENS = 2000;
+// Re-exported so the existing importers keep their one-stop import.
+export { OVERSIZED_THRESHOLD_TOKENS };
 
 /**
  * Estimate token usage for each context file. Mutates the entries in-place to
