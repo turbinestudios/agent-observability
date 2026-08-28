@@ -7,7 +7,7 @@ import {
   PathEnvironment,
 } from './paths';
 import { createReadonlySnapshot, ReadonlySnapshot, sourceMtime } from './snapshot';
-import { TelemetryDatabase, SchemaMismatchError } from './database';
+import { TelemetryDatabase, SchemaMismatchError, ensureSnapshotIndexes } from './database';
 import { SessionTitleInfo, workspaceStorageDirFor } from './sessionTitles';
 import { overlayTitle, readMergedSessionTitles, titleStorageDirs } from './titleStore';
 import { UNKNOWN_REPOSITORY } from './repositoryUrl';
@@ -800,6 +800,9 @@ export class TelemetryService {
       }
       try {
         const snapshot = createReadonlySnapshot(target.path);
+        // The copy is ours and disposable; index it so the first query does not
+        // full-scan span_attributes. A no-op when the source already has them.
+        ensureSnapshotIndexes(snapshot.dbPath);
         let db: TelemetryDatabase;
         try {
           db = TelemetryDatabase.open(snapshot.dbPath);

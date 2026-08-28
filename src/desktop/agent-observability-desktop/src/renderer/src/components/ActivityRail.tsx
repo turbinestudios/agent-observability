@@ -65,9 +65,11 @@ const ENTRIES: RailEntry[] = [
 interface Props {
   active: ViewId;
   onSelect: (view: ViewId) => void;
+  /** Opens the What's new dialog. Not a destination, so not a ViewId. */
+  onShowChangelog: () => void;
 }
 
-export function ActivityRail({ active, onSelect }: Props): JSX.Element {
+export function ActivityRail({ active, onSelect, onShowChangelog }: Props): JSX.Element {
   const { theme, toggle } = useThemeValue();
   const [version, setVersion] = useState('');
   useEffect(() => {
@@ -94,10 +96,26 @@ export function ActivityRail({ active, onSelect }: Props): JSX.Element {
         </button>
       ))}
 
-      {/* Pinned to the bottom: an appearance control, not a destination. */}
+      {/*
+        Pinned to the bottom, below the destinations: neither of these navigates
+        anywhere. The release notes sit next to the version they explain.
+      */}
       <button
         type="button"
         className="rail-button rail-button-end"
+        onClick={onShowChangelog}
+        aria-label="What's new"
+        title="What's new"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M11 2.5 12.6 7l4.4 1.6-4.4 1.6L11 14.7 9.4 10.2 5 8.6 9.4 7 11 2.5Z" />
+          <path d="M17.5 13.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9.9-2.4Z" />
+        </svg>
+      </button>
+
+      <button
+        type="button"
+        className="rail-button"
         onClick={toggle}
         aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
         title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}

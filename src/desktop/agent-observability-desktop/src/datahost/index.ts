@@ -21,6 +21,7 @@ import { DesktopSettingsReader } from './drivers/desktopConfig';
 import { applySettingsPatch, buildSettingsSnapshot } from './settings';
 import { ClaudeIndexer } from './indexer/claudeIndexer';
 import { CopilotIndexer } from './indexer/copilotIndexer';
+import { ensureArchiveIndexes } from './archiveIndexes';
 import { IndexDb } from './indexer/indexDb';
 import { RenameStore } from './renames';
 import { HiddenStore } from './hidden';
@@ -70,6 +71,8 @@ let status: IndexStatus = { indexed: 0, total: 0, phase: 'idle' };
 let indexing = false;
 /** A pass was requested while one was running; run again when it finishes. */
 let rerunQueued = false;
+/** The archive is indexed once per launch, before anything reads it. */
+let archiveIndexesEnsured = false;
 
 /** Ports the renderer is reachable on. Populated by the handshake from main. */
 const ports: MessagePortMain[] = [];
@@ -150,6 +153,15 @@ function runIndex(): IndexStatus {
 
   if (config.isLocalTelemetryEnabled()) {
     try {
+      // Before anything reads the archive: without the read layer's indexes the
+      // first session opened after a launch takes minutes, not seconds.
+      if (!archiveIndexesEnsured) {
+        archiveIndexesEnsured = true;
+        const note = ensureArchiveIndexes(config);
+        if (note !== undefined) {
+          notes.push(`Copilot: ${note}`);
+        }
+      }
       const copilot = new CopilotIndexer({ db, config, onDiscovered, onRows }).run();
       if (copilot.skipped !== undefined) {
         notes.push(`Copilot: ${copilot.skipped}`);

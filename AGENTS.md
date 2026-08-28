@@ -5,6 +5,17 @@ a local VS Code extension reads on-disk Copilot telemetry and keeps all raw
 content on the machine, while a cloud dashboard serves org-level **aggregate-only**
 analytics. See [README.md](README.md) for the full overview.
 
+## Never commit or push
+
+Do not run `git commit`, `git push`, `git tag`, `gh pr create`, or anything else
+that writes to history or to GitHub — unless the user asks for it in that
+message. Leave finished work in the working tree, say what changed, and let them
+decide what gets committed and when.
+
+Permission does not carry over: being told to commit once says nothing about the
+next change. Everything else in git is fine unasked — reading history, `git
+status`, `git diff`, creating a branch to work on, staging.
+
 ## Repository map
 
 | Area | Path | Stack |
@@ -101,6 +112,42 @@ Before changing anything on the producer→consumer path, read
 [docs/privacy-validation.md](docs/privacy-validation.md) and
 [docs/architecture](docs/architecture), and keep the schema, the extension
 aggregator, and the dashboard `AggregateBatchValidator` in sync.
+
+## Changelogs: user-facing change only
+
+Both shipped products keep a changelog, and both are read by the people who use
+them rather than by reviewers:
+
+| Product | File | Where users read it |
+| --- | --- | --- |
+| Desktop app | [CHANGELOG.md](src/desktop/agent-observability-desktop/CHANGELOG.md) | The **What's new** dialog, opened from the sparkle at the bottom of the sidebar |
+| VS Code extension | [CHANGELOG.md](src/extension/agent-observability-vscode/CHANGELOG.md) | The Marketplace listing |
+
+**Add an entry when, and only when, a user can see or do something differently
+because of the change.** A new capability, changed behaviour, a bug they could
+actually hit, a speed-up they would notice — those earn an entry. Internal work
+earns none, however large: refactors, test coverage, build and CI changes,
+comments, documentation, dependency bumps that change nothing observable.
+
+When a change qualifies, in the same commit as the change itself:
+
+1. **Bump `version`** in that package's `package.json`, following SemVer.
+2. **Insert `## [x.y.z] - YYYY-MM-DD`** at the top of that package's
+   `CHANGELOG.md`, above the previous version, using today's date and the exact
+   version you set.
+3. **Group the notes** under `### Added`, `### Changed`, `### Fixed`,
+   `### Removed`. Omit a heading with nothing under it.
+4. **Write it for the person using the app** — what changed and why it matters to
+   them. Not a diff summary, and never a file, class or function name. If an
+   entry cannot be written without naming internals, that is the signal it was
+   not a user-facing change.
+
+The desktop changelog is parsed and rendered by the app itself
+([parseChangelog.ts](src/desktop/agent-observability-desktop/src/renderer/src/changelog/parseChangelog.ts)),
+so it has to stay in that exact shape — `## [version] - date`, `### Group`,
+`- item` — with `**bold**`, `` `code` `` and `[links](url)` as the only inline
+markup. Its tests parse the real file, so a malformed entry fails the build
+rather than reaching a user as an empty dialog.
 
 ## Changing the extension: bump version + update CHANGELOG
 

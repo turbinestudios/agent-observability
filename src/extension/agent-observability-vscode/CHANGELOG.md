@@ -4,6 +4,26 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.16] - 2026-08-28
+
+### Fixed
+
+- **Opening the first Copilot session after startup no longer takes minutes.**
+  The telemetry database stores every prompt, tool definition and system
+  instruction in one table keyed by span, with nothing to look rows up by
+  attribute name — so three of the queries behind the detail view had to read
+  the entire table, which on a well-used archive is well over a gigabyte. Two of
+  them run on the first session opened after startup, which is why that one
+  session was slow and the rest were not. The archive now carries an index for
+  those lookups, added automatically the next time the extension writes to it,
+  so no action is needed and nothing is re-imported. Measured on a 1.6 GB
+  archive, the first session opened went from 8.9s to 2.4s of query time, and
+  each later one is quicker too.
+- Machines with no archive yet — where sessions are read straight from Copilot's
+  own database, which this extension never writes — get the same speed-up
+  applied to the private read-only copy it takes instead.
+
+
 ## [0.9.15] - 2026-08-27
 
 ### Added

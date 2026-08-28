@@ -5,6 +5,7 @@ import { OverviewView } from './views/overview/OverviewView';
 import { SettingsView } from './views/settings/SettingsView';
 import { PlaceholderView } from './views/PlaceholderView';
 import { ActivityRail } from './components/ActivityRail';
+import { ChangelogDialog } from './components/ChangelogDialog';
 import type { ViewId } from './components/ActivityRail';
 import { ThemeProvider } from './theme/ThemeContext';
 import './app.css';
@@ -19,11 +20,14 @@ import './app.css';
  */
 export function App(): JSX.Element {
   const [view, setView] = useState<ViewId>('overview');
+  // A dialog, not a view: it overlays whatever you were looking at and returns
+  // you to it, so it must not disturb `view`.
+  const [changelogOpen, setChangelogOpen] = useState(false);
 
   return (
     <ThemeProvider>
       <div className="app">
-        <ActivityRail active={view} onSelect={setView} />
+        <ActivityRail active={view} onSelect={setView} onShowChangelog={() => setChangelogOpen(true)} />
         <main className="app-main">
           <div className="view-layer" hidden={view !== 'sessions'}>
             <SessionsView />
@@ -50,6 +54,7 @@ export function App(): JSX.Element {
             </div>
           )}
         </main>
+        {changelogOpen && <ChangelogDialog onClose={() => setChangelogOpen(false)} />}
       </div>
     </ThemeProvider>
   );

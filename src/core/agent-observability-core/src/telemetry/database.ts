@@ -33,6 +33,7 @@ import {
 import { extractResponseText } from './responseText';
 import { countWrittenLines, sumWrittenLines, WriteLineDelta } from './locAnalysis';
 import { SessionTitleInfo } from './sessionTitles';
+import { READ_INDEX_DDL } from './schemaIndexes';
 
 /** Span attribute key holding a tool call's raw arguments (file path + content/diff). */
 const TOOL_ARGUMENTS_KEY = 'gen_ai.tool.call.arguments';
@@ -84,6 +85,39 @@ const EMPTY_TREE_STATS: SessionTreeStats = {
   linesOfCodeRemoved: 0,
   linesOfDocRemoved: 0,
 };
+
+/**
+ * Create the read layer's supporting indexes on a SNAPSHOT COPY, before it is
+ * opened read-only.
+ *
+ * The copy is this process's private temp file (see {@link ./snapshot.createReadonlySnapshot})
+ * and is deleted with the handle, so writing to it mutates nobody's data — the
+ * invariant that matters is on the SOURCE, which this never opens. It exists for
+ * the source we are not allowed to write at all: Copilot's own
+ * `agent-traces.db`, which a machine with no archive reads directly.
+ *
+ * Where the source IS ours the index is already present — {@link ../otel/ingestStore.IngestStore}
+ * creates it on every open — the copy inherits it, and this costs one
+ * `sqlite_master` lookup.
+ *
+ * Best-effort by design: an unindexed snapshot still answers every query, just
+ * more slowly, so a failure here must never fail the open.
+ */
+export function ensureSnapshotIndexes(snapshotDbPath: string): void {
+  let db: Database | undefined;
+  try {
+    db = new Database(snapshotDbPath, { fileMustExist: true });
+    db.exec(READ_INDEX_DDL);
+  } catch {
+    // Slower queries, not a broken view. Deliberately swallowed.
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // Already closed, or never opened.
+    }
+  }
+}
 
 /**
  * Read-only wrapper over a snapshot-copy connection to `agent-traces.db`.

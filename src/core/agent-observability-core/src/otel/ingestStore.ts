@@ -1,6 +1,7 @@
 import { Database } from 'node-sqlite3-wasm';
 import { SpanRows } from './otlpToRows';
 import { SessionTitleInfo } from '../telemetry/sessionTitles';
+import { READ_INDEX_DDL } from '../telemetry/schemaIndexes';
 
 /**
  * The extension's OWN telemetry store, written from the OTLP receiver.
@@ -144,6 +145,9 @@ export class IngestStore {
     this.db.exec(SCHEMA_DDL);
     this.db.exec(WATERMARK_DDL);
     this.db.exec(SESSION_TITLES_DDL);
+    // Applied on every open, so an archive written before these indexes existed
+    // is migrated the first time any writer opens it. See schemaIndexes.
+    this.db.exec(READ_INDEX_DDL);
     if (this.getRow<{ version: number }>('SELECT version FROM schema_version LIMIT 1') === undefined) {
       this.db.run('INSERT INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]);
     }
