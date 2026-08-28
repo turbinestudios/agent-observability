@@ -392,8 +392,10 @@ export interface SettingsSnapshot {
   resolvedClaudeDirs: string[];
   /** True when a non-empty projects-path override does not exist on disk. */
   claudeOverrideMissing: boolean;
-  /** The Copilot database the next index pass would open, if any. */
-  resolvedCopilotDb?: { path: string; kind: 'archive' | 'native' | 'override' };
+  /** Every Copilot database the next index pass will read, in priority order. */
+  resolvedCopilotDbs: { path: string; kind: 'archive' | 'native' | 'override' }[];
+  /** The locations Copilot auto-detect checks, for explaining "nothing found". */
+  copilotScannedPaths: string[];
   /** True when a non-empty sqlitePath override does not exist on disk. */
   sqliteOverrideMissing: boolean;
   /**

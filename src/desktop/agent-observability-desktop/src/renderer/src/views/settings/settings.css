@@ -113,6 +113,22 @@
   overflow-wrap: anywhere;
 }
 
+/* The "nothing found" explanation: where auto-detect looked, then what to do. */
+.settings-resolved p {
+  margin: 4px 0;
+  max-width: 70ch;
+}
+
+.settings-scanned {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.settings-scanned code {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
 .settings-warning {
   font-size: 11px;
   color: var(--warning);

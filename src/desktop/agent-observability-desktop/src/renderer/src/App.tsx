@@ -11,6 +11,7 @@ import type { OpenSessionIntent } from './views/sessions/SessionsView';
 import { ActivityRail } from './components/ActivityRail';
 import { ChangelogDialog } from './components/ChangelogDialog';
 import { StartupOverlay } from './components/StartupOverlay';
+import { UpdateDownloadOverlay } from './components/UpdateDialog';
 import type { ViewId } from './components/ActivityRail';
 import { ThemeProvider } from './theme/ThemeContext';
 import './app.css';
@@ -38,9 +39,16 @@ export function App(): JSX.Element {
   // you to it, so it must not disturb `view`.
   const [changelogOpen, setChangelogOpen] = useState(false);
 
+  // macOS runs frameless (`titleBarStyle: 'hiddenInset'`), so the renderer
+  // must supply what the OS chrome normally would: a strip that clears the
+  // traffic lights and acts as the drag handle. Other platforms keep their
+  // native title bar and get neither.
+  const isMac = navigator.userAgent.includes('Macintosh');
+
   return (
     <ThemeProvider>
-      <div className="app">
+      <div className={isMac ? 'app app-mac' : 'app'}>
+        {isMac && <div className="titlebar-drag" aria-hidden="true" />}
         <ActivityRail active={view} onSelect={setView} onShowChangelog={() => setChangelogOpen(true)} />
         <main className="app-main">
           <div className="view-layer" hidden={view !== 'sessions'}>
@@ -103,6 +111,7 @@ export function App(): JSX.Element {
         </main>
         {changelogOpen && <ChangelogDialog onClose={() => setChangelogOpen(false)} />}
         <StartupOverlay />
+        <UpdateDownloadOverlay />
       </div>
     </ThemeProvider>
   );

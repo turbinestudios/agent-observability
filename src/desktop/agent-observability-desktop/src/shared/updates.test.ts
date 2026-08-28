@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeStatus, downloadingStatus, formatBytes, formatPercent } from './updates';
+import { describeStatus, downloadingStatus, formatBytes, formatPercent, formatTransfer } from './updates';
 
 describe('downloadingStatus', () => {
   it('passes a normal progress event through', () => {
@@ -86,6 +86,29 @@ describe('describeStatus', () => {
   it('explains the finished and failed states', () => {
     expect(describeStatus({ phase: 'downloaded', version: '1.2.0' })).toContain('ready');
     expect(describeStatus({ phase: 'failed', message: 'socket hang up' })).toContain('socket hang up');
+  });
+});
+
+describe('formatTransfer', () => {
+  it('names the size and rate the way the tooltip does — shared on purpose', () => {
+    const status = downloadingStatus('1.2.0', {
+      percent: 50,
+      transferred: 12 * 1024 * 1024,
+      total: 87 * 1024 * 1024,
+      bytesPerSecond: 2.1 * 1024 * 1024,
+    });
+    expect(status.phase === 'downloading' && formatTransfer(status)).toBe('12 MB of 87 MB, 2.1 MB/s');
+    expect(describeStatus(status)).toContain(formatTransfer(status as never));
+  });
+
+  it('degrades to what is known when the feed reports no total or rate', () => {
+    const status = downloadingStatus('1.2.0', {
+      percent: 0,
+      transferred: 5 * 1024,
+      total: 0,
+      bytesPerSecond: 0,
+    });
+    expect(status.phase === 'downloading' && formatTransfer(status)).toBe('5.0 KB');
   });
 });
 

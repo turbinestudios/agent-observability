@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import { Configuration } from '@agent-observability/core/src/config/configuration';
 import type { SettingsReader } from '@agent-observability/core/src/config/configuration';
+import type { PathEnvironment } from '@agent-observability/core/src/telemetry/paths';
 import { CopilotIndexer } from './copilotIndexer';
 import { IndexDb } from './indexDb';
 
@@ -60,8 +61,13 @@ interface SpanInput {
 }
 
 /** Build a database matching the shape the indexer queries. */
-function writeSourceDb(spans: SpanInput[], attributes: [string, string, string][] = []): void {
-  const source = new Database(sourceDb);
+function writeSourceDb(
+  spans: SpanInput[],
+  attributes: [string, string, string][] = [],
+  dbPath = sourceDb,
+): void {
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const source = new Database(dbPath);
   source.exec(`
     CREATE TABLE spans (
       span_id TEXT PRIMARY KEY,
@@ -145,8 +151,37 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function run(config = makeConfig(), gitRemote?: { resolve(p: string): string }) {
-  return new CopilotIndexer({ db, config, gitRemote }).run();
+function run(
+  config = makeConfig(),
+  gitRemote?: { resolve(p: string): string },
+  environment?: PathEnvironment,
+) {
+  return new CopilotIndexer({ db, config, gitRemote, environment }).run();
+}
+
+/**
+ * A platform where auto-detection finds the stable and Insiders databases
+ * under the temp root, so multi-database behavior tests without touching the
+ * real machine. Linux layout purely because it derives from one env var.
+ */
+function fakePlatform(): { environment: PathEnvironment; stable: string; insiders: string } {
+  const relative = path.join('User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db');
+  return {
+    stable: path.join(root, 'Code', relative),
+    insiders: path.join(root, 'Code - Insiders', relative),
+    environment: {
+      platform: 'linux',
+      env: { XDG_CONFIG_HOME: root },
+      homedir: () => root,
+      statKind: (candidate) => {
+        try {
+          return fs.statSync(candidate).isFile() ? 'file' : 'absent';
+        } catch {
+          return 'absent';
+        }
+      },
+    },
+  };
 }
 
 describe('what counts as a session', () => {
@@ -418,5 +453,47 @@ describe('resilience', () => {
     run();
 
     expect(db.listSessions({ source: 'copilot' }).map((r) => r.sessionId)).toEqual([UUID_A]);
+  });
+});
+
+describe('multiple VS Code installs', () => {
+  it('merges sessions from every database found, not just the first', () => {
+    // A machine with stable and Insiders side by side: sessions live in both,
+    // and reading only the first database would silently drop half of them.
+    const { environment, stable, insiders } = fakePlatform();
+    writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }], [], stable);
+    writeSourceDb([{ span_id: 's2', chat_session_id: UUID_B, operation_name: 'chat' }], [], insiders);
+
+    const result = run(makeConfig({ sqlitePath: undefined }), undefined, environment);
+
+    expect(result.hydrated).toBe(2);
+    expect(result.sourcePath).toContain(stable);
+    expect(result.sourcePath).toContain(insiders);
+    expect(db.listSessions({ source: 'copilot' }).map((r) => r.sessionId).sort()).toEqual(
+      [UUID_A, UUID_B].sort(),
+    );
+  });
+
+  it('an unreadable first database does not hide the second', () => {
+    const { environment, stable, insiders } = fakePlatform();
+    fs.mkdirSync(path.dirname(stable), { recursive: true });
+    fs.writeFileSync(stable, 'this is not a sqlite database');
+    writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }], [], insiders);
+
+    const result = run(makeConfig({ sqlitePath: undefined }), undefined, environment);
+
+    expect(result.hydrated).toBe(1);
+    expect(db.listSessions({ source: 'copilot' }).map((r) => r.sessionId)).toEqual([UUID_A]);
+  });
+
+  it('says so when a database was found but holds no sessions yet', () => {
+    // Found-but-empty is a different first-run situation from not-found, and
+    // silence here left new users unable to tell whether the wiring worked.
+    writeSourceDb([]);
+
+    const result = run();
+
+    expect(result.hydrated).toBe(0);
+    expect(result.skipped).toContain('no agent sessions yet');
   });
 });

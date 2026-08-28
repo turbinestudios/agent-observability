@@ -3,6 +3,29 @@
   height: 100%;
 }
 
+/*
+ * macOS is frameless (hiddenInset): reserve the top strip so content never
+ * sits under the traffic lights, and make that strip the drag handle — without
+ * it the window cannot be moved at all. Styled as a quiet title bar rather
+ * than left transparent, so the reserved space reads as chrome, not as a gap.
+ * Sits below the modal overlays (z 90+): a dialog on screen wins the pointer.
+ */
+.app-mac {
+  padding-top: 38px;
+}
+
+.titlebar-drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  z-index: 60;
+  -webkit-app-region: drag;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border);
+}
+
 .app-main {
   position: relative;
   flex: 1;
@@ -32,8 +55,6 @@
   align-items: center;
   padding-top: 8px;
   gap: 2px;
-  /* Clears the traffic lights on macOS, where the title bar is inset. */
-  padding-top: env(titlebar-area-height, 8px);
 }
 
 .rail-button {
@@ -372,4 +393,61 @@
   margin: 0;
   color: var(--fg-subtle);
   font-size: 12px;
+}
+
+/*
+ * The update-download dialog. Reuses the shared .modal-* shell; only the
+ * progress furniture is its own.
+ */
+.update-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.update-progress {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.update-percent {
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.update-transfer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.update-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--fg-subtle);
+}
+
+.update-error {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--danger);
+  word-break: break-word;
 }

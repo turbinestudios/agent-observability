@@ -73,19 +73,28 @@ export function formatPercent(status: UpdateStatus): string {
  */
 export function describeStatus(status: UpdateStatus): string {
   switch (status.phase) {
-    case 'downloading': {
-      const size =
-        status.total > 0
-          ? `${formatBytes(status.transferred)} of ${formatBytes(status.total)}`
-          : formatBytes(status.transferred);
-      const rate = status.bytesPerSecond > 0 ? `, ${formatBytes(status.bytesPerSecond)}/s` : '';
-      return `Downloading ${status.version} — ${size}${rate}`;
-    }
+    case 'downloading':
+      return `Downloading ${status.version} — ${formatTransfer(status)}`;
     case 'downloaded':
       return `${status.version} is ready — restart to install it`;
     case 'failed':
       return `Update failed — ${status.message}`;
   }
+}
+
+/**
+ * `12 MB of 87 MB, 2.1 MB/s` — the transfer detail on its own, shared by the
+ * sidebar tooltip and the download dialog so the two never disagree. Before
+ * the first byte (or on a feed with no content length) it degrades to what is
+ * actually known.
+ */
+export function formatTransfer(status: Extract<UpdateStatus, { phase: 'downloading' }>): string {
+  const size =
+    status.total > 0
+      ? `${formatBytes(status.transferred)} of ${formatBytes(status.total)}`
+      : formatBytes(status.transferred);
+  const rate = status.bytesPerSecond > 0 ? `, ${formatBytes(status.bytesPerSecond)}/s` : '';
+  return `${size}${rate}`;
 }
 
 /** Bytes at three significant figures, which keeps the tooltip a stable width. */

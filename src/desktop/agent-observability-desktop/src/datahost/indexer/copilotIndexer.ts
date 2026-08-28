@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
-import { resolveDatabasePaths } from '@agent-observability/core/src/telemetry/paths';
+import { resolveDatabasePaths, type PathEnvironment } from '@agent-observability/core/src/telemetry/paths';
 import { aiuToUsd } from '@agent-observability/core/src/telemetry/pricing';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
 import { sanitizeRepositoryUrl } from '@agent-observability/core/src/telemetry/repositoryUrl';
@@ -41,24 +41,39 @@ export interface CopilotDatabaseCandidate {
 }
 
 /**
- * The Copilot database the next index pass would open: the durable archive the
- * extension maintains when it exists (it keeps history Copilot's own rolling
- * database discards), else the first readable native/override database.
+ * Every Copilot database the next index pass will read, in priority order: the
+ * durable archive the extension maintains when it exists (it merges every
+ * native source and keeps history Copilot's own rolling database discards),
+ * else EVERY readable native/override database.
+ *
+ * Reading all of them matters on a machine with more than one VS Code install:
+ * when only the first candidate was read, a stale stable-Code database could
+ * hide the Insiders one holding all the real sessions.
  *
  * Exported for the settings snapshot, so what the settings page reports can
  * never disagree with what the indexer actually opens.
  */
-export function pickCopilotDatabase(config: Configuration): CopilotDatabaseCandidate | undefined {
+export function pickCopilotDatabases(
+  config: Configuration,
+  environment?: PathEnvironment,
+): CopilotDatabaseCandidate[] {
   const archive = resolveArchiveDbPath(config);
   if (archive !== undefined && fs.existsSync(archive) && fs.statSync(archive).size > 0) {
-    return { path: archive, archive: true, override: false };
+    return [{ path: archive, archive: true, override: false }];
   }
-  for (const found of resolveDatabasePaths(config).databases) {
-    if (fs.existsSync(found.path)) {
-      return { path: found.path, archive: false, override: found.source === 'override' };
-    }
-  }
-  return undefined;
+  const resolved =
+    environment === undefined ? resolveDatabasePaths(config) : resolveDatabasePaths(config, environment);
+  return resolved.databases.map((found) => ({
+    path: found.path,
+    archive: false,
+    override: found.source === 'override',
+  }));
+}
+
+/** The highest-priority candidate of {@link pickCopilotDatabases}, if any. */
+export function pickCopilotDatabase(config: Configuration): CopilotDatabaseCandidate | undefined {
+  const all = pickCopilotDatabases(config);
+  return all.length > 0 ? all[0] : undefined;
 }
 
 export interface CopilotIndexerDeps {
@@ -71,6 +86,11 @@ export interface CopilotIndexerDeps {
    * confine resolution instead of reading the machine's real checkouts.
    */
   gitRemote?: { resolve(localPath: string): string };
+  /**
+   * Where the platform keeps VS Code data. Injectable so a test can present
+   * multiple database locations without scanning the real machine.
+   */
+  environment?: PathEnvironment;
   now?: () => number;
 }
 
@@ -163,80 +183,114 @@ export class CopilotIndexer {
       return { discovered: 0, hydrated: 0, skipped: 'Copilot source is disabled' };
     }
 
-    const candidate = pickCopilotDatabase(this.deps.config);
-    if (candidate === undefined) {
+    const candidates = pickCopilotDatabases(this.deps.config, this.deps.environment);
+    if (candidates.length === 0) {
       return { discovered: 0, hydrated: 0, skipped: 'No Copilot database found on this machine' };
     }
 
-    let db: Database.Database;
-    try {
-      // readonly + fileMustExist: this is somebody else's live database and
-      // must never be created, migrated, or written by us.
-      db = new Database(candidate.path, { readonly: true, fileMustExist: true });
-    } catch (err) {
-      // Most often SQLITE_READONLY_CANTINIT: WAL mode needs to create a -shm
-      // file, which a read-only open cannot do when none exists yet. Copilot
-      // creates one as soon as it runs again, so this resolves itself.
+    // Read every candidate, merging by session id with the earlier (higher
+    // priority) database winning. One database failing to open must not hide
+    // the others: a machine with two VS Code installs keeps its sessions even
+    // when one file is momentarily unopenable.
+    const aggregates = new Map<string, SessionAggregate>();
+    const repositories = new Map<string, string>();
+    const aiu = new Map<string, number>();
+    const opened: string[] = [];
+    const problems: string[] = [];
+
+    for (const candidate of candidates) {
+      let db: Database.Database;
+      try {
+        // readonly + fileMustExist: this is somebody else's live database and
+        // must never be created, migrated, or written by us.
+        db = new Database(candidate.path, { readonly: true, fileMustExist: true });
+      } catch (err) {
+        // Most often SQLITE_READONLY_CANTINIT: WAL mode needs to create a -shm
+        // file, which a read-only open cannot do when none exists yet. Copilot
+        // creates one as soon as it runs again, so this resolves itself.
+        problems.push(`Could not open the database at ${candidate.path} (${errorMessage(err)})`);
+        continue;
+      }
+      try {
+        if (!hasSpansTable(db)) {
+          problems.push(`No spans table in ${candidate.path}`);
+          continue;
+        }
+
+        // Most span groups in this database are not sessions a person would
+        // recognize — tool-call ids and chat-helper traffic. Without this the
+        // list is mostly noise: 435 rows here instead of the real handful.
+        const started = this.startedSessions(db);
+        for (const aggregate of db.prepare(SESSIONS_SQL).all() as SessionAggregate[]) {
+          if (started.has(aggregate.session_id) && !aggregates.has(aggregate.session_id)) {
+            aggregates.set(aggregate.session_id, aggregate);
+          }
+        }
+        for (const [id, repository] of this.resolveRepositories(db)) {
+          if (!repositories.has(id)) {
+            repositories.set(id, repository);
+          }
+        }
+        for (const [id, nano] of this.sessionAiu(db)) {
+          if (!aiu.has(id)) {
+            aiu.set(id, nano);
+          }
+        }
+        opened.push(candidate.path);
+      } catch (err) {
+        problems.push(`Could not read ${candidate.path} (${errorMessage(err)})`);
+      } finally {
+        db.close();
+      }
+    }
+
+    if (opened.length === 0) {
+      return { discovered: 0, hydrated: 0, skipped: problems.join(' · ') };
+    }
+
+    const sourcePath = opened.join(' · ');
+    this.deps.onDiscovered?.(aggregates.size);
+    if (aggregates.size === 0) {
+      // Found but empty is a different first-run situation from not found, and
+      // saying so is what tells a new user the wiring works.
       return {
         discovered: 0,
         hydrated: 0,
-        skipped: `Could not open the Copilot database (${err instanceof Error ? err.message : String(err)})`,
+        sourcePath,
+        skipped: 'the database has no agent sessions yet — use Copilot chat once and refresh',
       };
     }
 
-    try {
-      if (!hasSpansTable(db)) {
-        return { discovered: 0, hydrated: 0, skipped: 'Copilot database has no spans table' };
+    const byWorkspace = this.workspaceRepositories();
+    const titles = readCopilotTitles(this.deps.db, this.deps.config, this.deps.environment);
+    const excluded = this.deps.config.getExcludedRepositories();
+
+    const rows: SessionRow[] = [];
+    for (const aggregate of aggregates.values()) {
+      // The span attribute wins when a session recorded one; plenty do not,
+      // and those are the sessions that would otherwise read as "unknown".
+      const repository =
+        repositories.get(aggregate.session_id) ??
+        byWorkspace.get(aggregate.session_id) ??
+        'unknown';
+      if (excluded.has(repository)) {
+        continue;
       }
-
-      // Most span groups in this database are not sessions a person would
-      // recognize — tool-call ids and chat-helper traffic. Without this the
-      // list is mostly noise: 435 rows here instead of the real handful.
-      const started = this.startedSessions(db);
-
-      const aggregates = (db.prepare(SESSIONS_SQL).all() as SessionAggregate[]).filter((a) =>
-        started.has(a.session_id),
+      rows.push(
+        this.toRow(
+          aggregate,
+          repository,
+          titles.get(aggregate.session_id),
+          aiu.get(aggregate.session_id),
+        ),
       );
-      this.deps.onDiscovered?.(aggregates.length);
-      if (aggregates.length === 0) {
-        return { discovered: 0, hydrated: 0, sourcePath: candidate.path };
-      }
-
-      const repositories = this.resolveRepositories(db);
-      const byWorkspace = this.workspaceRepositories();
-      const titles = readCopilotTitles(this.deps.db, this.deps.config);
-      const aiu = this.sessionAiu(db);
-      const excluded = this.deps.config.getExcludedRepositories();
-
-      const rows: SessionRow[] = [];
-      for (const aggregate of aggregates) {
-        // The span attribute wins when a session recorded one; plenty do not,
-        // and those are the sessions that would otherwise read as "unknown".
-        const repository =
-          repositories.get(aggregate.session_id) ??
-          byWorkspace.get(aggregate.session_id) ??
-          'unknown';
-        if (excluded.has(repository)) {
-          continue;
-        }
-        rows.push(
-          this.toRow(
-            aggregate,
-            repository,
-            titles.get(aggregate.session_id),
-            aiu.get(aggregate.session_id),
-          ),
-        );
-      }
-
-      this.deps.db.upsertSessions(rows);
-      this.deps.onRows?.(rows);
-      this.deps.db.removeMissing('copilot', new Set(rows.map((r) => r.sessionId)));
-
-      return { discovered: aggregates.length, hydrated: rows.length, sourcePath: candidate.path };
-    } finally {
-      db.close();
     }
+
+    this.deps.db.upsertSessions(rows);
+    this.deps.onRows?.(rows);
+    this.deps.db.removeMissing('copilot', new Set(rows.map((r) => r.sessionId)));
+
+    return { discovered: aggregates.size, hydrated: rows.length, sourcePath };
   }
 
   /**
@@ -276,7 +330,10 @@ export class CopilotIndexer {
   private workspaceRepositories(): Map<string, string> {
     const map = new Map<string, string>();
     try {
-      const sourcePaths = resolveDatabasePaths(this.deps.config).databases.map((d) => d.path);
+      const { config, environment } = this.deps;
+      const resolved =
+        environment === undefined ? resolveDatabasePaths(config) : resolveDatabasePaths(config, environment);
+      const sourcePaths = resolved.databases.map((d) => d.path);
       const gitRemote = this.deps.gitRemote ?? new GitRemoteResolver();
       for (const root of titleStorageDirs(sourcePaths)) {
         for (const [id, repository] of buildGlobalSessionRepositories(root, (p) =>
@@ -354,6 +411,10 @@ export class CopilotIndexer {
       pending: false,
     };
   }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function hasSpansTable(db: Database.Database): boolean {

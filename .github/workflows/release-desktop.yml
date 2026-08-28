@@ -75,15 +75,64 @@ jobs:
           MAIN_VITE_UPDATE_TOKEN: ${{ secrets.DESKTOP_UPDATE_TOKEN }}
         run: npm run build -w agent-observability-desktop
 
-      - name: Package installers
+      # Split per platform so the macOS certificate never reaches the Windows
+      # leg — electron-builder would try to sign the NSIS installer with it.
+      - name: Package installers (Windows)
+        if: matrix.artifact == 'windows'
         working-directory: src/desktop/agent-observability-desktop
-        # Unsigned on purpose for now: no certificates are configured, and
+        # Windows builds are unsigned: no certificate is configured, and
         # auto-discovery would otherwise pick up an unrelated keychain identity
         # on a self-hosted runner and fail the build.
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --config electron-builder.yml --publish never
+
+      - name: Package installers (macOS)
+        if: matrix.artifact == 'macos'
+        working-directory: src/desktop/agent-observability-desktop
+        shell: bash
+        # Signed and notarized when the secrets exist (see
+        # docs/macos-signing-and-notarization.md); without them (forks, dry
+        # runs) this falls back to the unsigned build exactly as before.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CERT_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          if [ -n "$CSC_LINK" ] && [ -n "$APPLE_API_KEY_P8" ]; then
+            # Notarization wants the .p8 as a file; the secret holds its text.
+            echo "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/apple_api_key.p8"
+            export APPLE_API_KEY="$RUNNER_TEMP/apple_api_key.p8"
+            npx electron-builder --config electron-builder.yml --publish never
+          else
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            npx electron-builder --config electron-builder.yml --publish never \
+              -c.mac.notarize=false
+          fi
+
+      - name: Verify signature and notarization (macOS)
+        if: matrix.artifact == 'macos'
+        working-directory: src/desktop/agent-observability-desktop
+        # Proof on the runner itself, so a release cut from a Windows machine
+        # never needs a Mac to confirm: a valid deep signature and a stapled
+        # notarization ticket on both architectures, or the build fails here
+        # instead of in front of a user. Skipped for unsigned fallback builds.
+        env:
+          HAS_CERTS: ${{ secrets.MAC_CERT_P12 != '' && secrets.APPLE_API_KEY_P8 != '' }}
+        run: |
+          if [ "$HAS_CERTS" != "true" ]; then
+            echo "No signing secrets — unsigned build, nothing to verify."
+            exit 0
+          fi
+          for app in release/mac*/*.app; do
+            echo "== $app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            xcrun stapler validate "$app"
+          done
 
       - name: Collect installers
         uses: actions/upload-artifact@v4
@@ -122,8 +171,8 @@ jobs:
         with:
           files: installers/*
           # Drafted rather than published: someone should download and open one
-          # build per platform before users see it, since these are unsigned and
-          # nothing in CI actually launches the app.
+          # build per platform before users see it — CI verifies signatures but
+          # never actually launches the app.
           draft: true
           name: Agent Observability Desktop ${{ github.ref_name }}
           body: |
@@ -135,12 +184,12 @@ jobs:
 
             ### First launch
 
-            These builds are **not code-signed**, so both systems will warn:
-
-            - **macOS** — right-click the app and choose **Open**, then confirm.
-              Or run `xattr -cr "/Applications/Agent Observability.app"`.
-            - **Windows** — on the SmartScreen prompt choose **More info** →
-              **Run anyway**.
+            - **macOS** — builds are signed and notarized: drag to
+              Applications and double-click. (Only releases from BEFORE
+              signing was set up say "damaged" — for those, run
+              `xattr -cr "/Applications/Agent Observability.app"`.)
+            - **Windows** — builds are not signed, so SmartScreen warns:
+              choose **More info** → **Run anyway**.
 
             ### Auto-update
 

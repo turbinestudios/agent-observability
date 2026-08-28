@@ -124,13 +124,13 @@ export function SettingsView(): JSX.Element {
           {snapshot.sqliteOverrideMissing && (
             <span className="settings-warning">This file does not exist.</span>
           )}
-          {snapshot.sqlitePath !== '' && snapshot.resolvedCopilotDb?.kind === 'archive' && (
+          {snapshot.sqlitePath !== '' && snapshot.resolvedCopilotDbs[0]?.kind === 'archive' && (
             <span className="settings-warning">
               A durable Copilot archive exists and takes precedence — the override applies only when
               no archive is present.
             </span>
           )}
-          <span className="settings-resolved">{describeCopilotResolution(snapshot)}</span>
+          <CopilotResolution snapshot={snapshot} />
         </div>
       </section>
 
@@ -261,18 +261,44 @@ function describeClaudeResolution(snapshot: SettingsSnapshot): string {
   return `Reading from: ${snapshot.resolvedClaudeDirs.join(' · ')}`;
 }
 
-/** Which Copilot database the next index pass would open. */
-function describeCopilotResolution(snapshot: SettingsSnapshot): string {
+/**
+ * Which Copilot databases the next index pass will read — and when none were
+ * found, WHERE the app looked and what makes one appear. A first-time user who
+ * only sees "not found" has no move to make; the scanned locations plus the
+ * one action that creates the database turn the dead end into a checklist.
+ */
+function CopilotResolution({ snapshot }: { snapshot: SettingsSnapshot }): JSX.Element {
   if (!snapshot.copilotEnabled) {
-    return 'GitHub Copilot is turned off.';
+    return <span className="settings-resolved">GitHub Copilot is turned off.</span>;
   }
-  const db = snapshot.resolvedCopilotDb;
-  if (db === undefined) {
-    return 'No Copilot database found on this machine.';
+  const dbs = snapshot.resolvedCopilotDbs;
+  if (dbs.length === 0) {
+    return (
+      <div className="settings-resolved">
+        <p>No Copilot database found yet. These locations were checked:</p>
+        <ul className="settings-scanned">
+          {snapshot.copilotScannedPaths.map((p) => (
+            <li key={p}>
+              <code>{p}</code>
+            </li>
+          ))}
+        </ul>
+        <p>
+          Chat with Copilot in VS Code once and it will be picked up on the next refresh — or point
+          the field above at an <code>agent-traces.db</code> if yours lives somewhere else.
+        </p>
+      </div>
+    );
   }
-  const kind =
-    db.kind === 'archive' ? 'durable archive' : db.kind === 'override' ? 'override' : 'VS Code storage';
-  return `Reading from: ${db.path} (${kind})`;
+  return (
+    <span className="settings-resolved">
+      Reading from: {dbs.map((db) => `${db.path} (${describeDbKind(db.kind)})`).join(' · ')}
+    </span>
+  );
+}
+
+function describeDbKind(kind: 'archive' | 'native' | 'override'): string {
+  return kind === 'archive' ? 'durable archive' : kind === 'override' ? 'override' : 'VS Code storage';
 }
 
 /**

@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 import { parseSessionTitle } from '@agent-observability/core/src/telemetry/sessionTitles';
 import { parseChatSessionIndex } from '@agent-observability/core/src/telemetry/chatSessionIndex';
 import { titleStorageDirs } from '@agent-observability/core/src/telemetry/titleStore';
-import { resolveDatabasePaths } from '@agent-observability/core/src/telemetry/paths';
+import { resolveDatabasePaths, type PathEnvironment } from '@agent-observability/core/src/telemetry/paths';
 import type { Configuration } from '@agent-observability/core/src/config/configuration';
 import type { IndexDb } from './indexDb';
 
@@ -38,8 +38,14 @@ export interface TitleInfo {
  * Titles for every known session, refreshing the persisted index first. Returns
  * the full set, including ones carried over from previous runs.
  */
-export function readCopilotTitles(db: IndexDb, config: Configuration): Map<string, TitleInfo> {
-  const sourcePaths = resolveDatabasePaths(config).databases.map((d) => d.path);
+export function readCopilotTitles(
+  db: IndexDb,
+  config: Configuration,
+  environment?: PathEnvironment,
+): Map<string, TitleInfo> {
+  const resolved =
+    environment === undefined ? resolveDatabasePaths(config) : resolveDatabasePaths(config, environment);
+  const sourcePaths = resolved.databases.map((d) => d.path);
   for (const dir of titleStorageDirs(sourcePaths)) {
     refreshDirectory(db, dir);
   }

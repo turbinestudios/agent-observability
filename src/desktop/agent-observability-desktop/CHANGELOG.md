@@ -9,6 +9,28 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] - 2026-08-29
+
+### Fixed
+
+- **The window can be moved again on macOS.** The app is frameless there, and
+  content sat directly under the traffic lights with nothing to grab; the top
+  edge is now a proper title strip that clears the buttons and drags the
+  window.
+- **Copilot sessions are found on more machines, with no setup.** The app now
+  reads **every** Copilot database it can find — VS Code stable and Insiders
+  side by side — instead of only the first one. Previously a stale or
+  momentarily unopenable database from one VS Code install could hide the one
+  holding all your real sessions.
+
+### Changed
+
+- **"No Copilot database found" now explains itself.** Settings lists exactly
+  which locations were checked and what makes the database appear (chat with
+  Copilot in VS Code once), instead of leaving a first-time user guessing.
+- The status bar now says when a Copilot database was found but holds no agent
+  sessions yet, so an empty list is distinguishable from a missing one.
+
 ## [1.8.0] - 2026-08-28
 
 ### Added
@@ -62,6 +84,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   critique of the opening prompt, written by the model. Every run first shows
   exactly what would be sent and asks you to confirm; the written verdict is
   stored only on this machine.
+- **Downloading an update shows its progress.** Choosing **Update now** opens
+  a progress window — a real bar, the percentage, the size and speed — instead
+  of a silent wait that read as nothing happening. You can send it to the
+  background and keep working; the sidebar keeps showing the download, and a
+  failure says what went wrong and that nothing on your machine changed.
 - **The app explains itself while starting — and keeps you company.** The
   first scan after a launch now says what is happening — finding your
   sessions, then reading them with a running count, then preparing the session

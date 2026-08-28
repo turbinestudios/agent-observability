@@ -7,11 +7,12 @@ import {
   MIN_SESSION_MINUTES,
 } from '@agent-observability/core/src/config/configuration';
 import { defaultFs, resolveClaudeProjectsDirs, type ClaudeFs } from '@agent-observability/core/src/claude/paths';
+import { candidateDatabasePaths } from '@agent-observability/core/src/telemetry/paths';
 import type { SettingsPatch, SettingsSnapshot } from '../shared/rpc';
 import type { DesktopSettingsReader } from './drivers/desktopConfig';
 import { resolveConfigPath } from './drivers/desktopConfig';
 import { DEEP_RETRO_ENABLED_KEY } from './deepRetro';
-import { pickCopilotDatabase, type CopilotDatabaseCandidate } from './indexer/copilotIndexer';
+import { pickCopilotDatabases, type CopilotDatabaseCandidate } from './indexer/copilotIndexer';
 
 /**
  * The settings surface behind the Settings view: what the four editable keys
@@ -23,7 +24,8 @@ import { pickCopilotDatabase, type CopilotDatabaseCandidate } from './indexer/co
 /** Injectable environment so tests never scan the developer's real machine. */
 export interface SettingsSeams {
   claudeFs?: ClaudeFs;
-  pickCopilot?: (config: Configuration) => CopilotDatabaseCandidate | undefined;
+  pickCopilots?: (config: Configuration) => CopilotDatabaseCandidate[];
+  copilotCandidates?: (config: Configuration) => string[];
   exists?: (p: string) => boolean;
   configPath?: string;
 }
@@ -35,10 +37,10 @@ export function buildSettingsSnapshot(
   seams: SettingsSeams = {},
 ): SettingsSnapshot {
   const exists = seams.exists ?? fs.existsSync;
-  const pick = seams.pickCopilot ?? pickCopilotDatabase;
+  const pick = seams.pickCopilots ?? pickCopilotDatabases;
+  const candidates = seams.copilotCandidates ?? candidateDatabasePaths;
   const claudeProjectsPath = storedString(settings, ConfigKeys.claudeProjectsPath);
   const sqlitePath = storedString(settings, ConfigKeys.sqlitePath);
-  const copilotDb = pick(config);
   const configPath = seams.configPath ?? resolveConfigPath();
 
   return {
@@ -48,14 +50,13 @@ export function buildSettingsSnapshot(
     sqlitePath,
     resolvedClaudeDirs: resolveClaudeProjectsDirs(config, seams.claudeFs ?? defaultFs),
     claudeOverrideMissing: claudeProjectsPath !== '' && !exists(claudeProjectsPath),
-    ...(copilotDb !== undefined
-      ? {
-          resolvedCopilotDb: {
-            path: copilotDb.path,
-            kind: copilotDb.archive ? ('archive' as const) : copilotDb.override ? ('override' as const) : ('native' as const),
-          },
-        }
-      : {}),
+    resolvedCopilotDbs: pick(config).map((db) => ({
+      path: db.path,
+      kind: db.archive ? ('archive' as const) : db.override ? ('override' as const) : ('native' as const),
+    })),
+    // Where auto-detect looks, so the page can explain a "nothing found"
+    // instead of leaving a first-time user guessing.
+    copilotScannedPaths: candidates(config),
     sqliteOverrideMissing: sqlitePath !== '' && !exists(sqlitePath),
     // Read through Configuration rather than the raw store, so the page shows
     // the clamped value the detector will actually use.

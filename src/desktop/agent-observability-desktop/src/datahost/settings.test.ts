@@ -6,7 +6,7 @@ import { Configuration } from '@agent-observability/core/src/config/configuratio
 import type { ClaudeFs } from '@agent-observability/core/src/claude/paths';
 import { DesktopSettingsReader } from './drivers/desktopConfig';
 import { applySettingsPatch, buildSettingsSnapshot, type SettingsSeams } from './settings';
-import { pickCopilotDatabase } from './indexer/copilotIndexer';
+import { pickCopilotDatabase, pickCopilotDatabases } from './indexer/copilotIndexer';
 
 /**
  * The snapshot/patch pair behind the Settings page. Everything runs against a
@@ -39,7 +39,8 @@ function fakeClaudeFs(existingDirs: string[] = []): ClaudeFs {
 function seams(over: Partial<SettingsSeams> = {}): SettingsSeams {
   return {
     claudeFs: fakeClaudeFs(),
-    pickCopilot: () => undefined,
+    pickCopilots: () => [],
+    copilotCandidates: () => [],
     exists: () => false,
     configPath: file,
     ...over,
@@ -58,7 +59,7 @@ describe('buildSettingsSnapshot', () => {
     expect(snapshot.claudeOverrideMissing).toBe(false);
     expect(snapshot.sqliteOverrideMissing).toBe(false);
     expect(snapshot.resolvedClaudeDirs).toEqual([]);
-    expect(snapshot.resolvedCopilotDb).toBeUndefined();
+    expect(snapshot.resolvedCopilotDbs).toEqual([]);
     expect(snapshot.configPath).toBe(file);
     expect(snapshot.configDir).toBe(dir);
   });
@@ -86,24 +87,42 @@ describe('buildSettingsSnapshot', () => {
     expect(snapshot.resolvedClaudeDirs).toEqual([path.normalize(dir)]);
   });
 
-  it('maps the picked Copilot database onto snapshot kinds', () => {
+  it('maps the picked Copilot databases onto snapshot kinds', () => {
     const settings = new DesktopSettingsReader(file);
     const config = new Configuration(settings);
 
     const archive = buildSettingsSnapshot(settings, config, seams({
-      pickCopilot: () => ({ path: '/a.db', archive: true, override: false }),
+      pickCopilots: () => [{ path: '/a.db', archive: true, override: false }],
     }));
-    expect(archive.resolvedCopilotDb).toEqual({ path: '/a.db', kind: 'archive' });
+    expect(archive.resolvedCopilotDbs).toEqual([{ path: '/a.db', kind: 'archive' }]);
 
     const override = buildSettingsSnapshot(settings, config, seams({
-      pickCopilot: () => ({ path: '/o.db', archive: false, override: true }),
+      pickCopilots: () => [{ path: '/o.db', archive: false, override: true }],
     }));
-    expect(override.resolvedCopilotDb).toEqual({ path: '/o.db', kind: 'override' });
+    expect(override.resolvedCopilotDbs).toEqual([{ path: '/o.db', kind: 'override' }]);
 
-    const native = buildSettingsSnapshot(settings, config, seams({
-      pickCopilot: () => ({ path: '/n.db', archive: false, override: false }),
+    const natives = buildSettingsSnapshot(settings, config, seams({
+      pickCopilots: () => [
+        { path: '/n.db', archive: false, override: false },
+        { path: '/m.db', archive: false, override: false },
+      ],
     }));
-    expect(native.resolvedCopilotDb).toEqual({ path: '/n.db', kind: 'native' });
+    expect(natives.resolvedCopilotDbs).toEqual([
+      { path: '/n.db', kind: 'native' },
+      { path: '/m.db', kind: 'native' },
+    ]);
+  });
+
+  it('lists the scanned locations so "not found" can explain itself', () => {
+    const settings = new DesktopSettingsReader(file);
+    const snapshot = buildSettingsSnapshot(settings, new Configuration(settings), seams({
+      copilotCandidates: () => ['/code/agent-traces.db', '/insiders/agent-traces.db'],
+    }));
+
+    expect(snapshot.copilotScannedPaths).toEqual([
+      '/code/agent-traces.db',
+      '/insiders/agent-traces.db',
+    ]);
   });
 });
 
@@ -241,5 +260,37 @@ describe('pickCopilotDatabase', () => {
     });
 
     expect(pickCopilotDatabase(new Configuration(settings))).toBeUndefined();
+  });
+});
+
+describe('pickCopilotDatabases', () => {
+  it('returns every readable native database, not just the first', () => {
+    // Two VS Code installs side by side; only reading the first would let a
+    // stale stable database hide the Insiders one with the real sessions.
+    const relative = path.join('User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db');
+    const stable = path.join(dir, 'Code', relative);
+    const insiders = path.join(dir, 'Code - Insiders', relative);
+    for (const p of [stable, insiders]) {
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, 'x');
+    }
+
+    const settings = new DesktopSettingsReader(file);
+    settings.update({ 'copilotArchive.path': path.join(dir, 'missing.db') });
+    const picked = pickCopilotDatabases(new Configuration(settings), {
+      platform: 'linux',
+      env: { XDG_CONFIG_HOME: dir },
+      homedir: () => dir,
+      statKind: (p) => {
+        try {
+          return fs.statSync(p).isFile() ? 'file' : 'absent';
+        } catch {
+          return 'absent';
+        }
+      },
+    });
+
+    expect(picked.map((c) => c.path)).toEqual([stable, insiders]);
+    expect(picked.every((c) => !c.archive && !c.override)).toBe(true);
   });
 });
