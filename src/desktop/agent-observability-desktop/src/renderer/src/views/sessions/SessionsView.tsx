@@ -109,7 +109,12 @@ export function SessionsView({
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 58,
+    // A first-paint guess only. Rows are MEASURED (see `measureElement` on the
+    // wrapper below) because their height genuinely varies: the tag line exists
+    // only on a tagged session, and reserving it on every row would waste a
+    // line on the majority that carry none. Measuring beats a magic number that
+    // silently overlaps rows the next time the type scale moves.
+    estimateSize: () => 76,
     overscan: 12,
   });
 
@@ -343,8 +348,13 @@ export function SessionsView({
                 return (
                   <div
                     key={key}
+                    // Both are required by the measuring path: the index tells
+                    // the virtualizer which row it just measured, and the
+                    // height must stay unset so the row can size to itself.
+                    data-index={item.index}
+                    ref={virtualizer.measureElement}
                     className="sessions-row-wrap"
-                    style={{ transform: `translateY(${item.start}px)`, height: item.size }}
+                    style={{ transform: `translateY(${item.start}px)` }}
                   >
                     <SessionRowItem
                       row={row}
@@ -524,6 +534,7 @@ function SessionRowItem({
   onRestore: () => void;
 }): JSX.Element {
   const title = row.title ?? row.sessionId.slice(0, 8);
+  const tags = row.tags ?? [];
 
   if (renaming) {
     return (
@@ -691,24 +702,30 @@ function SessionRowItem({
         </span>
         <span className="session-time">{formatRelative(row.endedAtMs)}</span>
       </div>
+      {/* Where it came from. On its own line, so a long repository has the
+          full width instead of competing with the metrics. */}
       <div className="session-row-bottom">
         <span className={`chip chip-${row.source}`}>{sourceLabel(row.source)}</span>
         <span className="session-repo">{row.repository}</span>
-        {/*
-          Two, then a count. A heavily tagged session would otherwise push the
-          repository and the metrics off the row entirely; the full list is one
-          hover away and always in the detail pane.
-        */}
-        {(row.tags ?? []).slice(0, ROW_TAG_LIMIT).map((tag) => (
-          <span key={tag} className="session-tag" title={(row.tags ?? []).join(', ')}>
-            {tag}
-          </span>
-        ))}
-        {(row.tags ?? []).length > ROW_TAG_LIMIT && (
-          <span className="session-tag session-tag-more" title={(row.tags ?? []).join(', ')}>
-            +{(row.tags ?? []).length - ROW_TAG_LIMIT}
-          </span>
-        )}
+      </div>
+      {/*
+        The tag line, present only on a tagged session — reserving it on every
+        row would spend a line on the majority that carry none. Two tags then a
+        count: the full set is in the tooltip and in the detail pane.
+      */}
+      {tags.length > 0 && (
+        <div className="session-row-tags" title={tags.join(', ')}>
+          {tags.slice(0, ROW_TAG_LIMIT).map((tag) => (
+            <span key={tag} className="session-tag">
+              {tag}
+            </span>
+          ))}
+          {tags.length > ROW_TAG_LIMIT && (
+            <span className="session-tag session-tag-more">+{tags.length - ROW_TAG_LIMIT}</span>
+          )}
+        </div>
+      )}
+      <div className="session-row-metrics">
         {row.pending === true ? (
           <span className="session-meta dim">reading…</span>
         ) : (

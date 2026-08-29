@@ -9,16 +9,7 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.11.1] - 2026-08-29
-
-### Fixed
-
-- **1.11.0 never finished building, so it never reached anyone.** This release
-  carries everything that was meant to be in it — the Dashboard time window,
-  the repository, date and tag filters, click-through from the charts, and
-  session tagging and notes — all listed below.
-
-## [1.11.0] - 2026-08-29
+## [1.12.0] - 2026-08-29
 
 ### Added
 
