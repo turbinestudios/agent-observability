@@ -435,6 +435,67 @@ export interface SettingsPatch {
   claudeEffort?: string;
 }
 
+/**
+ * The VS Code setting that makes Copilot Chat write `agent-traces.db`. Off by
+ * default — which is why a machine can use Copilot daily and hold no database.
+ * Lives here rather than in core's paths module so the renderer can show it
+ * without pulling node imports into its bundle.
+ */
+export const COPILOT_TRACE_SETTING = 'github.copilot.chat.otel.dbSpanExporter.enabled';
+
+/**
+ * Per-editor state of the VS Code setting that makes Copilot Chat write its
+ * trace database. Only 'unset', 'disabled' and 'no-settings-file' are fixable
+ * by {@link RpcMethods['copilot.enableTracing']}; the last two states get
+ * manual instructions instead.
+ */
+export type CopilotTraceState =
+  | 'enabled' // key present and true
+  | 'unset' // settings.json parses, key absent (VS Code default: off)
+  | 'disabled' // key explicitly false — a user decision, changed only with consent
+  | 'no-settings-file' // editor evidenced but no settings.json; fixable by creating one
+  | 'unparseable' // JSONC too broken to edit safely
+  | 'denied'; // no permission to read the file
+
+/** One VS Code-family editor and where its trace-exporter setting stands. */
+export interface CopilotSetupTarget {
+  /** Raw variant directory name ('Code', 'Cursor', …). */
+  variant: string;
+  /** Display name ('VS Code', 'VS Code Insiders', else the raw name). */
+  variantLabel: string;
+  /** Absolute path of the editor's `User/settings.json`. */
+  settingsFile: string;
+  state: CopilotTraceState;
+  /** The editor's `agent-traces.db` already exists — tracing has produced data. */
+  dbExists: boolean;
+  /** Error text for 'unparseable' / 'denied'. */
+  detail?: string;
+}
+
+/** The whole Copilot-tracing setup picture, ready for either consent surface. */
+export interface CopilotSetupStatus {
+  targets: CopilotSetupTarget[];
+  /** The Copilot source toggle in THIS app (`localTelemetry.enabled`). */
+  copilotSourceEnabled: boolean;
+  /** The startup prompt was dismissed on some earlier launch (persisted). */
+  promptDismissed: boolean;
+  /** Datahost verdict: the startup prompt belongs on screen this launch. */
+  shouldPrompt: boolean;
+}
+
+/** Outcome of one settings.json write, error-as-value like `sessions.delete`. */
+export interface EnableTracingTargetResult {
+  settingsFile: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface EnableTracingResult {
+  results: EnableTracingTargetResult[];
+  /** Status re-checked after the writes, so one round trip updates the UI. */
+  status: CopilotSetupStatus;
+}
+
 /** Request/response methods. Every one resolves off the UI thread. */
 export interface RpcMethods {
   ping(payload: string): string;
@@ -548,6 +609,20 @@ export interface RpcMethods {
    * re-indexed automatically; the returned snapshot reflects the new state.
    */
   'settings.update'(patch: SettingsPatch): SettingsSnapshot;
+  /**
+   * Per-editor state of the Copilot trace-exporter setting. Read-only and
+   * cheap — a few file stats plus JSONC parses — so re-check freely.
+   */
+  'copilot.setupStatus'(): CopilotSetupStatus;
+  /**
+   * Write the trace-exporter setting into the given editors' settings.json
+   * files (comments preserved). Call only after the user consented — the
+   * startup prompt or the Settings button. Paths are validated against the
+   * datahost's own target list; arbitrary paths are refused.
+   */
+  'copilot.enableTracing'(settingsFiles: string[]): EnableTracingResult;
+  /** Persist that the startup setup prompt should not be shown again. */
+  'copilot.dismissSetupPrompt'(): void;
   'index.status'(): IndexStatus;
   'index.refresh'(): IndexStatus;
   /** Drop and rebuild the index from scratch — the recovery path. */

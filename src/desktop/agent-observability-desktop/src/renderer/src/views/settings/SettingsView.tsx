@@ -12,6 +12,7 @@ import {
 import type { AiAvailability, SettingsSnapshot } from '../../../../shared/rpc';
 import { dataHost } from '../../api/client';
 import { Spinner } from '../../components/Spinner';
+import { CopilotSetupSection } from './CopilotSetupSection';
 import { useSettings } from './useSettings';
 import './settings.css';
 
@@ -130,7 +131,7 @@ export function SettingsView(): JSX.Element {
               no archive is present.
             </span>
           )}
-          <CopilotResolution snapshot={snapshot} />
+          <CopilotResolution snapshot={snapshot} onRecheck={() => save({})} />
         </div>
       </section>
 
@@ -265,9 +266,15 @@ function describeClaudeResolution(snapshot: SettingsSnapshot): string {
  * Which Copilot databases the next index pass will read — and when none were
  * found, WHERE the app looked and what makes one appear. A first-time user who
  * only sees "not found" has no move to make; the scanned locations plus the
- * one action that creates the database turn the dead end into a checklist.
+ * one-click fix (or its manual fallback) turn the dead end into a checklist.
  */
-function CopilotResolution({ snapshot }: { snapshot: SettingsSnapshot }): JSX.Element {
+function CopilotResolution({
+  snapshot,
+  onRecheck,
+}: {
+  snapshot: SettingsSnapshot;
+  onRecheck: () => void;
+}): JSX.Element {
   if (!snapshot.copilotEnabled) {
     return <span className="settings-resolved">GitHub Copilot is turned off.</span>;
   }
@@ -284,10 +291,15 @@ function CopilotResolution({ snapshot }: { snapshot: SettingsSnapshot }): JSX.El
           ))}
         </ul>
         <p>
-          Every other VS Code–based editor next to these (Cursor, VSCodium, …) is scanned for the
-          same file automatically. Chat with Copilot in VS Code once and it will be picked up on
-          the next refresh — or point the field above at an <code>agent-traces.db</code> if yours
-          lives somewhere else.
+          VS Code writes this file only while Copilot Chat&apos;s trace exporter is switched on,
+          and it is off by default — which is why a machine that uses Copilot every day can still
+          have no database.
+        </p>
+        <CopilotSetupSection onRecheck={onRecheck} />
+        <p>
+          Editors built on VS Code (Cursor, VSCodium, …) are scanned automatically too. If yours
+          keeps its data somewhere else entirely, point the field above at its{' '}
+          <code>agent-traces.db</code>.
         </p>
       </div>
     );

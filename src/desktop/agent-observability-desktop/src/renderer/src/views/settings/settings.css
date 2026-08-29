@@ -1,11 +1,20 @@
 /* Settings view. Mirrors the overview's card language, scoped to this view. */
 
 .settings {
+  /* Fills the flex .view-layer. The reading width is capped on the CONTENT
+   * below, never here: capping this box caps the scroll container with it, and
+   * the scrollbar ends up floating mid-window instead of hugging the right
+   * edge (the same trap .hotspots and .retro call out). */
   flex: 1;
   min-width: 0;
   overflow-y: auto;
   padding: 22px 26px 32px;
-  max-width: 760px;
+}
+
+/* The 760px reading column this view has always had, less its horizontal
+ * padding — so the cards keep exactly the width they had. */
+.settings > * {
+  max-width: 708px;
 }
 
 .settings-header h1 {
@@ -177,6 +186,85 @@
 
 .settings-action:hover {
   background: var(--hover);
+}
+
+/* Per-editor Copilot tracing status with its one-click fix. */
+.settings-setup {
+  margin: 8px 0;
+}
+
+.settings-setup-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-setup-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+}
+
+.settings-setup-row + .settings-setup-row {
+  border-top: 1px solid var(--border);
+}
+
+.settings-setup-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-setup-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.settings-setup-state {
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+
+.settings-setup-state.is-on {
+  color: var(--accent);
+}
+
+.settings-setup-manual {
+  margin-top: 4px;
+}
+
+.settings-setup-manual code {
+  font-family: var(--font-mono);
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+
+.settings-setup-restart {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font-size: 12px;
+  max-width: 70ch;
+}
+
+/* Row buttons sit beside their text, not under it like the card-level actions. */
+.settings-action-inline {
+  margin-top: 0;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.settings-setup-manual .settings-action-inline {
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 11.5px;
 }
 
 /* A short numeric field with its unit beside it, rather than a full-width path. */

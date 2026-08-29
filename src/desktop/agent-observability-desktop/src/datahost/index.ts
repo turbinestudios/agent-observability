@@ -37,6 +37,13 @@ import { DeepRetroStore, toLlmVerdict } from './deepRetros';
 import { DEEP_RETRO_ENABLED_KEY, runDeepRetrospective } from './deepRetro';
 import { AiBackendHolder } from './aiBackends';
 import { AiHelperController } from './aiHelper';
+import {
+  COPILOT_SETUP_DISMISS_KEY,
+  checkCopilotSetup,
+  enableCopilotTracing,
+  setupNotes,
+  startupCopilotSetup,
+} from './copilotSetup';
 
 /**
  * The data host: a utilityProcess that owns every expensive operation.
@@ -113,6 +120,12 @@ const OVERVIEW_WINDOW_DAYS = 30;
 
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'idle' };
 let indexing = false;
+/**
+ * The launch-time Copilot setup advisory, appended to the index notes whenever
+ * the Copilot indexer finds no database. Refreshed after a consented enable so
+ * the status bar never keeps claiming tracing is off once it isn't.
+ */
+let copilotSetupNotes: string[] = [];
 /** A pass was requested while one was running; run again when it finishes. */
 let rerunQueued = false;
 /** The archive is indexed once per launch, before anything reads it. */
@@ -239,6 +252,9 @@ function runIndex(): IndexStatus {
       const copilot = new CopilotIndexer({ db, config, onDiscovered, onRows }).run();
       if (copilot.skipped !== undefined) {
         notes.push(`Copilot: ${copilot.skipped}`);
+        // "No database" has a likely cause the user can fix: the trace
+        // exporter being off in VS Code. Say so next to the symptom.
+        notes.push(...copilotSetupNotes);
       }
     } catch (err) {
       notes.push(`Copilot: ${errorText(err)}`);
@@ -561,6 +577,21 @@ function handle(request: RpcRequest): unknown {
       }
       return buildSettingsSnapshot(settings, config);
     }
+    case 'copilot.setupStatus':
+      return checkCopilotSetup(settings, config);
+    case 'copilot.enableTracing': {
+      // Consent happened in the renderer (startup prompt or Settings button);
+      // the paths are still validated against our own target list inside.
+      const result = enableCopilotTracing(request.params[0], settings, config);
+      // The launch advisory must not outlive the fix it recommends.
+      copilotSetupNotes = setupNotes(result.status);
+      // No re-index: the database cannot exist until the editor restarts and
+      // Copilot chats once. "Check again" / index.refresh covers that moment.
+      return result;
+    }
+    case 'copilot.dismissSetupPrompt':
+      settings.update({ [COPILOT_SETUP_DISMISS_KEY]: true });
+      return undefined;
     case 'index.status':
       refreshCounts();
       return status;
@@ -628,6 +659,10 @@ process.parentPort?.on('message', (event) => {
     refreshCounts();
     // Paint from whatever the last run left behind, then bring it up to date.
     emit({ event: 'index.progress', status });
+    // The launch-time Copilot setup check: a few stats and small file parses,
+    // cheap enough to run before the index pass whose notes it feeds. The
+    // renderer pulls the verdict itself via copilot.setupStatus.
+    copilotSetupNotes = startupCopilotSetup(settings, config).notes;
     // Deferred so the handshake completes and the first paint happens before
     // the indexer starts competing for this process's single thread.
     setTimeout(() => runIndex(), 0);

@@ -359,6 +359,50 @@
   color: var(--bg);
 }
 
+.modal-btn.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.modal-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent);
+}
+
+/* --- Copilot setup offer --------------------------------------------------- */
+
+.setup-dialog-text {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  max-width: 62ch;
+}
+
+.setup-dialog-text strong {
+  color: var(--fg);
+}
+
+.setup-dialog-text code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-sunken);
+  padding: 1px 5px;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.setup-dialog-failure {
+  color: var(--warning);
+}
+
+.setup-dialog-open {
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11.5px;
+}
+
 /* Marks a user-chosen name, so a renamed session is not mistaken for its own. */
 .renamed-dot {
   flex: none;

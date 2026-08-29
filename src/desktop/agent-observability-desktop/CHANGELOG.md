@@ -9,17 +9,53 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.10.0] - 2026-08-29
+
+### Added
+
+- **The app can now switch Copilot tracing on for you.** VS Code records
+  Copilot sessions only while a setting that is off by default is enabled —
+  previously you had to edit VS Code's settings file yourself. Now the app
+  checks every launch, and when nothing is being recorded it offers to add the
+  setting with one click, for every VS Code–based editor on your machine. Your
+  settings file keeps its comments and formatting, a setting you deliberately
+  turned off is never overridden, and nothing leaves your computer.
+- **Settings shows where every editor stands.** The Copilot section now lists
+  each detected editor — VS Code, Insiders, Cursor, and the rest — with whether
+  tracing is on, an Enable button when it is not, and a Check again button for
+  after you restart the editor.
+- **Clear instructions when the app can't do it for you.** If a settings file
+  can't be edited safely — it has a syntax error, or the app lacks permission —
+  the app says so, shows the exact line to add, and opens the file for you.
+
 ## [1.9.1] - 2026-08-29
 
 ### Added
 
+- **The sidebar now opens with labels beside the icons**, so what each
+  destination leads to is readable without hovering it. The collapse button at
+  the bottom returns it to the icon strip, and the app remembers which you
+  prefer.
 - **Copilot is found in VS Code–based editors too.** Every refresh now also
   scans the app folders beside VS Code — Cursor, VSCodium, Windsurf, and any
   other editor built on VS Code — for a Copilot database, so sessions from
   those editors appear without pointing the app at a path by hand.
 
+### Changed
+
+- **"No Copilot database found" now names the switch that creates it.** VS Code
+  only writes that database while Copilot Chat's trace exporter is enabled, and
+  it is off by default — so a machine can use Copilot daily and still have
+  nothing to read. Settings now gives you the exact setting to add, instead of
+  suggesting you chat with Copilot again and hope.
+
 ### Fixed
 
+- **The download dialog is no longer hidden behind the startup screen.**
+  Accepting an update while the app was still starting left the "Starting up…"
+  screen covering the download it had just begun. Only one of the two is shown
+  now, and it is the download; the startup screen returns if you send the
+  download to the background before the app has finished starting.
 - **The What's new dialog opens again.** Clicking the sparkle in the sidebar
   appeared to do nothing: the dialog was there, but a layout slip let a long
   changelog push it below the bottom edge of the window. It now opens centered

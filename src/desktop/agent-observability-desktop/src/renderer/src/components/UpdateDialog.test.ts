@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { UpdateDialogView } from './UpdateDialog';
+import { UpdateDialogView, updateDialogState } from './UpdateDialog';
 import type { UpdateStatus } from '../../../shared/updates';
 
 /**
@@ -58,5 +58,50 @@ describe('UpdateDialogView — failed', () => {
     expect(html).toContain('net::ERR_INTERNET_DISCONNECTED');
     expect(html).toContain('Nothing changed');
     expect(html).toContain('Close');
+  });
+});
+
+/**
+ * The shell asks this to decide whether the startup overlay must stand down,
+ * so "is the dialog up?" and "what does it show?" have to be the same answer.
+ */
+describe('updateDialogState', () => {
+  const downloading: UpdateStatus = {
+    phase: 'downloading',
+    version: '1.9.0',
+    percent: 10,
+    transferred: 1,
+    total: 2,
+    bytesPerSecond: 1,
+  };
+
+  it('is absent with no update in flight', () => {
+    expect(updateDialogState(undefined, undefined)).toBeUndefined();
+  });
+
+  it('is up while downloading, keyed to that version', () => {
+    expect(updateDialogState(downloading, undefined)).toEqual({
+      status: downloading,
+      key: 'download:1.9.0',
+    });
+  });
+
+  it('stays down once that download is dismissed', () => {
+    expect(updateDialogState(downloading, 'download:1.9.0')).toBeUndefined();
+  });
+
+  it('opens again for a different version despite the earlier dismissal', () => {
+    const next = { ...downloading, version: '1.9.1' } as UpdateStatus;
+    expect(updateDialogState(next, 'download:1.9.0')?.key).toBe('download:1.9.1');
+  });
+
+  it('renders nothing once downloaded — main takes over with a native prompt', () => {
+    expect(updateDialogState({ phase: 'downloaded', version: '1.9.0' }, undefined)).toBeUndefined();
+  });
+
+  it('shows a failure, and stays down after it is dismissed', () => {
+    const failed: UpdateStatus = { phase: 'failed', message: 'boom' };
+    expect(updateDialogState(failed, undefined)).toEqual({ status: failed, key: 'failed' });
+    expect(updateDialogState(failed, 'failed')).toBeUndefined();
   });
 });

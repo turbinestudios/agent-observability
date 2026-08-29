@@ -24,12 +24,28 @@ import { useNoteTick } from './useNoteTick';
  * The stage transitions live in `./startup.ts`, where a test pins the subtle
  * one: the data host emits a persisted `idle` status BEFORE the pass starts,
  * and taking that for completion is exactly the dead-window bug this fixes.
+ *
+ * `suppressed` lets the shell stand it down while another blocking overlay
+ * owns the window — today the update download dialog, which the user asked for
+ * explicitly and which would otherwise be hidden underneath this one.
  */
 
 /** Nobody gets locked behind a wedge: the overlay always lifts eventually. */
 const STARTUP_CAP_MS = 120_000;
 
-export function StartupOverlay(): JSX.Element | null {
+export function StartupOverlay({
+  suppressed = false,
+  onDone,
+}: {
+  suppressed?: boolean;
+  /**
+   * Fired once when the stage machine reaches 'done' — the shell's signal that
+   * startup surfaces may now appear. Derived here rather than by the callers
+   * because the machine knows the trap they would all fall into: the persisted
+   * `idle` status emitted BEFORE the first pass (see module comment).
+   */
+  onDone?: () => void;
+}): JSX.Element | null {
   const [stage, setStage] = useState<StartupStage>(() =>
     dataHost.connectionState() === 'failed' ? { kind: 'done' } : { kind: 'connecting' },
   );
@@ -39,6 +55,15 @@ export function StartupOverlay(): JSX.Element | null {
   const note = useNoteTick(stage.kind, stage.kind !== 'done');
   // The barrier must fire exactly once, however many progress events arrive.
   const warmingRef = useRef(false);
+  // So must onDone — 'done' is terminal, but effects re-run on other deps.
+  const doneRef = useRef(false);
+
+  useEffect(() => {
+    if (stage.kind === 'done' && !doneRef.current) {
+      doneRef.current = true;
+      onDone?.();
+    }
+  }, [stage.kind, onDone]);
 
   useEffect(() => {
     const offConnection = dataHost.onConnectionChange((state) => {
@@ -76,7 +101,10 @@ export function StartupOverlay(): JSX.Element | null {
     ]).then(() => setStage((current) => nextStartupStage(current, { kind: 'warmed' })));
   }, [stage.kind]);
 
-  if (stage.kind === 'done') {
+  // Below the hooks, never above them: while suppressed the stage machine must
+  // keep advancing, or the overlay would return stuck on a stage the app left
+  // minutes ago — and its barrier would never run.
+  if (stage.kind === 'done' || suppressed) {
     return null;
   }
 

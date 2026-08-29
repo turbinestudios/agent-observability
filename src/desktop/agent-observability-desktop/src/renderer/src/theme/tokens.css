@@ -27,6 +27,8 @@
   --danger: #f0736a;
 
   --rail-width: 52px;
+  /* Wide enough for the longest destination label ("Context Hotspots"). */
+  --rail-width-expanded: 184px;
   --sidebar-width: 340px;
   --radius: 6px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Ubuntu, sans-serif;

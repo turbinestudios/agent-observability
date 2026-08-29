@@ -44,6 +44,25 @@ The extension **auto-detects** the local Copilot `agent-traces.db` SQLite
 database (override with `agentObservability.sqlitePath` only if auto-detect
 fails). It opens the file **read-only** and shows:
 
+> **Copilot has to be writing that database first.** Copilot Chat creates
+> `agent-traces.db` lazily, and only while its SQLite span exporter is enabled —
+> which is **off by default**. A machine can use Copilot daily and still have no
+> database at all. Turn it on in VS Code settings, then chat with Copilot once:
+>
+> ```jsonc
+> "github.copilot.chat.otel.dbSpanExporter.enabled": true
+> ```
+>
+> The file lands in the extension's `globalStorage`, e.g. on macOS
+> `~/Library/Application Support/Code/User/globalStorage/github.copilot-chat/agent-traces.db`.
+> Auto-detect scans the equivalent path for every VS Code–based editor
+> installed (stable, Insiders, Cursor, VSCodium, …).
+>
+> The **desktop app** (1.10.0+) checks this at every launch and can add the
+> setting for you — accept the offer it shows when nothing is being recorded,
+> or use the per-editor **Enable** button in its Settings. Fully restart the
+> editor afterwards.
+
 - **Local Overview** — a summary of your local Copilot agent activity.
 - **Sessions** — your local agent sessions with prompt, tool, model, duration
   and success detail. **This detail is local-only** and is never uploaded.

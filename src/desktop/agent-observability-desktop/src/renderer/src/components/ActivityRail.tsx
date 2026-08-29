@@ -2,12 +2,17 @@ import type { JSX } from 'react';
 import { useEffect, useState } from 'react';
 import { useThemeValue } from '../theme/ThemeContext';
 import { useUpdateStatus } from '../updates/useUpdateStatus';
+import { useRailExpanded } from './useRailExpanded';
 import { UpdateIndicator } from './UpdateIndicator';
 
 /**
  * The view switcher. Dashboard sits first and is the app's default; everything
  * else is a secondary destination that opens on demand. The theme toggle sits
  * at the bottom, separated from the destinations above it.
+ *
+ * It opens showing labels beside the icons and collapses to the icon strip on
+ * demand — see {@link useRailExpanded}. Every button keeps its `title`, so the
+ * collapsed strip still names its destinations on hover.
  */
 
 export type ViewId = 'sessions' | 'overview' | 'hotspots' | 'retro' | 'assistant' | 'settings';
@@ -76,6 +81,7 @@ interface Props {
 
 export function ActivityRail({ active, onSelect, onShowChangelog }: Props): JSX.Element {
   const { theme, toggle } = useThemeValue();
+  const { expanded, toggle: toggleExpanded } = useRailExpanded();
   const update = useUpdateStatus();
   const [version, setVersion] = useState('');
   useEffect(() => {
@@ -84,8 +90,12 @@ export function ActivityRail({ active, onSelect, onShowChangelog }: Props): JSX.
       .then(setVersion)
       .catch(() => undefined);
   }, []);
+  // The theme button's accessible name has to match the words on it once they
+  // are visible, so the short form doubles as the label when expanded.
+  const themeAction = theme === 'dark' ? 'Light theme' : 'Dark theme';
+  const themeHint = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
   return (
-    <nav className="rail" aria-label="Views">
+    <nav className={expanded ? 'rail rail-expanded' : 'rail'} aria-label="Views">
       {ENTRIES.map((entry) => (
         <button
           key={entry.id}
@@ -99,6 +109,7 @@ export function ActivityRail({ active, onSelect, onShowChangelog }: Props): JSX.
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             {entry.icon}
           </svg>
+          {expanded && <span className="rail-label">{entry.label}</span>}
         </button>
       ))}
 
@@ -117,14 +128,15 @@ export function ActivityRail({ active, onSelect, onShowChangelog }: Props): JSX.
           <path d="M11 2.5 12.6 7l4.4 1.6-4.4 1.6L11 14.7 9.4 10.2 5 8.6 9.4 7 11 2.5Z" />
           <path d="M17.5 13.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9.9-2.4Z" />
         </svg>
+        {expanded && <span className="rail-label">What&apos;s new</span>}
       </button>
 
       <button
         type="button"
         className="rail-button"
         onClick={toggle}
-        aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-        title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        aria-label={expanded ? themeAction : themeHint}
+        title={themeHint}
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           {theme === 'dark' ? (
@@ -138,6 +150,33 @@ export function ActivityRail({ active, onSelect, onShowChangelog }: Props): JSX.
             <path d="M21 13.2A9 9 0 1 1 10.8 3a7.2 7.2 0 0 0 10.2 10.2Z" />
           )}
         </svg>
+        {expanded && <span className="rail-label">{themeAction}</span>}
+      </button>
+
+      {/*
+        The width switch itself. Last, because it acts on the rail rather than
+        on anything the rail leads to — and the chevron points the way the rail
+        will move.
+      */}
+      <button
+        type="button"
+        className="rail-button"
+        onClick={toggleExpanded}
+        aria-expanded={expanded}
+        aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'}
+        title={expanded ? 'Collapse sidebar' : 'Expand sidebar'}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d={expanded ? 'M14.5 6.5 9 12l5.5 5.5' : 'M9.5 6.5 15 12l-5.5 5.5'}
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+          />
+        </svg>
+        {expanded && <span className="rail-label">Collapse</span>}
       </button>
 
       {/* Above the version, and only while an update is in flight. */}

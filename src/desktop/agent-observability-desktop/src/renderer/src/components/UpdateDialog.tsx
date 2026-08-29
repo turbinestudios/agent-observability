@@ -1,8 +1,7 @@
 import type { JSX } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { formatTransfer } from '../../../shared/updates';
 import type { UpdateStatus } from '../../../shared/updates';
-import { useUpdateStatus } from '../updates/useUpdateStatus';
 import { rotatedNote } from './loadingNotes';
 import { useNoteTick } from './useNoteTick';
 import { Spinner } from './Spinner';
@@ -26,21 +25,33 @@ import { Spinner } from './Spinner';
  * which case the sidebar's Failed marker keeps that quieter role.
  */
 
-/** App-level wrapper: subscribes, and remembers what the user dismissed. */
-export function UpdateDownloadOverlay(): JSX.Element | null {
-  const status = useUpdateStatus();
-  const [dismissed, setDismissed] = useState<string | undefined>(undefined);
+/** What the dialog is showing, and the key its dismissal would stick to. */
+export interface UpdateDialogState {
+  status: Exclude<UpdateStatus, { phase: 'downloaded' }>;
+  /** Identifies WHAT was dismissed, so a later download opens a fresh dialog. */
+  key: string;
+}
 
+/**
+ * Whether the download dialog belongs on screen, and under which dismissal key.
+ *
+ * Pure, and answered for the shell rather than inside the dialog, because it is
+ * a question no other component could ask on its own: the startup overlay has
+ * to yield while this dialog is up. Both block the window, and the startup one
+ * — being the topmost layer — would otherwise cover the update the user just
+ * consented to.
+ */
+export function updateDialogState(
+  status: UpdateStatus | undefined,
+  dismissed: string | undefined,
+): UpdateDialogState | undefined {
   if (status === undefined || status.phase === 'downloaded') {
-    return null;
+    return undefined;
   }
   // A dismissal sticks for this download (or this failure) only: a NEW version
   // starting to download deserves a fresh dialog.
   const key = status.phase === 'downloading' ? `download:${status.version}` : 'failed';
-  if (dismissed === key) {
-    return null;
-  }
-  return <UpdateDialogView status={status} onDismiss={() => setDismissed(key)} />;
+  return dismissed === key ? undefined : { status, key };
 }
 
 /** The dialog itself, stateless so it renders headless in tests. */

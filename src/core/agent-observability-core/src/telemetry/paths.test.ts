@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as path from 'node:path';
 import {
   candidateDatabasePaths,
+  copilotConfigTargets,
   resolveDatabasePath,
   resolveDatabasePaths,
   PathConfig,
@@ -30,11 +31,14 @@ interface EnvOptions {
   denied?: string[];
   /** Subdirectory names per directory, for the variant-editor scan. */
   subdirs?: Record<string, string[]>;
+  /** Paths that exist as directories, for editor-existence evidence. */
+  dirs?: string[];
 }
 
 function makeEnv(opts: EnvOptions): PathEnvironment {
   const files = new Set(opts.files ?? []);
   const denied = new Set(opts.denied ?? []);
+  const dirs = new Set(opts.dirs ?? []);
   return {
     platform: opts.platform,
     env: opts.env ?? {},
@@ -44,6 +48,7 @@ function makeEnv(opts: EnvOptions): PathEnvironment {
     ...(opts.subdirs === undefined
       ? {}
       : { listSubdirectories: (dir: string) => opts.subdirs?.[dir] ?? [] }),
+    ...(opts.dirs === undefined ? {} : { directoryExists: (dir: string) => dirs.has(dir) }),
   };
 }
 
@@ -219,6 +224,104 @@ describe('variant-editor discovery', () => {
     const env = makeEnv({ platform: 'darwin', home: MAC_HOME, files: [cursorDb] });
     const r = resolveDatabasePaths(makeConfig(), env);
     expect(r.databases).toEqual([]);
+  });
+});
+
+describe('copilotConfigTargets', () => {
+  const codeUser = path.join(APPDATA, 'Code', 'User');
+  const codeSettings = path.join(codeUser, 'settings.json');
+  const codeDb = path.join(APPDATA, 'Code', DB_RELATIVE);
+
+  it('includes VS Code when its User dir exists, with the derived paths', () => {
+    const env = makeEnv({ platform: 'win32', env: { APPDATA }, dirs: [codeUser] });
+    expect(copilotConfigTargets(env)).toEqual([
+      {
+        variant: 'Code',
+        source: 'stable',
+        userDir: codeUser,
+        settingsFile: codeSettings,
+        dbPath: codeDb,
+        dbKind: 'absent',
+      },
+    ]);
+  });
+
+  it('includes VS Code on a settings.json stat alone when the fake lacks directoryExists', () => {
+    const env = makeEnv({ platform: 'win32', env: { APPDATA }, files: [codeSettings] });
+    const targets = copilotConfigTargets(env);
+    expect(targets.map((t) => t.variant)).toEqual(['Code']);
+  });
+
+  it('excludes VS Code without any install evidence', () => {
+    const env = makeEnv({ platform: 'win32', env: { APPDATA }, dirs: [] });
+    expect(copilotConfigTargets(env)).toEqual([]);
+  });
+
+  it('includes a variant editor only with Copilot-specific evidence', () => {
+    const cursorCopilotDir = path.join(
+      APPDATA,
+      'Cursor',
+      'User',
+      'globalStorage',
+      'github.copilot-chat',
+    );
+    const env = makeEnv({
+      platform: 'win32',
+      env: { APPDATA },
+      dirs: [cursorCopilotDir],
+      subdirs: { [APPDATA]: ['Cursor', 'Slack', 'Discord'] },
+    });
+    const targets = copilotConfigTargets(env);
+    expect(targets.map((t) => t.variant)).toEqual(['Cursor']);
+    expect(targets[0].source).toBe('variant');
+    expect(targets[0].settingsFile).toBe(path.join(APPDATA, 'Cursor', 'User', 'settings.json'));
+  });
+
+  it('an existing variant trace DB is evidence even without directoryExists', () => {
+    const codiumDb = path.join(APPDATA, 'VSCodium', DB_RELATIVE);
+    const env = makeEnv({
+      platform: 'win32',
+      env: { APPDATA },
+      files: [codiumDb],
+      subdirs: { [APPDATA]: ['VSCodium'] },
+    });
+    const targets = copilotConfigTargets(env);
+    expect(targets.map((t) => t.variant)).toEqual(['VSCodium']);
+    expect(targets[0].dbKind).toBe('file');
+  });
+
+  it('propagates a denied DB stat', () => {
+    const env = makeEnv({
+      platform: 'win32',
+      env: { APPDATA },
+      dirs: [codeUser],
+      denied: [codeDb],
+    });
+    expect(copilotConfigTargets(env)[0].dbKind).toBe('denied');
+  });
+
+  it('uses the macOS config root', () => {
+    const macUser = path.join(LINUX_HOME, 'Library', 'Application Support', 'Code', 'User');
+    const env = makeEnv({ platform: 'darwin', home: LINUX_HOME, dirs: [macUser] });
+    expect(copilotConfigTargets(env)[0].userDir).toBe(macUser);
+  });
+
+  it('honors XDG_CONFIG_HOME on Linux and excludes vscode-server dirs', () => {
+    const xdg = path.join(LINUX_HOME, 'xdg');
+    const xdgUser = path.join(xdg, 'Code', 'User');
+    const env = makeEnv({
+      platform: 'linux',
+      home: LINUX_HOME,
+      env: { XDG_CONFIG_HOME: xdg },
+      dirs: [xdgUser],
+    });
+    const targets = copilotConfigTargets(env);
+    expect(targets.map((t) => t.userDir)).toEqual([xdgUser]);
+  });
+
+  it('returns nothing when the config root cannot be derived', () => {
+    const env = makeEnv({ platform: 'win32', env: {} }); // no APPDATA
+    expect(copilotConfigTargets(env)).toEqual([]);
   });
 });
 

@@ -56,6 +56,47 @@
   align-items: center;
   padding-top: 8px;
   gap: 2px;
+  /* Collapsing is a deliberate act; animating it keeps the views from jumping. */
+  transition: width 140ms ease-out, flex-basis 140ms ease-out;
+}
+
+/*
+ * Expanded: the same rail, given room for the labels. Buttons become full-width
+ * rows so the whole row is the target, not just the icon.
+ */
+.rail-expanded {
+  width: var(--rail-width-expanded);
+  flex-basis: var(--rail-width-expanded);
+  align-items: stretch;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.rail-expanded .rail-button {
+  width: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 10px;
+}
+
+/* The active marker hugs the rail's edge, which the padding moved. */
+.rail-expanded .rail-button[aria-current='true']::before {
+  left: -8px;
+}
+
+.rail-label {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Stretching is for the rows; these two stay centred as in the icon strip. */
+.rail-expanded .rail-version,
+.rail-expanded .rail-update {
+  align-self: center;
 }
 
 .rail-button {

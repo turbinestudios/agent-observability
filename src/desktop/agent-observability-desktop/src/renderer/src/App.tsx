@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { SessionsView } from './views/sessions/SessionsView';
 import { OverviewView } from './views/overview/OverviewView';
 import { SettingsView } from './views/settings/SettingsView';
@@ -10,10 +10,15 @@ import type { AskAiIntent } from './views/assistant/AssistantView';
 import type { OpenSessionIntent } from './views/sessions/SessionsView';
 import { ActivityRail } from './components/ActivityRail';
 import { ChangelogDialog } from './components/ChangelogDialog';
+import { CopilotSetupDialog } from './components/CopilotSetupDialog';
+import { copilotSetupDialogState } from './components/copilotSetupState';
 import { StartupOverlay } from './components/StartupOverlay';
-import { UpdateDownloadOverlay } from './components/UpdateDialog';
+import { UpdateDialogView, updateDialogState } from './components/UpdateDialog';
 import type { ViewId } from './components/ActivityRail';
+import { useUpdateStatus } from './updates/useUpdateStatus';
 import { ThemeProvider } from './theme/ThemeContext';
+import { dataHost } from './api/client';
+import type { CopilotSetupStatus } from '../../shared/rpc';
 import './app.css';
 
 /**
@@ -38,6 +43,42 @@ export function App(): JSX.Element {
   // A dialog, not a view: it overlays whatever you were looking at and returns
   // you to it, so it must not disturb `view`.
   const [changelogOpen, setChangelogOpen] = useState(false);
+  // The update download. Its dismissal is held here rather than inside the
+  // dialog because the startup overlay has to know whether it is on screen —
+  // see the overlays at the bottom of the tree.
+  const updateStatus = useUpdateStatus();
+  const [dismissedUpdate, setDismissedUpdate] = useState<string | undefined>(undefined);
+  const updateDialog = updateDialogState(updateStatus, dismissedUpdate);
+
+  // The Copilot setup offer. Fetched only once the startup overlay has lifted,
+  // so the prompt can never race the first paint; the datahost decides whether
+  // it is warranted (`shouldPrompt`), the shell only arbitrates overlays.
+  const [startupDone, setStartupDone] = useState(false);
+  const [copilotSetup, setCopilotSetup] = useState<CopilotSetupStatus | undefined>(undefined);
+  const [dismissedSetup, setDismissedSetup] = useState(false);
+  useEffect(() => {
+    if (!startupDone) {
+      return;
+    }
+    let cancelled = false;
+    dataHost
+      .call('copilot.setupStatus')
+      .then((next) => {
+        if (!cancelled) {
+          setCopilotSetup(next);
+        }
+      })
+      .catch(() => undefined); // No status, no prompt; Settings still has the fix.
+    return () => {
+      cancelled = true;
+    };
+  }, [startupDone]);
+  const setupDialog = copilotSetupDialogState(
+    copilotSetup,
+    startupDone,
+    updateDialog !== undefined,
+    dismissedSetup,
+  );
 
   // macOS runs frameless (`titleBarStyle: 'hiddenInset'`), so the renderer
   // must supply what the OS chrome normally would: a strip that clears the
@@ -110,8 +151,30 @@ export function App(): JSX.Element {
           )}
         </main>
         {changelogOpen && <ChangelogDialog onClose={() => setChangelogOpen(false)} />}
-        <StartupOverlay />
-        <UpdateDownloadOverlay />
+        {/*
+          One blocking overlay at a time, in a strict order: startup overlay,
+          then the update dialog, then the Copilot setup offer. The update
+          dialog is what the user just consented to and it blocks the window
+          itself, so the startup overlay stands down while it is up — and
+          comes back if the download is sent to the background before the
+          first index pass has finished. The setup offer waits for both.
+        */}
+        <StartupOverlay
+          suppressed={updateDialog !== undefined}
+          onDone={() => setStartupDone(true)}
+        />
+        {updateDialog !== undefined && (
+          <UpdateDialogView
+            status={updateDialog.status}
+            onDismiss={() => setDismissedUpdate(updateDialog.key)}
+          />
+        )}
+        {setupDialog !== undefined && (
+          <CopilotSetupDialog
+            status={setupDialog.status}
+            onDismiss={() => setDismissedSetup(true)}
+          />
+        )}
       </div>
     </ThemeProvider>
   );

@@ -106,6 +106,13 @@ export interface PathEnvironment {
    * simply skipped.
    */
   listSubdirectories?(dir: string): string[];
+  /**
+   * Whether `dir` exists as a directory (false on any error). Optional like
+   * {@link listSubdirectories}; needed because {@link statKind} classifies
+   * directories as 'absent'. Without it, editor-existence evidence falls back
+   * to file stats alone.
+   */
+  directoryExists?(dir: string): boolean;
 }
 
 const defaultEnvironment: PathEnvironment = {
@@ -121,6 +128,13 @@ const defaultEnvironment: PathEnvironment = {
         .map((entry) => entry.name);
     } catch {
       return [];
+    }
+  },
+  directoryExists: (dir: string): boolean => {
+    try {
+      return fs.statSync(dir).isDirectory();
+    } catch {
+      return false;
     }
   },
 };
@@ -229,6 +243,89 @@ export function resolveDatabasePath(
   environment: PathEnvironment = defaultEnvironment,
 ): DatabasePathResult {
   return resolveDatabasePaths(config, environment).primary;
+}
+
+/** One VS Code-family editor install the environment has concrete evidence of. */
+export interface CopilotConfigTarget {
+  /** Directory name under the config root: 'Code', 'Code - Insiders', 'Cursor', … */
+  variant: string;
+  /** 'stable' | 'insiders' | 'variant', for diagnostics. */
+  source: DatabaseSource;
+  /** Absolute `<configRoot>/<variant>/User` directory. */
+  userDir: string;
+  /** Absolute `<userDir>/settings.json` — may not exist yet. */
+  settingsFile: string;
+  /** Absolute path `agent-traces.db` would appear at for this editor. */
+  dbPath: string;
+  /** Current on-disk state of that DB. */
+  dbKind: PathKind;
+}
+
+/**
+ * The editors whose `User/settings.json` could carry the Copilot trace-exporter
+ * setting (`github.copilot.chat.otel.dbSpanExporter.enabled`), with evidence
+ * the editor actually exists:
+ *
+ * - `Code` / `Code - Insiders` qualify with any sign of an install (an
+ *   existing settings.json, or the User dir itself — a fresh install with no
+ *   settings file yet is exactly the case a caller can fix by creating one).
+ * - Discovered variants (Cursor, VSCodium, Windsurf, …) qualify only with
+ *   Copilot-specific evidence — a `github.copilot-chat` globalStorage dir or
+ *   the trace DB itself — because the config root is full of non-editor app
+ *   dirs that must never be offered a settings write.
+ * - The Linux `~/.vscode-server*` data dirs are deliberately excluded: in
+ *   remote setups the user-level settings.json lives on the client, and the
+ *   server's `data/Machine/settings.json` has different semantics.
+ */
+export function copilotConfigTargets(
+  environment: PathEnvironment = defaultEnvironment,
+): CopilotConfigTarget[] {
+  const root = configRoot(environment);
+  if (root === undefined) {
+    return [];
+  }
+
+  const build = (variant: string, source: DatabaseSource): CopilotConfigTarget => {
+    const userDir = path.join(root, variant, 'User');
+    return {
+      variant,
+      source,
+      userDir,
+      settingsFile: path.join(userDir, 'settings.json'),
+      dbPath: path.join(root, variant, DB_RELATIVE),
+      dbKind: environment.statKind(path.join(root, variant, DB_RELATIVE)),
+    };
+  };
+
+  const targets: CopilotConfigTarget[] = [];
+
+  for (const [variant, source] of [
+    ['Code', 'stable'],
+    ['Code - Insiders', 'insiders'],
+  ] as const) {
+    const target = build(variant, source);
+    const evidence =
+      environment.statKind(target.settingsFile) === 'file' ||
+      environment.directoryExists?.(target.userDir) === true;
+    if (evidence) {
+      targets.push(target);
+    }
+  }
+
+  const names = environment.listSubdirectories?.(root) ?? [];
+  for (const variant of names
+    .filter((name) => name !== 'Code' && name !== 'Code - Insiders')
+    .sort()) {
+    const target = build(variant, 'variant');
+    const copilotDir = path.join(target.userDir, 'globalStorage', 'github.copilot-chat');
+    const evidence =
+      environment.directoryExists?.(copilotDir) === true || target.dbKind !== 'absent';
+    if (evidence) {
+      targets.push(target);
+    }
+  }
+
+  return targets;
 }
 
 /**
