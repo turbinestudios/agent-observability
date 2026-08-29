@@ -9,6 +9,18 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.10.2] - 2026-08-29
+
+### Fixed
+
+- **An upgrade now truly owns the screen.** Accepting an update while the app
+  was still starting could leave the "Starting up…" screen painted over the
+  download progress. The download dialog now sits above every other layer, and
+  the moment you consent to an upgrade the startup screen retires for good —
+  it no longer returns even if you send the download to the background.
+- **The Settings scrollbar sits at the window edge again**, instead of floating
+  in the middle of the page.
+
 ## [1.10.0] - 2026-08-29
 
 ### Added
@@ -27,14 +39,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **Clear instructions when the app can't do it for you.** If a settings file
   can't be edited safely — it has a syntax error, or the app lacks permission —
   the app says so, shows the exact line to add, and opens the file for you.
-
-### Fixed
-
-- **An upgrade now truly owns the screen.** Accepting an update while the app
-  was still starting could leave the "Starting up…" screen painted over the
-  download progress. The download dialog now sits above every other layer, and
-  the moment you consent to an upgrade the startup screen retires for good —
-  it no longer returns even if you send the download to the background.
 
 ## [1.9.1] - 2026-08-29
 
