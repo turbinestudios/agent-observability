@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { IndexDb, TOP_MODEL_LIMIT, TOP_REPOSITORY_LIMIT } from './indexDb';
+import { MAX_DAILY_COLUMNS } from '../../shared/rpc';
 import type { SessionRow } from '../../shared/rpc';
 
 /**
@@ -160,7 +161,109 @@ describe('daily series', () => {
   });
 
   it('reports the window it covered, so the UI can label it', () => {
-    expect(db.overview(14).windowDays).toBe(14);
+    expect(db.overview(90).windowDays).toBe(90);
+    expect(db.overview(90).window).toBe(90);
+  });
+});
+
+/**
+ * The window narrows EVERY figure, not only the daily series.
+ *
+ * It used to narrow the charts alone, which put an all-time tile directly above
+ * a 30-day chart and invited the reader to compare them. `'all'` is the way back
+ * to uncapped totals, and it is the only way — so it has to actually work.
+ */
+describe('the window', () => {
+  /** One recent session and one far outside any window. */
+  function twoEras(): void {
+    db.upsertSessions([
+      row({ sessionId: 'recent', repository: 'r-new', model: 'm-new', interactionCount: 3, costMicros: 10 }),
+      row({
+        sessionId: 'ancient',
+        endedAtMs: Date.now() - 200 * DAY_MS,
+        repository: 'r-old',
+        model: 'm-old',
+        interactionCount: 7,
+        costMicros: 90,
+      }),
+    ]);
+  }
+
+  it('narrows the totals, not just the charts', () => {
+    twoEras();
+    const { totals } = db.overview(30);
+    expect(totals.sessions).toBe(1);
+    expect(totals.steps).toBe(3);
+    expect(totals.costMicros).toBe(10);
+  });
+
+  it('narrows the by-source, repository and model rollups too', () => {
+    twoEras();
+    const data = db.overview(30);
+    expect(data.bySource).toEqual([expect.objectContaining({ source: 'claude', sessions: 1 })]);
+    expect(data.topRepositories.map((r) => r.repository)).toEqual(['r-new']);
+    expect(data.byModel.map((m) => m.model)).toEqual(['m-new']);
+  });
+
+  it("counts everything under 'all', which is the way back to the old totals", () => {
+    twoEras();
+    const { totals } = db.overview('all');
+    expect(totals.sessions).toBe(2);
+    expect(totals.steps).toBe(10);
+    expect(totals.costMicros).toBe(100);
+  });
+
+  it('measures a shorter window more tightly still', () => {
+    db.upsertSessions([
+      row({ sessionId: 'today' }),
+      row({ sessionId: 'lastweek', endedAtMs: Date.now() - 10 * DAY_MS }),
+    ]);
+    expect(db.overview(7).totals.sessions).toBe(1);
+    expect(db.overview(30).totals.sessions).toBe(2);
+  });
+
+  it('keeps undated rows out of a window but inside all-time', () => {
+    // A zero timestamp is "not recorded", which cannot be placed in any window
+    // — but dropping it from the all-time count would lose it entirely.
+    db.upsertSessions([row({ sessionId: 'dated' }), row({ sessionId: 'undated', endedAtMs: 0 })]);
+    expect(db.overview(30).totals.sessions).toBe(1);
+    expect(db.overview('all').totals.sessions).toBe(2);
+  });
+
+  it("spans all-time charts from the oldest session, uncapped", () => {
+    db.upsertSessions([
+      row({ sessionId: 'now' }),
+      row({ sessionId: 'then', endedAtMs: Date.now() - 9 * DAY_MS }),
+    ]);
+    const data = db.overview('all');
+    expect(data.windowDays).toBe(10); // the ten calendar days from 'then' to today
+    expect(data.dailyCapped).toBeUndefined();
+  });
+
+  it('caps the all-time chart span, and says so, when history outruns it', () => {
+    // The tiles still count everything; only the columns stop. Saying so is the
+    // whole point — two time scales on one page must never be silent.
+    db.upsertSessions([
+      row({ sessionId: 'now' }),
+      row({ sessionId: 'antique', endedAtMs: Date.now() - (MAX_DAILY_COLUMNS + 100) * DAY_MS }),
+    ]);
+    const data = db.overview('all');
+    expect(data.windowDays).toBe(MAX_DAILY_COLUMNS);
+    expect(data.dailyCapped).toBe(true);
+    expect(data.totals.sessions).toBe(2);
+  });
+
+  it('spans a single day when nothing is dated, rather than zero columns', () => {
+    db.upsertSessions([row({ sessionId: 'undated', endedAtMs: 0 })]);
+    expect(db.overview('all').windowDays).toBe(1);
+  });
+
+  it('excludes hidden sessions from the all-time span', () => {
+    db.upsertSessions([
+      row({ sessionId: 'now' }),
+      row({ sessionId: 'old-and-hidden', endedAtMs: Date.now() - 40 * DAY_MS }),
+    ]);
+    expect(db.overview('all', ['claude:old-and-hidden']).windowDays).toBe(1);
   });
 });
 

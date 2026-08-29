@@ -19,7 +19,12 @@ import type {
   SessionRef,
   SessionRow,
 } from '../shared/rpc';
-import { MAX_COMPARE_SESSIONS, sessionKey } from '../shared/rpc';
+import {
+  DEFAULT_OVERVIEW_WINDOW,
+  MAX_COMPARE_SESSIONS,
+  sessionKey,
+  toOverviewWindow,
+} from '../shared/rpc';
 import { DetailRenderer } from './detail/detailRenderer';
 import type { CombinedRequest, DetailContext } from './detail/detailRenderer';
 import { AnalysisQueue } from './analysis/analysisQueue';
@@ -29,9 +34,11 @@ import { ClaudeIndexer } from './indexer/claudeIndexer';
 import { CopilotIndexer } from './indexer/copilotIndexer';
 import { ensureArchiveIndexes } from './archiveIndexes';
 import { IndexDb } from './indexer/indexDb';
-import type { AnalysisTarget } from './indexer/indexDb';
+import type { AnalysisTarget, SessionKeyOverlay } from './indexer/indexDb';
 import { RenameStore } from './renames';
 import { HiddenStore } from './hidden';
+import { TagStore } from './tags';
+import { NoteStore } from './notes';
 import { describeDeletion, deleteSession } from './deletion';
 import { DeepRetroStore, toLlmVerdict } from './deepRetros';
 import { DEEP_RETRO_ENABLED_KEY, runDeepRetrospective } from './deepRetro';
@@ -99,6 +106,11 @@ const deviations = new LocalDeviationDetector(config);
 const detail = new DetailRenderer(sources, deviations);
 const renames = new RenameStore();
 const hidden = new HiddenStore();
+// Tags and notes deliberately do NOT reach the AI backends below: everything
+// they hold is text the user wrote, and the consent notices on the deep
+// retrospective and the AI Helper enumerate exactly what those requests carry.
+const tags = new TagStore();
+const notes = new NoteStore();
 const deepRetros = new DeepRetroStore();
 
 // One backend wiring for everything that talks to the user's `claude` CLI —
@@ -114,9 +126,6 @@ const aiHelper = new AiHelperController({
   backend: () => aiBackends.active(),
   emit,
 });
-
-/** How far back the overview charts look. */
-const OVERVIEW_WINDOW_DAYS = 30;
 
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'idle' };
 let indexing = false;
@@ -160,8 +169,21 @@ function pushAnalyzedRows(targets: readonly AnalysisTarget[]): void {
     .map((t) => db.getRow(t.source, t.sessionId))
     .filter((row): row is SessionRow => row !== undefined);
   if (rows.length > 0) {
-    emit({ event: 'sessions.upserted', rows: renames.apply(rows) });
+    emit({ event: 'sessions.upserted', rows: decorate(rows) });
   }
+}
+
+/**
+ * Layer every user-authored overlay onto rows read from the index: chosen
+ * names, tags, and whether a note exists.
+ *
+ * One function rather than a chain at each call site, because the index stores
+ * none of this — it is a disposable cache — and a path that forgot one of them
+ * would silently serve rows that look correct and are not: a refresh that
+ * reverts a rename, a tag chip that disappears when the indexer touches a row.
+ */
+function decorate(rows: SessionRow[]): SessionRow[] {
+  return notes.apply(tags.apply(renames.apply(rows)));
 }
 
 function post(message: RpcResponse | RpcEvent): void {
@@ -210,7 +232,7 @@ function runIndex(): IndexStatus {
     // one back on screen.
     const visible = rows.filter((r) => !hidden.isHidden(r.source, r.sessionId));
     if (visible.length > 0) {
-      emit({ event: 'sessions.upserted', rows: renames.apply(visible) });
+      emit({ event: 'sessions.upserted', rows: decorate(visible) });
     }
     refreshCounts();
     emit({ event: 'index.progress', status });
@@ -335,41 +357,50 @@ function applyContextAction(action: ContextAction): void {
 }
 
 /**
- * List sessions, with user-chosen names layered on.
+ * The session keys the index cannot work out for itself, because they come from
+ * the JSON stores beside it.
  *
- * A text search runs in SQL over the ORIGINAL titles, so a session found only
- * by its new name has to be unioned in separately — otherwise renaming a
- * session would make it unsearchable by the name the user just gave it.
+ * Resolved BEFORE the query and handed to it, so a tag filter and a search over
+ * user-chosen names are both decided in SQL along with everything else. The
+ * earlier shape — query, then union renamed matches in JavaScript — appended
+ * rows after SQL's `LIMIT`, which made the second page skip and duplicate and
+ * made `sessions.count` disagree with the list it was counting.
  */
-function listSessions(params: ListSessionsParams): SessionRow[] {
-  const hiddenKeys = hidden.all();
-  const rows = db.listSessions(params, hiddenKeys);
+function keyOverlay(params: ListSessionsParams): SessionKeyOverlay {
   const query = params.query?.trim() ?? '';
-  if (query.length === 0) {
-    return renames.apply(rows);
-  }
+  return {
+    ...(params.tag !== undefined && params.tag.length > 0
+      ? { restrictKeys: tags.keysFor(params.tag) }
+      : {}),
+    ...(query.length > 0 ? { renameKeys: renames.matchingKeys(query) } : {}),
+  };
+}
 
-  const seen = new Set(rows.map((r) => sessionKey(r.source, r.sessionId)));
-  const showingHidden = params.hidden === true;
-  const extraKeys = renames
-    .matchingKeys(query)
-    .filter((key) => !seen.has(key) && hidden.all().includes(key) === showingHidden);
-  const extra = db.getRowsByKey(extraKeys).filter((row) => {
-    // The union must still respect an active source filter.
-    if (params.source !== undefined && row.source !== params.source) {
-      return false;
-    }
-    return params.repository === undefined || row.repository === params.repository;
-  });
-
-  return renames
-    .apply([...rows, ...extra])
-    .sort((a, b) => b.endedAtMs - a.endedAtMs || (a.sessionId < b.sessionId ? 1 : -1));
+/** List sessions, with every user-authored overlay layered back on. */
+function listSessions(params: ListSessionsParams): SessionRow[] {
+  return decorate(db.listSessions(params, hidden.all(), keyOverlay(params)));
 }
 
 /** The indexed timestamp doubles as the detail cache key. */
 function stampOf(source: string, sessionId: string): number {
   return db.getRow(source, sessionId)?.indexedAtMs ?? 0;
+}
+
+/**
+ * Push one row's new state to the list and return it.
+ *
+ * Every annotation — rename, tags, note — ends this way: the row updates in
+ * place through the existing upsert event, so the list does not re-query and
+ * the session does not jump out from under the pointer that just annotated it.
+ */
+function pushRow(source: string, sessionId: string): SessionRow | undefined {
+  const row = db.getRow(source, sessionId);
+  if (row === undefined) {
+    return undefined;
+  }
+  const [patched] = decorate([row]);
+  emit({ event: 'sessions.upserted', rows: [patched] });
+  return patched;
 }
 
 function handle(request: RpcRequest): unknown {
@@ -381,7 +412,9 @@ function handle(request: RpcRequest): unknown {
     case 'sessions.groups':
       return db.listGroups(hidden.all());
     case 'sessions.count':
-      return db.countSessions(request.params[0], hidden.all());
+      // The same overlay the list uses, so "showing 300 of 1,847" can never
+      // count a different set than the rows underneath it.
+      return db.countSessions(request.params[0], hidden.all(), keyOverlay(request.params[0]));
     case 'sessions.hide': {
       const [source, sessionId, isHidden] = request.params;
       hidden.set(source, sessionId, isHidden);
@@ -402,6 +435,10 @@ function handle(request: RpcRequest): unknown {
         // Drop it from the index too, or the next list would still show it
         // until a re-index noticed the source data was gone.
         db.removeSession(source, sessionId);
+        // …and forget its annotations, or the tag filter would keep offering a
+        // count that includes a session nothing can open any more.
+        tags.set(source, sessionId, []);
+        notes.set(source, sessionId, '');
         detail.invalidate(source, sessionId);
         emit({ event: 'sessions.removed', keys: [sessionKey(source, sessionId)] });
         refreshCounts();
@@ -472,19 +509,33 @@ function handle(request: RpcRequest): unknown {
       renames.set(source, sessionId, title);
       // The cached document carries the old name in its header.
       detail.invalidate(source, sessionId);
-      const row = db.getRow(source, sessionId);
-      if (row === undefined) {
-        return undefined;
-      }
-      const [patched] = renames.apply([row]);
-      emit({ event: 'sessions.upserted', rows: [patched] });
-      return patched;
+      return pushRow(source, sessionId);
     }
     case 'sessions.row': {
       const [source, sessionId] = request.params;
       const row = db.getRow(source, sessionId);
-      return row === undefined ? undefined : renames.apply([row])[0];
+      return row === undefined ? undefined : decorate([row])[0];
     }
+    case 'sessions.setTags': {
+      const [source, sessionId, next] = request.params;
+      tags.set(source, sessionId, next);
+      // No document invalidation, unlike a rename: tags are drawn by the app's
+      // own chrome around the frame, not baked into the rendered document.
+      return pushRow(source, sessionId);
+    }
+    case 'sessions.setNote': {
+      const [source, sessionId, note] = request.params;
+      notes.set(source, sessionId, note);
+      return pushRow(source, sessionId);
+    }
+    case 'sessions.note': {
+      const [source, sessionId] = request.params;
+      return notes.get(source, sessionId);
+    }
+    case 'tags.list':
+      // Hidden sessions are left out, so a tag's count matches the rows
+      // choosing it would actually show.
+      return tags.list(hidden.all());
     case 'hotspots.get': {
       const params = request.params[0] ?? {};
       const hiddenKeys = hidden.all();
@@ -541,9 +592,16 @@ function handle(request: RpcRequest): unknown {
     case 'ai.acknowledge':
       return aiHelper.acknowledge();
     case 'overview.get':
+      // The window is narrowed here rather than trusted: it arrives from the
+      // renderer's persisted preference, which a stale or hand-edited
+      // localStorage entry can put anything into.
+      //
       // Hidden sessions are excluded so the totals agree with the list; a
       // count that includes what the user removed reads as a bug.
-      return db.overview(OVERVIEW_WINDOW_DAYS, hidden.all());
+      return db.overview(
+        toOverviewWindow(request.params[0]?.window ?? DEFAULT_OVERVIEW_WINDOW),
+        hidden.all(),
+      );
     case 'settings.get':
       return buildSettingsSnapshot(settings, config);
     case 'settings.update': {

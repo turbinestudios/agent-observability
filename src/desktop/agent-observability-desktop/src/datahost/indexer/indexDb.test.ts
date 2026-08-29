@@ -101,6 +101,130 @@ describe('listSessions', () => {
   });
 });
 
+/**
+ * The date filter reads the END time — the column this list is ordered by and
+ * the one the overview buckets its day columns by. Filtering on the start time
+ * instead would make a chart column open a different set than it counted.
+ */
+describe('date range', () => {
+  beforeEach(() => {
+    db.upsertSessions([
+      row({ sessionId: 'early', endedAtMs: 1_000 }),
+      row({ sessionId: 'mid', endedAtMs: 5_000 }),
+      row({ sessionId: 'late', endedAtMs: 9_000 }),
+    ]);
+  });
+
+  it('narrows to sessions at or after a moment', () => {
+    expect(db.listSessions({ endedAfterMs: 5_000 }).map((r) => r.sessionId)).toEqual(['late', 'mid']);
+  });
+
+  it('narrows to sessions at or before a moment', () => {
+    expect(db.listSessions({ endedBeforeMs: 5_000 }).map((r) => r.sessionId)).toEqual(['mid', 'early']);
+  });
+
+  it('is inclusive at both ends, so a one-day range holds that day', () => {
+    expect(
+      db.listSessions({ endedAfterMs: 5_000, endedBeforeMs: 5_000 }).map((r) => r.sessionId),
+    ).toEqual(['mid']);
+  });
+
+  it('combines with the source, repository and text filters', () => {
+    db.upsertSessions([
+      row({ sessionId: 'other-repo', endedAtMs: 6_000, repository: 'github.com/acme/other' }),
+      row({ sessionId: 'copilot-one', endedAtMs: 6_000, source: 'copilot' }),
+      row({ sessionId: 'titled', endedAtMs: 6_000, title: 'Fix the parser' }),
+    ]);
+    const inRange = { endedAfterMs: 5_000, endedBeforeMs: 9_000 };
+    expect(db.listSessions({ ...inRange, source: 'copilot' }).map((r) => r.sessionId)).toEqual([
+      'copilot-one',
+    ]);
+    expect(
+      db.listSessions({ ...inRange, repository: 'github.com/acme/other' }).map((r) => r.sessionId),
+    ).toEqual(['other-repo']);
+    expect(db.listSessions({ ...inRange, query: 'parser' }).map((r) => r.sessionId)).toEqual([
+      'titled',
+    ]);
+    // …and the range still bounds those narrower filters.
+    expect(db.listSessions({ endedBeforeMs: 4_000, query: 'parser' })).toEqual([]);
+  });
+
+  it('counts exactly what it lists', () => {
+    const params = { endedAfterMs: 5_000 };
+    expect(db.countSessions(params)).toBe(db.listSessions(params).length);
+  });
+});
+
+/**
+ * Tags and user-chosen names live in JSON stores, not the index, so their keys
+ * are passed INTO the query. Everything then happens in one statement —
+ * filtering, ordering, LIMIT and OFFSET — which is what makes paging correct.
+ */
+describe('key overlays', () => {
+  beforeEach(() => {
+    db.upsertSessions([
+      row({ sessionId: 'a', endedAtMs: 3_000, title: 'Original A' }),
+      row({ sessionId: 'b', endedAtMs: 2_000, title: 'Original B' }),
+      row({ sessionId: 'c', endedAtMs: 1_000, title: 'Original C' }),
+    ]);
+  });
+
+  it('narrows the list to the tagged sessions', () => {
+    const rows = db.listSessions({ tag: 'experiment-A' }, [], { restrictKeys: ['claude:a', 'claude:c'] });
+    expect(rows.map((r) => r.sessionId)).toEqual(['a', 'c']);
+  });
+
+  it('selects nothing when the tag is on nothing, rather than everything', () => {
+    expect(db.listSessions({ tag: 'unused' }, [], { restrictKeys: [] })).toEqual([]);
+  });
+
+  it('fails closed when a tag was never resolved to keys', () => {
+    // A caller that forgot to resolve the tag must not be handed the whole
+    // list — that would read as the tag matching every session.
+    expect(db.listSessions({ tag: 'experiment-A' })).toEqual([]);
+  });
+
+  it('finds a session by the name the user gave it, which the index does not store', () => {
+    const rows = db.listSessions({ query: 'renamed' }, [], { renameKeys: ['claude:b'] });
+    expect(rows.map((r) => r.sessionId)).toEqual(['b']);
+  });
+
+  it('unions renamed matches with the text matches, in one ordered result', () => {
+    const rows = db.listSessions({ query: 'Original A' }, [], { renameKeys: ['claude:c'] });
+    expect(rows.map((r) => r.sessionId)).toEqual(['a', 'c']);
+  });
+
+  it('keeps a renamed match inside the other filters', () => {
+    // The rename is an alternative way to MATCH, never a way to escape the
+    // source, repository or date the user also asked for.
+    expect(
+      db.listSessions({ query: 'renamed', endedBeforeMs: 1_500 }, [], { renameKeys: ['claude:b'] }),
+    ).toEqual([]);
+  });
+
+  it('pages a renamed match correctly, which a post-query union could not', () => {
+    const overlay = { renameKeys: ['claude:c'] };
+    const first = db.listSessions({ query: 'Original A', limit: 1 }, [], overlay);
+    const second = db.listSessions({ query: 'Original A', limit: 1, offset: 1 }, [], overlay);
+    expect(first.map((r) => r.sessionId)).toEqual(['a']);
+    expect(second.map((r) => r.sessionId)).toEqual(['c']);
+  });
+
+  it('counts the same set the list returns', () => {
+    const params = { query: 'Original A' };
+    const overlay = { renameKeys: ['claude:c'] };
+    expect(db.countSessions(params, [], overlay)).toBe(2);
+    expect(db.countSessions({ tag: 't' }, [], { restrictKeys: ['claude:a'] })).toBe(1);
+  });
+
+  it('still excludes hidden sessions from a tagged list', () => {
+    const rows = db.listSessions({ tag: 't' }, ['claude:a'], {
+      restrictKeys: ['claude:a', 'claude:b'],
+    });
+    expect(rows.map((r) => r.sessionId)).toEqual(['b']);
+  });
+});
+
 describe('placeholder rows', () => {
   it('does not overwrite parsed counts when a placeholder is written again', () => {
     db.upsertSessions([row({ sessionId: 'a', interactionCount: 42, title: 'Real title', pending: false })]);

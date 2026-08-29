@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
 import type { ConnectionState } from '../../api/client';
-import type { IndexStatus, SessionGroup, SessionRow } from '../../../../shared/rpc';
+import type {
+  IndexStatus,
+  ListSessionsParams,
+  SessionGroup,
+  SessionRow,
+  TagCount,
+} from '../../../../shared/rpc';
 import { sessionKey } from '../../../../shared/rpc';
+import type { SessionFilters } from './filters';
+import { filterKey, matchesFilters, toListParams } from './filters';
 
 /**
  * Loads the session list and keeps it live.
@@ -23,6 +31,8 @@ export const PAGE_SIZE = 300;
 interface UseSessionsResult {
   rows: SessionRow[];
   groups: SessionGroup[];
+  /** Every tag in use, for the filter dropdown and the row editor's suggestions. */
+  tags: TagCount[];
   status: IndexStatus;
   connection: ConnectionState;
   loading: boolean;
@@ -33,39 +43,52 @@ interface UseSessionsResult {
   deviationCount: number;
   /** How many sessions the retrospective judged struggled or abandoned. */
   frictionCount: number;
+  /** How many sessions match the current filters, loaded or not. */
+  total: number;
+  /** Sessions match beyond the rows loaded so far. */
+  hasMore: boolean;
+  loadingMore: boolean;
   refresh: () => void;
   rebuild: () => void;
   reload: () => void;
+  loadMore: () => void;
 }
 
 /**
- * `source` is undefined for "All". `showHidden` swaps the list over to the
- * sessions the user removed, so they can be restored.
+ * `filters` narrows the list in SQL — source, repository, date range and tag.
+ * `showHidden` swaps it over to the sessions the user removed, so they can be
+ * restored.
  */
 export function useSessions(
   query: string,
-  source: string | undefined,
+  filters: SessionFilters,
   showHidden = false,
   onlyDeviations = false,
   onlyFriction = false,
 ): UseSessionsResult {
   const [rows, setRows] = useState<SessionRow[]>([]);
   const [groups, setGroups] = useState<SessionGroup[]>([]);
+  const [tags, setTags] = useState<TagCount[]>([]);
   const [status, setStatus] = useState<IndexStatus>({ indexed: 0, total: 0, phase: 'idle' });
   const [connection, setConnection] = useState<ConnectionState>(() => dataHost.connectionState());
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [hiddenCount, setHiddenCount] = useState(0);
   const [deviationCount, setDeviationCount] = useState(0);
   const [frictionCount, setFrictionCount] = useState(0);
+  const [total, setTotal] = useState(0);
 
   // Held in a ref so the event subscription can merge without being torn down
   // and re-created on every render.
   const rowsRef = useRef<SessionRow[]>([]);
   const queryRef = useRef(query);
   queryRef.current = query;
-  const sourceRef = useRef(source);
-  sourceRef.current = source;
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+  // A filter set is a fresh object on every render, so the effect below keys off
+  // its VALUE. Depending on the object itself would re-query forever.
+  const key = filterKey(filters);
 
   const applyRows = useCallback((next: SessionRow[]) => {
     rowsRef.current = next;
@@ -79,35 +102,98 @@ export function useSessions(
   const frictionRef = useRef(onlyFriction);
   frictionRef.current = onlyFriction;
 
+  /**
+   * Bumped by every fresh query. A page that arrives after the filters moved on
+   * belongs to a different list, so it is dropped rather than appended to one it
+   * was never part of.
+   */
+  const generation = useRef(0);
+
+  const listParams = useCallback(
+    (): ListSessionsParams => ({
+      query: queryRef.current,
+      ...toListParams(filtersRef.current),
+      hidden: hiddenRef.current,
+      ...(deviationsRef.current ? { deviations: true } : {}),
+      ...(frictionRef.current ? { friction: true } : {}),
+    }),
+    [],
+  );
+
   const load = useCallback(async () => {
+    const mine = (generation.current += 1);
+    const params = listParams();
     try {
-      const next = await dataHost.call('sessions.list', {
-        query: queryRef.current,
-        source: sourceRef.current,
-        hidden: hiddenRef.current,
-        ...(deviationsRef.current ? { deviations: true } : {}),
-        ...(frictionRef.current ? { friction: true } : {}),
-        limit: PAGE_SIZE,
-      });
+      const next = await dataHost.call('sessions.list', { ...params, limit: PAGE_SIZE });
+      if (generation.current !== mine) {
+        return;
+      }
       applyRows(next);
       setError(undefined);
+      // The honest denominator for "showing N of M", counted over exactly the
+      // same predicate the page came from.
+      void dataHost
+        .call('sessions.count', params)
+        .then((count) => {
+          if (generation.current === mine) {
+            setTotal(count);
+          }
+        })
+        .catch(() => undefined);
       void dataHost.call('sessions.hiddenCount').then(setHiddenCount).catch(() => undefined);
       console.log(`[sessions] loaded ${next.length} row(s)`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (generation.current === mine) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setLoading(false);
+      if (generation.current === mine) {
+        setLoading(false);
+      }
     }
-  }, [applyRows]);
+  }, [applyRows, listParams]);
 
-  // Re-query whenever the search text or source filter changes. Filtering runs
-  // in SQL rather than over the loaded page, so a match outside the first page
-  // is still found.
+  /**
+   * The next page, appended.
+   *
+   * Paging is offset-based, which only works because every filter — the tag,
+   * and a search over user-chosen names included — is decided inside the SQL
+   * query. Anything filtered afterwards would make an offset skip rows.
+   */
+  const loadMore = useCallback(() => {
+    const mine = generation.current;
+    setLoadingMore(true);
+    void dataHost
+      .call('sessions.list', {
+        ...listParams(),
+        limit: PAGE_SIZE,
+        offset: rowsRef.current.length,
+      })
+      .then((next) => {
+        if (generation.current !== mine || next.length === 0) {
+          return;
+        }
+        // Merged rather than concatenated: a row pushed while the page was in
+        // flight may already be on screen, and appending it again would show
+        // the same session twice.
+        applyRows(mergeRows(rowsRef.current, next));
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => {
+        if (generation.current === mine) {
+          setLoadingMore(false);
+        }
+      });
+  }, [applyRows, listParams]);
+
+  // Re-query whenever the search text or any filter changes. Filtering runs in
+  // SQL rather than over the loaded page, so a match outside the first page is
+  // still found.
   useEffect(() => {
     setLoading(true);
     const timer = setTimeout(() => void load(), query.length === 0 ? 0 : 150);
     return () => clearTimeout(timer);
-  }, [query, source, showHidden, onlyDeviations, onlyFriction, load]);
+  }, [query, key, showHidden, onlyDeviations, onlyFriction, load]);
 
   useEffect(() => {
     const offRows = dataHost.on('sessions.upserted', (event) => {
@@ -132,14 +218,24 @@ export function useSessions(
       if (deviationsRef.current || frictionRef.current) {
         return;
       }
-      // A source filter, by contrast, is decidable from the row itself.
-      const incoming =
-        sourceRef.current === undefined
-          ? event.rows
-          : event.rows.filter((r) => r.source === sourceRef.current);
-      if (incoming.length > 0) {
-        applyRows(mergeRows(rowsRef.current, incoming));
+      // Source, repository, date and tag ARE all decidable from the row, so
+      // both directions are handled: a row that now qualifies is merged in, and
+      // one that stopped qualifying — an untagged session in a tag-filtered
+      // list — is taken out rather than left sitting there.
+      const active = filtersRef.current;
+      const incoming = event.rows.filter((r) => matchesFilters(r, active));
+      const dropped = event.rows
+        .filter((r) => !matchesFilters(r, active))
+        .map((r) => sessionKey(r.source, r.sessionId));
+      if (incoming.length === 0 && dropped.length === 0) {
+        return;
       }
+      const gone = new Set(dropped);
+      const kept =
+        gone.size === 0
+          ? rowsRef.current
+          : rowsRef.current.filter((r) => !gone.has(sessionKey(r.source, r.sessionId)));
+      applyRows(mergeRows(kept, incoming));
     });
 
     const offRemoved = dataHost.on('sessions.removed', (event) => {
@@ -206,6 +302,20 @@ export function useSessions(
     };
   }, [applyRows, load]);
 
+  // Tags change only when the user edits them, so this follows the row pushes
+  // that carry those edits rather than polling.
+  const reloadTags = useCallback(() => {
+    void dataHost
+      .call('tags.list')
+      .then(setTags)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    reloadTags();
+    return dataHost.on('sessions.upserted', () => reloadTags());
+  }, [reloadTags]);
+
   const refresh = useCallback(() => {
     void dataHost.call('index.refresh').catch((err: Error) => setError(err.message));
   }, []);
@@ -223,6 +333,7 @@ export function useSessions(
     () => ({
       rows,
       groups,
+      tags,
       status,
       connection,
       loading,
@@ -230,13 +341,20 @@ export function useSessions(
       hiddenCount,
       deviationCount,
       frictionCount,
+      total,
+      // A live push can put more rows on screen than the count knew about, so
+      // this compares rather than assuming the count is the larger number.
+      hasMore: total > rows.length,
+      loadingMore,
       refresh,
       rebuild,
       reload: load,
+      loadMore,
     }),
     [
       rows,
       groups,
+      tags,
       status,
       connection,
       loading,
@@ -244,9 +362,12 @@ export function useSessions(
       hiddenCount,
       deviationCount,
       frictionCount,
+      total,
+      loadingMore,
       refresh,
       rebuild,
       load,
+      loadMore,
     ],
   );
 }

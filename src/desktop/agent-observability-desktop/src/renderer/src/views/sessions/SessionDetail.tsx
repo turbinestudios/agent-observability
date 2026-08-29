@@ -1,7 +1,7 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
-import type { AiAvailability, SessionRow } from '../../../../shared/rpc';
+import type { AiAvailability, SessionRow, TagCount } from '../../../../shared/rpc';
 import { useThemeValue } from '../../theme/ThemeContext';
 import { Spinner } from '../../components/Spinner';
 import { rotatedNote } from '../../components/loadingNotes';
@@ -208,30 +208,43 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
   };
 
   return (
-    <>
-      <button
-        type="button"
-        className="icon-button detail-refresh"
-        title="Refresh session"
-        onClick={() => {
-          forceRef.current = true;
-          setRefreshToken((token) => token + 1);
-        }}
-      >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M12 4a8 8 0 0 1 7.4 5h-2.2A6 6 0 0 0 6 12h3l-4 4.5L1 12h3a8 8 0 0 1 8-8Z" />
-        </svg>
-      </button>
-      {onAskAi !== undefined && (
-        <button
-          type="button"
-          className="detail-ask-ai"
-          title="Attach this session to the AI Helper and ask about it"
-          onClick={() => onAskAi(row.source, row.sessionId)}
-        >
-          Ask AI
-        </button>
-      )}
+    <div className="detail-shell">
+      {/*
+        The annotation strip. Everything here is the app's own chrome, kept
+        deliberately OUTSIDE the sandboxed frame: the document renders session
+        content, which is arbitrary text from a model or a repository, and it
+        must never be able to draw or read the controls that write to disk.
+      */}
+      <Annotations
+        row={row}
+        actions={
+          <>
+            {onAskAi !== undefined && (
+              <button
+                type="button"
+                className="detail-ask-ai"
+                title="Attach this session to the AI Helper and ask about it"
+                onClick={() => onAskAi(row.source, row.sessionId)}
+              >
+                Ask AI
+              </button>
+            )}
+            <button
+              type="button"
+              className="icon-button"
+              title="Refresh session"
+              onClick={() => {
+                forceRef.current = true;
+                setRefreshToken((token) => token + 1);
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 4a8 8 0 0 1 7.4 5h-2.2A6 6 0 0 0 6 12h3l-4 4.5L1 12h3a8 8 0 0 1 8-8Z" />
+              </svg>
+            </button>
+          </>
+        }
+      />
       {deepRunning && (
         <div className="deep-retro-status" role="status" aria-live="polite">
           <Spinner size={14} stroke={2} />
@@ -264,6 +277,226 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
         sandbox="allow-scripts"
         src={docUrl}
       />
+    </div>
+  );
+}
+
+/** How long typing pauses before a note is written. */
+const NOTE_SAVE_DELAY_MS = 500;
+
+/**
+ * Tags and a note for the open session, above the document.
+ *
+ * Both are LOCAL-ONLY user data: they are kept in JSON stores beside the index
+ * so a rebuild cannot lose them, and they are never added to the AI Helper's
+ * grounding or the deep retrospective's digest — those two paths state exactly
+ * what they send, and quietly widening either would break the consent the user
+ * gave.
+ */
+function Annotations({ row, actions }: { row: SessionRow; actions: JSX.Element }): JSX.Element {
+  // The component is keyed by session in the list, so this seeds once per
+  // session; the effect below follows later edits made from the row itself.
+  const [tags, setTags] = useState<string[]>(row.tags ?? []);
+  const [known, setKnown] = useState<TagCount[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [note, setNote] = useState('');
+  const [noteLoaded, setNoteLoaded] = useState(false);
+
+  // Keyed on the serialized VALUE, not the array: a pushed row carries a fresh
+  // array on every index tick whether or not the tags changed, and re-seeding
+  // on each of those would fight whatever is being edited here. Serialized
+  // rather than joined on a separator, so a tag containing one cannot split.
+  const incoming = JSON.stringify(row.tags ?? []);
+  useEffect(() => {
+    setTags(JSON.parse(incoming) as string[]);
+  }, [incoming]);
+
+  // The suggestions only move when tags do, so this follows them rather than
+  // re-fetching on every render.
+  useEffect(() => {
+    void dataHost
+      .call('tags.list')
+      .then(setKnown)
+      .catch(() => undefined);
+  }, [incoming]);
+
+  // The note body is fetched per session rather than carried on every list row.
+  useEffect(() => {
+    let cancelled = false;
+    void dataHost
+      .call('sessions.note', row.source, row.sessionId)
+      .then((text) => {
+        if (!cancelled) {
+          setNote(text);
+          setNoteLoaded(true);
+          // Open on arrival when there is something to read: a note exists to
+          // be seen, and hiding it behind a toggle would waste it.
+          setNoteOpen(text.length > 0);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNoteLoaded(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [row.source, row.sessionId]);
+
+  const commitTags = (next: string[]): void => {
+    setAdding(false);
+    setTags(next);
+    void dataHost.call('sessions.setTags', row.source, row.sessionId, next).catch(() => undefined);
+  };
+
+  /**
+   * Saving is debounced while typing, and flushed on unmount — closing the pane
+   * or switching sessions mid-sentence must not be how a note is lost.
+   */
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pending = useRef<string | undefined>(undefined);
+  const target = useRef({ source: row.source, sessionId: row.sessionId });
+  target.current = { source: row.source, sessionId: row.sessionId };
+
+  const flush = useCallback(() => {
+    if (timer.current !== undefined) {
+      clearTimeout(timer.current);
+      timer.current = undefined;
+    }
+    const text = pending.current;
+    pending.current = undefined;
+    if (text === undefined) {
+      return;
+    }
+    const { source, sessionId } = target.current;
+    void dataHost.call('sessions.setNote', source, sessionId, text).catch(() => undefined);
+  }, []);
+
+  useEffect(() => flush, [flush]);
+
+  const editNote = (text: string): void => {
+    setNote(text);
+    pending.current = text;
+    if (timer.current !== undefined) {
+      clearTimeout(timer.current);
+    }
+    timer.current = setTimeout(flush, NOTE_SAVE_DELAY_MS);
+  };
+
+  return (
+    <>
+      <div className="detail-annotations">
+        <div className="detail-tags">
+          {tags.map((tag) => (
+            <span key={tag} className="detail-tag">
+              {tag}
+              <button
+                type="button"
+                className="detail-tag-remove"
+                aria-label={`Remove tag ${tag}`}
+                title={`Remove "${tag}"`}
+                onClick={() => commitTags(tags.filter((t) => t !== tag))}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          {adding ? (
+            <AddTagInput
+              known={known}
+              onCancel={() => setAdding(false)}
+              onCommit={(tag) => commitTags([...tags, tag])}
+            />
+          ) : (
+            <button type="button" className="detail-tag-add" onClick={() => setAdding(true)}>
+              + Tag
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          className="detail-note-toggle"
+          aria-expanded={noteOpen}
+          onClick={() => setNoteOpen((open) => !open)}
+        >
+          {note.length > 0 ? 'Note' : '+ Note'}
+        </button>
+        <div className="detail-actions">{actions}</div>
+      </div>
+      {noteOpen && noteLoaded && (
+        <textarea
+          className="detail-note"
+          value={note}
+          aria-label="Note about this session"
+          placeholder="What happened in this run, and what you would change."
+          rows={3}
+          onChange={(e) => editNote(e.target.value)}
+          onBlur={flush}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * One new tag, with the tags already in use offered as suggestions — a native
+ * datalist, because picking an existing tag rather than retyping it is what
+ * keeps a corpus from quietly splitting in two over a capital letter.
+ */
+function AddTagInput({
+  known,
+  onCancel,
+  onCommit,
+}: {
+  known: TagCount[];
+  onCancel: () => void;
+  onCommit: (tag: string) => void;
+}): JSX.Element {
+  const [value, setValue] = useState('');
+  const done = useRef(false);
+
+  const commit = (): void => {
+    if (done.current) {
+      return; // blur fires after Enter; only the first one counts
+    }
+    done.current = true;
+    const tag = value.trim();
+    if (tag.length === 0) {
+      onCancel();
+    } else {
+      onCommit(tag);
+    }
+  };
+
+  return (
+    <>
+      <input
+        className="detail-tag-input"
+        autoFocus
+        value={value}
+        list="detail-known-tags"
+        aria-label="New tag"
+        placeholder="experiment-A"
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            done.current = true;
+            onCancel();
+          }
+        }}
+      />
+      <datalist id="detail-known-tags">
+        {known.map((tag) => (
+          <option key={tag.tag} value={tag.tag} />
+        ))}
+      </datalist>
     </>
   );
 }

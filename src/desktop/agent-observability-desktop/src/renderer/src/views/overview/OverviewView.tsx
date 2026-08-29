@@ -1,11 +1,22 @@
 import type { JSX } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
-import type { IndexStatus, OverviewData } from '../../../../shared/rpc';
-import { formatCost, formatDuration, formatTokens, sourceLabel, splitNotes } from '../sessions/format';
+import type { IndexStatus, OverviewData, OverviewWindow } from '../../../../shared/rpc';
+import { OVERVIEW_WINDOWS } from '../../../../shared/rpc';
+import {
+  formatCost,
+  formatDuration,
+  formatTokens,
+  shortRepo,
+  sourceLabel,
+  splitNotes,
+} from '../sessions/format';
+import type { SessionFilters } from '../sessions/filters';
+import { isoDayRange } from '../sessions/filters';
 import { Spinner } from '../../components/Spinner';
 import { HorizontalBars, Legend, StackedBarChart } from './charts';
 import type { SeriesStyle, StackedColumn } from './charts';
+import { persistWindow, readStoredWindow, windowDescription, windowLabel, windowRange } from './window';
 import './overview.css';
 
 /**
@@ -32,20 +43,66 @@ const TOKEN_SERIES: SeriesStyle[] = [
   { key: 'output', label: 'Output', colorVar: '--series-4' },
 ];
 
-export function OverviewView(): JSX.Element {
+interface Props {
+  /**
+   * Open the session list narrowed to what was clicked. Every drill-down also
+   * carries the active window, so the list answers the same question the mark
+   * did — a repository whose bar reads 12 must not open 400 sessions.
+   */
+  onOpenSessions?: (filters: SessionFilters) => void;
+}
+
+export function OverviewView({ onOpenSessions }: Props): JSX.Element {
   const [data, setData] = useState<OverviewData | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [status, setStatus] = useState<IndexStatus | undefined>(undefined);
+  const [chosen, setChosen] = useState<OverviewWindow>(readStoredWindow);
+  /**
+   * A window change is in flight.
+   *
+   * Re-aggregating is usually milliseconds, but the data host is single-threaded
+   * — behind an index pass it can be ten seconds or more. Until it answers, the
+   * page still shows the PREVIOUS window's numbers under a control that has
+   * already moved, which reads as the button having done nothing.
+   */
+  const [switching, setSwitching] = useState(false);
+
+  /**
+   * Set just before a user-initiated change, and consumed by the fetch it
+   * causes. Only that case earns the spinner: the background refresh after an
+   * index pass would otherwise flash one over the page unprompted.
+   */
+  const userChanged = useRef(false);
+  /** Guards against a slow window's answer landing after a later one's. */
+  const generation = useRef(0);
 
   const load = useCallback(() => {
+    const mine = (generation.current += 1);
+    const blocking = userChanged.current;
+    userChanged.current = false;
+    if (blocking) {
+      setSwitching(true);
+    }
     dataHost
-      .call('overview.get')
+      .call('overview.get', { window: chosen })
       .then((next) => {
+        if (generation.current !== mine) {
+          return; // a later window was chosen while this was in flight
+        }
         setData(next);
         setError(undefined);
       })
-      .catch((err: Error) => setError(err.message));
-  }, []);
+      .catch((err: Error) => {
+        if (generation.current === mine) {
+          setError(err.message);
+        }
+      })
+      .finally(() => {
+        if (generation.current === mine) {
+          setSwitching(false);
+        }
+      });
+  }, [chosen]);
 
   useEffect(() => {
     load();
@@ -66,6 +123,45 @@ export function OverviewView(): JSX.Element {
   }, [load]);
 
   const days = useMemo(() => (data === undefined ? [] : buildDays(data)), [data]);
+
+  const chooseWindow = useCallback(
+    (next: OverviewWindow) => {
+      if (next === chosen) {
+        return; // re-picking the active window would spin for nothing
+      }
+      // The control itself moves immediately; the numbers follow when the data
+      // host answers, and the spinner covers the gap between the two.
+      userChanged.current = true;
+      setChosen(next);
+      persistWindow(next);
+    },
+    [chosen],
+  );
+
+  /**
+   * Everything a drill-down carries by default: the window that produced the
+   * figure being clicked. A mark opens the sessions BEHIND it, which means the
+   * same slice, not the whole history.
+   */
+  const baseFilters = useMemo((): SessionFilters => windowRange(chosen), [chosen]);
+
+  const selector = <WindowSelector value={chosen} onChange={chooseWindow} />;
+
+  /**
+   * Floats over the middle of the view while a new window is being aggregated.
+   *
+   * The stale figures stay on screen beneath it rather than being blanked:
+   * they are what the page said a moment ago, and replacing them with an empty
+   * frame would lose the comparison the user is in the middle of making.
+   * Pointer events stay off so the page underneath is still scrollable.
+   */
+  const busy = switching ? (
+    <div className="overview-busy" role="status" aria-label="Updating the dashboard">
+      <span className="overview-busy-chip">
+        <Spinner size={44} stroke={3} />
+      </span>
+    </div>
+  ) : null;
 
   if (error !== undefined) {
     return (
@@ -91,28 +187,46 @@ export function OverviewView(): JSX.Element {
   }
 
   if (data.totals.sessions === 0) {
-    // First run (or every source turned off): guidance instead of zero tiles.
+    // Two very different empty pages, and telling them apart matters: an
+    // all-time zero really is a first run, but a windowed zero is a quiet week
+    // — and saying "no sessions yet" to someone with two years of history,
+    // with no way back to them, would be the worst thing this window could do.
     const notes = splitNotes(status?.message);
+    const quietWindow = chosen !== 'all';
     return (
-      <div className="placeholder">
-        <div>
-          <h2>No sessions yet</h2>
-          <p>
-            Sessions appear here once you have used Claude Code or GitHub Copilot on this machine.
-            Everything stays local — nothing is uploaded.
-          </p>
-          {notes.length > 0 && (
-            <ul className="overview-empty-notes">
-              {notes.map((note) => (
-                <li key={note}>{note}</li>
-              ))}
-            </ul>
-          )}
-          <p style={{ marginTop: 12, color: 'var(--fg-subtle)' }}>
-            Sources and paths can be adjusted in Settings (the gear icon).
-          </p>
+      <>
+        {busy}
+        <div className="overview">
+        <header className="overview-header">
+          <div className="overview-title">
+            <h1>Dashboard</h1>
+            {selector}
+          </div>
+        </header>
+        <div className="placeholder">
+          <div>
+            <h2>{quietWindow ? `Nothing in ${windowDescription(chosen)}` : 'No sessions yet'}</h2>
+            <p>
+              {quietWindow
+                ? 'No sessions ended in this window. Try a longer one — All time covers everything recorded on this machine.'
+                : 'Sessions appear here once you have used Claude Code or GitHub Copilot on this machine. Everything stays local — nothing is uploaded.'}
+            </p>
+            {!quietWindow && notes.length > 0 && (
+              <ul className="overview-empty-notes">
+                {notes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            )}
+            {!quietWindow && (
+              <p style={{ marginTop: 12, color: 'var(--fg-subtle)' }}>
+                Sources and paths can be adjusted in Settings (the gear icon).
+              </p>
+            )}
+          </div>
         </div>
-      </div>
+        </div>
+      </>
     );
   }
 
@@ -136,13 +250,40 @@ export function OverviewView(): JSX.Element {
     segments: SOURCE_SERIES.map((s) => ({ key: s.key, value: day.costBySource[s.key] ?? 0 })),
   }));
 
+  // Only where the chart span is narrower than the tiles above it, which is
+  // exactly when the two could be misread as answering the same question.
+  const spanNote =
+    data.dailyCapped === true ? `charts cover the last ${data.windowDays} days` : undefined;
+
+  /**
+   * Clicking a day column opens exactly that day — a one-day range replacing
+   * the window's, since the column counted one day, not the window.
+   */
+  const openDay =
+    onOpenSessions === undefined
+      ? undefined
+      : (index: number): void => {
+          const day = days[index];
+          if (day !== undefined) {
+            onOpenSessions(isoDayRange(day.iso));
+          }
+        };
+
   return (
+    <>
+    {busy}
     <div className="overview">
       <header className="overview-header">
-        <h1>Dashboard</h1>
+        <div className="overview-title">
+          <h1>Dashboard</h1>
+          {selector}
+        </div>
         <p>
-          Everything recorded on this machine. Nothing here has been uploaded — all of it is read
-          from your own agent logs.
+          {chosen === 'all'
+            ? 'Everything recorded on this machine.'
+            : `Sessions from ${windowDescription(chosen)}.`}{' '}
+          Nothing here has been uploaded — all of it is read from your own agent logs. Click a bar,
+          a row, or a day to see the sessions behind it.
         </p>
       </header>
 
@@ -187,6 +328,7 @@ export function OverviewView(): JSX.Element {
       <section className="card">
         <div className="card-head">
           <h2>Sessions per day</h2>
+          {spanNote !== undefined && <span className="card-note">{spanNote}</span>}
           <Legend series={SOURCE_SERIES} />
         </div>
         <StackedBarChart
@@ -194,12 +336,14 @@ export function OverviewView(): JSX.Element {
           series={SOURCE_SERIES}
           formatValue={(v) => v.toLocaleString()}
           emptyMessage={`No sessions in the last ${data.windowDays} days.`}
+          onSelect={openDay}
         />
       </section>
 
       <section className="card">
         <div className="card-head">
           <h2>Tokens per day</h2>
+          {spanNote !== undefined && <span className="card-note">{spanNote}</span>}
           <Legend series={TOKEN_SERIES} />
         </div>
         <StackedBarChart
@@ -207,12 +351,14 @@ export function OverviewView(): JSX.Element {
           series={TOKEN_SERIES}
           formatValue={(v) => formatTokens(v).replace(' tokens', '')}
           emptyMessage={`No token usage recorded in the last ${data.windowDays} days.`}
+          onSelect={openDay}
         />
       </section>
 
       <section className="card">
         <div className="card-head">
           <h2>Cost per day</h2>
+          {spanNote !== undefined && <span className="card-note">{spanNote}</span>}
           <Legend series={SOURCE_SERIES} />
         </div>
         <StackedBarChart
@@ -220,6 +366,7 @@ export function OverviewView(): JSX.Element {
           series={SOURCE_SERIES}
           formatValue={(v) => formatCost(v) || '$0.00'}
           emptyMessage={`No cost data in the last ${data.windowDays} days.`}
+          onSelect={openDay}
         />
       </section>
 
@@ -243,6 +390,15 @@ export function OverviewView(): JSX.Element {
             }))}
             colorVar="--series-1"
             emptyMessage="No sessions have a resolved repository yet."
+            onSelect={
+              onOpenSessions === undefined
+                ? undefined
+                : (index) =>
+                    onOpenSessions({
+                      ...baseFilters,
+                      repository: data.topRepositories[index].repository,
+                    })
+            }
           />
         </section>
 
@@ -267,13 +423,27 @@ export function OverviewView(): JSX.Element {
             </thead>
             <tbody>
               {data.bySource.map((row) => (
-                <tr key={row.source}>
+                <tr
+                  key={row.source}
+                  className={onOpenSessions === undefined ? undefined : 'row-selectable'}
+                >
                   <th scope="row">
                     <span
                       className="legend-swatch"
                       style={{ background: `var(${colorVarFor(row.source)})` }}
                     />
-                    {sourceLabel(row.source)}
+                    {onOpenSessions === undefined ? (
+                      sourceLabel(row.source)
+                    ) : (
+                      <button
+                        type="button"
+                        className="table-link"
+                        aria-label={`${sourceLabel(row.source)} — show these sessions`}
+                        onClick={() => onOpenSessions({ ...baseFilters, source: row.source })}
+                      >
+                        {sourceLabel(row.source)}
+                      </button>
+                    )}
                   </th>
                   <td className="n">{row.sessions.toLocaleString()}</td>
                   <td className="n">{row.steps.toLocaleString()}</td>
@@ -335,6 +505,7 @@ export function OverviewView(): JSX.Element {
         </section>
       </div>
     </div>
+    </>
   );
 }
 
@@ -347,7 +518,40 @@ function Tile({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
+/**
+ * How far back the whole page looks.
+ *
+ * A segmented control rather than a dropdown: there are four choices, they are
+ * ordered, and which one is active has to be readable at a glance from anywhere
+ * on the page — every number below it depends on the answer.
+ */
+function WindowSelector({
+  value,
+  onChange,
+}: {
+  value: OverviewWindow;
+  onChange: (next: OverviewWindow) => void;
+}): JSX.Element {
+  return (
+    <div className="window-selector" role="group" aria-label="Time window">
+      {OVERVIEW_WINDOWS.map((option) => (
+        <button
+          key={String(option)}
+          type="button"
+          className="window-option"
+          aria-pressed={option === value}
+          onClick={() => onChange(option)}
+        >
+          {windowLabel(option)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 interface DayBucket {
+  /** `YYYY-MM-DD`, local — the identity a click on this column drills into. */
+  iso: string;
   short: string;
   long: string;
   sessionsBySource: Record<string, number>;
@@ -371,7 +575,9 @@ function buildDays(data: OverviewData): DayBucket[] {
   for (let i = data.windowDays - 1; i >= 0; i -= 1) {
     const date = new Date(today);
     date.setDate(today.getDate() - i);
-    byDay.set(isoDay(date), {
+    const iso = isoDay(date);
+    byDay.set(iso, {
+      iso,
       short: date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
       long: date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }),
       sessionsBySource: {},
@@ -405,10 +611,4 @@ function isoDay(date: Date): string {
 function colorVarFor(source: string): string {
   const known = SOURCE_SERIES.findIndex((s) => s.key === source);
   return known >= 0 ? SOURCE_SERIES[known].colorVar : '--series-3';
-}
-
-/** `owner/repo` — the part that identifies it, without the host boilerplate. */
-function shortRepo(repository: string): string {
-  const parts = repository.replace(/\.git$/, '').split('/').filter((p) => p.length > 0);
-  return parts.slice(-2).join('/') || repository;
 }

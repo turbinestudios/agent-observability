@@ -1,4 +1,4 @@
-import type { JSX } from 'react';
+import type { JSX, KeyboardEvent } from 'react';
 import { useId, useState } from 'react';
 
 /**
@@ -53,11 +53,17 @@ export function StackedBarChart({
   series,
   formatValue,
   emptyMessage,
+  onSelect,
 }: {
   columns: StackedColumn[];
   series: SeriesStyle[];
   formatValue: (value: number) => string;
   emptyMessage: string;
+  /**
+   * Open the sessions behind one column. Optional: a chart without it stays
+   * inert rather than pretending every mark is a link.
+   */
+  onSelect?: (index: number) => void;
 }): JSX.Element {
   const [tip, setTip] = useState<TooltipState | undefined>(undefined);
   const clipId = useId();
@@ -105,9 +111,12 @@ export function StackedBarChart({
           const x = index * columnWidth + (columnWidth - barWidth) / 2;
           let cursor = CHART_HEIGHT;
 
+          const selectable = onSelect !== undefined && total > 0;
+
           return (
             <g
               key={column.label}
+              className={selectable ? 'chart-column chart-column-selectable' : 'chart-column'}
               onMouseEnter={(e) =>
                 setTip({
                   x: e.clientX,
@@ -122,13 +131,32 @@ export function StackedBarChart({
               }
               onMouseMove={(e) => setTip((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev))}
             >
-              {/* Full-height target so thin bars and empty days stay hoverable. */}
+              {/*
+                Full-height target so thin bars and empty days stay hoverable —
+                and, where the column leads somewhere, the click and keyboard
+                target too. An EMPTY day is deliberately not selectable: opening
+                a list guaranteed to be empty is not a useful answer.
+              */}
               <rect
                 x={index * columnWidth}
                 y={0}
                 width={columnWidth}
                 height={CHART_HEIGHT}
                 fill="transparent"
+                {...(selectable
+                  ? {
+                      role: 'button',
+                      tabIndex: 0,
+                      'aria-label': `${column.fullLabel} — show these sessions`,
+                      onClick: () => onSelect(index),
+                      onKeyDown: (e: KeyboardEvent) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onSelect(index);
+                        }
+                      },
+                    }
+                  : {})}
               />
               {series.map((s) => {
                 const value = column.segments.find((seg) => seg.key === s.key)?.value ?? 0;
@@ -181,10 +209,13 @@ export function HorizontalBars({
   rows,
   colorVar,
   emptyMessage,
+  onSelect,
 }: {
   rows: { label: string; value: number; title?: string }[];
   colorVar: string;
   emptyMessage: string;
+  /** Open the sessions behind one bar, by its index. */
+  onSelect?: (index: number) => void;
 }): JSX.Element {
   if (rows.length === 0) {
     return <p className="chart-empty">{emptyMessage}</p>;
@@ -193,18 +224,39 @@ export function HorizontalBars({
 
   return (
     <ul className="hbars">
-      {rows.map((row) => (
-        <li key={row.label} title={row.title ?? row.label}>
-          <span className="hbar-label">{row.label}</span>
-          <span className="hbar-track">
-            <span
-              className="hbar-fill"
-              style={{ width: `${(row.value / max) * 100}%`, background: `var(${colorVar})` }}
-            />
-          </span>
-          <span className="hbar-value">{row.value.toLocaleString()}</span>
-        </li>
-      ))}
+      {rows.map((row, index) => {
+        // The bar's own markup, whether or not it is wrapped in a button.
+        const content = (
+          <>
+            <span className="hbar-label">{row.label}</span>
+            <span className="hbar-track">
+              <span
+                className="hbar-fill"
+                style={{ width: `${(row.value / max) * 100}%`, background: `var(${colorVar})` }}
+              />
+            </span>
+            <span className="hbar-value">{row.value.toLocaleString()}</span>
+          </>
+        );
+        return (
+          <li key={row.label} title={row.title ?? row.label}>
+            {onSelect === undefined ? (
+              content
+            ) : (
+              // A real button, so it is reachable and operable from the
+              // keyboard without reimplementing any of that here.
+              <button
+                type="button"
+                className="hbar-button"
+                aria-label={`${row.title ?? row.label} — show these sessions`}
+                onClick={() => onSelect(index)}
+              >
+                {content}
+              </button>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }

@@ -21,8 +21,8 @@ add genuinely new research capability.
 | 2 | [Workflow deviation detection](02-deviation-detection.md) | Abnormal runs get flagged automatically so I know where to look | Completed (1.4.0) | M | Core's deviation engine, stubbed off in the desktop app |
 | 3 | [Context Hotspots view](03-context-hotspots.md) | See which instruction/skill files agents actually load, skip, or overload | Completed (1.5.0) | M | Core's hotspots provider; replaces a sidebar placeholder |
 | 4 | [Cost & efficiency analytics](04-cost-analytics.md) | See what sessions, models, and repos actually cost | Completed (1.6.0) | M | Dead `costMicros` plumbing + core pricing in three modes |
-| 5 | [Time ranges, filters & drill-down](05-time-ranges-filters-drilldown.md) | Slice any view by time and repository; click a chart to see the sessions behind it | Planned | M | Repository filter already implemented in SQL, unused |
-| 6 | [Session tagging & research notes](06-tagging-notes.md) | Label runs ("experiment-A", "bad-run") and build corpora to compare | Planned | M | The `RenameStore`/`HiddenStore` JSON-store pattern |
+| 5 | [Time ranges, filters & drill-down](05-time-ranges-filters-drilldown.md) | Slice any view by time and repository; click a chart to see the sessions behind it | Completed (1.11.0) | M | Repository filter already implemented in SQL, unused |
+| 6 | [Session tagging & research notes](06-tagging-notes.md) | Label runs ("experiment-A", "bad-run") and build corpora to compare | Completed (1.11.0) | M | The `RenameStore`/`HiddenStore` JSON-store pattern |
 | 7 | [Tool usage analytics](07-tool-analytics.md) | Per-tool call volume, failure rates, and durations — find friction tools | Planned | M/L | Per-tool data all sources already parse and discard |
 | 8 | [Rework & churn quality signals](08-rework-churn.md) | Distinguish productive runs from thrashing — the first quality proxy | Planned | L | Per-turn LoC data + Claude `structuredPatch`, unused today |
 | 9 | [Session retrospective](09-session-retrospective.md) | Each session tells me what it set out to do, how it went, and what to change | Completed (1.7.0) | M/L | Unread transcript markers + the turn data every source already parses |
@@ -35,7 +35,20 @@ compare it). 7 and 8 are independent of everything else.
 
 Mark a row **Completed**, with the desktop version it shipped in, as each
 proposal lands. Proposal 3 ships a minimal cross-view “open this session”
-intent; proposal 5 should generalize that rather than re-invent it.
+intent; proposal 5 generalized that rather than re-inventing it — `App.tsx` now
+holds a `SessionFilterIntent` beside the open intent, and 7 and 8 should land on
+that same seam.
+
+Two things proposal 5 settled differently from its own spec, worth knowing
+before building on it. Its date filter reads **`ended_at_ms`**, not
+`started_at_ms`: the list is ordered by it and the Dashboard buckets its day
+columns by it, so a start-time filter would have made a day column open a
+different set of sessions than the column counted — and the existing
+`idx_sessions_recent` covers it, so no `SCHEMA_VERSION` bump was needed. And the
+JS union that used to add rename-matched sessions after the SQL query is gone:
+tags and renamed titles now reach the index as key sets passed *into*
+`buildFilter`, because anything filtered after `LIMIT` makes offset paging skip
+and duplicate.
 
 ## Future candidates (no spec yet)
 

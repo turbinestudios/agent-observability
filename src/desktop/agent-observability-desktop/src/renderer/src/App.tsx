@@ -7,7 +7,8 @@ import { HotspotsView } from './views/hotspots/HotspotsView';
 import { RetroView } from './views/retro/RetroView';
 import { AssistantView } from './views/assistant/AssistantView';
 import type { AskAiIntent } from './views/assistant/AssistantView';
-import type { OpenSessionIntent } from './views/sessions/SessionsView';
+import type { OpenSessionIntent, SessionFilterIntent } from './views/sessions/SessionsView';
+import type { SessionFilters } from './views/sessions/filters';
 import { ActivityRail } from './components/ActivityRail';
 import { ChangelogDialog } from './components/ChangelogDialog';
 import { CopilotSetupDialog } from './components/CopilotSetupDialog';
@@ -30,13 +31,20 @@ import './app.css';
  * remaining views load only when first opened.
  *
  * Because Sessions is always mounted, another view can hand it a session to
- * open: the intent is held here and passed down, which is why it carries an
- * `at` timestamp — asking twice for the SAME session must still count as two
- * requests, or the second click would do nothing.
+ * open — or a set of filters to narrow to: the intent is held here and passed
+ * down, which is why it carries an `at` timestamp — asking twice for the SAME
+ * session or the same filters must still count as two requests, or the second
+ * click would do nothing.
  */
 export function App(): JSX.Element {
   const [view, setView] = useState<ViewId>('overview');
   const [openIntent, setOpenIntent] = useState<OpenSessionIntent | undefined>(undefined);
+  // "Show me the sessions behind this chart mark", raised by the Dashboard.
+  const [filterIntent, setFilterIntent] = useState<SessionFilterIntent | undefined>(undefined);
+  const openSessions = (filters: SessionFilters): void => {
+    setFilterIntent({ ...filters, at: Date.now() });
+    setView('sessions');
+  };
   // "Ask AI about this session": held here like the open intent, because the
   // Sessions view raises it while the AI Helper consumes it.
   const [askIntent, setAskIntent] = useState<AskAiIntent | undefined>(undefined);
@@ -99,6 +107,7 @@ export function App(): JSX.Element {
           <div className="view-layer" hidden={view !== 'sessions'}>
             <SessionsView
               openIntent={openIntent}
+              filterIntent={filterIntent}
               onAskAi={(source, sessionId) => {
                 setAskIntent({ source, sessionId, at: Date.now() });
                 setView('assistant');
@@ -113,7 +122,7 @@ export function App(): JSX.Element {
           */}
           {view === 'overview' && (
             <div className="view-layer">
-              <OverviewView />
+              <OverviewView onOpenSessions={openSessions} />
             </div>
           )}
           {view === 'hotspots' && (

@@ -1,7 +1,7 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { SessionRef, SessionRow } from '../../../../shared/rpc';
+import type { SessionRef, SessionRow, TagCount } from '../../../../shared/rpc';
 import { sessionKey } from '../../../../shared/rpc';
 import { dataHost } from '../../api/client';
 import { useSessions } from './useSessions';
@@ -10,10 +10,13 @@ import { CompareDetail } from './CompareDetail';
 import { CompareBar } from './CompareBar';
 import { IndexStatusBar } from './IndexStatusBar';
 import { SourceFilter } from './SourceFilter';
+import { FilterPanel } from './FilterPanel';
 import { Spinner } from '../../components/Spinner';
 import { DeleteDialog } from './DeleteDialog';
 import { toggleSelection } from './selection';
 import { showsVerdictChip, verdictLabel } from './retro';
+import type { SessionFilters } from './filters';
+import { applyIntent, clearFilter, describeFilters, filterChips, hasFilters } from './filters';
 import { formatCost, formatDuration, formatRelative, formatTokens, sourceLabel } from './format';
 import './sessions.css';
 
@@ -29,6 +32,18 @@ export interface OpenSessionIntent {
 }
 
 /**
+ * A filtered list another view asked for — clicking a repository bar or a day
+ * column on the Dashboard. Carries `at` for the same reason the open intent
+ * does: clicking the same bar twice has to register twice.
+ */
+export interface SessionFilterIntent extends SessionFilters {
+  at: number;
+}
+
+/** How many tag chips fit on a row before the rest become a "+N". */
+const ROW_TAG_LIMIT = 2;
+
+/**
  * Sessions: the app's primary view and its left-hand navigation.
  *
  * The list is virtualized because a developer accumulates thousands of sessions
@@ -37,14 +52,18 @@ export interface OpenSessionIntent {
  */
 export function SessionsView({
   openIntent,
+  filterIntent,
   onAskAi,
 }: {
   openIntent?: OpenSessionIntent;
+  /** A pre-filtered list another view asked for. */
+  filterIntent?: SessionFilterIntent;
   /** Attach a session to the AI Helper and switch to it. */
   onAskAi?: (source: string, sessionId: string) => void;
 }): JSX.Element {
   const [query, setQuery] = useState('');
-  const [source, setSource] = useState<string | undefined>(undefined);
+  const [filters, setFilters] = useState<SessionFilters>({});
+  const [panelOpen, setPanelOpen] = useState(false);
   const [selected, setSelected] = useState<string | undefined>(undefined);
   // Ticked for comparison. Kept as keys rather than rows, so narrowing the list
   // with a search or a source filter hides rows without untickng them.
@@ -53,6 +72,10 @@ export function SessionsView({
   // so ticking more sessions afterwards does not redraw it underneath the user.
   const [comparing, setComparing] = useState<readonly string[] | undefined>(undefined);
   const [renaming, setRenaming] = useState<string | undefined>(undefined);
+  // Editing a row's tags, by key. Inline like the rename, not a popover: the
+  // list is virtualized and transform-positioned inside a scroll container,
+  // where anchoring a floating panel to a row is a problem with no upside.
+  const [taggingKey, setTaggingKey] = useState<string | undefined>(undefined);
   // A session opened from another view. Held separately from the list because
   // it may be outside the loaded page, or filtered out of it entirely — the
   // detail pane must still show it rather than silently doing nothing.
@@ -65,6 +88,7 @@ export function SessionsView({
   const {
     rows,
     groups,
+    tags,
     status,
     connection,
     loading,
@@ -72,10 +96,14 @@ export function SessionsView({
     refresh,
     rebuild,
     reload,
+    loadMore,
     hiddenCount,
     deviationCount,
     frictionCount,
-  } = useSessions(query, source, showHidden, onlyDeviations, onlyFriction);
+    total,
+    hasMore,
+    loadingMore,
+  } = useSessions(query, filters, showHidden, onlyDeviations, onlyFriction);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -112,6 +140,26 @@ export function SessionsView({
     },
     [query, reload],
   );
+
+  const commitTags = useCallback((row: SessionRow, next: string[]) => {
+    setTaggingKey(undefined);
+    void dataHost.call('sessions.setTags', row.source, row.sessionId, next).catch(() => undefined);
+  }, []);
+
+  // Another view asked for a filtered list — a repository bar or a day column
+  // on the Dashboard. The search box and the state chips are separate controls
+  // and are deliberately left alone; only the narrowing filters are replaced.
+  const appliedIntentAt = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (filterIntent === undefined || appliedIntentAt.current === filterIntent.at) {
+      return;
+    }
+    appliedIntentAt.current = filterIntent.at;
+    setFilters(applyIntent(filterIntent));
+    // The arriving filters are shown as chips; opening the panel on top of them
+    // would cover the list the user just asked to see.
+    setPanelOpen(false);
+  }, [filterIntent]);
 
   // Another view asked for a session: fetch its row by key rather than hoping
   // it is on the current page, and close any comparison so the pane shows it.
@@ -190,6 +238,17 @@ export function SessionsView({
             aria-label="Search sessions"
             onChange={(e) => setQuery(e.target.value)}
           />
+          <button
+            type="button"
+            className={`icon-button${hasFilters(filters) ? ' icon-button-active' : ''}`}
+            aria-expanded={panelOpen}
+            onClick={() => setPanelOpen((open) => !open)}
+            title="Filter by repository, date, or tag"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M3 5h18l-7 8v6l-4 2v-8L3 5Z" />
+            </svg>
+          </button>
           <button type="button" className="icon-button" onClick={refresh} title="Refresh">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M12 4a8 8 0 0 1 7.4 5h-2.2A6 6 0 0 0 6 12h3l-4 4.5L1 12h3a8 8 0 0 1 8-8Z" />
@@ -197,10 +256,22 @@ export function SessionsView({
           </button>
         </header>
 
+        {panelOpen && (
+          <FilterPanel
+            filters={filters}
+            onChange={setFilters}
+            groups={groups}
+            tags={tags}
+            onClose={() => setPanelOpen(false)}
+          />
+        )}
+
         <SourceFilter
           groups={groups}
-          active={source}
-          onSelect={setSource}
+          active={filters.source}
+          onSelect={(source) => setFilters((current) => ({ ...current, source }))}
+          chips={filterChips(filters)}
+          onClearFilter={(key) => setFilters((current) => clearFilter(current, key))}
           hiddenCount={hiddenCount}
           showingHidden={showHidden}
           onToggleHidden={() => {
@@ -262,8 +333,9 @@ export function SessionsView({
           {rows.length === 0 && (loading || busy) ? (
             <ListLoading busy={busy} />
           ) : rows.length === 0 ? (
-            <EmptyState query={query} />
+            <EmptyState query={query} filters={filters} />
           ) : (
+            <>
             <div className="sessions-virtual" style={{ height: virtualizer.getTotalSize() }}>
               {virtualizer.getVirtualItems().map((item) => {
                 const row = rows[item.index];
@@ -279,6 +351,8 @@ export function SessionsView({
                       selected={key === selected}
                       checked={checked.includes(key)}
                       renaming={renaming === key}
+                      tagging={taggingKey === key}
+                      knownTags={tags}
                       hidden={showHidden}
                       // Opening a session closes a comparison: the pane shows
                       // one or the other, and a click that changed nothing on
@@ -291,6 +365,9 @@ export function SessionsView({
                       onStartRename={() => setRenaming(key)}
                       onCancelRename={() => setRenaming(undefined)}
                       onCommitRename={(title) => commitRename(row, title)}
+                      onStartTags={() => setTaggingKey(key)}
+                      onCancelTags={() => setTaggingKey(undefined)}
+                      onCommitTags={(next) => commitTags(row, next)}
                       onRemove={() => setConfirming(row)}
                       onRestore={() => restore(row)}
                     />
@@ -298,6 +375,22 @@ export function SessionsView({
                 );
               })}
             </div>
+            {/*
+              The list used to stop at the first page with nothing saying so —
+              a session past the 300th was reachable only by searching for it.
+              The count is the same query as the rows, so the two agree.
+            */}
+            {hasMore && (
+              <div className="sessions-more">
+                <button type="button" onClick={loadMore} disabled={loadingMore}>
+                  {loadingMore ? 'Loading…' : 'Load more'}
+                </button>
+                <span className="sessions-more-note">
+                  Showing {rows.length.toLocaleString()} of {total.toLocaleString()}
+                </span>
+              </div>
+            )}
+            </>
           )}
           </div>
         </div>
@@ -354,16 +447,36 @@ function ListLoading({ busy }: { busy: boolean }): JSX.Element {
   );
 }
 
-function EmptyState({ query }: { query: string }): JSX.Element {
+/**
+ * Nothing to show — which has three quite different causes, and naming the
+ * wrong one is worse than naming none. A filtered list that says "No sessions
+ * yet" is the trap: the user reads it as an empty index and goes looking for a
+ * bug, when the answer is a filter they set on another screen.
+ */
+function EmptyState({ query, filters }: { query: string; filters: SessionFilters }): JSX.Element {
+  const filtered = hasFilters(filters) || filters.source !== undefined;
+  if (query.length === 0 && !filtered) {
+    return (
+      <div className="placeholder">
+        <div>
+          <h2>No sessions yet</h2>
+          <p>Sessions appear here once you have used Claude Code or Copilot on this machine.</p>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="placeholder">
       <div>
-        <h2>{query.length > 0 ? 'No matching sessions' : 'No sessions yet'}</h2>
+        <h2>No matching sessions</h2>
         <p>
-          {query.length > 0
-            ? 'Try a different search term.'
-            : 'Sessions appear here once you have used Claude Code or Copilot on this machine.'}
+          {query.length > 0 && filtered
+            ? 'Nothing matches that search within the current filters.'
+            : query.length > 0
+              ? 'Try a different search term.'
+              : 'Nothing matches the current filters.'}
         </p>
+        {filtered && <p className="empty-filters">{describeFilters(filters)}</p>}
       </div>
     </div>
   );
@@ -374,12 +487,17 @@ function SessionRowItem({
   selected,
   checked,
   renaming,
+  tagging,
+  knownTags,
   hidden,
   onSelect,
   onToggleCheck,
   onStartRename,
   onCancelRename,
   onCommitRename,
+  onStartTags,
+  onCancelTags,
+  onCommitTags,
   onRemove,
   onRestore,
 }: {
@@ -388,6 +506,10 @@ function SessionRowItem({
   /** Ticked for comparison — independent of `selected`, which opens the session. */
   checked: boolean;
   renaming: boolean;
+  /** The row is swapped over to its inline tag editor. */
+  tagging: boolean;
+  /** Every tag already in use, so the editor can suggest rather than ask. */
+  knownTags: TagCount[];
   /** True while the list is showing hidden sessions, where the action is restore. */
   hidden: boolean;
   onSelect: () => void;
@@ -395,6 +517,9 @@ function SessionRowItem({
   onStartRename: () => void;
   onCancelRename: () => void;
   onCommitRename: (title: string) => void;
+  onStartTags: () => void;
+  onCancelTags: () => void;
+  onCommitTags: (tags: string[]) => void;
   onRemove: () => void;
   onRestore: () => void;
 }): JSX.Element {
@@ -408,6 +533,19 @@ function SessionRowItem({
           originalTitle={row.originalTitle}
           onCancel={onCancelRename}
           onCommit={onCommitRename}
+        />
+      </div>
+    );
+  }
+
+  if (tagging) {
+    return (
+      <div className="session-row session-row-renaming" aria-current={selected}>
+        <TagInput
+          initial={row.tags ?? []}
+          knownTags={knownTags}
+          onCancel={onCancelTags}
+          onCommit={onCommitTags}
         />
       </div>
     );
@@ -465,6 +603,9 @@ function SessionRowItem({
         {row.originalTitle !== undefined && (
           <span className="renamed-dot" aria-label="Renamed" title="Renamed" />
         )}
+        {row.hasNote === true && (
+          <span className="note-dot" aria-label="Has a note" title="Has a note — open it to read" />
+        )}
         {/*
           Only for a count above zero: an unanalyzed session has no count at
           all, and marking it would claim something nobody has checked.
@@ -508,6 +649,21 @@ function SessionRowItem({
           </svg>
         </span>
         <span
+          className="row-tag"
+          role="button"
+          tabIndex={-1}
+          aria-label="Edit tags"
+          title="Tags"
+          onClick={(e) => {
+            e.stopPropagation();
+            onStartTags();
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M2 12.5 11.5 3H21v9.5L11.5 22 2 12.5Zm15-6.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z" />
+          </svg>
+        </span>
+        <span
           className="row-remove"
           role="button"
           tabIndex={-1}
@@ -538,6 +694,21 @@ function SessionRowItem({
       <div className="session-row-bottom">
         <span className={`chip chip-${row.source}`}>{sourceLabel(row.source)}</span>
         <span className="session-repo">{row.repository}</span>
+        {/*
+          Two, then a count. A heavily tagged session would otherwise push the
+          repository and the metrics off the row entirely; the full list is one
+          hover away and always in the detail pane.
+        */}
+        {(row.tags ?? []).slice(0, ROW_TAG_LIMIT).map((tag) => (
+          <span key={tag} className="session-tag" title={(row.tags ?? []).join(', ')}>
+            {tag}
+          </span>
+        ))}
+        {(row.tags ?? []).length > ROW_TAG_LIMIT && (
+          <span className="session-tag session-tag-more" title={(row.tags ?? []).join(', ')}>
+            +{(row.tags ?? []).length - ROW_TAG_LIMIT}
+          </span>
+        )}
         {row.pending === true ? (
           <span className="session-meta dim">reading…</span>
         ) : (
@@ -618,6 +789,78 @@ function RenameInput({
           Reset
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * Inline editor for a session's tags — comma-separated, with the tags already
+ * in use offered as suggestions.
+ *
+ * The same shape as the rename editor deliberately: commit on Enter and on
+ * blur, discard on Escape. A datalist rather than a custom menu keeps the
+ * suggestions native, which matters more here than anywhere — a tag typed
+ * slightly differently is the one mistake that quietly splits a corpus in two,
+ * and picking from the list is how that is avoided. (The store still folds
+ * case, so it is a nudge rather than the only defence.)
+ */
+function TagInput({
+  initial,
+  knownTags,
+  onCancel,
+  onCommit,
+}: {
+  initial: string[];
+  knownTags: TagCount[];
+  onCancel: () => void;
+  onCommit: (tags: string[]) => void;
+}): JSX.Element {
+  const listId = 'known-tags';
+  const [value, setValue] = useState(initial.join(', '));
+  const committed = useRef(false);
+
+  const commit = (next: string): void => {
+    if (committed.current) {
+      return; // blur fires after Enter; only the first one counts
+    }
+    committed.current = true;
+    // Normalization proper happens in the store; this only has to turn one
+    // line of text into candidate tags.
+    onCommit(
+      next
+        .split(',')
+        .map((tag) => tag.trim())
+        .filter((tag) => tag.length > 0),
+    );
+  };
+
+  return (
+    <div className="rename-row">
+      <input
+        className="rename-input"
+        autoFocus
+        value={value}
+        list={listId}
+        aria-label="Tags, comma separated"
+        placeholder="experiment-A, baseline"
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => commit(value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit(value);
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            committed.current = true;
+            onCancel();
+          }
+        }}
+      />
+      <datalist id={listId}>
+        {knownTags.map((tag) => (
+          <option key={tag.tag} value={tag.tag} />
+        ))}
+      </datalist>
     </div>
   );
 }

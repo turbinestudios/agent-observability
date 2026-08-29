@@ -1,12 +1,14 @@
 import type { JSX } from 'react';
 import type { SessionGroup } from '../../../../shared/rpc';
+import type { FilterChip, FilterKey } from './filters';
 import { sourceLabel } from './format';
 
 /**
- * Narrows the list, in two rows that answer two different questions:
- * WHICH TOOL (All / Claude Code / Copilot) on the first, and WHAT STATE
+ * Narrows the list, in rows that answer different questions:
+ * WHICH TOOL (All / Claude Code / Copilot) on the first, WHAT STATE
  * (Flagged / Struggled / Hidden) on the second — mixing them in one strip read
- * as if "Flagged" were a source.
+ * as if "Flagged" were a source — and, when any are set, what the filter panel
+ * is currently narrowing to on a third.
  *
  * The source choices are fixed rather than derived from what happens to be
  * indexed, so the filter does not appear and disappear between runs — a source
@@ -16,6 +18,10 @@ import { sourceLabel } from './format';
  * state chips keep the opposite rule — offered only once they would select
  * something — so the second row vanishes entirely when there is nothing to
  * narrow to.
+ *
+ * The panel's chips are always shown while they are applied, even with the
+ * panel shut. That is the whole contract: a filter the user cannot see is
+ * indistinguishable from an empty index.
  */
 
 const KNOWN_SOURCES = ['claude', 'copilot'];
@@ -25,6 +31,9 @@ interface Props {
   /** `undefined` means All. */
   active: string | undefined;
   onSelect: (source: string | undefined) => void;
+  /** What the filter panel is narrowing to right now; each is clearable. */
+  chips: FilterChip[];
+  onClearFilter: (key: FilterKey) => void;
   hiddenCount: number;
   showingHidden: boolean;
   onToggleHidden: () => void;
@@ -42,6 +51,8 @@ export function SourceFilter({
   groups,
   active,
   onSelect,
+  chips,
+  onClearFilter,
   hiddenCount,
   showingHidden,
   onToggleHidden,
@@ -109,6 +120,25 @@ export function SourceFilter({
               onClick={onToggleHidden}
             />
           )}
+        </div>
+      )}
+      {chips.length > 0 && (
+        <div className="filter-row" role="group" aria-label="Active filters">
+          {chips.map((chip) => (
+            <button
+              key={chip.key}
+              type="button"
+              className="filter-chip filter-chip-clearable"
+              aria-pressed={true}
+              title={`${chip.title ?? chip.label} — click to clear`}
+              onClick={() => onClearFilter(chip.key)}
+            >
+              {chip.label}
+              <span className="filter-chip-clear" aria-hidden="true">
+                ×
+              </span>
+            </button>
+          ))}
         </div>
       )}
     </div>

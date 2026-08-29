@@ -43,6 +43,16 @@ export interface SessionRow {
    */
   originalTitle?: string;
   /**
+   * The user's labels for this session, in the case they typed. Absent means
+   * none — the field is optional so every indexer and fixture that builds a row
+   * stays untouched. LOCAL-ONLY: these live in a JSON store beside the renames,
+   * never in `index.db` (a rebuild must not lose them) and never on any
+   * aggregate, sync, or AI path.
+   */
+  tags?: string[];
+  /** A free-text note is attached. The note itself is fetched per session. */
+  hasNote?: boolean;
+  /**
    * How many workflow deviations the background analysis found in this session.
    * Absent while the session has not been analyzed yet — which is not the same
    * as zero, so the list shows a badge only for a number greater than zero.
@@ -85,6 +95,23 @@ export interface ListSessionsParams {
   deviations?: boolean;
   /** Only sessions the retrospective judged struggled or abandoned. */
   friction?: boolean;
+  /**
+   * Date range, inclusive, over the session's END time — the same instant the
+   * list sorts by and the overview buckets its day columns by. Filtering on the
+   * start time instead would make a day column open a different set of sessions
+   * than the column counted.
+   */
+  endedAfterMs?: number;
+  endedBeforeMs?: number;
+  /** Only sessions carrying this user tag. Matched case-insensitively. */
+  tag?: string;
+}
+
+/** One user tag and how many sessions carry it, for the filter and the picker. */
+export interface TagCount {
+  /** Display case — whichever spelling the tag is most often written in. */
+  tag: string;
+  count: number;
 }
 
 /**
@@ -154,6 +181,52 @@ export interface ContextAction {
   value: string;
 }
 
+/**
+ * How far back the Dashboard looks. `'all'` means no cutoff at all, which is
+ * what the whole view used to be before the window applied to more than the
+ * per-day charts — so nobody loses the totals they were reading.
+ */
+export type OverviewWindow = 7 | 30 | 90 | 'all';
+
+/** Every selectable window, in the order the segmented control shows them. */
+export const OVERVIEW_WINDOWS: readonly OverviewWindow[] = [7, 30, 90, 'all'];
+
+export const DEFAULT_OVERVIEW_WINDOW: OverviewWindow = 30;
+
+/**
+ * Widest daily series the charts will draw. `'all'` leaves the tiles uncapped
+ * but has to stop somewhere for the columns, or years of history would be drawn
+ * as a thousand slivers.
+ */
+export const MAX_DAILY_COLUMNS = 366;
+
+/** Narrow an untrusted value to a window, falling back to the default. */
+export function toOverviewWindow(value: unknown): OverviewWindow {
+  return OVERVIEW_WINDOWS.includes(value as OverviewWindow)
+    ? (value as OverviewWindow)
+    : DEFAULT_OVERVIEW_WINDOW;
+}
+
+/**
+ * The first instant of a `days`-long window that ends today — local midnight,
+ * `days - 1` days ago.
+ *
+ * Local rather than a rolling `now - days * 24h` because the overview groups by
+ * local day: a rolling cutoff lands mid-morning on the oldest day, so that
+ * column would show a fraction of its real total with nothing saying why.
+ *
+ * Shared rather than defined on each side, because the data host aggregates the
+ * window and the renderer hands the same range to a drill-down. Two definitions
+ * would eventually differ by a few hours, and the list would quietly disagree
+ * with the tile that was clicked.
+ */
+export function windowStartMs(days: number, now: number = Date.now()): number {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  return start.getTime();
+}
+
 /** One day's activity, for the overview charts. */
 export interface DayPoint {
   /** `YYYY-MM-DD`, local time. */
@@ -202,6 +275,15 @@ export interface OverviewData {
   daily: DayPoint[];
   /** How many days `daily` covers. */
   windowDays: number;
+  /** The window every figure above was computed over. */
+  window: OverviewWindow;
+  /**
+   * Set only when `window` is `'all'` and the history is longer than
+   * {@link MAX_DAILY_COLUMNS}: the tiles cover everything but the day charts
+   * stop at `windowDays`, and the cards have to say so rather than letting two
+   * time scales sit on one page unannounced.
+   */
+  dailyCapped?: true;
   /** Busiest repositories by session count. */
   topRepositories: { repository: string; sessions: number }[];
   /**
@@ -553,7 +635,22 @@ export interface RpcMethods {
    * does not match the active filter.
    */
   'sessions.row'(source: string, sessionId: string): SessionRow | undefined;
-  'overview.get'(): OverviewData;
+  /**
+   * Replace a session's tags, or clear them with an empty array. Normalized on
+   * the way in — trimmed, de-duplicated case-insensitively, capped — so the
+   * caller does not have to. Returns the row as it now reads.
+   */
+  'sessions.setTags'(source: string, sessionId: string, tags: string[]): SessionRow | undefined;
+  /** Attach a note, or clear it with an empty string. Returns the updated row. */
+  'sessions.setNote'(source: string, sessionId: string, note: string): SessionRow | undefined;
+  /**
+   * A session's note text, empty when there is none. Fetched per session rather
+   * than carried on every list row, which only needs to know one exists.
+   */
+  'sessions.note'(source: string, sessionId: string): string;
+  /** Every tag in use with its session count, for the filter and the picker. */
+  'tags.list'(): TagCount[];
+  'overview.get'(params?: { window?: OverviewWindow }): OverviewData;
   /**
    * The Context Hotspots ranking, aggregated in SQL over what the background
    * analysis has read so far. Returns the ranking it can build right now plus

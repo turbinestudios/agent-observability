@@ -2,6 +2,7 @@ import type { JSX } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { dataHost } from '../api/client';
 import { PAGE_SIZE } from '../views/sessions/useSessions';
+import { readStoredWindow } from '../views/overview/window';
 import { Spinner } from './Spinner';
 import { nextStartupStage, stageText, type StartupStage } from './startup';
 import { useNoteTick } from './useNoteTick';
@@ -98,7 +99,9 @@ export function StartupOverlay({
     // freeze it; the views render their own errors.
     void Promise.allSettled([
       dataHost.call('sessions.list', { limit: PAGE_SIZE }),
-      dataHost.call('overview.get'),
+      // The window the Dashboard will actually open on — warming a different
+      // one would order correctly but leave the query the view issues cold.
+      dataHost.call('overview.get', { window: readStoredWindow() }),
     ]).then(() => setStage((current) => nextStartupStage(current, { kind: 'warmed' })));
   }, [stage.kind]);
 

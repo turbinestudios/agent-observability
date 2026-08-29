@@ -8,11 +8,13 @@ import type {
   HotspotSessionRow,
   ListSessionsParams,
   OverviewData,
+  OverviewWindow,
   RetroListRow,
   RetroVerdict,
   SessionGroup,
   SessionRow,
 } from '../../shared/rpc';
+import { MAX_DAILY_COLUMNS, windowStartMs } from '../../shared/rpc';
 import type { SessionAnalysis } from '../analysis/sessionAnalyzer';
 
 /**
@@ -227,6 +229,21 @@ export interface StoredSession {
   verdict?: string | null;
 }
 
+/**
+ * Session keys the index cannot derive for itself, because the data behind them
+ * lives in the JSON stores beside it — tags and user-chosen names.
+ *
+ * They are passed INTO the query rather than applied to its results so that
+ * filtering, ordering, `LIMIT` and `OFFSET` all happen once, in SQL. Filtering
+ * afterwards would make a page silently short and paging incorrect.
+ */
+export interface SessionKeyOverlay {
+  /** AND-ed: the list is narrowed to these keys. Backs the tag filter. */
+  restrictKeys?: readonly string[];
+  /** OR-ed into the text predicate: sessions matched only by a user-chosen name. */
+  renameKeys?: readonly string[];
+}
+
 /** One session the background analysis still has to read. */
 export interface AnalysisTarget {
   source: string;
@@ -325,8 +342,12 @@ export class IndexDb {
 
   // -- reads ----------------------------------------------------------------
 
-  listSessions(params: ListSessionsParams, hiddenKeys: readonly string[] = []): SessionRow[] {
-    const { where, args } = buildFilter(params, hiddenKeys);
+  listSessions(
+    params: ListSessionsParams,
+    hiddenKeys: readonly string[] = [],
+    overlay: SessionKeyOverlay = {},
+  ): SessionRow[] {
+    const { where, args } = buildFilter(params, hiddenKeys, overlay);
     const limit = clampLimit(params.limit);
     const offset = Math.max(0, params.offset ?? 0);
     const rows = this.db
@@ -338,8 +359,12 @@ export class IndexDb {
     return rows.map(toSessionRow);
   }
 
-  countSessions(params: ListSessionsParams, hiddenKeys: readonly string[] = []): number {
-    const { where, args } = buildFilter(params, hiddenKeys);
+  countSessions(
+    params: ListSessionsParams,
+    hiddenKeys: readonly string[] = [],
+    overlay: SessionKeyOverlay = {},
+  ): number {
+    const { where, args } = buildFilter(params, hiddenKeys, overlay);
     const row = this.db.prepare(`SELECT COUNT(*) AS n ${SESSION_FROM} ${where}`).get(...args) as {
       n: number;
     };
@@ -516,22 +541,46 @@ export class IndexDb {
   }
 
   /**
-   * Everything the overview shows, in four aggregate queries over the index.
+   * Everything the overview shows, in a handful of aggregate queries over the
+   * index.
    *
    * All of it comes from indexed columns, so this stays a few milliseconds even
    * with thousands of sessions — the view can open instantly instead of the
    * user watching sources be re-read.
+   *
+   * The window narrows EVERY figure, not just the daily series: a page whose
+   * tiles are all-time and whose charts are not puts two time scales side by
+   * side and invites the reader to compare them. `'all'` is the way back to
+   * uncapped totals.
    */
-  overview(windowDays: number, hiddenKeys: readonly string[] = []): OverviewData {
+  overview(window: OverviewWindow, hiddenKeys: readonly string[] = []): OverviewData {
+    // Both the cutoff and the chart's buckets start at a LOCAL midnight, so a
+    // "7 days" window is today plus the six days before it — exactly the seven
+    // columns the chart draws — rather than a rolling 168 hours that half-fills
+    // a column nobody can see.
+    const cutoff = window === 'all' ? 0 : windowStartMs(window);
+
     // Applied to every aggregate below, so the totals, the per-source split,
     // the daily series, and the repository ranking all count the same sessions.
-    const excl =
-      hiddenKeys.length === 0
-        ? ''
-        : `source || ':' || session_id NOT IN (${hiddenKeys.map(() => '?').join(', ')})`;
-    const whereExcl = excl === '' ? '' : `WHERE ${excl}`;
-    const andExcl = excl === '' ? '' : `AND ${excl}`;
-    const hk = hiddenKeys;
+    const scope: string[] = [];
+    const scopeArgs: unknown[] = [];
+    if (cutoff > 0) {
+      scope.push('ended_at_ms >= ?');
+      scopeArgs.push(cutoff);
+    }
+    if (hiddenKeys.length > 0) {
+      scope.push(`source || ':' || session_id NOT IN (${hiddenKeys.map(() => '?').join(', ')})`);
+      scopeArgs.push(...hiddenKeys);
+    }
+    const whereExcl = scope.length === 0 ? '' : `WHERE ${scope.join(' AND ')}`;
+    const andExcl = scope.length === 0 ? '' : `AND ${scope.join(' AND ')}`;
+    const hk = scopeArgs;
+
+    // How many day columns to draw. A real window says so itself; 'all' has to
+    // ask the index how far back the history actually goes, and stop at
+    // MAX_DAILY_COLUMNS so years of it are not drawn as a thousand slivers.
+    const { windowDays, dailyCapped } = this.dailySpan(window, hiddenKeys);
+    const dailyCutoff = windowStartMs(windowDays);
 
     // Cost sums SKIP NULLs by SQL semantics, which is the honesty rule: an
     // unpriced session (NULL cost_micros) contributes nothing rather than a
@@ -586,7 +635,7 @@ export class IndexDb {
           GROUP BY day, source
           ORDER BY day ASC`,
       )
-      .all(Date.now() - windowDays * 86_400_000, ...hk) as DayPoint[];
+      .all(dailyCutoff, ...hk) as DayPoint[];
 
     // Ties are common — several repositories sitting on the same count — so the
     // order needs a second key, or SQLite picks arbitrarily and a repository can
@@ -627,7 +676,54 @@ export class IndexDb {
       )
       .all(...hk, TOP_MODEL_LIMIT) as OverviewData['byModel'];
 
-    return { totals, bySource, daily, windowDays, topRepositories, byModel };
+    return {
+      totals,
+      bySource,
+      daily,
+      windowDays,
+      window,
+      ...(dailyCapped ? { dailyCapped: true as const } : {}),
+      topRepositories,
+      byModel,
+    };
+  }
+
+  /**
+   * How many day columns the charts should draw, and whether that is less than
+   * the history behind them.
+   *
+   * A chosen window answers for itself. `'all'` has to look: the oldest session
+   * sets the span, capped at {@link MAX_DAILY_COLUMNS} — and when the cap bites,
+   * the caller has to say so, because the tiles above the charts are still
+   * counting everything.
+   */
+  private dailySpan(
+    window: OverviewWindow,
+    hiddenKeys: readonly string[],
+  ): { windowDays: number; dailyCapped?: true } {
+    if (window !== 'all') {
+      return { windowDays: window };
+    }
+    const exclude =
+      hiddenKeys.length === 0
+        ? ''
+        : `AND source || ':' || session_id NOT IN (${hiddenKeys.map(() => '?').join(', ')})`;
+    const row = this.db
+      .prepare(`SELECT MIN(ended_at_ms) AS oldest FROM sessions WHERE ended_at_ms > 0 ${exclude}`)
+      .get(...hiddenKeys) as { oldest: number | null };
+    if (row.oldest === null) {
+      return { windowDays: 1 };
+    }
+    const start = new Date(row.oldest);
+    start.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    // Rounded, not floored: a DST boundary inside the span makes one of these
+    // days 23 or 25 hours long, which would otherwise drop or duplicate a day.
+    const span = Math.round((today.getTime() - start.getTime()) / 86_400_000) + 1;
+    return span > MAX_DAILY_COLUMNS
+      ? { windowDays: MAX_DAILY_COLUMNS, dailyCapped: true }
+      : { windowDays: Math.max(1, span) };
   }
 
   // -- background analysis ---------------------------------------------------
@@ -1013,15 +1109,17 @@ function buildFilter(
   params: ListSessionsParams,
   /** `source:sessionId` keys the user has taken out of their list. */
   hiddenKeys: readonly string[] = [],
+  /** Key sets the index cannot derive on its own — they live in JSON stores. */
+  overlay: SessionKeyOverlay = {},
 ): { where: string; args: unknown[] } {
   const clauses: string[] = [];
   const args: unknown[] = [];
+  const key = `s.source || ':' || s.session_id`;
 
   // Hidden sessions are excluded in SQL rather than after the query, so a
   // page of results is not silently short once some of it is filtered away.
   if (hiddenKeys.length > 0) {
     const placeholders = hiddenKeys.map(() => '?').join(', ');
-    const key = `s.source || ':' || s.session_id`;
     clauses.push(`${key} ${params.hidden === true ? 'IN' : 'NOT IN'} (${placeholders})`);
     args.push(...hiddenKeys);
   } else if (params.hidden === true) {
@@ -1036,6 +1134,32 @@ function buildFilter(
   if (params.repository !== undefined && params.repository.length > 0) {
     clauses.push('s.repository = ?');
     args.push(params.repository);
+  }
+  // Inclusive, and over the END time — the column this list is ordered by and
+  // the one the overview buckets its day columns by, so clicking a day opens
+  // exactly the sessions that column counted.
+  if (params.endedAfterMs !== undefined) {
+    clauses.push('s.ended_at_ms >= ?');
+    args.push(params.endedAfterMs);
+  }
+  if (params.endedBeforeMs !== undefined) {
+    clauses.push('s.ended_at_ms <= ?');
+    args.push(params.endedBeforeMs);
+  }
+  // Tags live outside the index, so the caller resolves the tag to session keys
+  // and passes them here. An EMPTY set means the tag exists on nothing: that
+  // has to select nothing, exactly as the hidden filter above does. An
+  // UNRESOLVED tag (keys absent) fails closed for the same reason — returning
+  // the whole list would read as the tag matching everything.
+  if (params.tag !== undefined && params.tag.length > 0 && overlay.restrictKeys === undefined) {
+    clauses.push('1 = 0');
+  } else if (overlay.restrictKeys !== undefined) {
+    if (overlay.restrictKeys.length === 0) {
+      clauses.push('1 = 0');
+    } else {
+      clauses.push(`${key} IN (${overlay.restrictKeys.map(() => '?').join(', ')})`);
+      args.push(...overlay.restrictKeys);
+    }
   }
   // A session with no analysis row yet is unread, not clean, so the chip shows
   // only what the analysis actually flagged.
@@ -1052,11 +1176,23 @@ function buildFilter(
     // ESCAPE is required for the backslashes below to mean anything: without it
     // SQLite treats them as literal characters and a search for "100%" matches
     // everything instead of the one session that says it.
-    clauses.push(
-      `(s.title LIKE ? ESCAPE '\\' OR s.repository LIKE ? ESCAPE '\\' OR s.session_id LIKE ? ESCAPE '\\')`,
-    );
+    const parts = [
+      `s.title LIKE ? ESCAPE '\\'`,
+      `s.repository LIKE ? ESCAPE '\\'`,
+      `s.session_id LIKE ? ESCAPE '\\'`,
+    ];
     const like = `%${query.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
     args.push(like, like, like);
+    // The index stores ORIGINAL titles, so a session found only by the name the
+    // user gave it is matched by key instead. It has to be OR-ed into the same
+    // predicate rather than unioned in afterwards: appending rows after SQL's
+    // LIMIT would make the second page skip and duplicate.
+    const renameKeys = overlay.renameKeys ?? [];
+    if (renameKeys.length > 0) {
+      parts.push(`${key} IN (${renameKeys.map(() => '?').join(', ')})`);
+      args.push(...renameKeys);
+    }
+    clauses.push(`(${parts.join(' OR ')})`);
   }
   return { where: clauses.length === 0 ? '' : `WHERE ${clauses.join(' AND ')}`, args };
 }

@@ -104,6 +104,63 @@ export function formatRelative(epochMs: number, nowMs: number = Date.now()): str
 }
 
 /**
+ * `owner/repo` — the part that identifies a repository, without the host
+ * boilerplate. Shared by the Dashboard's bars and the list's filter chips, so
+ * clicking a bar and reading the resulting chip name the same thing.
+ */
+export function shortRepo(repository: string): string {
+  const parts = repository
+    .replace(/\.git$/, '')
+    .split('/')
+    .filter((p) => p.length > 0);
+  return parts.slice(-2).join('/') || repository;
+}
+
+/**
+ * A date as `<input type="date">` wants it, `YYYY-MM-DD`, in LOCAL time —
+ * matching the day boundaries the overview groups by. `toISOString` would shift
+ * the day for anyone east or west of UTC.
+ */
+export function toDateInput(epochMs: number): string {
+  const date = new Date(epochMs);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * The reverse: a `YYYY-MM-DD` from a date input as a local timestamp. `edge`
+ * picks which end of that day — a range is inclusive, so "to 7 Aug" has to mean
+ * the last instant of the 7th, not its first.
+ */
+export function fromDateInput(value: string, edge: 'start' | 'end'): number | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) {
+    return undefined;
+  }
+  const [, year, month, day] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  if (edge === 'end') {
+    date.setHours(23, 59, 59, 999);
+  }
+  return date.getTime();
+}
+
+/** A date for a filter chip: "7 Aug", or "7 Aug 2025" outside this year. */
+export function formatDay(epochMs: number, nowMs: number = Date.now()): string {
+  const date = new Date(epochMs);
+  const sameYear = new Date(nowMs).getFullYear() === date.getFullYear();
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: sameYear ? undefined : 'numeric',
+  });
+}
+
+/**
  * Split the data host's advisory status message into individual notes. The
  * host joins per-source notes with ' · ' (see `runIndex`), one note per source.
  */

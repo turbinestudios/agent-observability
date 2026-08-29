@@ -9,6 +9,45 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.11.0] - 2026-08-29
+
+### Added
+
+- **The Dashboard has a time window.** Pick 7, 30 or 90 days — or **All time** —
+  and every tile, table and chart on the page answers for that period. Your
+  choice is remembered between restarts.
+- **Click a chart to see the sessions behind it.** A repository bar, a row in
+  **By source**, or a single day column now opens the session list narrowed to
+  exactly what you clicked, for the window you were looking at.
+- **Filter the session list by repository, date, and tag.** The funnel button
+  beside the search box opens the filters; whatever is applied shows as a chip
+  above the list, and clicking a chip clears it — so a short list always says
+  why it is short.
+- **Sessions past the 300th are reachable.** The list used to stop at the first
+  three hundred with nothing saying so. A **Load more** button now walks the
+  rest, and tells you how many there are.
+- **Tag your sessions.** Label runs "experiment-A", "baseline", "bad-run" —
+  whatever a comparison needs — from a session's row or from the panel above an
+  open session. Tags you have already used are suggested as you type, so a set
+  does not split in two over a capital letter. Filter the list to a tag, select
+  all of them, and compare.
+- **Attach a note to a session.** A free-text note above the open session
+  records what actually happened and what you would change; a small ring on the
+  row shows that one is there.
+- **Your tags and notes are kept safely aside.** They live outside the session
+  index, so rebuilding the index never loses them, and they are never part of
+  anything sent to the AI Helper or a deep retrospective.
+
+### Changed
+
+- **The Dashboard's totals now follow the selected window.** They used to count
+  every session ever recorded while the charts below them showed 30 days, which
+  made the two impossible to read together. Choose **All time** for the previous
+  behaviour — nothing has been lost.
+- **An open session now has a strip along the top** carrying its tags, its note,
+  **Ask AI**, and refresh, in place of the buttons that floated over the top-right
+  corner of the page.
+
 ## [1.10.2] - 2026-08-29
 
 ### Fixed

@@ -104,6 +104,91 @@
   color: var(--accent);
 }
 
+/*
+ * An applied filter, shown whether or not the panel that set it is open —
+ * a filter the user cannot see is indistinguishable from an empty index.
+ */
+.filter-chip-clearable {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.filter-chip-clear {
+  color: var(--fg-subtle);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.filter-chip-clearable:hover .filter-chip-clear {
+  color: var(--fg);
+}
+
+/* --- filter panel --------------------------------------------------------- */
+
+.filter-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunken);
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.filter-field select,
+.filter-field input {
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+/* Two date inputs side by side; they are the only pair narrow enough to fit. */
+.filter-dates {
+  display: flex;
+  gap: 6px;
+}
+
+.filter-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.filter-panel-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.filter-panel-btn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+/* The funnel, while it is narrowing something. */
+.icon-button-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* --- rename ---------------------------------------------------------------- */
 
 .session-row-renaming {
@@ -166,6 +251,26 @@
 }
 
 .row-rename:hover {
+  background: var(--bg-sunken);
+  color: var(--fg);
+}
+
+/* Tags follow the same rule as rename: on the active or hovered row only. */
+.row-tag {
+  flex: none;
+  display: none;
+  place-items: center;
+  padding: 2px;
+  border-radius: 3px;
+  color: var(--fg-subtle);
+}
+
+.session-row:hover .row-tag,
+.session-row[aria-current='true'] .row-tag {
+  display: grid;
+}
+
+.row-tag:hover {
   background: var(--bg-sunken);
   color: var(--fg);
 }
@@ -412,6 +517,19 @@
   background: var(--accent);
 }
 
+/*
+ * A note exists. Hollow rather than filled, so it is distinguishable at a
+ * glance from the renamed and deviation dots it sits beside — three solid dots
+ * of different colors would be a legend nobody has.
+ */
+.note-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--fg-muted);
+}
+
 /* --- index status ---------------------------------------------------------- */
 
 .status-bar {
@@ -609,6 +727,72 @@
   font-style: italic;
 }
 
+/*
+ * A tag on a row. Capped in width so one long label cannot push the metrics
+ * off the line; the row's title attribute carries the full set.
+ */
+.session-tag {
+  flex: 0 1 auto;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 10px;
+}
+
+.session-tag-more {
+  flex: none;
+  color: var(--fg-subtle);
+}
+
+/* --- load more ------------------------------------------------------------- */
+
+.sessions-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sessions-more button {
+  padding: 4px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sessions-more button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.sessions-more button:disabled {
+  color: var(--fg-subtle);
+  cursor: default;
+}
+
+.sessions-more-note {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Names the filters behind an empty list, so it is not read as an empty index. */
+.empty-filters {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--fg-subtle);
+}
+
 .chip {
   flex: none;
   padding: 1px 5px;
@@ -633,33 +817,138 @@
 }
 
 /*
- * Floats over the detail document's top-right corner. A solid chip background
- * keeps it readable over whatever the document renders beneath it.
+ * The session pane: an annotation strip, an optional note, then the document.
+ *
+ * The strip replaced three chips floating over the frame's top-right corner.
+ * Tags and a note need real width and real controls, and stacking five floating
+ * things over a document that scrolls beneath them was already at its limit.
  */
-.detail-refresh {
-  position: absolute;
-  top: 10px;
-  right: 16px;
-  z-index: 1;
-  height: 30px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+.detail-shell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-/* "Ask AI": attach this session to the AI Helper. Sits beside the refresh chip. */
+.detail-annotations {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+/* Tags take the room; the actions stay pinned right. */
+.detail-tags {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.detail-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.detail-tag-remove {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-subtle);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.detail-tag-remove:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.detail-tag-add,
+.detail-note-toggle {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-subtle);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.detail-tag-add:hover,
+.detail-note-toggle:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.detail-note-toggle[aria-expanded='true'] {
+  border-style: solid;
+  color: var(--fg-muted);
+}
+
+.detail-tag-input {
+  width: 130px;
+  padding: 2px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.detail-note {
+  flex: none;
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunken);
+  color: var(--fg);
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.detail-note:focus {
+  outline: none;
+  background: var(--bg);
+}
+
+.detail-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* "Ask AI": attach this session to the AI Helper. */
 .detail-ask-ai {
-  position: absolute;
-  top: 10px;
-  right: 56px;
-  z-index: 1;
-  height: 30px;
+  height: 26px;
   padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--bg-elevated);
+  background: var(--bg);
   color: var(--fg-muted);
   font-size: 12px;
   cursor: pointer;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 }
 
 .detail-ask-ai:hover {
@@ -674,8 +963,9 @@
  */
 .deep-retro-status {
   position: absolute;
-  top: 10px;
-  right: 132px;
+  /* Clears the annotation strip, which now occupies the top of the pane. */
+  top: 48px;
+  right: 16px;
   z-index: 1;
   display: flex;
   align-items: center;
