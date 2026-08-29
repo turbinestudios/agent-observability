@@ -11,6 +11,7 @@ import {
   isoDayRange,
   matchesFilters,
 } from './filters';
+import { formatDay } from './format';
 import type { SessionRow } from '../../../../shared/rpc';
 
 /**
@@ -23,6 +24,19 @@ import type { SessionRow } from '../../../../shared/rpc';
 const AUG_7 = new Date(2026, 7, 7, 12).getTime();
 const AUG_9 = new Date(2026, 7, 9, 12).getTime();
 const NOW = new Date(2026, 7, 20, 9).getTime();
+
+/**
+ * The day names are COMPUTED, never written out.
+ *
+ * `formatDay` delegates to `Intl`, whose output follows the machine's locale:
+ * "7 Aug" on a European machine, "Aug 7" on the US-locale CI runner. Writing
+ * either one here pins the test to whoever last ran it. What `dateLabel`
+ * actually decides is the composition AROUND those names — collapsing a
+ * one-day range to a single name, joining two ends, prefixing an open one —
+ * and that is what these assert.
+ */
+const DAY_7 = formatDay(AUG_7, NOW);
+const DAY_9 = formatDay(AUG_9, NOW);
 
 describe('chips', () => {
   it('shows nothing when nothing is narrowed', () => {
@@ -54,18 +68,28 @@ describe('chips', () => {
 });
 
 describe('date labels', () => {
+  it('uses two genuinely different days, so the collapse below means something', () => {
+    // Without this, a bug that made every day format identically would let the
+    // one-day assertion pass for the wrong reason.
+    expect(DAY_7).not.toBe(DAY_9);
+  });
+
   it('names a single day once rather than as a range of itself', () => {
     const { endedAfterMs, endedBeforeMs } = dayRange(AUG_7);
-    expect(dateLabel({ endedAfterMs, endedBeforeMs }, NOW)).toBe('7 Aug');
+    const label = dateLabel({ endedAfterMs, endedBeforeMs }, NOW);
+    expect(label).toBe(DAY_7);
+    expect(label).not.toContain('–');
   });
 
   it('shows both ends of a real range', () => {
-    expect(dateLabel({ endedAfterMs: AUG_7, endedBeforeMs: AUG_9 }, NOW)).toBe('7 Aug – 9 Aug');
+    expect(dateLabel({ endedAfterMs: AUG_7, endedBeforeMs: AUG_9 }, NOW)).toBe(
+      `${DAY_7} – ${DAY_9}`,
+    );
   });
 
   it('says which end is open, so it cannot read as a single day', () => {
-    expect(dateLabel({ endedAfterMs: AUG_7 }, NOW)).toBe('From 7 Aug');
-    expect(dateLabel({ endedBeforeMs: AUG_9 }, NOW)).toBe('Until 9 Aug');
+    expect(dateLabel({ endedAfterMs: AUG_7 }, NOW)).toBe(`From ${DAY_7}`);
+    expect(dateLabel({ endedBeforeMs: AUG_9 }, NOW)).toBe(`Until ${DAY_9}`);
   });
 
   it('is absent when no dates are set', () => {

@@ -94,6 +94,38 @@ dotnet test src/dashboard/AgentObservability.Dashboard.Tests/AgentObservability.
 CI deploys the dashboard and infra via [.github/workflows](.github/workflows);
 the extension is not part of CI.
 
+## Tests must not depend on the machine that runs them
+
+A green local run proves nothing about CI, and this has now broken a desktop
+release twice: once on a slow runner overrunning vitest's 5s default, once on
+a US-locale runner formatting a date as `Aug 7` where the author's machine
+said `7 Aug`. The release workflow is triggered **by the tag**
+([release-desktop.yml](.github/workflows/release-desktop.yml)), so the tests
+run *after* the version is tagged — a failure there means a tagged version
+with no installers, recoverable only by another version bump.
+
+Never assert on a value the environment chooses:
+
+- **Locale.** `toLocaleDateString`, `toLocaleTimeString`, `toLocaleString`,
+  anything `Intl`. The runner is `en-US`; a European dev machine is not.
+  Compute the expectation by calling the same formatter, and assert the logic
+  *around* it — that a range joins two names, that a prefix is added — rather
+  than what `Intl` chose to return. `formatCost` shows the other way out: when
+  a figure must read identically everywhere, format it by hand and say so.
+- **Timezone.** Build fixture dates with `new Date(y, m, d)` and compare
+  against values derived the same way; never mix in a UTC literal or
+  `toISOString`, which shifts the day either side of Greenwich.
+- **Clock speed.** Anything that copies a SQLite fixture or walks a real tree
+  needs a `testTimeout` that fits a loaded runner, not a fast laptop. Never
+  assert on elapsed time.
+- **Platform.** Path separators, path case, and line endings all differ
+  between the Windows and macOS runners the release matrix uses. Compare with
+  `path.join`/`path.sep`, never a hard-coded `/` or `\`.
+
+The question to ask of every new assertion: *would this still be true on a
+different machine, in a different country, in December?* If the answer depends
+on the answer to "whose machine?", the assertion is wrong, not the runner.
+
 ## Privacy invariant (do not break)
 
 Raw content — prompts, completions, tool I/O, file paths, identities, branch and
