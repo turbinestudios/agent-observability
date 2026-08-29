@@ -73,10 +73,14 @@ export function App(): JSX.Element {
       cancelled = true;
     };
   }, [startupDone]);
+  // An update status exists only after the user consents to a download, and it
+  // never returns to undefined — so this is a latch: from the first byte on,
+  // the upgrade owns the window's blocking layers for the rest of the session.
+  const upgradeUnderway = updateStatus !== undefined;
   const setupDialog = copilotSetupDialogState(
     copilotSetup,
     startupDone,
-    updateDialog !== undefined,
+    upgradeUnderway,
     dismissedSetup,
   );
 
@@ -153,16 +157,17 @@ export function App(): JSX.Element {
         {changelogOpen && <ChangelogDialog onClose={() => setChangelogOpen(false)} />}
         {/*
           One blocking overlay at a time, in a strict order: startup overlay,
-          then the update dialog, then the Copilot setup offer. The update
-          dialog is what the user just consented to and it blocks the window
-          itself, so the startup overlay stands down while it is up — and
-          comes back if the download is sent to the background before the
-          first index pass has finished. The setup offer waits for both.
+          then the update dialog, then the Copilot setup offer. An upgrade the
+          user consented to RETIRES the startup overlay outright — it must not
+          cover the download, and it must not come back over an upgrade even
+          when the download is sent to the background (its startup machine
+          keeps running underneath, so the view warm-up still happens). The
+          dialog's own z-index outranks the startup overlay as well, so even a
+          status-timing gap cannot paint "starting up" over the download. The
+          setup offer additionally stays away for the whole upgrade: offering
+          new setup while the app is being replaced helps nobody.
         */}
-        <StartupOverlay
-          suppressed={updateDialog !== undefined}
-          onDone={() => setStartupDone(true)}
-        />
+        <StartupOverlay suppressed={upgradeUnderway} onDone={() => setStartupDone(true)} />
         {updateDialog !== undefined && (
           <UpdateDialogView
             status={updateDialog.status}

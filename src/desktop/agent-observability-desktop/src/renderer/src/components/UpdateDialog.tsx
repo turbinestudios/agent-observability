@@ -77,7 +77,7 @@ export function UpdateDialogView({
 
   if (status.phase === 'failed') {
     return (
-      <div className="modal-backdrop" onMouseDown={onDismiss}>
+      <div className="modal-backdrop update-backdrop" onMouseDown={onDismiss}>
         <div
           className="modal"
           role="dialog"
@@ -100,7 +100,7 @@ export function UpdateDialogView({
 
   const starting = status.transferred === 0 && status.total === 0;
   return (
-    <div className="modal-backdrop" onMouseDown={onDismiss}>
+    <div className="modal-backdrop update-backdrop" onMouseDown={onDismiss}>
       <div
         className="modal"
         role="dialog"

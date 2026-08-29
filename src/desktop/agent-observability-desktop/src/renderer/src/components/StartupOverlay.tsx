@@ -25,9 +25,10 @@ import { useNoteTick } from './useNoteTick';
  * one: the data host emits a persisted `idle` status BEFORE the pass starts,
  * and taking that for completion is exactly the dead-window bug this fixes.
  *
- * `suppressed` lets the shell stand it down while another blocking overlay
- * owns the window — today the update download dialog, which the user asked for
- * explicitly and which would otherwise be hidden underneath this one.
+ * `suppressed` lets the shell stand it down while something more important
+ * owns the window — today an app upgrade the user consented to, which retires
+ * this overlay for the rest of the session (see the shell's overlay comment).
+ * The machine keeps running while suppressed, so the warm-up still happens.
  */
 
 /** Nobody gets locked behind a wedge: the overlay always lifts eventually. */

@@ -494,6 +494,17 @@
   color: var(--fg-subtle);
 }
 
+/*
+ * The download dialog outranks every other layer — the startup overlay (90)
+ * included. The shell also stands the startup overlay down in React state, but
+ * that suppression rides on event timing; this is the hard guarantee that an
+ * upgrade the user just consented to can never be painted over, whatever order
+ * the state lands in.
+ */
+.update-backdrop {
+  z-index: 100;
+}
+
 .update-error {
   margin: 10px 0 0;
   font-size: 12.5px;

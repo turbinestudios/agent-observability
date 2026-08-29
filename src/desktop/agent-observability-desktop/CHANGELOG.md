@@ -28,6 +28,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   can't be edited safely — it has a syntax error, or the app lacks permission —
   the app says so, shows the exact line to add, and opens the file for you.
 
+### Fixed
+
+- **An upgrade now truly owns the screen.** Accepting an update while the app
+  was still starting could leave the "Starting up…" screen painted over the
+  download progress. The download dialog now sits above every other layer, and
+  the moment you consent to an upgrade the startup screen retires for good —
+  it no longer returns even if you send the download to the background.
+
 ## [1.9.1] - 2026-08-29
 
 ### Added
