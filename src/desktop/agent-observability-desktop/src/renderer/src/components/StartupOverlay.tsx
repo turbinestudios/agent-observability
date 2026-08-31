@@ -102,6 +102,7 @@ export function StartupOverlay({
       // The window the Dashboard will actually open on — warming a different
       // one would order correctly but leave the query the view issues cold.
       dataHost.call('overview.get', { window: readStoredWindow() }),
+      dataHost.call('overview.insights', { window: readStoredWindow() }),
     ]).then(() => setStage((current) => nextStartupStage(current, { kind: 'warmed' })));
   }, [stage.kind]);
 

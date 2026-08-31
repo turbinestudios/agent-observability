@@ -25,16 +25,49 @@ import './hotspots.css';
  * worse than an answer that grows.
  */
 
+/**
+ * "Review this file here", raised by the Dashboard's hotspot card. The `at`
+ * timestamp makes asking for the same file twice count as two requests, the
+ * same convention every cross-view intent in App.tsx follows.
+ */
+export interface HotspotFocusIntent {
+  /** Absent for a plain "view all" — the view opens as it stands. */
+  file?: string;
+  at: number;
+}
+
 interface Props {
   /** Opens a session in the Sessions view, from the expanded row. */
   onOpenSession: (source: string, sessionId: string) => void;
+  /** A file to arrive focused on, from the Dashboard's drill-down. */
+  focusIntent?: HotspotFocusIntent;
+  /** Opens the Improve view scoped to the selected repository. */
+  onImprove?: (repository: string) => void;
 }
 
-export function HotspotsView({ onOpenSession }: Props): JSX.Element {
+export function HotspotsView({ onOpenSession, focusIntent, onImprove }: Props): JSX.Element {
   const [data, setData] = useState<HotspotsResult | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [repository, setRepository] = useState<string>('');
   const [expanded, setExpanded] = useState<string | undefined>(undefined);
+
+  /**
+   * Arriving from the Dashboard: focus the named file. The repository filter is
+   * cleared because the Dashboard's card aggregates across repositories — a
+   * filter left over from an earlier visit could hide the very row that was
+   * clicked. Tracked by the intent's timestamp so a repeat click still lands.
+   */
+  const [consumedIntent, setConsumedIntent] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (focusIntent === undefined || focusIntent.at === consumedIntent) {
+      return;
+    }
+    setConsumedIntent(focusIntent.at);
+    if (focusIntent.file !== undefined) {
+      setRepository('');
+      setExpanded(focusIntent.file);
+    }
+  }, [focusIntent, consumedIntent]);
 
   const load = useCallback(() => {
     dataHost
@@ -100,6 +133,23 @@ export function HotspotsView({ onOpenSession }: Props): JSX.Element {
             </select>
           </label>
           <span className="hotspots-coverage">{describeCoverage(data.rows, data.status)}</span>
+          {onImprove !== undefined && (
+            <button
+              type="button"
+              className="hotspots-improve"
+              // Plans are single-repository by definition, so the door opens
+              // only once one is chosen here.
+              disabled={repository === ''}
+              title={
+                repository === ''
+                  ? 'Pick a repository first — improvement plans cover one repository at a time'
+                  : `Build an improvement plan for ${repository}`
+              }
+              onClick={() => onImprove(repository)}
+            >
+              Improve context…
+            </button>
+          )}
         </div>
         {progress !== undefined && (
           <p className="hotspots-progress" role="status">

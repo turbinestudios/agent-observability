@@ -15,7 +15,14 @@ import { UpdateIndicator } from './UpdateIndicator';
  * collapsed strip still names its destinations on hover.
  */
 
-export type ViewId = 'sessions' | 'overview' | 'hotspots' | 'retro' | 'assistant' | 'settings';
+export type ViewId =
+  | 'sessions'
+  | 'overview'
+  | 'hotspots'
+  | 'retro'
+  | 'improve'
+  | 'assistant'
+  | 'settings';
 
 interface RailEntry {
   id: ViewId;
@@ -58,6 +65,14 @@ const ENTRIES: RailEntry[] = [
     // A backwards-looping arrow: looking back over what already ran.
     icon: (
       <path d="M12 4.5V1.6L6.8 6l5.2 4.4V7.5a6 6 0 1 1-5.9 7.1l-2.5.5A8.5 8.5 0 1 0 12 4.5Z" />
+    ),
+  },
+  {
+    id: 'improve',
+    label: 'Improve',
+    // A wrench over a spark: turning evidence into concrete fixes.
+    icon: (
+      <path d="M21.6 6.2a5.4 5.4 0 0 1-7.3 6.5L7.4 19.6a2.1 2.1 0 0 1-3-3l6.9-6.9a5.4 5.4 0 0 1 6.5-7.3L14.6 5.6l3.8 3.8 3.2-3.2Z" />
     ),
   },
   {

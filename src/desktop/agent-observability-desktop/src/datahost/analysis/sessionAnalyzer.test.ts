@@ -7,7 +7,7 @@ import type {
 } from '@agent-observability/core/src/telemetry/models';
 import type { SessionContextAnalysis } from '@agent-observability/core/src/context/models';
 import { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
-import { analyzeSession } from './sessionAnalyzer';
+import { analyzeSession, projectFindings } from './sessionAnalyzer';
 
 /**
  * What the background pass records per session. The detection itself is core's
@@ -248,5 +248,38 @@ describe('analyzeSession', () => {
     expect(
       analyze(stubSource({ detail: detail([turn(1_000)]), interactionsFail: true })),
     ).toMatchObject({ deviationCount: 0, errorCount: 0 });
+  });
+});
+
+describe('projectFindings', () => {
+  const finding = (
+    id: Parameters<typeof projectFindings>[0][number]['id'],
+    severity: 'info' | 'friction' | 'blocker',
+  ) => ({ id, severity, description: 'irrelevant here', contentDerived: false as const });
+
+  it('folds findings to one row per signal with occurrence counts', () => {
+    expect(
+      projectFindings([
+        finding('correction-reprompt', 'friction'),
+        finding('correction-reprompt', 'friction'),
+        finding('rework-churn', 'friction'),
+      ]),
+    ).toEqual([
+      { id: 'correction-reprompt', severity: 'friction', count: 2 },
+      { id: 'rework-churn', severity: 'friction', count: 1 },
+    ]);
+  });
+
+  it('keeps the worst severity a signal reached, in either order', () => {
+    expect(
+      projectFindings([finding('tool-error-streak', 'friction'), finding('tool-error-streak', 'blocker')]),
+    ).toEqual([{ id: 'tool-error-streak', severity: 'blocker', count: 2 }]);
+    expect(
+      projectFindings([finding('context-compaction', 'friction'), finding('context-compaction', 'info')]),
+    ).toEqual([{ id: 'context-compaction', severity: 'friction', count: 2 }]);
+  });
+
+  it('projects nothing from nothing', () => {
+    expect(projectFindings([])).toEqual([]);
   });
 });

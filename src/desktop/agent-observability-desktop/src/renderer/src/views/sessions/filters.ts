@@ -1,5 +1,6 @@
-import type { ListSessionsParams, SessionRow } from '../../../../shared/rpc';
+import type { ListSessionsParams, RetroVerdict, SessionRow } from '../../../../shared/rpc';
 import { formatDay, shortRepo, sourceLabel } from './format';
+import { themeLabel, verdictLabel } from './retro';
 
 /**
  * What the session list is currently narrowed to, and how that reads on screen.
@@ -20,10 +21,14 @@ export interface SessionFilters {
   endedAfterMs?: number;
   endedBeforeMs?: number;
   tag?: string;
+  /** One exact retrospective verdict — a Dashboard hero-slice drill-down. */
+  verdict?: RetroVerdict;
+  /** One retrospective finding signal — a Dashboard theme drill-down. */
+  signal?: string;
 }
 
 /** Which dimension a chip clears. */
-export type FilterKey = 'source' | 'repository' | 'date' | 'tag';
+export type FilterKey = 'source' | 'repository' | 'date' | 'tag' | 'verdict' | 'signal';
 
 export interface FilterChip {
   key: FilterKey;
@@ -53,6 +58,20 @@ export function filterChips(filters: SessionFilters, nowMs: number = Date.now())
   }
   if (filters.tag !== undefined) {
     chips.push({ key: 'tag', label: `#${filters.tag}`, title: `Tagged "${filters.tag}"` });
+  }
+  if (filters.verdict !== undefined) {
+    chips.push({
+      key: 'verdict',
+      label: verdictLabel(filters.verdict),
+      title: `Sessions the retrospective judged "${verdictLabel(filters.verdict)}"`,
+    });
+  }
+  if (filters.signal !== undefined) {
+    chips.push({
+      key: 'signal',
+      label: themeLabel(filters.signal),
+      title: 'Sessions whose retrospective raised this friction theme',
+    });
   }
   return chips;
 }
@@ -122,6 +141,8 @@ export function filterKey(filters: SessionFilters): string {
     filters.endedAfterMs ?? '',
     filters.endedBeforeMs ?? '',
     filters.tag ?? '',
+    filters.verdict ?? '',
+    filters.signal ?? '',
   ].join('|');
 }
 
@@ -161,6 +182,12 @@ export function applyIntent(intent: SessionFilters): SessionFilters {
   if (intent.tag !== undefined) {
     next.tag = intent.tag;
   }
+  if (intent.verdict !== undefined) {
+    next.verdict = intent.verdict;
+  }
+  if (intent.signal !== undefined) {
+    next.signal = intent.signal;
+  }
   return next;
 }
 
@@ -198,6 +225,15 @@ export function matchesFilters(row: SessionRow, filters: SessionFilters): boolea
     return false;
   }
   if (filters.endedBeforeMs !== undefined && row.endedAtMs > filters.endedBeforeMs) {
+    return false;
+  }
+  if (filters.verdict !== undefined && row.verdict !== filters.verdict) {
+    return false;
+  }
+  // A signal filter is SQL-decided (the row does not carry its findings), so a
+  // pushed row cannot prove it qualifies — fail closed, exactly like the search
+  // text, and let the re-query bring it in if it belongs.
+  if (filters.signal !== undefined && filters.signal.length > 0) {
     return false;
   }
   if (filters.tag !== undefined && filters.tag.length > 0) {

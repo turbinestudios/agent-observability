@@ -3,6 +3,7 @@ import { normalizeExtensions } from '../telemetry/locAnalysis';
 import { buildRepoSyncPolicy, normalizeRepositoryList, RepoSyncPolicy } from '../aggregate/repoSyncPolicy';
 import { MIN_SESSION_MINUTES, parseWorkflowConfigs } from './workflowParsing';
 import { ClaudeEffort, DEFAULT_CLAUDE_MODEL, parseClaudeEffort } from '../chat/backends/claudeCliArgs';
+import { DEFAULT_COPILOT_CLI_MODEL } from '../chat/backends/copilotCliArgs';
 import type { BackendId } from '../chat/backends/chatBackend';
 
 export { MIN_SESSION_MINUTES } from './workflowParsing';
@@ -60,6 +61,8 @@ export const ConfigKeys = {
   aiHelperClaudeModel: 'aiHelper.claudeModel',
   aiHelperClaudeEffort: 'aiHelper.claudeEffort',
   aiHelperClaudeCliPath: 'aiHelper.claudeCliPath',
+  aiHelperCopilotCliModel: 'aiHelper.copilotCliModel',
+  aiHelperCopilotCliPath: 'aiHelper.copilotCliPath',
   copilotCloudEnabled: 'copilotCloud.enabled',
   copilotCloudAccounts: 'copilotCloud.accounts',
   copilotCloudGhCliPath: 'copilotCloud.ghCliPath',
@@ -113,6 +116,8 @@ export const ConfigDefaults = {
   aiHelperClaudeModel: 'sonnet',
   aiHelperClaudeEffort: 'high',
   aiHelperClaudeCliPath: '',
+  aiHelperCopilotCliModel: '',
+  aiHelperCopilotCliPath: '',
   copilotCloudEnabled: false,
   copilotCloudAccounts: [] as readonly string[],
   copilotCloudGhCliPath: '',
@@ -489,7 +494,7 @@ export class Configuration {
    */
   getAiHelperBackend(): BackendId {
     const raw = this.config().get<string>(ConfigKeys.aiHelperBackend, ConfigDefaults.aiHelperBackend);
-    return raw === 'claude-code' ? 'claude-code' : 'copilot';
+    return raw === 'claude-code' || raw === 'copilot-cli' ? raw : 'copilot';
   }
 
   /** Preferred Copilot model id/family for the AI Helper; '' = first available. */
@@ -520,6 +525,22 @@ export class Configuration {
       .get<string>(ConfigKeys.aiHelperClaudeCliPath, ConfigDefaults.aiHelperClaudeCliPath)
       .trim();
     return value.length > 0 ? value : 'claude';
+  }
+
+  /** Copilot CLI model id; blank falls back to `auto` (the CLI picks). */
+  getAiHelperCopilotCliModel(): string {
+    const value = this.config()
+      .get<string>(ConfigKeys.aiHelperCopilotCliModel, ConfigDefaults.aiHelperCopilotCliModel)
+      .trim();
+    return value.length > 0 ? value : DEFAULT_COPILOT_CLI_MODEL;
+  }
+
+  /** Copilot CLI executable; blank falls back to `copilot` on PATH. */
+  getAiHelperCopilotCliPath(): string {
+    const value = this.config()
+      .get<string>(ConfigKeys.aiHelperCopilotCliPath, ConfigDefaults.aiHelperCopilotCliPath)
+      .trim();
+    return value.length > 0 ? value : 'copilot';
   }
 
   /**

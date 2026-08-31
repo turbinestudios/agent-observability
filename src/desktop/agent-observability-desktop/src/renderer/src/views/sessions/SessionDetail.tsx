@@ -1,7 +1,7 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
-import type { AiAvailability, SessionRow, TagCount } from '../../../../shared/rpc';
+import type { AiAvailability, AiBackendInfo, SessionRow, TagCount } from '../../../../shared/rpc';
 import { useThemeValue } from '../../theme/ThemeContext';
 import { Spinner } from '../../components/Spinner';
 import { rotatedNote } from '../../components/loadingNotes';
@@ -53,6 +53,8 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
   // Probed when the dialog opens — the CLI is the dialog's whole means of
   // action, so a missing install must block the confirm, not fail after it.
   const [deepAvailability, setDeepAvailability] = useState<AiAvailability | undefined>(undefined);
+  // The active backend, so the consent copy names the actual vendor and CLI.
+  const [deepBackend, setDeepBackend] = useState<AiBackendInfo | undefined>(undefined);
   const frameRef = useRef<HTMLIFrameElement>(null);
   // Bumped by the refresh button; the ref marks the next fetch as forced so
   // only a deliberate refresh re-parses (a theme change reuses the cache).
@@ -68,6 +70,10 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
       .call('ai.availability')
       .then(setDeepAvailability)
       .catch((err: Error) => setDeepAvailability({ available: false, reason: err.message }));
+    dataHost
+      .call('ai.backends')
+      .then((all) => setDeepBackend(all.find((b) => b.active)))
+      .catch(() => setDeepBackend(undefined));
   }, []);
 
   useEffect(() => {
@@ -262,6 +268,7 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
       {deepConfirm && (
         <DeepRetroDialog
           availability={deepAvailability}
+          backend={deepBackend}
           onRecheck={checkAvailability}
           onCancel={() => setDeepConfirm(false)}
           onConfirm={runDeep}
@@ -511,12 +518,15 @@ function AddTagInput({
  */
 function DeepRetroDialog({
   availability,
+  backend,
   onRecheck,
   onCancel,
   onConfirm,
 }: {
   /** `undefined` while the probe is in flight. */
   availability?: AiAvailability;
+  /** The active backend, naming the vendor the digest would go to. */
+  backend?: AiBackendInfo;
   onRecheck: () => void;
   onCancel: () => void;
   onConfirm: () => void;
@@ -547,20 +557,17 @@ function DeepRetroDialog({
         <h2 id="deep-retro-title">Send this session to be judged?</h2>
         <p>
           This sends the session&apos;s prompts, the assistant&apos;s responses, and its tool names
-          to Anthropic through your own Claude Code login — the same account the session ran on. The
-          written retrospective is stored only on this machine, and nothing here uses the cloud-sync
-          path.
+          to <strong>{backend?.vendor ?? 'the AI vendor'}</strong> through your own{' '}
+          {backend?.label ?? 'AI'} CLI login. The written retrospective is stored only on this
+          machine, and nothing here uses the cloud-sync path.
         </p>
         {cliMissing && (
           <div className="modal-warning" role="alert">
             <p>
-              <strong>The Claude Code CLI was not found</strong> — this needs it to run.{' '}
-              {availability.reason}
+              <strong>The {backend?.label ?? 'AI'} CLI was not found</strong> — this needs it to
+              run. {availability.reason}
             </p>
-            <p>
-              Install it with <code>npm install -g @anthropic-ai/claude-code</code>, or set the CLI
-              path under Settings → AI, then check again.
-            </p>
+            <p>Fix the CLI path — or switch backends — under Settings → AI, then check again.</p>
             <button type="button" className="modal-btn" onClick={onRecheck}>
               Check again
             </button>

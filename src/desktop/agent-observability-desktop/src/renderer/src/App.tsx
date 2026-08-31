@@ -4,7 +4,10 @@ import { SessionsView } from './views/sessions/SessionsView';
 import { OverviewView } from './views/overview/OverviewView';
 import { SettingsView } from './views/settings/SettingsView';
 import { HotspotsView } from './views/hotspots/HotspotsView';
+import type { HotspotFocusIntent } from './views/hotspots/HotspotsView';
 import { RetroView } from './views/retro/RetroView';
+import { ImproveView } from './views/improve/ImproveView';
+import type { ImproveIntent } from './views/improve/ImproveView';
 import { AssistantView } from './views/assistant/AssistantView';
 import type { AskAiIntent } from './views/assistant/AssistantView';
 import type { OpenSessionIntent, SessionFilterIntent } from './views/sessions/SessionsView';
@@ -48,6 +51,20 @@ export function App(): JSX.Element {
   // "Ask AI about this session": held here like the open intent, because the
   // Sessions view raises it while the AI Helper consumes it.
   const [askIntent, setAskIntent] = useState<AskAiIntent | undefined>(undefined);
+  // "Review this context file": raised by the Dashboard's hotspot card,
+  // consumed by the Hotspots view.
+  const [hotspotIntent, setHotspotIntent] = useState<HotspotFocusIntent | undefined>(undefined);
+  const openHotspot = (file?: string): void => {
+    setHotspotIntent({ ...(file !== undefined ? { file } : {}), at: Date.now() });
+    setView('hotspots');
+  };
+  // "Improve this repository": raised by the Hotspots and Retro headers,
+  // consumed by the Improve view (arrives pre-scoped to the repository).
+  const [improveIntent, setImproveIntent] = useState<ImproveIntent | undefined>(undefined);
+  const openImprove = (repository: string): void => {
+    setImproveIntent({ repository, at: Date.now() });
+    setView('improve');
+  };
   // A dialog, not a view: it overlays whatever you were looking at and returns
   // you to it, so it must not disturb `view`.
   const [changelogOpen, setChangelogOpen] = useState(false);
@@ -122,12 +139,14 @@ export function App(): JSX.Element {
           */}
           {view === 'overview' && (
             <div className="view-layer">
-              <OverviewView onOpenSessions={openSessions} />
+              <OverviewView onOpenSessions={openSessions} onOpenHotspot={openHotspot} />
             </div>
           )}
           {view === 'hotspots' && (
             <div className="view-layer">
               <HotspotsView
+                focusIntent={hotspotIntent}
+                onImprove={openImprove}
                 onOpenSession={(source, sessionId) => {
                   setOpenIntent({ source, sessionId, at: Date.now() });
                   setView('sessions');
@@ -138,11 +157,17 @@ export function App(): JSX.Element {
           {view === 'retro' && (
             <div className="view-layer">
               <RetroView
+                onImprove={openImprove}
                 onOpenSession={(source, sessionId) => {
                   setOpenIntent({ source, sessionId, at: Date.now() });
                   setView('sessions');
                 }}
               />
+            </div>
+          )}
+          {view === 'improve' && (
+            <div className="view-layer">
+              <ImproveView focusIntent={improveIntent} />
             </div>
           )}
           {view === 'assistant' && (

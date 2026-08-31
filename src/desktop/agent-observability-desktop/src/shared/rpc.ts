@@ -95,6 +95,13 @@ export interface ListSessionsParams {
   deviations?: boolean;
   /** Only sessions the retrospective judged struggled or abandoned. */
   friction?: boolean;
+  /** Only sessions the retrospective judged exactly this — the Dashboard's slice drill-down. */
+  verdict?: RetroVerdict;
+  /**
+   * Only sessions whose retrospective raised this finding signal (beyond
+   * info severity) — the Dashboard's friction-theme drill-down.
+   */
+  signal?: string;
   /**
    * Date range, inclusive, over the session's END time — the same instant the
    * list sorts by and the overview buckets its day columns by. Filtering on the
@@ -392,6 +399,67 @@ export interface RetroResult {
   status: AnalysisStatus;
 }
 
+/** How many friction themes the Dashboard's insight card ranks. */
+export const INSIGHT_THEME_LIMIT = 8;
+
+/** How many scored hotspots the Dashboard's insight card shows. */
+export const INSIGHT_HOTSPOT_LIMIT = 5;
+
+/**
+ * One day-and-verdict bucket for the Dashboard hero. `'unjudged'` counts the
+ * sessions with no verdict yet — not yet analyzed, or unjudgeable — so the
+ * hero's columns always sum to the same sessions the daily chart counts.
+ */
+export interface VerdictDayPoint {
+  /** `YYYY-MM-DD`, local time — the same bucketing as {@link DayPoint}. */
+  day: string;
+  verdict: RetroVerdict | 'unjudged';
+  sessions: number;
+}
+
+/**
+ * One recurring retrospective finding, ranked by how many sessions raised it.
+ * `signalId` is core's stable `RetrospectiveSignalId`; kept as a string so this
+ * contract file stays import-free (the datahost's assignment from core's type
+ * makes drift a compile error, as with {@link RetroVerdict}).
+ */
+export interface ThemeRow {
+  signalId: string;
+  /** Distinct sessions the signal appeared in — the honest recurrence measure. */
+  sessions: number;
+  /** Total occurrences across those sessions. */
+  occurrences: number;
+}
+
+/** A hotspot row plus its composite review score (0–100, higher = look first). */
+export interface ScoredHotspotRow extends HotspotRow {
+  score: number;
+}
+
+/**
+ * The Dashboard's insight section: how sessions went, what friction recurs, and
+ * which context files deserve a look. Separate from {@link OverviewData}
+ * because it follows the ANALYSIS pass, not the indexer — it refreshes on
+ * `analysis.progress` and carries the coverage note that makes partial results
+ * honest.
+ */
+export interface OverviewInsights {
+  /** Sparse day × verdict counts for the window, oldest day first. */
+  verdictDaily: VerdictDayPoint[];
+  /** Recurring friction themes, most widespread first. */
+  themes: ThemeRow[];
+  /** Context files ranked by composite score, highest first. */
+  hotspots: ScoredHotspotRow[];
+  /** Coverage of the analysis behind all three cards. */
+  status: AnalysisStatus;
+  /** Echoes the request, so the view can drop an answer for a stale window. */
+  window: OverviewWindow;
+  /** How many day columns `verdictDaily` covers. */
+  windowDays: number;
+  /** Same meaning as {@link OverviewData.dailyCapped}. */
+  dailyCapped?: true;
+}
+
 /**
  * A deep retrospective as the user's own `claude` CLI wrote it. Everything here
  * is model output about LOCAL session content; it is stored only in the local
@@ -413,8 +481,23 @@ export interface DeepRetroResult {
   error?: string;
 }
 
-/** Whether the AI backend (the user's own `claude` CLI) can currently serve requests. */
+/** Whether the ACTIVE AI backend (the user's own AI CLI) can currently serve requests. */
 export interface AiAvailability {
+  available: boolean;
+  /** User-facing explanation when not available. */
+  reason?: string;
+}
+
+/** One registered AI backend, for the Settings picker and consent copy. */
+export interface AiBackendInfo {
+  /** Core `BackendId`, e.g. `claude-code` or `copilot-cli`. */
+  id: string;
+  /** Display name, e.g. "Claude Code". */
+  label: string;
+  /** The vendor the backend sends content to, for consent copy: "Anthropic" / "GitHub". */
+  vendor: string;
+  /** This is the backend `ai.*` calls currently route to. */
+  active: boolean;
   available: boolean;
   /** User-facing explanation when not available. */
   reason?: string;
@@ -492,16 +575,133 @@ export interface SettingsSnapshot {
    * the user's own Claude Code CLI login (each run still confirms per session).
    */
   deepRetroEnabled: boolean;
+  /**
+   * `improve.enabled` — whether Context Improvement Plans can be generated.
+   * OFF by default: enabling it is the first consent gate for the third
+   * sanctioned exception (each generation still confirms in a dialog).
+   */
+  improveEnabled: boolean;
   /** `aiHelper.claudeCliPath`; empty string means `claude` on PATH. */
   claudeCliPath: string;
   /** `aiHelper.claudeModel` as the backend will use it (blank resolves to the default alias). */
   claudeModel: string;
   /** `aiHelper.claudeEffort`, clamped to a valid effort level. */
   claudeEffort: string;
+  /**
+   * `aiHelper.backend` as it will resolve on this machine: which CLI the AI
+   * features route through. `claude-code` unless `copilot-cli` was chosen.
+   */
+  aiBackend: string;
+  /** `aiHelper.copilotCliPath`; empty string means `copilot` on PATH. */
+  copilotCliPath: string;
   /** Absolute path of the desktop config file. */
   configPath: string;
   /** Its directory, for the "open config folder" affordance. */
   configDir: string;
+}
+
+/** Most context hotspots one improvement plan may carry (UI and datahost both enforce). */
+export const MAX_IMPROVE_HOTSPOTS = 8;
+
+/** Most sessions one improvement plan may carry. */
+export const MAX_IMPROVE_SESSIONS = 5;
+
+/** Whether a repository can generate improvement plans, and from what root. */
+export interface ImproveRepoStatus {
+  repository: string;
+  /** The resolved local checkout. LOCAL-ONLY — never leaves this machine. */
+  root?: string;
+  /** Allowlisted context files found under the root. */
+  contextFileCount?: number;
+  /** Why generation is blocked, when it is. */
+  error?: string;
+}
+
+/** What one generation sends: the selected hotspots and sessions, one repository. */
+export interface ImproveGenerateParams {
+  repository: string;
+  /** Hotspot row identities (`HotspotRow.file`) to include as usage statistics. */
+  hotspotFiles: string[];
+  /** Sessions whose retrospective evidence to include. */
+  sessions: SessionRef[];
+}
+
+/** One proposed edit as the renderer sees it — content stays datahost-side. */
+export interface ImprovePlanEditView {
+  path: string;
+  action: 'replace' | 'create';
+  rationale?: string;
+  appliedAtMs?: number;
+  revertedAtMs?: number;
+  /** An applied, since-untouched file this plan still holds a backup for. */
+  canUndo: boolean;
+}
+
+/** A stored improvement plan, rendered for display. */
+export interface ContextPlanView {
+  id: string;
+  repository: string;
+  createdAtMs: number;
+  backendLabel: string;
+  /** The vendor the generation was sent to — part of the record, not just the dialog. */
+  vendor: string;
+  model: string;
+  /** Host-rendered markdown (the renderer owns no markdown parser). */
+  narrativeHtml: string;
+  summary?: string;
+  /** Proposals the validator dropped — shown honestly, never silently. */
+  invalidEditCount: number;
+  edits: ImprovePlanEditView[];
+}
+
+/** One row of the plan history list. */
+export interface ContextPlanSummary {
+  id: string;
+  repository: string;
+  createdAtMs: number;
+  backendLabel: string;
+  summary?: string;
+  editCount: number;
+  appliedCount: number;
+}
+
+/** Error-as-value, like {@link DeepRetroResult}. */
+export interface ImproveGenerateResult {
+  plan?: ContextPlanView;
+  error?: string;
+}
+
+/** One display line of a file diff; `fold` compresses an unchanged run. */
+export interface FileDiffLine {
+  kind: 'same' | 'add' | 'del' | 'fold';
+  /** Absent on folds. */
+  text?: string;
+  /** Folded line count; absent otherwise. */
+  count?: number;
+}
+
+/** A proposed edit diffed against the file as it is on disk RIGHT NOW. */
+export interface FileDiffResult {
+  lines: FileDiffLine[];
+  /** The file no longer matches what the plan was generated from. */
+  stale: boolean;
+  /** A `replace` target that has vanished from disk. */
+  missing: boolean;
+  error?: string;
+}
+
+/** Per-file outcome of an apply or undo. */
+export interface ApplyFileResult {
+  path: string;
+  ok: boolean;
+  status: 'applied' | 'stale' | 'missing' | 'refused' | 'error' | 'reverted';
+  detail?: string;
+}
+
+export interface ApplyResult {
+  results: ApplyFileResult[];
+  /** A whole-request refusal (gate off, plan unknown, root gone). */
+  error?: string;
 }
 
 /** Partial settings update; omitted fields are untouched. `''` clears a path override. */
@@ -512,9 +712,13 @@ export interface SettingsPatch {
   sqlitePath?: string;
   maxSessionMinutes?: number;
   deepRetroEnabled?: boolean;
+  improveEnabled?: boolean;
   claudeCliPath?: string;
   claudeModel?: string;
   claudeEffort?: string;
+  /** Which CLI the AI features route through. */
+  aiBackend?: 'claude-code' | 'copilot-cli';
+  copilotCliPath?: string;
 }
 
 /**
@@ -652,6 +856,13 @@ export interface RpcMethods {
   'tags.list'(): TagCount[];
   'overview.get'(params?: { window?: OverviewWindow }): OverviewData;
   /**
+   * The Dashboard's insight section — verdict trend, recurring friction themes,
+   * scored hotspots — over the same window as {@link RpcMethods['overview.get']}
+   * but refreshed on `analysis.progress`, because everything in it comes from
+   * the background analysis rather than the indexer.
+   */
+  'overview.insights'(params?: { window?: OverviewWindow }): OverviewInsights;
+  /**
    * The Context Hotspots ranking, aggregated in SQL over what the background
    * analysis has read so far. Returns the ranking it can build right now plus
    * its progress, so the view can show partial results honestly instead of an
@@ -682,6 +893,12 @@ export interface RpcMethods {
    * cached — call freely from any surface that needs the CLI.
    */
   'ai.availability'(): AiAvailability;
+  /**
+   * Every registered AI backend with its availability, the active one marked.
+   * Backs the Settings backend picker and lets consent surfaces name the
+   * vendor a send would actually go to.
+   */
+  'ai.backends'(): AiBackendInfo[];
   /** The AI Helper chat as it stands, for a view that just (re)mounted. */
   'ai.state'(): AiChatState;
   /**
@@ -699,6 +916,40 @@ export interface RpcMethods {
   'ai.reset'(): void;
   /** Record that the user accepted the one-time first-use notice. */
   'ai.acknowledge'(): void;
+  /**
+   * Whether a repository can generate improvement plans: is a local checkout
+   * known, and does it still resolve to this repository. Read-only and cheap.
+   */
+  'improve.repoStatus'(repository: string): ImproveRepoStatus;
+  /**
+   * Generate one Context Improvement Plan. THE THIRD SANCTIONED EXCEPTION:
+   * sends the selected hotspot statistics, the selected sessions'
+   * retrospective evidence (titles and goals included), and the repository's
+   * context-file CONTENTS to the active backend's vendor through the user's
+   * own CLI login. Gated twice — the default-off Settings toggle and the
+   * per-generation dialog the RENDERER must show before calling this; the
+   * datahost additionally refuses when the toggle is off.
+   */
+  'improve.generate'(params: ImproveGenerateParams): ImproveGenerateResult;
+  /** Stored plans, newest first, optionally narrowed to one repository. */
+  'improve.plans'(repository?: string): ContextPlanSummary[];
+  /** One stored plan, rendered for display. */
+  'improve.plan'(id: string): ContextPlanView | undefined;
+  /**
+   * Diff one proposed edit against the file as it stands on disk — which makes
+   * the preview double as a live staleness probe.
+   */
+  'improve.diff'(id: string, path: string): FileDiffResult;
+  /**
+   * Write the approved edits into the repository. The product's ONE sanctioned
+   * write path into user repos: allowlisted context files under the resolved
+   * root only, staleness-checked against the generation, backed up before the
+   * first byte is written, and never deleting anything. Call only after the
+   * per-file preview and approval; the datahost re-validates everything.
+   */
+  'improve.apply'(id: string, paths: string[]): ApplyResult;
+  /** Restore applied files from their backups (refused after outside edits). */
+  'improve.undo'(id: string, paths: string[]): ApplyResult;
   /** The editable settings plus what auto-detection currently resolves to. */
   'settings.get'(): SettingsSnapshot;
   /**

@@ -1,14 +1,15 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ASSISTANT_QUICK_PROMPTS } from '@agent-observability/core/src/chat/tasks/assistantGrounding';
-import type { AiAvailability, AiChatState, SessionRef } from '../../../../shared/rpc';
+import type { AiAvailability, AiBackendInfo, AiChatState, SessionRef } from '../../../../shared/rpc';
 import { dataHost } from '../../api/client';
 import { Spinner } from '../../components/Spinner';
 import './assistant.css';
 
 /**
  * The AI Helper: a chat grounded in the user's own local session data, run
- * through their own Claude Code CLI login.
+ * through their own AI CLI login — Claude Code, or the GitHub Copilot CLI when
+ * Settings selects it.
  *
  * The thread lives in the datahost (`ai.state` restores it on remount); this
  * view owns only the input box, the not-yet-sent attach chip, and the
@@ -38,6 +39,10 @@ interface FocusChip extends SessionRef {
 
 export function AssistantView({ onOpenSession, askIntent }: Props): JSX.Element {
   const [availability, setAvailability] = useState<AiAvailability | undefined>(undefined);
+  // The ACTIVE backend, so every line of copy names the CLI and vendor a send
+  // would actually go to — "Claude Code / Anthropic" must not be hardcoded now
+  // that Settings can route through the GitHub Copilot CLI instead.
+  const [backend, setBackend] = useState<AiBackendInfo | undefined>(undefined);
   const [chat, setChat] = useState<AiChatState | undefined>(undefined);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -59,6 +64,10 @@ export function AssistantView({ onOpenSession, askIntent }: Props): JSX.Element 
       .call('ai.availability')
       .then(setAvailability)
       .catch((err: Error) => setAvailability({ available: false, reason: err.message }));
+    dataHost
+      .call('ai.backends')
+      .then((all) => setBackend(all.find((b) => b.active)))
+      .catch(() => setBackend(undefined));
   }, []);
 
   useEffect(() => {
@@ -176,12 +185,13 @@ export function AssistantView({ onOpenSession, askIntent }: Props): JSX.Element 
   }
 
   if (!availability.available) {
-    return <CliMissingHero reason={availability.reason} onRecheck={checkAvailability} />;
+    return <CliMissingHero backend={backend} reason={availability.reason} onRecheck={checkAvailability} />;
   }
 
   if (!chat.acknowledged) {
     return (
       <FirstUseNotice
+        backend={backend}
         onAccept={() => {
           void dataHost.call('ai.acknowledge').then(refresh);
         }}
@@ -198,7 +208,7 @@ export function AssistantView({ onOpenSession, askIntent }: Props): JSX.Element 
           <h1>AI Helper</h1>
           <p>
             Ask about your own sessions — what you worked on, what struggled and why, where the
-            tokens went. Runs through your own Claude Code CLI on this machine.
+            tokens went. Runs through your own {backend?.label ?? 'AI'} CLI on this machine.
           </p>
         </div>
       </header>
@@ -313,8 +323,8 @@ export function AssistantView({ onOpenSession, askIntent }: Props): JSX.Element 
         <div className="assistant-footnote">
           <span>
             Each message sends your question and a summary of recent sessions
-            {focus !== undefined ? ', plus excerpts of the attached session,' : ''} through your own
-            Claude Code CLI.
+            {focus !== undefined ? ', plus excerpts of the attached session,' : ''} through your own{' '}
+            {backend?.label ?? 'AI'} CLI.
           </span>
           {!empty && (
             <button
@@ -341,15 +351,24 @@ export function AssistantView({ onOpenSession, askIntent }: Props): JSX.Element 
 }
 
 /** Blocking state: the feature cannot work without the CLI, so say so loudly. */
-function CliMissingHero({ reason, onRecheck }: { reason?: string; onRecheck: () => void }): JSX.Element {
+function CliMissingHero({
+  backend,
+  reason,
+  onRecheck,
+}: {
+  backend?: AiBackendInfo;
+  reason?: string;
+  onRecheck: () => void;
+}): JSX.Element {
+  const label = backend?.label ?? 'AI';
   return (
     <div className="assistant-hero" role="alert">
       <div>
-        <h2>The AI Helper needs the Claude Code CLI</h2>
-        <p>{reason ?? 'The Claude Code CLI was not found on this machine.'}</p>
+        <h2>The AI Helper needs the {label} CLI</h2>
+        <p>{reason ?? `The ${label} CLI was not found on this machine.`}</p>
         <p>
-          Install it with <code>npm install -g @anthropic-ai/claude-code</code>, or point the app at
-          an existing install under <strong>Settings → AI</strong>.
+          Point the app at an existing install — or switch backends — under{' '}
+          <strong>Settings → AI</strong>.
         </p>
         <button type="button" className="assistant-hero-action" onClick={onRecheck}>
           Check again
@@ -360,7 +379,13 @@ function CliMissingHero({ reason, onRecheck }: { reason?: string; onRecheck: () 
 }
 
 /** The one-time consent notice. The datahost refuses sends until it is accepted. */
-function FirstUseNotice({ onAccept }: { onAccept: () => void }): JSX.Element {
+function FirstUseNotice({
+  backend,
+  onAccept,
+}: {
+  backend?: AiBackendInfo;
+  onAccept: () => void;
+}): JSX.Element {
   return (
     <div className="assistant-hero assistant-notice">
       <div>
@@ -371,9 +396,10 @@ function FirstUseNotice({ onAccept }: { onAccept: () => void }): JSX.Element {
           figures — and, when you attach a session, capped excerpts of its prompts and responses.
         </p>
         <p>
-          It all goes to Anthropic through <strong>your own Claude Code CLI login</strong> on this
-          machine: no API key of this app, nothing in the background, and nothing on the cloud-sync
-          path — that continues to carry no raw content, ever.
+          It all goes to {backend?.vendor ?? 'the AI vendor'} through{' '}
+          <strong>your own {backend?.label ?? 'AI'} CLI login</strong> on this machine — whichever
+          backend Settings selects: no API key of this app, nothing in the background, and nothing
+          on the cloud-sync path — that continues to carry no raw content, ever.
         </p>
         <button type="button" className="assistant-hero-action" onClick={onAccept}>
           I understand — continue

@@ -13,8 +13,14 @@ import type { CancellationToken } from './cancellation';
  * can implement backends against this contract.
  */
 
-/** Stable backend identifier (mirrors the `aiHelper.backend` setting values). */
-export type BackendId = 'copilot' | 'claude-code';
+/**
+ * Stable backend identifier (mirrors the `aiHelper.backend` setting values).
+ * `'copilot'` is the VS Code extension's `vscode.lm` backend; `'copilot-cli'`
+ * is GitHub's standalone `copilot` CLI — a distinct id, because reusing
+ * `'copilot'` would silently route desktop installs (whose default setting is
+ * `'copilot'`, today falling back to Claude) through the CLI unasked.
+ */
+export type BackendId = 'copilot' | 'claude-code' | 'copilot-cli';
 
 /** One selectable model for the active backend. */
 export interface ModelChoice {

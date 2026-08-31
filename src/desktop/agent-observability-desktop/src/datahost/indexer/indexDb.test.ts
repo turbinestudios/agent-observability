@@ -333,7 +333,7 @@ describe('clear', () => {
 
 /** A stored analysis, with the file list defaulting to nothing in context. */
 function analysis(over: Partial<SessionAnalysis> = {}): SessionAnalysis {
-  return { deviationCount: 0, errorCount: 0, contextFiles: [], ...over };
+  return { deviationCount: 0, errorCount: 0, findings: [], contextFiles: [], ...over };
 }
 
 /** One context file as the analyzer reports it. */
@@ -564,10 +564,41 @@ describe('hotspots', () => {
   });
 });
 
+describe('windowed hotspots', () => {
+  it('excludes sessions ending before the cutoff, leaving unwindowed calls whole', () => {
+    const now = Date.now();
+    db.upsertSessions([
+      row({ sessionId: 'recent', endedAtMs: now }),
+      row({ sessionId: 'ancient', endedAtMs: 1_000 }),
+    ]);
+    for (const id of ['recent', 'ancient']) {
+      db.putAnalysis(
+        'claude',
+        id,
+        analysis({ contextFiles: [file({ filePath: '/repo/CLAUDE.md' })] }),
+        5_000,
+        9_000,
+      );
+    }
+
+    expect(db.hotspots({ endedAfterMs: now - 1_000 })[0].sessionCount).toBe(1);
+    expect(db.hotspots()[0].sessionCount).toBe(2);
+  });
+});
+
 describe('schema version', () => {
   it('drops and rebuilds an index written by an older version, analysis included', () => {
     db.upsertSessions([row({ sessionId: 'a' })]);
-    db.putAnalysis('claude', 'a', analysis({ deviationCount: 2 }), 5_000, 9_000);
+    db.putAnalysis(
+      'claude',
+      'a',
+      analysis({
+        deviationCount: 2,
+        findings: [{ id: 'correction-reprompt', severity: 'friction', count: 1 }],
+      }),
+      5_000,
+      9_000,
+    );
     db.close();
 
     // Pose as an index left behind by an earlier release. Reopening must rebuild
@@ -581,6 +612,7 @@ describe('schema version', () => {
 
     expect(db.listSessions({})).toHaveLength(0);
     expect(db.hotspots()).toHaveLength(0);
+    expect(db.insights('all').themes).toHaveLength(0);
     expect(db.analysisCounts()).toEqual({ analyzed: 0, total: 0 });
     // And it is usable again immediately, not left half-dropped.
     db.upsertSessions([row({ sessionId: 'b' })]);
@@ -640,6 +672,198 @@ describe('retrospective verdicts', () => {
         .sort(),
     ).toEqual(['gone', 'struggled']);
     expect(db.countSessions({ friction: true })).toBe(2);
+  });
+});
+
+describe('session findings', () => {
+  it('rewrites a session\'s findings wholesale on re-analysis', () => {
+    db.upsertSessions([row({ sessionId: 'a', endedAtMs: Date.now() })]);
+    db.putAnalysis(
+      'claude',
+      'a',
+      analysis({
+        findings: [
+          { id: 'correction-reprompt', severity: 'friction', count: 2 },
+          { id: 'tool-error-streak', severity: 'blocker', count: 1 },
+        ],
+      }),
+      5_000,
+      9_000,
+    );
+    // The re-analysis no longer raises the error streak: it must leave the
+    // themes, not linger in them.
+    db.putAnalysis(
+      'claude',
+      'a',
+      analysis({ findings: [{ id: 'correction-reprompt', severity: 'friction', count: 3 }] }),
+      5_000,
+      9_500,
+    );
+
+    const { themes } = db.insights('all');
+    expect(themes).toEqual([{ signalId: 'correction-reprompt', sessions: 1, occurrences: 3 }]);
+  });
+
+  it('drops findings with their session, and on clear and clearDeviations', () => {
+    db.upsertSessions([row({ sessionId: 'a', endedAtMs: Date.now() })]);
+    const flagged = analysis({ findings: [{ id: 'rework-churn', severity: 'friction', count: 1 }] });
+
+    db.putAnalysis('claude', 'a', flagged, 5_000, 9_000);
+    db.removeSession('claude', 'a');
+    expect(db.insights('all').themes).toHaveLength(0);
+
+    db.upsertSessions([row({ sessionId: 'a', endedAtMs: Date.now() })]);
+    db.putAnalysis('claude', 'a', flagged, 5_000, 9_000);
+    db.clearDeviations();
+    expect(db.insights('all').themes).toHaveLength(0);
+
+    db.putAnalysis('claude', 'a', flagged, 5_000, 9_000);
+    db.clear();
+    expect(db.insights('all').themes).toHaveLength(0);
+  });
+
+  it('ranks themes by sessions affected, then occurrences, and excludes info severity', () => {
+    const now = Date.now();
+    db.upsertSessions([
+      row({ sessionId: 'a', endedAtMs: now }),
+      row({ sessionId: 'b', endedAtMs: now }),
+      row({ sessionId: 'c', endedAtMs: now }),
+    ]);
+    db.putAnalysis(
+      'claude',
+      'a',
+      analysis({
+        findings: [
+          { id: 'correction-reprompt', severity: 'friction', count: 1 },
+          { id: 'rework-churn', severity: 'friction', count: 5 },
+          { id: 'plan-mode-skipped', severity: 'info', count: 1 },
+        ],
+      }),
+      5_000,
+      9_000,
+    );
+    db.putAnalysis(
+      'claude',
+      'b',
+      analysis({ findings: [{ id: 'correction-reprompt', severity: 'blocker', count: 2 }] }),
+      5_000,
+      9_000,
+    );
+    db.putAnalysis(
+      'claude',
+      'c',
+      analysis({ findings: [{ id: 'plan-mode-skipped', severity: 'info', count: 4 }] }),
+      5_000,
+      9_000,
+    );
+
+    const { themes } = db.insights('all');
+    expect(themes).toEqual([
+      { signalId: 'correction-reprompt', sessions: 2, occurrences: 3 },
+      { signalId: 'rework-churn', sessions: 1, occurrences: 5 },
+    ]);
+  });
+
+  it('windows themes by session end time and respects hidden keys', () => {
+    const now = Date.now();
+    db.upsertSessions([
+      row({ sessionId: 'recent', endedAtMs: now }),
+      row({ sessionId: 'ancient', endedAtMs: 1_000 }),
+      row({ sessionId: 'hidden', endedAtMs: now }),
+    ]);
+    for (const id of ['recent', 'ancient', 'hidden']) {
+      db.putAnalysis(
+        'claude',
+        id,
+        analysis({ findings: [{ id: 'repeated-prompt', severity: 'friction', count: 1 }] }),
+        5_000,
+        9_000,
+      );
+    }
+
+    expect(db.insights(7, ['claude:hidden']).themes).toEqual([
+      { signalId: 'repeated-prompt', sessions: 1, occurrences: 1 },
+    ]);
+    expect(db.insights('all').themes[0].sessions).toBe(3);
+  });
+
+  it('narrows the session list to a finding signal, failing closed on info-only', () => {
+    db.upsertSessions([
+      row({ sessionId: 'raised' }),
+      row({ sessionId: 'info-only' }),
+      row({ sessionId: 'clean' }),
+    ]);
+    db.putAnalysis(
+      'claude',
+      'raised',
+      analysis({ findings: [{ id: 'vague-first-prompt', severity: 'friction', count: 1 }] }),
+      5_000,
+      9_000,
+    );
+    db.putAnalysis(
+      'claude',
+      'info-only',
+      analysis({ findings: [{ id: 'vague-first-prompt', severity: 'info', count: 1 }] }),
+      5_000,
+      9_000,
+    );
+    db.putAnalysis('claude', 'clean', analysis(), 5_000, 9_000);
+
+    expect(db.listSessions({ signal: 'vague-first-prompt' }).map((r) => r.sessionId)).toEqual(['raised']);
+    expect(db.countSessions({ signal: 'vague-first-prompt' })).toBe(1);
+    expect(db.listSessions({ signal: 'no-such-signal' })).toEqual([]);
+  });
+
+  it('narrows the session list to one exact verdict', () => {
+    db.upsertSessions([row({ sessionId: 'rough' }), row({ sessionId: 'fine' }), row({ sessionId: 'unjudged' })]);
+    db.putAnalysis('claude', 'rough', analysis({ retro: retroCounts({ verdict: 'bumpy' }) }), 5_000, 9_000);
+    db.putAnalysis('claude', 'fine', analysis({ retro: retroCounts() }), 5_000, 9_000);
+    db.putAnalysis('claude', 'unjudged', analysis(), 5_000, 9_000);
+
+    expect(db.listSessions({ verdict: 'bumpy' }).map((r) => r.sessionId)).toEqual(['rough']);
+    // A NULL verdict is "not judged" and passes no exact-verdict filter.
+    expect(db.countSessions({ verdict: 'smooth' })).toBe(1);
+  });
+});
+
+describe('insights verdict trend', () => {
+  it('buckets every session — judged, unjudgeable, and unanalyzed — so days sum to the daily chart', () => {
+    const now = Date.now();
+    db.upsertSessions([
+      row({ sessionId: 'smooth', endedAtMs: now }),
+      row({ sessionId: 'rough', endedAtMs: now }),
+      row({ sessionId: 'broken', endedAtMs: now }),
+      row({ sessionId: 'unread', endedAtMs: now }),
+    ]);
+    db.putAnalysis('claude', 'smooth', analysis({ retro: retroCounts() }), 5_000, 9_000);
+    db.putAnalysis('claude', 'rough', analysis({ retro: retroCounts({ verdict: 'struggled' }) }), 5_000, 9_000);
+    // Analyzed but unjudgeable: NULL verdict must land in 'unjudged', never 'smooth'.
+    db.putAnalysis('claude', 'broken', analysis(), 5_000, 9_000);
+
+    const { verdictDaily } = db.insights(7);
+    const byVerdict = new Map(verdictDaily.map((p) => [p.verdict, p.sessions]));
+    expect(byVerdict.get('smooth')).toBe(1);
+    expect(byVerdict.get('struggled')).toBe(1);
+    expect(byVerdict.get('unjudged')).toBe(2);
+
+    // The invariant the hero chart depends on: per-day sums equal the overview's
+    // daily session counts, computed by the very same SQL bucketing.
+    const overviewByDay = new Map<string, number>();
+    for (const point of db.overview(7).daily) {
+      overviewByDay.set(point.day, (overviewByDay.get(point.day) ?? 0) + point.sessions);
+    }
+    const insightsByDay = new Map<string, number>();
+    for (const point of verdictDaily) {
+      insightsByDay.set(point.day, (insightsByDay.get(point.day) ?? 0) + point.sessions);
+    }
+    expect(insightsByDay).toEqual(overviewByDay);
+  });
+
+  it('excludes hidden sessions', () => {
+    const now = Date.now();
+    db.upsertSessions([row({ sessionId: 'kept', endedAtMs: now }), row({ sessionId: 'hidden', endedAtMs: now })]);
+    const { verdictDaily } = db.insights(7, ['claude:hidden']);
+    expect(verdictDaily.reduce((sum, p) => sum + p.sessions, 0)).toBe(1);
   });
 });
 

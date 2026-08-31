@@ -22,9 +22,11 @@ import './retro.css';
 interface Props {
   /** Opens a session in the Sessions view. */
   onOpenSession: (source: string, sessionId: string) => void;
+  /** Opens the Improve view scoped to the selected repository. */
+  onImprove?: (repository: string) => void;
 }
 
-export function RetroView({ onOpenSession }: Props): JSX.Element {
+export function RetroView({ onOpenSession, onImprove }: Props): JSX.Element {
   const [data, setData] = useState<RetroResult | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [repository, setRepository] = useState<string>('');
@@ -121,6 +123,23 @@ export function RetroView({ onOpenSession }: Props): JSX.Element {
             </select>
           </label>
           <span className="retro-view-coverage">{describeRetroCoverage(data.rows, data.status)}</span>
+          {onImprove !== undefined && (
+            <button
+              type="button"
+              className="retro-view-improve"
+              // Plans are single-repository by definition, so the door opens
+              // only once one is chosen here.
+              disabled={repository === ''}
+              title={
+                repository === ''
+                  ? 'Pick a repository first — improvement plans cover one repository at a time'
+                  : `Build an improvement plan for ${repository}`
+              }
+              onClick={() => onImprove(repository)}
+            >
+              Improve context…
+            </button>
+          )}
         </div>
         {progress !== undefined && (
           <p className="retro-view-progress" role="status">

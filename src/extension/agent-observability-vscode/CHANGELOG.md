@@ -4,6 +4,14 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.1] - 2026-08-31
+
+### Fixed
+
+- **Tables in chat answers render as real tables.** When an answer ranks
+  sessions or lays out figures side by side, it now appears as a proper table
+  that scrolls sideways when wide — instead of one long line of `|` characters.
+
 ## [0.10.0] - 2026-08-28
 
 ### Added

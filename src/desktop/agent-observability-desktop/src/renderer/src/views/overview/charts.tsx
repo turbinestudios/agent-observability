@@ -54,6 +54,7 @@ export function StackedBarChart({
   formatValue,
   emptyMessage,
   onSelect,
+  onSelectSegment,
 }: {
   columns: StackedColumn[];
   series: SeriesStyle[];
@@ -64,6 +65,14 @@ export function StackedBarChart({
    * inert rather than pretending every mark is a link.
    */
   onSelect?: (index: number) => void;
+  /**
+   * Open the sessions behind one SEGMENT of a column — a finer answer than the
+   * whole day. Mouse-only precision: the segment rects paint above the
+   * column's full-height target, so a click on one wins, while the keyboard
+   * stays on the column — five tab stops per day would wreck the tab order.
+   * Return `false` to decline a segment (it falls through to the column).
+   */
+  onSelectSegment?: (index: number, seriesKey: string) => boolean | void;
 }): JSX.Element {
   const [tip, setTip] = useState<TooltipState | undefined>(undefined);
   const clipId = useId();
@@ -167,6 +176,17 @@ export function StackedBarChart({
                 cursor -= height;
                 const y = cursor;
                 cursor -= SEGMENT_GAP;
+                // A declined segment (handler returns false) answers with the
+                // whole day instead: segment rects sit above the column's
+                // transparent target, so the click would otherwise go nowhere.
+                const onSegmentClick =
+                  onSelectSegment === undefined
+                    ? undefined
+                    : (): void => {
+                        if (onSelectSegment(index, s.key) === false) {
+                          onSelect?.(index);
+                        }
+                      };
                 return (
                   <rect
                     key={s.key}
@@ -177,6 +197,7 @@ export function StackedBarChart({
                     rx={RADIUS / 2}
                     fill={`var(${s.colorVar})`}
                     clipPath={`url(#${clipId})`}
+                    onClick={onSegmentClick}
                   />
                 );
               })}

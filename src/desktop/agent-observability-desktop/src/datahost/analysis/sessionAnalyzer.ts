@@ -6,7 +6,11 @@ import type {
   ContextFileEntry,
   ContextFileStatus,
 } from '@agent-observability/core/src/context/models';
-import type { RetrospectiveCounts } from '@agent-observability/core/src/analysis/retrospective';
+import type {
+  RetrospectiveCounts,
+  RetrospectiveFinding,
+  RetrospectiveSignalId,
+} from '@agent-observability/core/src/analysis/retrospective';
 import { detectTurnDeviations } from './turnDeviations';
 import { retrospectiveFor } from './sessionRetrospective';
 
@@ -35,6 +39,16 @@ export interface AnalyzedContextFile {
   estTokens: number;
 }
 
+/**
+ * One retrospective signal as the index stores it — id, worst severity, and how
+ * often it fired in the session. Ids and enum labels only, never content.
+ */
+export interface AnalyzedFinding {
+  id: RetrospectiveSignalId;
+  severity: 'info' | 'friction' | 'blocker';
+  count: number;
+}
+
 /** What the background pass records per session. */
 export interface SessionAnalysis {
   /** Total per-turn workflow deviations across the session. */
@@ -48,6 +62,11 @@ export interface SessionAnalysis {
    * index stores as NULL: "not judged" must never read as "smooth".
    */
   retro?: RetrospectiveCounts;
+  /**
+   * The retrospective's findings folded per signal id — the Dashboard's
+   * recurring-themes grain. Empty when the retrospective could not be built.
+   */
+  findings: AnalyzedFinding[];
   contextFiles: AnalyzedContextFile[];
 }
 
@@ -90,18 +109,47 @@ export function analyzeSession(
   // A retrospective failure must not cost the deviation badge: the two ride
   // the same analysis row but are independent results.
   let retro: RetrospectiveCounts | undefined;
+  let findings: AnalyzedFinding[] = [];
   try {
-    retro = retrospectiveFor(source, sessionId, detail.value).counts;
+    const retrospective = retrospectiveFor(source, sessionId, detail.value);
+    retro = retrospective.counts;
+    findings = projectFindings(retrospective.findings);
   } catch {
     retro = undefined;
+    findings = [];
   }
 
   return {
     deviationCount,
     errorCount,
     ...(retro !== undefined ? { retro } : {}),
+    findings,
     contextFiles: contextFilesOf(source, sessionId, deps),
   };
+}
+
+const SEVERITY_RANK = { blocker: 0, friction: 1, info: 2 } as const;
+
+/**
+ * Fold a retrospective's findings to one row per signal id: how often it fired
+ * and the worst severity it reached. This is the projection the index stores —
+ * descriptions and turn references stay behind, recomputed on demand like the
+ * rest of the narrative.
+ */
+export function projectFindings(findings: readonly RetrospectiveFinding[]): AnalyzedFinding[] {
+  const byId = new Map<RetrospectiveSignalId, AnalyzedFinding>();
+  for (const finding of findings) {
+    const existing = byId.get(finding.id);
+    if (existing === undefined) {
+      byId.set(finding.id, { id: finding.id, severity: finding.severity, count: 1 });
+    } else {
+      existing.count += 1;
+      if (SEVERITY_RANK[finding.severity] < SEVERITY_RANK[existing.severity]) {
+        existing.severity = finding.severity;
+      }
+    }
+  }
+  return [...byId.values()];
 }
 
 /**

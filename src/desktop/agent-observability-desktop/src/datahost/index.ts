@@ -21,13 +21,16 @@ import type {
 } from '../shared/rpc';
 import {
   DEFAULT_OVERVIEW_WINDOW,
+  INSIGHT_HOTSPOT_LIMIT,
   MAX_COMPARE_SESSIONS,
   sessionKey,
   toOverviewWindow,
+  windowStartMs,
 } from '../shared/rpc';
 import { DetailRenderer } from './detail/detailRenderer';
 import type { CombinedRequest, DetailContext } from './detail/detailRenderer';
 import { AnalysisQueue } from './analysis/analysisQueue';
+import { scoreHotspots } from './analysis/hotspotScore';
 import { DesktopSettingsReader } from './drivers/desktopConfig';
 import { applySettingsPatch, buildSettingsSnapshot } from './settings';
 import { ClaudeIndexer } from './indexer/claudeIndexer';
@@ -42,7 +45,15 @@ import { NoteStore } from './notes';
 import { describeDeletion, deleteSession } from './deletion';
 import { DeepRetroStore, toLlmVerdict } from './deepRetros';
 import { DEEP_RETRO_ENABLED_KEY, runDeepRetrospective } from './deepRetro';
-import { AiBackendHolder } from './aiBackends';
+import { ContextPlanStore } from './improve/contextPlans';
+import {
+  generateContextPlan,
+  improveRepoStatus,
+  planSummary,
+  planView,
+} from './improve/contextPlan';
+import { applyContextPlan, diffForEdit, undoContextPlan } from './improve/contextPlanApply';
+import { AiBackendHolder, backendVendor } from './aiBackends';
 import { AiHelperController } from './aiHelper';
 import {
   COPILOT_SETUP_DISMISS_KEY,
@@ -112,6 +123,7 @@ const hidden = new HiddenStore();
 const tags = new TagStore();
 const notes = new NoteStore();
 const deepRetros = new DeepRetroStore();
+const contextPlans = new ContextPlanStore();
 
 // One backend wiring for everything that talks to the user's `claude` CLI —
 // the deep retrospective and the AI Helper share its probe cache, and an AI
@@ -579,8 +591,49 @@ function handle(request: RpcRequest): unknown {
     }
     case 'analysis.status':
       return analysis.status();
+    case 'improve.repoStatus':
+      return improveRepoStatus(request.params[0], db);
+    case 'improve.generate':
+      return generateContextPlan(request.params[0], {
+        db,
+        sources,
+        store: contextPlans,
+        deepRetros,
+        config,
+        settings,
+        backend: aiBackends.active(),
+        vendor: backendVendor(aiBackends.active().id),
+      });
+    case 'improve.plans':
+      return contextPlans.list(request.params[0]).map(planSummary);
+    case 'improve.plan': {
+      const plan = contextPlans.get(request.params[0]);
+      return plan === undefined ? undefined : planView(plan);
+    }
+    case 'improve.diff':
+      return diffForEdit(request.params[0], request.params[1], { store: contextPlans, settings });
+    case 'improve.apply':
+      return applyContextPlan(request.params[0], request.params[1], { store: contextPlans, settings });
+    case 'improve.undo':
+      return undoContextPlan(request.params[0], request.params[1], { store: contextPlans, settings });
     case 'ai.availability':
       return aiBackends.active().isAvailable();
+    case 'ai.backends': {
+      const activeId = aiBackends.active().id;
+      return Promise.all(
+        aiBackends.all().map(async (backend) => {
+          const availability = await backend.isAvailable();
+          return {
+            id: backend.id,
+            label: backend.label,
+            vendor: backendVendor(backend.id),
+            active: backend.id === activeId,
+            available: availability.available,
+            ...(availability.available ? {} : { reason: availability.reason }),
+          };
+        }),
+      );
+    }
     case 'ai.state':
       return aiHelper.state();
     case 'ai.send':
@@ -602,6 +655,27 @@ function handle(request: RpcRequest): unknown {
         toOverviewWindow(request.params[0]?.window ?? DEFAULT_OVERVIEW_WINDOW),
         hidden.all(),
       );
+    case 'overview.insights': {
+      const window = toOverviewWindow(request.params[0]?.window ?? DEFAULT_OVERVIEW_WINDOW);
+      const hiddenKeys = hidden.all();
+      const { verdictDaily, themes, windowDays, dailyCapped } = db.insights(window, hiddenKeys);
+      // The hotspot card rides the same query as the Hotspots view, windowed to
+      // the Dashboard's range and scored over the FULL windowed set — the
+      // frequency sub-score normalizes by the busiest file — before truncating.
+      const endedAfterMs = window === 'all' ? undefined : windowStartMs(window);
+      const hotspots = scoreHotspots(
+        db.hotspots(endedAfterMs === undefined ? {} : { endedAfterMs }, hiddenKeys),
+      ).slice(0, INSIGHT_HOTSPOT_LIMIT);
+      return {
+        verdictDaily,
+        themes,
+        hotspots,
+        status: analysis.status(),
+        window,
+        windowDays,
+        ...(dailyCapped === true ? { dailyCapped: true as const } : {}),
+      };
+    }
     case 'settings.get':
       return buildSettingsSnapshot(settings, config);
     case 'settings.update': {

@@ -104,7 +104,7 @@ export class AnalysisQueue {
       this.deps.db.putAnalysis(
         target.source,
         target.sessionId,
-        analysis ?? { deviationCount: 0, errorCount: 0, contextFiles: [] },
+        analysis ?? { deviationCount: 0, errorCount: 0, findings: [], contextFiles: [] },
         target.indexedAtMs,
         this.now(),
       );

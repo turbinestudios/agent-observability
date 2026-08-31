@@ -9,7 +9,7 @@ import {
   CLAUDE_EFFORT_LEVELS,
   CLAUDE_MODEL_CHOICES,
 } from '@agent-observability/core/src/chat/backends/claudeCliArgs';
-import type { AiAvailability, SettingsSnapshot } from '../../../../shared/rpc';
+import type { AiAvailability, AiBackendInfo, SettingsSnapshot } from '../../../../shared/rpc';
 import { dataHost } from '../../api/client';
 import { Spinner } from '../../components/Spinner';
 import { CopilotSetupSection } from './CopilotSetupSection';
@@ -28,19 +28,24 @@ import './settings.css';
 export function SettingsView(): JSX.Element {
   const { snapshot, error, saving, save } = useSettings();
   const [availability, setAvailability] = useState<AiAvailability | undefined>(undefined);
+  const [backends, setBackends] = useState<AiBackendInfo[] | undefined>(undefined);
 
   const checkAvailability = useCallback(() => {
     dataHost
       .call('ai.availability')
       .then(setAvailability)
       .catch((err: Error) => setAvailability({ available: false, reason: err.message }));
+    dataHost
+      .call('ai.backends')
+      .then(setBackends)
+      .catch(() => setBackends(undefined));
   }, []);
 
-  // Re-probed when the AI settings change: a corrected CLI path should clear
-  // the warning without leaving the page.
+  // Re-probed when the AI settings change: a corrected CLI path or a switched
+  // backend should clear the warning without leaving the page.
   useEffect(() => {
     checkAvailability();
-  }, [checkAvailability, snapshot?.claudeCliPath]);
+  }, [checkAvailability, snapshot?.claudeCliPath, snapshot?.copilotCliPath, snapshot?.aiBackend]);
 
   if (snapshot === undefined) {
     return error !== undefined ? (
@@ -160,24 +165,63 @@ export function SettingsView(): JSX.Element {
         </label>
         <p className="settings-hint">
           Adds an "Ask for a deep retrospective" button to a session's retrospective card. Running
-          it sends that session's prompts and responses to Anthropic through your own Claude Code
+          it sends that session's prompts and responses to the vendor of your selected AI backend —
+          Anthropic through your own Claude Code login, or GitHub through your own Copilot CLI
           login — never in the background, and each run asks you to confirm first. Everything else
           in this app stays on this machine.
+        </p>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.improveEnabled}
+            disabled={saving}
+            onChange={(e) => save({ improveEnabled: e.target.checked })}
+          />
+          Allow context improvement plans
+        </label>
+        <p className="settings-hint">
+          Lets the Improve view generate plans for a repository's context files. Generating one
+          sends the selected files' usage statistics, the selected sessions' retrospective
+          evidence, and the repository's context-file contents to your selected AI backend's
+          vendor — each generation asks you to confirm first, and no file is ever changed without
+          your per-file approval.
         </p>
       </section>
 
       <section className="settings-card" aria-label="AI">
         <h2>AI</h2>
         <p className="settings-hint">
-          The AI Helper and the deep retrospective run through your own Claude Code CLI login on
-          this machine — no API key of this app is involved.
+          The AI features run through your own AI CLI login on this machine — Claude Code (sends to
+          Anthropic) or the GitHub Copilot CLI (sends to GitHub). No API key of this app is
+          involved, and which one answers is your choice here.
         </p>
+        <div className="settings-row">
+          <span className="settings-label">AI backend</span>
+          {AI_BACKEND_CHOICES.map((choice) => {
+            const info = backends?.find((b) => b.id === choice.id);
+            return (
+              <label key={choice.id} className="settings-toggle">
+                <input
+                  type="radio"
+                  name="ai-backend"
+                  checked={snapshot.aiBackend === choice.id}
+                  disabled={saving}
+                  onChange={() => save({ aiBackend: choice.id })}
+                />
+                {choice.label}
+                <span className="settings-resolved">
+                  {' '}
+                  — sends to {choice.vendor}
+                  {info !== undefined && !info.available ? ' · CLI not found' : ''}
+                </span>
+              </label>
+            );
+          })}
+        </div>
         {availability !== undefined && !availability.available && (
           <div className="settings-warning-block" role="alert">
             <p>
-              <strong>The Claude Code CLI was not found.</strong> The AI Helper and the deep
-              retrospective need it. Install it with{' '}
-              <code>npm install -g @anthropic-ai/claude-code</code>, or set the path below.
+              <strong>The selected AI CLI is not working.</strong> {availability.reason}
             </p>
             <button type="button" className="settings-action" onClick={checkAvailability}>
               Check again
@@ -197,7 +241,19 @@ export function SettingsView(): JSX.Element {
           </span>
         </div>
         <div className="settings-row">
-          <span className="settings-label">Model</span>
+          <span className="settings-label">Copilot CLI path</span>
+          <PathInput
+            value={snapshot.copilotCliPath}
+            disabled={saving}
+            ariaLabel="Copilot CLI path"
+            onCommit={(value) => save({ copilotCliPath: value })}
+          />
+          <span className="settings-resolved">
+            Leave empty to use <code>copilot</code> from PATH.
+          </span>
+        </div>
+        <div className="settings-row">
+          <span className="settings-label">Claude model</span>
           <select
             className="settings-input settings-select"
             aria-label="Claude model for AI features"
@@ -216,7 +272,7 @@ export function SettingsView(): JSX.Element {
           </select>
         </div>
         <div className="settings-row">
-          <span className="settings-label">Reasoning effort</span>
+          <span className="settings-label">Claude reasoning effort</span>
           <select
             className="settings-input settings-select"
             aria-label="Reasoning effort for AI features"
@@ -250,6 +306,16 @@ export function SettingsView(): JSX.Element {
     </div>
   );
 }
+
+/** The two CLIs the desktop can route AI features through, in display order. */
+const AI_BACKEND_CHOICES: readonly {
+  id: 'claude-code' | 'copilot-cli';
+  label: string;
+  vendor: string;
+}[] = [
+  { id: 'claude-code', label: 'Claude Code', vendor: 'Anthropic' },
+  { id: 'copilot-cli', label: 'GitHub Copilot CLI', vendor: 'GitHub' },
+];
 
 /** What the Claude scan will actually read, given the current settings. */
 function describeClaudeResolution(snapshot: SettingsSnapshot): string {

@@ -1,4 +1,5 @@
 import { FriendlyError } from '../lmErrors';
+import { CliBackendError } from './cliError';
 
 /**
  * Pure mapping of Claude Code CLI failures to friendly, user-facing messages —
@@ -38,17 +39,10 @@ export function cliMissingMessage(hints: ClaudeCliHints): string {
 }
 
 /** Structured failure thrown by the Claude backend around a CLI run. */
-export class ClaudeCliError extends Error {
-  code?: string;
-  exitCode?: number;
-  stderrTail?: string;
-
+export class ClaudeCliError extends CliBackendError {
   constructor(message: string, options?: { code?: string; exitCode?: number; stderrTail?: string }) {
-    super(message);
+    super(message, options);
     this.name = 'ClaudeCliError';
-    this.code = options?.code;
-    this.exitCode = options?.exitCode;
-    this.stderrTail = options?.stderrTail;
   }
 }
 

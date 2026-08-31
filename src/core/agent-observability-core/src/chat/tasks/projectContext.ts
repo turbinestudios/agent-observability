@@ -166,6 +166,34 @@ export function buildContextFilesDigest(
   ].join('\n');
 }
 
+/** How many directories {@link findRepoRoot} will walk up before giving up. */
+const REPO_ROOT_MAX_ASCENT = 12;
+
+/**
+ * Walk up from `startDir` to the first directory containing a `.git` entry —
+ * the repository root. Claude session cwds are often subdirectories of the
+ * checkout, and hotspot file paths always are; the context-file scan and the
+ * improvement-plan write path both need the actual root. Returns `undefined`
+ * when no `.git` is found within the ascent bound.
+ */
+export function findRepoRoot(startDir: string): string | undefined {
+  let current = path.resolve(startDir);
+  for (let step = 0; step <= REPO_ROOT_MAX_ASCENT; step += 1) {
+    try {
+      fs.statSync(path.join(current, '.git'));
+      return current;
+    } catch {
+      // Not here — keep climbing.
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Internals
 

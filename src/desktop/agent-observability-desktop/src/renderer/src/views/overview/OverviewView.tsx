@@ -1,7 +1,13 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
-import type { IndexStatus, OverviewData, OverviewWindow } from '../../../../shared/rpc';
+import type {
+  IndexStatus,
+  OverviewData,
+  OverviewInsights,
+  OverviewWindow,
+  RetroVerdict,
+} from '../../../../shared/rpc';
 import { OVERVIEW_WINDOWS } from '../../../../shared/rpc';
 import {
   formatCost,
@@ -13,9 +19,12 @@ import {
 } from '../sessions/format';
 import type { SessionFilters } from '../sessions/filters';
 import { isoDayRange } from '../sessions/filters';
+import { themeLabel } from '../sessions/retro';
+import { categoryLabel, describeProgress, shortPath } from '../hotspots/hotspots';
 import { Spinner } from '../../components/Spinner';
 import { HorizontalBars, Legend, StackedBarChart } from './charts';
 import type { SeriesStyle, StackedColumn } from './charts';
+import { VERDICT_SERIES, themeTitle, verdictColumns } from './insights';
 import { persistWindow, readStoredWindow, windowDescription, windowLabel, windowRange } from './window';
 import './overview.css';
 
@@ -50,10 +59,16 @@ interface Props {
    * did — a repository whose bar reads 12 must not open 400 sessions.
    */
   onOpenSessions?: (filters: SessionFilters) => void;
+  /**
+   * Open the Context Hotspots view, focused on one file — or on nothing, for
+   * the card's "view all". Optional for the same reason `onOpenSessions` is.
+   */
+  onOpenHotspot?: (file?: string) => void;
 }
 
-export function OverviewView({ onOpenSessions }: Props): JSX.Element {
+export function OverviewView({ onOpenSessions, onOpenHotspot }: Props): JSX.Element {
   const [data, setData] = useState<OverviewData | undefined>(undefined);
+  const [insights, setInsights] = useState<OverviewInsights | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [status, setStatus] = useState<IndexStatus | undefined>(undefined);
   const [chosen, setChosen] = useState<OverviewWindow>(readStoredWindow);
@@ -104,23 +119,56 @@ export function OverviewView({ onOpenSessions }: Props): JSX.Element {
       });
   }, [chosen]);
 
+  /**
+   * The insight section loads beside the cost data, not with it: it follows the
+   * ANALYSIS pass rather than the indexer, so it refreshes as verdicts land. A
+   * generation guard drops a slow window's answer arriving after a later one's,
+   * exactly like `load`'s; a failure degrades to the section's pending line
+   * rather than taking the whole page down.
+   */
+  const insightsGeneration = useRef(0);
+  const loadInsights = useCallback(() => {
+    const mine = (insightsGeneration.current += 1);
+    dataHost
+      .call('overview.insights', { window: chosen })
+      .then((next) => {
+        if (insightsGeneration.current === mine) {
+          setInsights(next);
+        }
+      })
+      .catch(() => undefined);
+  }, [chosen]);
+
   useEffect(() => {
     load();
+    loadInsights();
     void dataHost
       .call('index.status')
       .then(setStatus)
       .catch(() => undefined);
     // Totals shift as the indexer hydrates; refresh once a pass settles rather
     // than on every batch, which would make the numbers flicker upward.
-    return dataHost.on('index.progress', (event) => {
+    const offIndex = dataHost.on('index.progress', (event) => {
       if (event.event === 'index.progress') {
         setStatus(event.status);
         if (event.status.phase === 'idle') {
           load();
+          loadInsights();
         }
       }
     });
-  }, [load]);
+    // Verdicts and findings land batch by batch; the hero fills in as they do,
+    // the way the Retro and Hotspots views already follow this event.
+    const offAnalysis = dataHost.on('analysis.progress', (event) => {
+      if (event.event === 'analysis.progress') {
+        loadInsights();
+      }
+    });
+    return () => {
+      offIndex();
+      offAnalysis();
+    };
+  }, [load, loadInsights]);
 
   const days = useMemo(() => (data === undefined ? [] : buildDays(data)), [data]);
 
@@ -269,6 +317,32 @@ export function OverviewView({ onOpenSessions }: Props): JSX.Element {
           }
         };
 
+  const heroColumns = insights === undefined ? [] : verdictColumns(days, insights.verdictDaily);
+  const progressNote = insights === undefined ? undefined : describeProgress(insights.status);
+  // How the analysis is doing, for the cards that can only be as complete as it
+  // is. The hero needs no such line — its gray "not analyzed" series says the
+  // same thing in the chart itself.
+  const analysisPending =
+    insights !== undefined &&
+    (insights.status.running || insights.status.analyzed < insights.status.total);
+
+  /**
+   * A colored slice answers with that day AND that verdict; the gray coverage
+   * slice declines (returns false) and falls through to the whole day — "the
+   * sessions nobody has judged yet" is not a question this page can pose
+   * honestly while the analysis is still running through them.
+   */
+  const openVerdictSegment =
+    onOpenSessions === undefined
+      ? undefined
+      : (index: number, seriesKey: string): boolean | void => {
+          const day = days[index];
+          if (day === undefined || !isVerdictKey(seriesKey)) {
+            return false;
+          }
+          onOpenSessions({ ...isoDayRange(day.iso), verdict: seriesKey });
+        };
+
   return (
     <>
     {busy}
@@ -287,7 +361,136 @@ export function OverviewView({ onOpenSessions }: Props): JSX.Element {
         </p>
       </header>
 
-      <section className="tiles" aria-label="Totals">
+      <section className="card">
+        <div className="card-head">
+          <h2>How sessions went</h2>
+          {progressNote !== undefined && <span className="card-note">{progressNote}</span>}
+          <Legend series={VERDICT_SERIES} />
+        </div>
+        {insights === undefined ? (
+          <div className="chart-loading" role="status" aria-live="polite">
+            <Spinner size={28} stroke={3} />
+            <span>Reading how sessions went…</span>
+          </div>
+        ) : (
+          <StackedBarChart
+            columns={heroColumns}
+            series={VERDICT_SERIES}
+            formatValue={(v) => v.toLocaleString()}
+            emptyMessage={`No sessions in the last ${insights.windowDays} days.`}
+            onSelect={openDay}
+            onSelectSegment={openVerdictSegment}
+          />
+        )}
+      </section>
+
+      <div className="overview-split" style={{ marginBottom: 14 }}>
+        <section className="card">
+          <div className="card-head">
+            <h2>Recurring friction themes</h2>
+          </div>
+          {insights === undefined || insights.themes.length === 0 ? (
+            <p className="chart-empty">
+              {insights === undefined || analysisPending
+                ? 'No recurring friction found yet — the analysis is still reading sessions.'
+                : 'No recurring friction in this window.'}
+            </p>
+          ) : (
+            <>
+              <HorizontalBars
+                rows={insights.themes.map((theme) => ({
+                  label: themeLabel(theme.signalId),
+                  value: theme.sessions,
+                  title: themeTitle(theme),
+                }))}
+                colorVar="--verdict-bumpy"
+                emptyMessage="No recurring friction in this window."
+                onSelect={
+                  onOpenSessions === undefined
+                    ? undefined
+                    : (index) =>
+                        onOpenSessions({ ...baseFilters, signal: insights.themes[index].signalId })
+                }
+              />
+              <p className="card-caption">
+                Retrospective findings ranked by how many sessions raised them in this window.
+              </p>
+            </>
+          )}
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2>Context hotspots to review</h2>
+            {onOpenHotspot !== undefined && insights !== undefined && insights.hotspots.length > 0 && (
+              <button
+                type="button"
+                className="table-link card-note"
+                onClick={() => onOpenHotspot()}
+              >
+                View all
+              </button>
+            )}
+          </div>
+          {insights === undefined || insights.hotspots.length === 0 ? (
+            <p className="chart-empty">
+              {insights === undefined || analysisPending
+                ? 'No context files seen yet — the analysis is still reading sessions.'
+                : 'No context files seen in this window.'}
+            </p>
+          ) : (
+            <>
+              <table className="source-table">
+                <thead>
+                  <tr>
+                    <th scope="col">File</th>
+                    <th scope="col">Kind</th>
+                    <th scope="col" className="n">Score</th>
+                    <th scope="col" className="n">Skipped</th>
+                    <th scope="col" className="n">Max tokens</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {insights.hotspots.map((row) => (
+                    <tr
+                      key={row.file}
+                      className={onOpenHotspot === undefined ? undefined : 'row-selectable'}
+                    >
+                      <th scope="row" title={row.file}>
+                        {onOpenHotspot === undefined ? (
+                          shortPath(row.file)
+                        ) : (
+                          <button
+                            type="button"
+                            className="table-link"
+                            aria-label={`${row.file} — review in Context Hotspots`}
+                            onClick={() => onOpenHotspot(row.file)}
+                          >
+                            {shortPath(row.file)}
+                          </button>
+                        )}
+                      </th>
+                      <td>{categoryLabel(row.category)}</td>
+                      <td className="n">{Math.round(row.score)}</td>
+                      <td className="n">
+                        {row.skippedCount.toLocaleString()} of{' '}
+                        {(row.appliedCount + row.skippedCount).toLocaleString()}
+                      </td>
+                      <td className="n">{row.estTokensMax.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="card-caption">
+                Scored 0–100 from skip rate, error and deviation co-occurrence, token weight, and
+                how often the file is applied. Higher means look first.
+              </p>
+            </>
+          )}
+        </section>
+      </div>
+
+      <section className="tiles tiles-compact" aria-label="Totals">
         <Tile label="Sessions" value={totals.sessions.toLocaleString()} />
         <Tile label="Steps" value={totals.steps.toLocaleString()} />
         <Tile
@@ -611,4 +814,9 @@ function isoDay(date: Date): string {
 function colorVarFor(source: string): string {
   const known = SOURCE_SERIES.findIndex((s) => s.key === source);
   return known >= 0 ? SOURCE_SERIES[known].colorVar : '--series-3';
+}
+
+/** Whether a hero series key is a real verdict — 'unjudged' is coverage, not one. */
+function isVerdictKey(key: string): key is RetroVerdict {
+  return key === 'smooth' || key === 'bumpy' || key === 'struggled' || key === 'abandoned';
 }

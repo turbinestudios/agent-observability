@@ -8,7 +8,8 @@ import { escapeHtml } from '../../views/escapeHtml';
  * leaf of text is HTML-escaped via {@link escapeHtml} before any structural tag
  * is introduced**, and the renderer only ever emits a fixed whitelist of tags
  * (`p`, `br`, `h1`–`h6`, `strong`, `em`, `code`, `pre`, `ul`/`ol`/`li`,
- * `blockquote`, `hr`, `a`, and the `div.code-block` wrapper). It never emits
+ * `blockquote`, `hr`, `a`, `table`/`thead`/`tbody`/`tr`/`th`/`td`, and the
+ * `div.code-block` / `div.table-wrap` wrappers). It never emits
  * `script`, `img`, `style`, event handlers, or inline scripts, and link hrefs
  * are restricted to `http(s)`/`mailto` (anything else renders as plain text). The
  * webview assigns the result via `innerHTML`; the strict CSP (`script-src
@@ -99,9 +100,22 @@ export function markdownToHtml(markdown: string): string {
       continue;
     }
 
+    // Pipe table — a header row whose next line is a dash/colon delimiter row.
+    if (isTableStart(lines, i)) {
+      const header = splitTableRow(lines[i]);
+      i += 2; // header + delimiter
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim().length > 0) {
+        rows.push(splitTableRow(lines[i]));
+        i++;
+      }
+      out.push(renderTable(header, rows));
+      continue;
+    }
+
     // Paragraph — consecutive plain lines, soft-joined with a space.
     const para: string[] = [];
-    while (i < lines.length && !isBlockStart(lines[i])) {
+    while (i < lines.length && !isBlockStart(lines[i]) && !isTableStart(lines, i)) {
       para.push(lines[i]);
       i++;
     }
@@ -122,6 +136,53 @@ function isBlockStart(line: string): boolean {
     /^\s*>\s?/.test(line) ||
     /^\s*([-*_])\1{2,}\s*$/.test(line)
   );
+}
+
+/**
+ * Whether the line at `i` opens a pipe table: it carries at least one `|` and
+ * the next line is a delimiter row. A lone pipe-bearing line stays a paragraph.
+ */
+function isTableStart(lines: readonly string[], i: number): boolean {
+  return lines[i].includes('|') && i + 1 < lines.length && isTableDelimiter(lines[i + 1]);
+}
+
+/**
+ * A table delimiter row: pipe-separated cells of dashes with optional
+ * alignment colons (`|---|:---:|`). Requiring a pipe keeps plain `---` on the
+ * horizontal-rule path.
+ */
+function isTableDelimiter(line: string): boolean {
+  const t = line.trim();
+  return t.includes('|') && t.includes('-') && /^\|?(\s*:?-+:?\s*\|)*\s*:?-+:?\s*\|?$/.test(t);
+}
+
+/** Split a table row into trimmed cell texts, dropping the optional edge pipes. */
+function splitTableRow(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith('|')) {
+    t = t.slice(1);
+  }
+  if (t.endsWith('|')) {
+    t = t.slice(0, -1);
+  }
+  return t.split('|').map((cell) => cell.trim());
+}
+
+/**
+ * Emit a table. Rows are squared to the header's cell count (extra cells
+ * dropped, missing ones empty); every cell runs through {@link renderInline},
+ * so cell text is escaped before any tag exists. The wrapper div lets the host
+ * style a horizontal scroll instead of squashing wide tables.
+ */
+function renderTable(header: readonly string[], rows: readonly string[][]): string {
+  const th = header.map((cell) => `<th>${renderInline(cell)}</th>`).join('');
+  const body = rows
+    .map((row) => {
+      const cells = header.map((_, col) => `<td>${renderInline(row[col] ?? '')}</td>`).join('');
+      return `<tr>${cells}</tr>`;
+    })
+    .join('');
+  return `<div class="table-wrap"><table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 /**

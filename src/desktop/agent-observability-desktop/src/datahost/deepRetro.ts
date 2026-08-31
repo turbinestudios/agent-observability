@@ -2,7 +2,7 @@ import type { Configuration } from '@agent-observability/core/src/config/configu
 import type { SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
 import type { CancellationToken } from '@agent-observability/core/src/chat/backends/cancellation';
 import type { ChatBackend } from '@agent-observability/core/src/chat/backends/chatBackend';
-import { ClaudeCliError } from '@agent-observability/core/src/chat/backends/claudeErrors';
+import { CliBackendError } from '@agent-observability/core/src/chat/backends/cliError';
 import {
   buildDeepRetrospectivePrompt,
   parseDeepRetrospective,
@@ -94,7 +94,7 @@ async function execute(source: string, sessionId: string, deps: DeepRetroDeps): 
     }
     // CLI failures go through the backend's friendly mapping (which carries the
     // desktop's own "where to fix it" hint); everything else surfaces as-is.
-    if (err instanceof ClaudeCliError) {
+    if (err instanceof CliBackendError) {
       return { error: deps.backend.describeError(err).message };
     }
     return { error: err instanceof Error ? err.message : String(err) };

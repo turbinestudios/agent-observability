@@ -16,19 +16,30 @@ reference for auditing the privacy-first refactor.
 > context-insights batch carries the **repository-relative paths of
 > customization files only** (instructions/skills/prompts/agents/hooks), with
 > counts and never contents, so teams can review context-engineering hotspots.
-> Two further deliberate, narrow exceptions exist for **content**, both
-> confined to the desktop app and to the user's own local `claude` CLI login
-> (never an API key of this product), both only ever user-initiated and never
-> background, and both entirely independent of the aggregate/context-insights
-> upload paths, which never carry raw content. The opt-in **Deep
-> Retrospective** sends one session's transcript digest to Anthropic — only
-> after the user enables it in Settings (off by default) **and** confirms a
-> per-session dialog naming exactly what is sent. The **AI Helper** chat sends
-> each message the user explicitly submits — their question, a summary of
-> recent sessions (titles, repositories, verdicts, token and cost figures),
-> and, when the user attaches a session, capped excerpts of its prompts and
+> Three further deliberate, narrow exceptions exist for **content**, all
+> confined to the desktop app and to the user's own local AI CLI login —
+> Claude Code (`claude`, to Anthropic) or the GitHub Copilot CLI (`copilot`,
+> to GitHub), whichever backend Settings selects; never an API key of this
+> product — all only ever user-initiated and never background, and all
+> entirely independent of the aggregate/context-insights upload paths, which
+> never carry raw content. The opt-in **Deep Retrospective** sends one
+> session's transcript digest to the selected vendor — only after the user
+> enables it in Settings (off by default) **and** confirms a per-session
+> dialog naming exactly what is sent. The **AI Helper** chat sends each
+> message the user explicitly submits — their question, a summary of recent
+> sessions (titles, repositories, verdicts, token and cost figures), and,
+> when the user attaches a session, capped excerpts of its prompts and
 > responses — after a one-time first-use notice in the view naming exactly
-> that, enforced again in the data host.
+> that, enforced again in the data host. The opt-in **Context Improvement
+> Plan** sends the selected context files' usage statistics, the selected
+> sessions' retrospective evidence (titles and goals included), and the
+> repository's context-file contents (capped) — only after the user enables
+> it in Settings (off by default) **and** confirms a per-generation dialog
+> naming the vendor and that payload, enforced again in the data host.
+> Applying a plan is the product's one sanctioned **local write path**:
+> allowlisted context files under the plan's re-verified repository root
+> only, per-file approved after a diff preview, staleness-checked against the
+> generation, backed up before writing, never deleting.
 
 The guarantee is enforced by **defense in depth**: the client never emits raw
 fields, the shared schema rejects unexpected fields, and the server re-validates
@@ -54,6 +65,8 @@ and rejects raw/free-text fields even though it does not trust the client.
 | 14 | Skip reasons reduced to a **closed taxonomy** (`applyToNoMatch`/`other`) — raw reason text never transmitted | `aggregate/contextInsightsExtractor.ts` (`classifySkipReason`) | `aggregate/contextInsightsPrivacy.test.ts` (raw reason absent) |
 | 15 | Server re-validates the context-insights batch and **rejects absolute/traversal/non-allowlisted paths** and unknown fields | `Services/Ingestion/ContextInsightsBatchValidator.cs` | `ContextInsightsValidatorTests.cs`, `ContextInsightsIngestionTests.cs` |
 | 16 | **Copilot (Cloud)** source is **pull-only**: raw cloud prompts / tool I/O / assistant text land on **local disk only** (home-dir sink) and the source uploads **nothing** — `getAggregationRows` returns `[]` in the current phases | `src/cloud/cloudSink.ts` (local sink), `src/cloud/copilotCloudSource.ts` (`getAggregationRows` → `[]`) | `src/cloud/copilotCloudSource.test.ts → getAggregationRows returns [] (cloud sessions are local-only through Phase 3)` |
+| 17 | **Context Improvement Plans** are double-gated (default-off setting + per-generation dialog naming vendor and payload) and the data host refuses a gate-off call **before** anything is assembled or sent | desktop `datahost/improve/contextPlan.ts` (`IMPROVE_ENABLED_KEY` check first) | `datahost/improve/contextPlan.test.ts` ("gate off … CLI seam is never touched") |
+| 18 | The plan **write path** is constrained to `SAFE_CONTEXT_FILE_PATTERN` files under the plan's re-verified repo root — traversal refused, staleness-checked (sha256 against generation), backed up before writing, **no delete action exists** | desktop `datahost/improve/contextPlanApply.ts` (allowlist re-check, `path.relative` guard, backup-then-write) | `datahost/improve/contextPlanApply.test.ts` (tampered path, moved root, stale, undo, never-delete) |
 
 ## Client-side enforcement (VS Code extension)
 

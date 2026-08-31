@@ -96,6 +96,30 @@
   font-size: 12px;
 }
 
+/* Markdown tables scroll sideways inside the bubble instead of squashing. */
+.assistant-bubble-model .table-wrap {
+  overflow-x: auto;
+  margin: 0 0 8px;
+}
+
+.assistant-bubble-model table {
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.assistant-bubble-model th,
+.assistant-bubble-model td {
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  text-align: left;
+}
+
+.assistant-bubble-model th {
+  background: var(--bg-sunken);
+  font-weight: 600;
+}
+
 .assistant-bubble-model a {
   color: var(--accent);
   cursor: pointer;

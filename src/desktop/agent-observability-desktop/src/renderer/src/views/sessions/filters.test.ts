@@ -65,6 +65,34 @@ describe('chips', () => {
     );
     expect(chips.map((c) => c.key)).toEqual(['repository', 'date', 'tag']);
   });
+
+  it('labels a verdict chip in plain language and a signal chip by its theme', () => {
+    expect(filterChips({ verdict: 'struggled' })[0]).toMatchObject({
+      key: 'verdict',
+      label: 'Struggled',
+    });
+    expect(filterChips({ signal: 'correction-reprompt' })[0]).toMatchObject({
+      key: 'signal',
+      label: 'Correction re-prompts',
+    });
+    // An unknown signal id still shows AS ITSELF — visible and clearable
+    // beats hidden.
+    expect(filterChips({ signal: 'future-signal' })[0].label).toBe('future-signal');
+  });
+
+  it('clears verdict and signal chips like any other dimension', () => {
+    expect(clearFilter({ verdict: 'bumpy', signal: 's' }, 'verdict')).toEqual({ signal: 's' });
+    expect(clearFilter({ verdict: 'bumpy', signal: 's' }, 'signal')).toEqual({ verdict: 'bumpy' });
+  });
+
+  it('keys and applies the new dimensions so drill-downs re-query and replace', () => {
+    expect(filterKey({ verdict: 'bumpy' })).not.toBe(filterKey({}));
+    expect(filterKey({ signal: 'a' })).not.toBe(filterKey({ signal: 'b' }));
+    expect(applyIntent({ verdict: 'smooth', signal: 'rework-churn' })).toEqual({
+      verdict: 'smooth',
+      signal: 'rework-churn',
+    });
+  });
 });
 
 describe('date labels', () => {
@@ -217,6 +245,16 @@ describe('matching a pushed row', () => {
     const filters = { source: 'claude', repository: 'github.com/acme/app', tag: 't' };
     expect(matchesFilters(row({ tags: ['t'] }), filters)).toBe(true);
     expect(matchesFilters(row({ tags: ['t'], source: 'copilot' }), filters)).toBe(false);
+  });
+
+  it('decides a verdict filter from the row, treating no verdict as no match', () => {
+    expect(matchesFilters(row({ verdict: 'bumpy' }), { verdict: 'bumpy' })).toBe(true);
+    expect(matchesFilters(row({ verdict: 'smooth' }), { verdict: 'bumpy' })).toBe(false);
+    expect(matchesFilters(row(), { verdict: 'bumpy' })).toBe(false);
+  });
+
+  it('fails closed on a signal filter — the row cannot prove it qualifies', () => {
+    expect(matchesFilters(row(), { signal: 'correction-reprompt' })).toBe(false);
   });
 });
 

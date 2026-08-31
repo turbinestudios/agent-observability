@@ -30,6 +30,20 @@
   --chart-axis: #c3c2b7;
 }
 
+/*
+ * Verdict series for the "How sessions went" hero — aliased to the retro chip
+ * ramp so the chart and the chips can never disagree about what a verdict
+ * looks like. 'unjudged' is deliberately recessive: it is coverage, not an
+ * answer, and must read as "not yet colored in".
+ */
+:root {
+  --verdict-smooth: var(--accent);
+  --verdict-bumpy: var(--warning);
+  --verdict-struggled: var(--danger);
+  --verdict-abandoned: var(--fg-subtle);
+  --verdict-unjudged: color-mix(in srgb, var(--fg-subtle) 35%, transparent);
+}
+
 .overview {
   flex: 1;
   min-width: 0;
@@ -175,6 +189,28 @@
   letter-spacing: 0.04em;
 }
 
+/*
+ * The demoted cost/volume strip: the same twelve figures, at reference size
+ * rather than headline size — the insight cards above are the page's answer
+ * now, and two rows of 21px numbers would still read as the lead.
+ */
+.tiles-compact {
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.tiles-compact .tile {
+  padding: 6px 10px;
+}
+
+.tiles-compact .tile-value {
+  font-size: 14px;
+}
+
+.tiles-compact .tile-label {
+  font-size: 9px;
+}
+
 /* --- cards ----------------------------------------------------------------- */
 
 .card {
@@ -262,6 +298,17 @@
   margin: 0;
   padding: 26px 0;
   text-align: center;
+  color: var(--fg-subtle);
+  font-size: 12px;
+}
+
+/* A card whose first answer is still in flight — a spinner, not a claim. */
+.chart-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 26px 0;
   color: var(--fg-subtle);
   font-size: 12px;
 }

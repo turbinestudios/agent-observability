@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { showsVerdictChip, verdictLabel } from './retro';
+import { showsVerdictChip, themeLabel, verdictLabel } from './retro';
 
 describe('verdictLabel', () => {
   it('names every verdict in plain language', () => {
@@ -20,5 +20,17 @@ describe('showsVerdictChip', () => {
 
   it('an unjudged session shows nothing — absent is not smooth', () => {
     expect(showsVerdictChip(undefined)).toBe(false);
+  });
+});
+
+describe('themeLabel', () => {
+  it('names the known finding signals in plain language', () => {
+    expect(themeLabel('correction-reprompt')).toBe('Correction re-prompts');
+    expect(themeLabel('vague-first-prompt')).toBe('Vague opening prompts');
+    expect(themeLabel('tool-error-streak')).toBe('Tool-error streaks');
+  });
+
+  it('shows an unknown id as itself rather than hiding it', () => {
+    expect(themeLabel('some-future-signal')).toBe('some-future-signal');
   });
 });

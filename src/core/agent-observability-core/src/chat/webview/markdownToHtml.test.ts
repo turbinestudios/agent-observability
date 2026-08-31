@@ -88,3 +88,52 @@ describe('markdownToHtml — structure', () => {
     expect(markdownToHtml('line one\nline two')).toBe('<p>line one line two</p>');
   });
 });
+
+describe('markdownToHtml — tables', () => {
+  it('renders a pipe table with header and body rows', () => {
+    const html = markdownToHtml('| Rank | Session |\n|---|---|\n| 1 | Alpha |\n| 2 | Beta |');
+    expect(html).toBe(
+      '<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Session</th></tr></thead>' +
+        '<tbody><tr><td>1</td><td>Alpha</td></tr><tr><td>2</td><td>Beta</td></tr></tbody></table></div>',
+    );
+  });
+
+  it('accepts alignment colons in the delimiter row', () => {
+    const html = markdownToHtml('| a | b |\n|:---|---:|\n| 1 | 2 |');
+    expect(html).toContain('<th>a</th><th>b</th>');
+    expect(html).toContain('<td>1</td><td>2</td>');
+  });
+
+  it('escapes cell contents before any tag is introduced', () => {
+    const html = markdownToHtml('| x |\n|---|\n| <script>alert(1)</script> |');
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('<td>&lt;script&gt;alert(1)&lt;/script&gt;</td>');
+  });
+
+  it('renders inline markup inside cells', () => {
+    const html = markdownToHtml('| a |\n|---|\n| **bold** `code` |');
+    expect(html).toContain('<td><strong>bold</strong> <code>code</code></td>');
+  });
+
+  it('squares ragged rows to the header width', () => {
+    const html = markdownToHtml('| a | b |\n|---|---|\n| only |\n| 1 | 2 | extra |');
+    expect(html).toContain('<tr><td>only</td><td></td></tr>');
+    expect(html).toContain('<tr><td>1</td><td>2</td></tr>');
+    expect(html).not.toContain('extra');
+  });
+
+  it('ends a preceding paragraph where a table starts', () => {
+    const html = markdownToHtml('intro text\n| a | b |\n|---|---|\n| 1 | 2 |');
+    expect(html).toContain('<p>intro text</p>');
+    expect(html).toContain('<th>a</th>');
+    expect(html).not.toContain('intro text |');
+  });
+
+  it('keeps a pipe-bearing line without a delimiter row as a paragraph', () => {
+    expect(markdownToHtml('either | or')).toBe('<p>either | or</p>');
+  });
+
+  it('keeps a plain dash run as a horizontal rule, not a table delimiter', () => {
+    expect(markdownToHtml('---')).toBe('<hr />');
+  });
+});

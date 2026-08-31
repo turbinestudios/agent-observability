@@ -94,6 +94,10 @@ body {
 .bubble h1, .bubble h2, .bubble h3, .bubble h4 { margin: 8px 0 4px; }
 .bubble ul, .bubble ol { margin: 4px 0; padding-left: 20px; }
 .bubble code { font-family: var(--vscode-editor-font-family, monospace); background: var(--vscode-textCodeBlock-background); padding: 0 3px; border-radius: 3px; }
+.bubble .table-wrap { overflow-x: auto; margin: 8px 0; }
+.bubble table { border-collapse: collapse; font-size: 0.95em; white-space: nowrap; }
+.bubble th, .bubble td { border: 1px solid var(--vscode-widget-border, var(--vscode-descriptionForeground)); padding: 3px 8px; text-align: left; }
+.bubble th { background: var(--vscode-editorWidget-background); font-weight: 600; }
 .code-block { position: relative; margin: 8px 0; border: 1px solid var(--vscode-widget-border, transparent); border-radius: 6px; overflow: hidden; }
 .code-block pre { margin: 0; padding: 10px; overflow-x: auto; background: var(--vscode-textCodeBlock-background); }
 .code-block pre code { background: transparent; padding: 0; }

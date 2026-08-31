@@ -216,3 +216,24 @@
   font-weight: 600;
   text-transform: uppercase;
 }
+
+/* The door to the Improve view, enabled once a repository is chosen. */
+.hotspots-improve {
+  padding: 4px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.hotspots-improve:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.hotspots-improve:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

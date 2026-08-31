@@ -27,6 +27,7 @@ add genuinely new research capability.
 | 8 | [Rework & churn quality signals](08-rework-churn.md) | Distinguish productive runs from thrashing — the first quality proxy | Planned | L | Per-turn LoC data + Claude `structuredPatch`, unused today |
 | 9 | [Session retrospective](09-session-retrospective.md) | Each session tells me what it set out to do, how it went, and what to change | Completed (1.7.0) | M/L | Unread transcript markers + the turn data every source already parses |
 | 10 | [AI Helper](10-ai-helper.md) | Ask questions about my own sessions and get grounded, cited answers | Completed (1.8.0) | M/L | Core's chat stack + the Claude CLI backend the deep retrospective already spawns |
+| 11 | [Context Improvement Plans](11-context-improvement-plans.md) | Turn hotspot + retro evidence into reviewed, appliable edits to my context files | Completed (1.14.0) | L | The hotspot/retro rankings, the chat-backend registry (now two CLIs), and the deep-retro runner pattern |
 
 **Suggested order:** 1 → 4 → 5 → 2 → 3 → 6 → 7 → 8. Proposal 5's cross-view
 navigation ("open Sessions pre-filtered") is reused by 3, 7, and 8 — build it
@@ -73,12 +74,18 @@ and duplicate.
    I/O, file paths, identities) never leaves the machine. Every feature in
    this folder is **local-only**. Never add fields to the aggregate/sync paths
    (`src/core/agent-observability-core/src/aggregate/*`, `…/src/sync/*`) or to
-   `schemas/*.json`. See `docs/privacy-validation.md`. The two sanctioned,
-   gated exceptions — both strictly the user's **own `claude` CLI login**,
-   user-initiated, never in the background — are proposal 9's opt-in Deep
-   Retrospective (default-off setting plus per-invocation confirmation) and
-   proposal 10's AI Helper (one-time first-use notice; every send an explicit
-   user action). Nothing else may cite them as precedent.
+   `schemas/*.json`. See `docs/privacy-validation.md`. The three sanctioned,
+   gated exceptions — all strictly the user's **own AI CLI login** (Claude
+   Code to Anthropic, or the GitHub Copilot CLI to GitHub, whichever Settings
+   selects), user-initiated, never in the background — are proposal 9's
+   opt-in Deep Retrospective (default-off setting plus per-invocation
+   confirmation), proposal 10's AI Helper (one-time first-use notice; every
+   send an explicit user action), and proposal 11's Context Improvement Plans
+   (default-off setting plus per-generation confirmation naming the vendor
+   and payload). Proposal 11 also defines the one sanctioned **local write
+   path** — allowlisted context files under the re-verified repo root,
+   per-file approved, backed up, never deleting. Nothing else may cite any of
+   these as precedent.
 2. **Core vs. host boundary.** Host-independent logic (parsing, metrics,
    rendering) goes in `src/core/agent-observability-core`; importing `vscode`
    there is a lint error. Desktop-only wiring stays in the desktop package.

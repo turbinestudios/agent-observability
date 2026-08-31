@@ -12,6 +12,7 @@ import type { SettingsPatch, SettingsSnapshot } from '../shared/rpc';
 import type { DesktopSettingsReader } from './drivers/desktopConfig';
 import { resolveConfigPath } from './drivers/desktopConfig';
 import { DEEP_RETRO_ENABLED_KEY } from './deepRetro';
+import { IMPROVE_ENABLED_KEY } from './improve/contextPlan';
 import { pickCopilotDatabases, type CopilotDatabaseCandidate } from './indexer/copilotIndexer';
 
 /**
@@ -62,10 +63,16 @@ export function buildSettingsSnapshot(
     // the clamped value the detector will actually use.
     maxSessionMinutes: config.getMaxSessionMinutes(),
     deepRetroEnabled: storedBoolean(settings, DEEP_RETRO_ENABLED_KEY, false),
+    improveEnabled: storedBoolean(settings, IMPROVE_ENABLED_KEY, false),
     claudeCliPath: storedString(settings, ConfigKeys.aiHelperClaudeCliPath),
     // Effective values (defaulted/clamped), same reasoning as maxSessionMinutes.
     claudeModel: config.getAiHelperClaudeModel(),
     claudeEffort: config.getAiHelperClaudeEffort(),
+    // Effective on THIS machine: the stored default `copilot` is the VS Code
+    // `vscode.lm` backend the desktop cannot carry, and the registry resolves
+    // it to Claude Code — the page must show where sends actually go.
+    aiBackend: config.getAiHelperBackend() === 'copilot-cli' ? 'copilot-cli' : 'claude-code',
+    copilotCliPath: storedString(settings, ConfigKeys.aiHelperCopilotCliPath),
     configPath,
     configDir: path.dirname(configPath),
   };
@@ -127,6 +134,17 @@ export function applySettingsPatch(
     changed.deepRetro = true;
   }
 
+  // The improvement-plan gate: the same consent-surface rule as the deep
+  // retrospective's — stored only on a real boolean, never inferred. Rides the
+  // `deepRetro` changed flag; neither needs anything rebuilt.
+  if (
+    typeof patch.improveEnabled === 'boolean' &&
+    patch.improveEnabled !== storedBoolean(settings, IMPROVE_ENABLED_KEY, false)
+  ) {
+    update[IMPROVE_ENABLED_KEY] = patch.improveEnabled;
+    changed.deepRetro = true;
+  }
+
   // The AI keys. `changed.ai` makes the caller rebuild the backend registry:
   // a successful CLI probe is cached per backend instance, so a changed path
   // would otherwise be ignored until the app restarts.
@@ -148,6 +166,21 @@ export function applySettingsPatch(
     const next = patch.claudeEffort.trim();
     if (next !== storedString(settings, ConfigKeys.aiHelperClaudeEffort)) {
       update[ConfigKeys.aiHelperClaudeEffort] = next.length > 0 ? next : undefined;
+      changed.ai = true;
+    }
+  }
+  // The backend picker: only the two ids the desktop can actually run are
+  // accepted — anything else on the wire is ignored, not stored.
+  if (patch.aiBackend === 'claude-code' || patch.aiBackend === 'copilot-cli') {
+    if (patch.aiBackend !== storedString(settings, ConfigKeys.aiHelperBackend)) {
+      update[ConfigKeys.aiHelperBackend] = patch.aiBackend;
+      changed.ai = true;
+    }
+  }
+  if (typeof patch.copilotCliPath === 'string') {
+    const next = patch.copilotCliPath.trim();
+    if (next !== storedString(settings, ConfigKeys.aiHelperCopilotCliPath)) {
+      update[ConfigKeys.aiHelperCopilotCliPath] = next.length > 0 ? next : undefined;
       changed.ai = true;
     }
   }

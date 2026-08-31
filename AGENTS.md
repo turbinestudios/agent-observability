@@ -140,22 +140,41 @@ is `additionalProperties: false` at every level.
 - Cloud sharing is **off by default** and gated on explicit consent plus an API
   key in VS Code SecretStorage (never in `settings.json`).
 - The dashboard ingestion URL is a hardcoded constant, not a user setting.
-- **Two sanctioned exceptions**, both desktop-only and both strictly the
-  user's **own local `claude` CLI login** (their account, never a product API
-  key), only ever user-initiated, never in the background, and never on the
-  aggregate/sync path — which continues to carry no raw content, ever:
+- **Three sanctioned exceptions**, all desktop-only and all strictly the
+  user's **own local AI CLI login** — Claude Code (`claude`, sends to
+  Anthropic) or the GitHub Copilot CLI (`copilot`, sends to GitHub),
+  whichever backend the user selects in Settings; their account, never a
+  product API key — only ever user-initiated, never in the background, and
+  never on the aggregate/sync path — which continues to carry no raw content,
+  ever:
   1. The **Deep Retrospective**: when the user turns it on in Settings (off by
      default) *and* confirms a per-session dialog stating exactly what is
-     sent, that one session's transcript digest goes to Anthropic to write a
-     retrospective.
+     sent and to which vendor, that one session's transcript digest goes to
+     that vendor to write a retrospective.
   2. The **AI Helper**: after a one-time first-use notice in the view stating
      exactly what each message carries — the user's question, a summary of
      recent sessions (titles, repositories, verdicts, token and cost
      figures), and, when the user attaches a session, capped excerpts of its
-     prompts and responses — each explicit send in the chat goes to Anthropic
-     the same way.
+     prompts and responses — each explicit send in the chat goes to the
+     selected vendor the same way.
+  3. The **Context Improvement Plan**: when the user turns it on in Settings
+     (off by default) *and* confirms a per-generation dialog naming the
+     vendor and exactly what is sent — the selected context files' usage
+     statistics, the selected sessions' retrospective evidence (titles and
+     goals included), and the repository's context-file contents (capped) —
+     that payload goes to the selected vendor to write an improvement plan
+     for the repository's context files.
 
   Nothing else may cite these exceptions as precedent.
+
+- **One sanctioned local write path.** Applying a Context Improvement Plan may
+  write **only** allowlisted context files (`CLAUDE.md`, `AGENTS.md`,
+  `copilot-instructions.md`, `SKILL.md`, `*.instructions.md`, `*.prompt.md`,
+  `*.agent.md`, `*.skill.md`) inside the plan's re-verified repository root —
+  each file approved individually after a diff preview, refused when the file
+  changed since the plan was generated, backed up before the first byte is
+  written, and never deleting anything. No other code may write into a user's
+  repository.
 
 Before changing anything on the producer→consumer path, read
 [docs/privacy-validation.md](docs/privacy-validation.md) and

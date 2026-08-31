@@ -13,8 +13,10 @@ import type {
   RetroVerdict,
   SessionGroup,
   SessionRow,
+  ThemeRow,
+  VerdictDayPoint,
 } from '../../shared/rpc';
-import { MAX_DAILY_COLUMNS, windowStartMs } from '../../shared/rpc';
+import { INSIGHT_THEME_LIMIT, MAX_DAILY_COLUMNS, windowStartMs } from '../../shared/rpc';
 import type { SessionAnalysis } from '../analysis/sessionAnalyzer';
 
 /**
@@ -35,7 +37,7 @@ import type { SessionAnalysis } from '../analysis/sessionAnalyzer';
  */
 
 /** Bump to invalidate every existing index (drop-and-rebuild, no migration). */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * How many of the most recent sessions the background analysis reads.
@@ -175,6 +177,22 @@ CREATE TABLE IF NOT EXISTS context_files (
 );
 CREATE INDEX IF NOT EXISTS idx_context_files_file ON context_files (file);
 
+-- One row per (session, retrospective signal) — the grain the Dashboard's
+-- "Recurring friction themes" card folds over. Ids, severities and counts
+-- only, never content strings: the same LOCAL-ONLY class as session_analysis.
+CREATE TABLE IF NOT EXISTS session_findings (
+  source     TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  -- Core's stable RetrospectiveSignalId.
+  signal_id  TEXT NOT NULL,
+  -- Worst severity across the session's occurrences: 'info'|'friction'|'blocker'.
+  severity   TEXT NOT NULL,
+  -- Occurrences within the session.
+  count      INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (source, session_id, signal_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_findings_signal ON session_findings (signal_id);
+
 -- Resolving a git remote means walking up to a .git/config; cache it per cwd.
 CREATE TABLE IF NOT EXISTS repo_cache (
   cwd            TEXT PRIMARY KEY,
@@ -187,7 +205,13 @@ CREATE TABLE IF NOT EXISTS repo_cache (
  * Every table keyed by `(source, session_id)`. Deleting a session walks this
  * list, so adding a per-session table cannot leave orphans behind.
  */
-const SESSION_OWNED_TABLES = ['sessions', 'files', 'session_analysis', 'context_files'] as const;
+const SESSION_OWNED_TABLES = [
+  'sessions',
+  'files',
+  'session_analysis',
+  'session_findings',
+  'context_files',
+] as const;
 
 /**
  * The session list reads its rows through a LEFT JOIN onto the analysis table,
@@ -318,7 +342,7 @@ export class IndexDb {
       this.db.exec(
         'DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS titles;' +
           ' DROP TABLE IF EXISTS repo_cache; DROP TABLE IF EXISTS session_analysis;' +
-          ' DROP TABLE IF EXISTS context_files;',
+          ' DROP TABLE IF EXISTS session_findings; DROP TABLE IF EXISTS context_files;',
       );
       this.db.exec(SCHEMA);
     }
@@ -332,7 +356,7 @@ export class IndexDb {
   clear(): void {
     this.db.exec(
       'DELETE FROM files; DELETE FROM sessions; DELETE FROM titles; DELETE FROM repo_cache;' +
-        ' DELETE FROM session_analysis; DELETE FROM context_files;',
+        ' DELETE FROM session_analysis; DELETE FROM session_findings; DELETE FROM context_files;',
     );
   }
 
@@ -726,6 +750,86 @@ export class IndexDb {
       : { windowDays: Math.max(1, span) };
   }
 
+  /**
+   * The Dashboard's insight aggregates: verdict-per-day and recurring finding
+   * themes. Scored hotspots ride the existing {@link IndexDb.hotspots} query so
+   * the two views can never disagree; the caller composes all three.
+   *
+   * The verdict series LEFT JOINs the analysis table so unanalyzed sessions
+   * count as `'unjudged'` — by construction each day's buckets sum to exactly
+   * the sessions the overview's daily chart counts, and a fresh rebuild renders
+   * as gray filling in rather than an empty chart.
+   */
+  insights(
+    window: OverviewWindow,
+    hiddenKeys: readonly string[] = [],
+  ): { verdictDaily: VerdictDayPoint[]; themes: ThemeRow[]; windowDays: number; dailyCapped?: true } {
+    const exclude =
+      hiddenKeys.length === 0
+        ? ''
+        : `AND s.source || ':' || s.session_id NOT IN (${hiddenKeys.map(() => '?').join(', ')})`;
+
+    // Same day span and local-midnight bucketing as the overview's daily series.
+    const { windowDays, dailyCapped } = this.dailySpan(window, hiddenKeys);
+    const dailyCutoff = windowStartMs(windowDays);
+
+    const stored = this.db
+      .prepare(
+        `SELECT date(s.ended_at_ms / 1000, 'unixepoch', 'localtime') AS day,
+                a.verdict AS verdict,
+                COUNT(*) AS sessions
+           FROM sessions s
+           LEFT JOIN session_analysis a ON a.source = s.source AND a.session_id = s.session_id
+          WHERE s.ended_at_ms > 0
+            AND s.ended_at_ms >= ?
+            ${exclude}
+          GROUP BY day, a.verdict
+          ORDER BY day ASC`,
+      )
+      .all(dailyCutoff, ...hiddenKeys) as { day: string; verdict: string | null; sessions: number }[];
+
+    // Fold unknown labels into 'unjudged' AFTER the query: toVerdict is the one
+    // arbiter of what counts as a verdict, and SQL must not grow a second one.
+    const merged = new Map<string, VerdictDayPoint>();
+    for (const row of stored) {
+      const verdict = toVerdict(row.verdict) ?? 'unjudged';
+      const key = `${row.day}:${verdict}`;
+      const existing = merged.get(key);
+      if (existing === undefined) {
+        merged.set(key, { day: row.day, verdict, sessions: row.sessions });
+      } else {
+        existing.sessions += row.sessions;
+      }
+    }
+
+    // Themes rank by distinct sessions affected — honest recurrence — with
+    // total occurrences and the id as deterministic tie-breaks. Info-severity
+    // findings are observations, not friction, and stay out of the card.
+    const cutoff = window === 'all' ? 0 : windowStartMs(window);
+    const themes = this.db
+      .prepare(
+        `SELECT f.signal_id AS signalId,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(f.count), 0) AS occurrences
+           FROM session_findings f
+           JOIN sessions s ON s.source = f.source AND s.session_id = f.session_id
+          WHERE f.severity <> 'info'
+            AND s.ended_at_ms >= ?
+            ${exclude}
+          GROUP BY f.signal_id
+          ORDER BY sessions DESC, occurrences DESC, f.signal_id ASC
+          LIMIT ?`,
+      )
+      .all(cutoff, ...hiddenKeys, INSIGHT_THEME_LIMIT) as ThemeRow[];
+
+    return {
+      verdictDaily: [...merged.values()],
+      themes,
+      windowDays,
+      ...(dailyCapped ? { dailyCapped: true as const } : {}),
+    };
+  }
+
   // -- background analysis ---------------------------------------------------
 
   /**
@@ -818,6 +922,15 @@ export class IndexDb {
          name = excluded.name, category = excluded.category, status = excluded.status,
          est_tokens = MAX(context_files.est_tokens, excluded.est_tokens)`,
     );
+    const clearFindings = this.db.prepare(
+      'DELETE FROM session_findings WHERE source = ? AND session_id = ?',
+    );
+    const putFinding = this.db.prepare(
+      `INSERT INTO session_findings (source, session_id, signal_id, severity, count)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(source, session_id, signal_id) DO UPDATE SET
+         severity = excluded.severity, count = excluded.count`,
+    );
 
     this.db.transaction(() => {
       // retro === undefined means the retrospective could not be built: store
@@ -856,6 +969,12 @@ export class IndexDb {
           file.estTokens,
         );
       }
+      // Rewritten wholesale for the same reason as the context files: a signal
+      // absent from the re-analysis must leave the themes, not linger in them.
+      clearFindings.run(source, sessionId);
+      for (const finding of analysis.findings) {
+        putFinding.run(source, sessionId, finding.id, finding.severity, finding.count);
+      }
     })();
   }
 
@@ -869,7 +988,9 @@ export class IndexDb {
    * change re-judges those too.
    */
   clearDeviations(): void {
-    this.db.exec('DELETE FROM session_analysis;');
+    // Findings ride along: they were projected from the same retrospectives the
+    // re-analysis is about to re-judge, so stale ones must not outlive the rows.
+    this.db.exec('DELETE FROM session_analysis; DELETE FROM session_findings;');
   }
 
   // -- session retrospectives ------------------------------------------------
@@ -956,7 +1077,10 @@ export class IndexDb {
    * MIN only to be deterministic: a file's classification comes from where it was
    * discovered, which does not vary between sessions in practice.
    */
-  hotspots(params: { repository?: string } = {}, hiddenKeys: readonly string[] = []): HotspotRow[] {
+  hotspots(
+    params: { repository?: string; endedAfterMs?: number } = {},
+    hiddenKeys: readonly string[] = [],
+  ): HotspotRow[] {
     const { where, args } = hotspotFilter(params, hiddenKeys);
     return this.db
       .prepare(
@@ -1080,6 +1204,40 @@ export class IndexDb {
     return new Map(rows.map((r) => [r.session_id, { title: r.title, derived: r.derived === 1 }]));
   }
 
+  /**
+   * Local working directories known to belong to a repository, newest
+   * resolution first — the reverse of {@link getCachedRepository}, for features
+   * that need a checkout on disk (the improvement plan's context-file scan).
+   */
+  cwdsForRepository(repository: string, limit = 20): { cwd: string; resolvedAtMs: number }[] {
+    return this.db
+      .prepare(
+        `SELECT cwd, resolved_at_ms AS resolvedAtMs FROM repo_cache
+          WHERE repository = ? ORDER BY resolved_at_ms DESC LIMIT ?`,
+      )
+      .all(repository, limit) as { cwd: string; resolvedAtMs: number }[];
+  }
+
+  /**
+   * Absolute context-file paths seen in a repository's sessions, newest first —
+   * the fallback root hint for repositories whose sessions carried no cwd
+   * (Copilot sessions resolve their repository another way).
+   */
+  contextFilePathsForRepository(repository: string, limit = 50): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT cf.file AS file, MAX(s.ended_at_ms) AS newest
+           FROM context_files cf
+           JOIN sessions s ON s.source = cf.source AND s.session_id = cf.session_id
+          WHERE s.repository = ?
+          GROUP BY cf.file
+          ORDER BY newest DESC
+          LIMIT ?`,
+      )
+      .all(repository, limit) as { file: string }[];
+    return rows.map((row) => row.file);
+  }
+
   getCachedRepository(cwd: string): string | undefined {
     const row = this.db.prepare('SELECT repository FROM repo_cache WHERE cwd = ?').get(cwd) as
       | { repository: string }
@@ -1171,6 +1329,20 @@ function buildFilter(
   if (params.friction === true) {
     clauses.push(`a.verdict IN ('struggled', 'abandoned')`);
   }
+  if (params.verdict !== undefined) {
+    clauses.push('a.verdict = ?');
+    args.push(params.verdict);
+  }
+  // A theme drill-down: sessions whose retrospective raised this signal beyond
+  // info severity — the same predicate the Dashboard's themes card counts by.
+  if (params.signal !== undefined && params.signal.length > 0) {
+    clauses.push(
+      `EXISTS (SELECT 1 FROM session_findings f
+                WHERE f.source = s.source AND f.session_id = s.session_id
+                  AND f.signal_id = ? AND f.severity <> 'info')`,
+    );
+    args.push(params.signal);
+  }
   const query = params.query?.trim();
   if (query !== undefined && query.length > 0) {
     // ESCAPE is required for the backslashes below to mean anything: without it
@@ -1203,7 +1375,7 @@ function buildFilter(
  * them: a count that includes what the user removed reads as a bug.
  */
 function hotspotFilter(
-  params: { repository?: string },
+  params: { repository?: string; endedAfterMs?: number },
   hiddenKeys: readonly string[],
   file?: string,
 ): { where: string; args: unknown[] } {
@@ -1217,6 +1389,12 @@ function hotspotFilter(
   if (params.repository !== undefined && params.repository.length > 0) {
     clauses.push('s.repository = ?');
     args.push(params.repository);
+  }
+  // The Dashboard's windowed card; the Hotspots view passes nothing and keeps
+  // its all-time ranking.
+  if (params.endedAfterMs !== undefined && params.endedAfterMs > 0) {
+    clauses.push('s.ended_at_ms >= ?');
+    args.push(params.endedAfterMs);
   }
   if (hiddenKeys.length > 0) {
     clauses.push(

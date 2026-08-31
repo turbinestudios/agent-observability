@@ -9,6 +9,61 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.14.0] - 2026-08-31
+
+### Added
+
+- **Improvement plans for your context files.** The new **Improve** view lets
+  you pick a repository's busiest context files and roughest sessions and get
+  a concrete plan — written by your own AI CLI — for how its `CLAUDE.md`,
+  `AGENTS.md`, and instruction files should change. Proposed edits show as a
+  per-file diff you approve one by one; applied files keep an automatic backup
+  with one-click undo, a file changed since the plan was made is refused
+  rather than overwritten, and nothing is ever deleted. Off by default —
+  turning it on in Settings and confirming each generation are both required,
+  because generating sends the selected evidence and the repository's context
+  files to your AI vendor through your own login. **Improve context…** buttons
+  in Context Hotspots and Retro take you there with the repository pre-picked.
+- **GitHub Copilot CLI as a second AI backend.** The AI Helper, deep
+  retrospectives, and improvement plans can now run through your own GitHub
+  Copilot CLI instead of Claude Code — pick the backend in **Settings → AI**.
+  Every consent notice names the vendor your selection actually sends to.
+
+## [1.13.0] - 2026-08-31
+
+### Added
+
+- **The Dashboard now opens with how your sessions went.** A per-day chart
+  stacks each day's sessions by their retrospective verdict — went smoothly,
+  some friction, struggled, left unfinished — with gray for sessions not
+  analyzed yet, so a fresh install colors in as the analysis catches up.
+  Click a colored slice to see exactly those sessions.
+- **Recurring friction themes.** The friction your retrospectives keep finding
+  — correction re-prompts, vague opening prompts, tool-error streaks — ranked
+  by how many sessions raised each theme in the window. Click a theme to see
+  the sessions behind it.
+- **Context hotspots to review.** The context files most worth a look, scored
+  0–100 from skip rate, error and deviation co-occurrence, token weight, and
+  how often they are applied — the same score the org dashboard uses. Click a
+  file to review it in Context Hotspots.
+
+### Changed
+
+- **Cost and volume moved down, not out.** The twelve totals are now a compact
+  strip beneath the new insight cards, and the daily cost, token, and session
+  charts follow below — everything still answers for the selected window.
+- **One-time rebuild on first launch.** This version reads more from each
+  session, so the local index rebuilds itself once; the list re-fills over a
+  few minutes and nothing is lost.
+
+## [1.12.1] - 2026-08-31
+
+### Fixed
+
+- **Tables in AI Helper answers render as real tables.** When an answer ranks
+  sessions or lays out figures side by side, it now appears as a proper table
+  that scrolls sideways when wide — instead of one long line of `|` characters.
+
 ## [1.12.0] - 2026-08-29
 
 ### Added
