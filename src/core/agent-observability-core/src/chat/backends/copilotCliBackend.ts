@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { exec, execFile, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -15,6 +15,7 @@ import {
   copilotCommandCandidates,
   sanitizeCopilotEnv,
 } from './copilotCliArgs';
+import { buildCmdShimLine, needsCmdShim } from './cliShim';
 import { CopilotEvent, CopilotStreamParser } from './copilotStreamParser';
 import {
   CopilotCliError,
@@ -90,9 +91,12 @@ export class CopilotCliBackend implements ChatBackend {
     // The CLI reads nothing from stdin in prompt mode, so a prompt too large
     // for a command line travels as a payload file the model reads with its
     // `view` tool — one file, in one app-owned temp directory, deleted after.
+    // An npm `.cmd`-shim install ALWAYS uses the payload file: the run goes
+    // through cmd.exe (see `cliShim.ts`), where free-form prompt text on the
+    // command line would be reinterpreted, not just size-limited.
     let payloadDir: string | undefined;
     let args: string[];
-    if (prompt.length > COPILOT_ARGV_PROMPT_LIMIT) {
+    if (needsCmdShim(command, process.platform) || prompt.length > COPILOT_ARGV_PROMPT_LIMIT) {
       payloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ao-copilot-'));
       const payloadPath = path.join(payloadDir, 'prompt.md');
       fs.writeFileSync(payloadPath, prompt, 'utf8');
@@ -121,13 +125,15 @@ export class CopilotCliBackend implements ChatBackend {
     token: CancellationToken,
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, {
-        shell: false,
-        windowsHide: true,
-        cwd: os.homedir(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: sanitizeCopilotEnv(process.env),
-      });
+      let child: ChildProcess;
+      try {
+        child = spawnCli(command, args);
+      } catch (err) {
+        // Modern Node throws EINVAL synchronously for a bare .cmd spawn; the
+        // shim wrapper avoids that, but a throw here must reject, not escape.
+        reject(new CopilotCliError(err instanceof Error ? err.message : String(err)));
+        return;
+      }
 
       const parser = new CopilotStreamParser();
       let stderrTail = '';
@@ -155,10 +161,10 @@ export class CopilotCliBackend implements ChatBackend {
         }
       };
 
-      child.stdout.setEncoding('utf8');
-      child.stdout.on('data', (chunk: string) => handleEvents(parser.push(chunk)));
-      child.stderr.setEncoding('utf8');
-      child.stderr.on('data', (chunk: string) => {
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => handleEvents(parser.push(chunk)));
+      child.stderr?.setEncoding('utf8');
+      child.stderr?.on('data', (chunk: string) => {
         stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_LIMIT);
       });
       child.on('error', (err: NodeJS.ErrnoException) => {
@@ -213,11 +219,37 @@ export class CopilotCliBackend implements ChatBackend {
   }
 }
 
+/**
+ * Spawn the CLI — directly, or through cmd.exe when the command is an npm
+ * `.cmd` shim (a direct spawn of one throws EINVAL on modern Node; see
+ * `cliShim.ts`). Stdin is unused either way: prompt mode reads only argv.
+ */
+function spawnCli(command: string, args: string[]): ChildProcess {
+  const options: SpawnOptions = {
+    windowsHide: true,
+    cwd: os.homedir(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: sanitizeCopilotEnv(process.env),
+  };
+  return needsCmdShim(command, process.platform)
+    ? spawn(buildCmdShimLine(command, args), { ...options, shell: true })
+    : spawn(command, args, { ...options, shell: false });
+}
+
 /** Whether `<command> --version` exits 0 within the probe timeout. */
 function probeVersion(command: string): Promise<boolean> {
   return new Promise((resolve) => {
-    execFile(command, ['--version'], { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (err) => {
-      resolve(err === null);
-    });
+    const done = (err: unknown): void => resolve(err === null);
+    try {
+      if (needsCmdShim(command, process.platform)) {
+        exec(buildCmdShimLine(command, ['--version']), { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, done);
+      } else {
+        execFile(command, ['--version'], { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, done);
+      }
+    } catch {
+      // A probe may never wedge availability: a synchronous spawn refusal
+      // (EINVAL and friends) reads as "this candidate does not work".
+      resolve(false);
+    }
   });
 }

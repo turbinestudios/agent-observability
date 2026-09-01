@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { exec, execFile, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import * as os from 'node:os';
 import { Configuration } from '../../config/configuration';
 import { FriendlyError } from '../lmErrors';
@@ -11,6 +11,7 @@ import {
   serializeMessagesForCli,
   CLAUDE_MODEL_CHOICES,
 } from './claudeCliArgs';
+import { buildCmdShimLine, needsCmdShim } from './cliShim';
 import { ClaudeStreamParser, ClaudeEvent } from './claudeStreamParser';
 import {
   ClaudeCliError,
@@ -80,13 +81,15 @@ export class ClaudeCodeBackend implements ChatBackend {
     const args = buildClaudeArgs(this.config.getAiHelperClaudeModel(), this.config.getAiHelperClaudeEffort());
 
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, {
-        shell: false,
-        windowsHide: true,
-        cwd: os.homedir(),
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: sanitizeClaudeEnv(process.env),
-      });
+      let child: ChildProcess;
+      try {
+        child = spawnCli(command, args);
+      } catch (err) {
+        // Modern Node throws EINVAL synchronously for a bare .cmd spawn; the
+        // shim wrapper avoids that, but a throw here must reject, not escape.
+        reject(new ClaudeCliError(err instanceof Error ? err.message : String(err)));
+        return;
+      }
 
       const parser = new ClaudeStreamParser();
       let stderrTail = '';
@@ -111,10 +114,10 @@ export class ClaudeCodeBackend implements ChatBackend {
         }
       };
 
-      child.stdout.setEncoding('utf8');
-      child.stdout.on('data', (chunk: string) => handleEvents(parser.push(chunk)));
-      child.stderr.setEncoding('utf8');
-      child.stderr.on('data', (chunk: string) => {
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => handleEvents(parser.push(chunk)));
+      child.stderr?.setEncoding('utf8');
+      child.stderr?.on('data', (chunk: string) => {
         stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_LIMIT);
       });
       child.on('error', (err: NodeJS.ErrnoException) => {
@@ -123,9 +126,9 @@ export class ClaudeCodeBackend implements ChatBackend {
       });
 
       // stdin errors (e.g. EPIPE when the process dies early) must not crash the host.
-      child.stdin.on('error', () => undefined);
-      child.stdin.write(prompt, 'utf8');
-      child.stdin.end();
+      child.stdin?.on('error', () => undefined);
+      child.stdin?.write(prompt, 'utf8');
+      child.stdin?.end();
 
       child.on('close', (exitCode) => {
         subscription.dispose();
@@ -179,11 +182,38 @@ export class ClaudeCodeBackend implements ChatBackend {
   }
 }
 
+/**
+ * Spawn the CLI — directly, or through cmd.exe when the command is an npm
+ * `.cmd` shim (a direct spawn of one throws EINVAL on modern Node; see
+ * `cliShim.ts`). The prompt travels via stdin either way — cmd.exe forwards
+ * stdin to its child — so no argv-safety concern arises from wrapping.
+ */
+function spawnCli(command: string, args: string[]): ChildProcess {
+  const options: SpawnOptions = {
+    windowsHide: true,
+    cwd: os.homedir(),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: sanitizeClaudeEnv(process.env),
+  };
+  return needsCmdShim(command, process.platform)
+    ? spawn(buildCmdShimLine(command, args), { ...options, shell: true })
+    : spawn(command, args, { ...options, shell: false });
+}
+
 /** Whether `<command> --version` exits 0 within the probe timeout. */
 function probeVersion(command: string): Promise<boolean> {
   return new Promise((resolve) => {
-    execFile(command, ['--version'], { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (err) => {
-      resolve(err === null);
-    });
+    const done = (err: unknown): void => resolve(err === null);
+    try {
+      if (needsCmdShim(command, process.platform)) {
+        exec(buildCmdShimLine(command, ['--version']), { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, done);
+      } else {
+        execFile(command, ['--version'], { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, done);
+      }
+    } catch {
+      // A probe may never wedge availability: a synchronous spawn refusal
+      // (EINVAL and friends) reads as "this candidate does not work".
+      resolve(false);
+    }
   });
 }

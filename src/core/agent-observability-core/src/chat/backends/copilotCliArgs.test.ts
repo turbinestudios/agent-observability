@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   COPILOT_ARGV_PROMPT_LIMIT,
+  DEFAULT_COPILOT_CLI_MODEL,
   buildCopilotArgs,
   buildCopilotPayloadArgs,
   copilotCommandCandidates,
   copilotPayloadPointer,
+  safeCopilotModel,
   sanitizeCopilotEnv,
 } from './copilotCliArgs';
 
@@ -65,6 +67,23 @@ describe('copilotCommandCandidates', () => {
       'C:\\tools\\copilot',
       'C:\\tools\\copilot.cmd',
     ]);
+  });
+});
+
+describe('safeCopilotModel', () => {
+  it('passes plausible ids through and falls back on anything else', () => {
+    expect(safeCopilotModel('gpt-5.4')).toBe('gpt-5.4');
+    expect(safeCopilotModel(' claude-sonnet-5 ')).toBe('claude-sonnet-5');
+    // A user setting rides argv — and on a .cmd install, a cmd.exe line — so
+    // stray shell characters collapse to the default instead of traveling.
+    expect(safeCopilotModel('auto" & del *')).toBe(DEFAULT_COPILOT_CLI_MODEL);
+    expect(safeCopilotModel('%PATH%')).toBe(DEFAULT_COPILOT_CLI_MODEL);
+    expect(safeCopilotModel('')).toBe(DEFAULT_COPILOT_CLI_MODEL);
+  });
+
+  it('is applied inside the built argv', () => {
+    const args = buildCopilotArgs('bad model!', 'x');
+    expect(args[args.indexOf('--model') + 1]).toBe(DEFAULT_COPILOT_CLI_MODEL);
   });
 });
 

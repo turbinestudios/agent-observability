@@ -45,12 +45,26 @@ export const COPILOT_CLI_MODEL_CHOICES: readonly { id: string; label: string }[]
  */
 export const COPILOT_ARGV_PROMPT_LIMIT = 24_000;
 
+/**
+ * Model ids the CLI plausibly accepts. Anything else falls back to the
+ * default — the model string is a user setting, and on a `.cmd`-shim install
+ * it rides a cmd.exe command line where stray characters are not just wrong
+ * but dangerous.
+ */
+const MODEL_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+
+/** The configured model if it is a plausible id, else the default. */
+export function safeCopilotModel(model: string): string {
+  const trimmed = model.trim();
+  return MODEL_ID_PATTERN.test(trimmed) ? trimmed : DEFAULT_COPILOT_CLI_MODEL;
+}
+
 /** Flags every helper invocation carries, whatever the transport. */
 function baseArgs(model: string): string[] {
   return [
     '--output-format', 'json',
     '--stream', 'on',
-    '--model', model,
+    '--model', safeCopilotModel(model),
     '--no-color',
     '--log-level', 'none',
     '--no-auto-update',

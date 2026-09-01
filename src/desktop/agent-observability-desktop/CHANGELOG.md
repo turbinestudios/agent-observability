@@ -9,6 +9,27 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.14.1] - 2026-09-01
+
+### Fixed
+
+- **GitHub Copilot CLI installed through npm now works on Windows.** npm
+  installs the CLI as a `.cmd` launcher, which the app could neither detect
+  nor run — the backend check sat on "Checking the AI backend…" forever and
+  everything behind it stayed disabled. Both CLIs are now started in a way
+  Windows accepts, and a backend that still cannot be reached says why
+  instead of hiding both.
+- **A disabled "Generate improvement plan" button now says why.** Whether it
+  is the Settings toggle, nothing selected yet, an unresolved repository
+  checkout, or the AI CLI itself, the reason appears beside the button
+  instead of leaving it silently gray.
+
+### Changed
+
+- **Loading states show spinners.** The Improve view shows one while your
+  repositories are found, and the Dashboard's "How sessions went" card shows
+  one while its first answer is computed.
+
 ## [1.14.0] - 2026-08-31
 
 ### Added

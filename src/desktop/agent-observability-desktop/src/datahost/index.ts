@@ -622,7 +622,18 @@ function handle(request: RpcRequest): unknown {
       const activeId = aiBackends.active().id;
       return Promise.all(
         aiBackends.all().map(async (backend) => {
-          const availability = await backend.isAvailable();
+          // One backend's probe blowing up must degrade to "that backend is
+          // unavailable", never take the whole list down — every consent
+          // surface and the Improve view read this to name the vendor.
+          let availability: { available: boolean; reason?: string };
+          try {
+            availability = await backend.isAvailable();
+          } catch (err) {
+            availability = {
+              available: false,
+              reason: err instanceof Error ? err.message : String(err),
+            };
+          }
           return {
             id: backend.id,
             label: backend.label,
