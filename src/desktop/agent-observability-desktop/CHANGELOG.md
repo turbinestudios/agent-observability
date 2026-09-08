@@ -9,6 +9,19 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.14.4] - 2026-09-08
+
+### Fixed
+
+- **Browse while history is being indexed and analyzed.** Background processing
+  no longer holds up searches, dashboard queries, or opening a session. Startup
+  opens the saved index without waiting for the full pass, and new sessions fill
+  in as they are discovered.
+- **Refreshes and settings changes no longer compete with each other.** Repeated
+  refreshes are combined, while deletion, rebuilding, and analysis-setting
+  changes safely stop old processing before applying. Background failures are
+  reported without taking down the interactive data service; Refresh retries.
+
 ## [1.14.3] - 2026-09-08
 
 ### Fixed

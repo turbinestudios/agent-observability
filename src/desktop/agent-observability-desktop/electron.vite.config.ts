@@ -10,8 +10,8 @@ import react from '@vitejs/plugin-react';
  * from node_modules at runtime, not inlined. The shared core is a devDependency
  * precisely so it stays bundled instead of being externalized.
  *
- * The datahost is a separate entry because it runs as its own utilityProcess:
- * all session parsing and indexing happens there, never on the main thread.
+ * The datahost runs as its own utilityProcess. Its background worker is a
+ * separate entry beside it, so indexing/analysis cannot block interactive RPC.
  */
 export default defineConfig({
   main: {
@@ -21,6 +21,7 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           datahost: resolve(__dirname, 'src/datahost/index.ts'),
+          background: resolve(__dirname, 'src/datahost/background/worker.ts'),
         },
       },
     },

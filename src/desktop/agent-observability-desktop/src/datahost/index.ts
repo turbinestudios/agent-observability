@@ -5,12 +5,11 @@ import { TelemetryService } from '@agent-observability/core/src/telemetry/teleme
 import { CopilotSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
 import { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
-import { sweepSnapshotDirs } from '@agent-observability/core/src/telemetry/snapshot';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
 import type {
   ContextAction,
+  AnalysisStatus,
   IndexStatus,
   ListSessionsParams,
   RpcEvent,
@@ -29,16 +28,15 @@ import {
 } from '../shared/rpc';
 import { DetailRenderer } from './detail/detailRenderer';
 import type { CombinedRequest, DetailContext } from './detail/detailRenderer';
-import { AnalysisQueue } from './analysis/analysisQueue';
+import { BackgroundController } from './background/controller';
+import { ProcessingWorker } from './background/processingWorker';
+import type { BackgroundInput, BackgroundMessage } from './background/protocol';
 import { scoreHotspots } from './analysis/hotspotScore';
 import { DesktopSettingsReader } from './drivers/desktopConfig';
 import { NativeTelemetryBackend } from './drivers/nativeTelemetryBackend';
 import { applySettingsPatch, buildSettingsSnapshot } from './settings';
-import { ClaudeIndexer } from './indexer/claudeIndexer';
-import { CopilotIndexer } from './indexer/copilotIndexer';
-import { ensureArchiveIndexes } from './archiveIndexes';
-import { IndexDb } from './indexer/indexDb';
-import type { AnalysisTarget, SessionKeyOverlay } from './indexer/indexDb';
+import { IndexDb, resolveIndexDbPath } from './indexer/indexDb';
+import type { SessionKeyOverlay } from './indexer/indexDb';
 import { RenameStore } from './renames';
 import { HiddenStore } from './hidden';
 import { TagStore } from './tags';
@@ -65,7 +63,8 @@ import {
 } from './copilotSetup';
 
 /**
- * The data host: a utilityProcess that owns every expensive operation.
+ * Interactive data host. Background indexing/analysis runs in a worker with
+ * its own WAL connection, never on this request-serving thread.
  *
  * It runs here rather than in the main process because core's session API is
  * synchronous — parsing a large transcript blocks whatever thread it runs on,
@@ -79,7 +78,8 @@ import {
 
 const settings = new DesktopSettingsReader();
 const config = new Configuration(settings);
-const db = new IndexDb();
+const indexPath = resolveIndexDbPath();
+const db = new IndexDb(indexPath);
 
 // The same registry abstraction the extension wires up. Listing comes from the
 // index; the registry serves session detail, where the per-source parsing
@@ -91,13 +91,6 @@ const db = new IndexDb();
 // indexer found in the archive fails to open with "database not found".
 const telemetry = new TelemetryService(config, undefined, new NativeTelemetryBackend(db));
 telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
-
-// Native detail/analysis reads no longer create snapshot copies. Keep healing
-// copies stranded by older releases, with the same age gate protecting fresh
-// snapshots owned by a concurrently running VS Code extension.
-const snapshotRoot = path.join(os.homedir(), '.agent-observability', 'desktop', 'snapshots');
-sweepSnapshotDirs(snapshotRoot);
-sweepSnapshotDirs(os.tmpdir(), 60 * 60_000);
 
 // Held directly as well as via the registry: its directory-listing cache must
 // be dropped on every index pass, or a session created while the app is open
@@ -135,48 +128,84 @@ const aiHelper = new AiHelperController({
 });
 
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'idle' };
-let indexing = false;
+let analysisRunning = false;
 /**
  * The launch-time Copilot setup advisory, appended to the index notes whenever
  * the Copilot indexer finds no database. Refreshed after a consented enable so
  * the status bar never keeps claiming tracing is off once it isn't.
  */
 let copilotSetupNotes: string[] = [];
-/** A pass was requested while one was running; run again when it finishes. */
-let rerunQueued = false;
-/** The archive is indexed once per launch, before anything reads it. */
-let archiveIndexesEnsured = false;
 
 /** Ports the renderer is reachable on. Populated by the handshake from main. */
 const ports: MessagePortMain[] = [];
 
-/**
- * Reads sessions in the background for the two things the index cannot answer
- * on its own: whether a session went wrong, and what it pulled into context.
- * Started after each index pass rather than during one, so parsing never
- * competes with the list filling in.
- */
-const analysis = new AnalysisQueue({
-  db,
-  sources,
-  detector: deviations,
-  acceptedMissing,
-  onProgress: (status) => emit({ event: 'analysis.progress', status }),
-  onAnalyzed: pushAnalyzedRows,
+let cleanupSnapshots = true;
+let ensureArchiveIndexes = true;
+const background = new BackgroundController({
+  spawn: () => {
+    const worker = new ProcessingWorker(path.join(__dirname, 'background.js'), {
+      workerData: {
+        indexPath, settings: settings.all(), copilotNotes: copilotSetupNotes,
+        cleanupSnapshots, ensureArchiveIndexes,
+      } satisfies BackgroundInput,
+    });
+    cleanupSnapshots = false;
+    ensureArchiveIndexes = false;
+    return worker;
+  },
+  onStart: () => {
+    claude.invalidateDiscovery();
+    status = { ...status, phase: 'discovering', message: undefined };
+    emit({ event: 'index.progress', status });
+  },
+  onStopped: () => {
+    analysisRunning = false;
+    status = { ...status, phase: 'idle' };
+    emit({ event: 'analysis.progress', status: analysisStatus() });
+  },
+  onError: (error) => {
+    analysisRunning = false;
+    status = { ...status, phase: 'error', message: error.message };
+    emit({ event: 'index.progress', status });
+    emit({ event: 'analysis.progress', status: analysisStatus() });
+  },
+  onMessage: onBackgroundMessage,
 });
 
-/**
- * Push the list rows whose analysis just landed, so a deviation badge appears
- * without the user refreshing. Hidden sessions are dropped here exactly as the
- * indexer's own pushes drop them.
- */
-function pushAnalyzedRows(targets: readonly AnalysisTarget[]): void {
-  const rows = targets
-    .filter((t) => !hidden.isHidden(t.source, t.sessionId))
-    .map((t) => db.getRow(t.source, t.sessionId))
-    .filter((row): row is SessionRow => row !== undefined);
-  if (rows.length > 0) {
-    emit({ event: 'sessions.upserted', rows: decorate(rows) });
+function analysisStatus(): AnalysisStatus {
+  return { ...db.analysisCounts(), running: analysisRunning };
+}
+
+function onBackgroundMessage(message: BackgroundMessage): void {
+  switch (message.type) {
+    case 'index':
+      status = message.status;
+      emit({ event: 'index.progress', status });
+      break;
+    case 'analysis':
+      analysisRunning = message.status.running;
+      emit({ event: 'analysis.progress', status: message.status });
+      break;
+    case 'rows':
+      // Discovery can push thousands at once. Bound each SQL IN list and
+      // message, and decorate CURRENT rows rather than worker-cached overlays.
+      claude.invalidateDiscovery();
+      for (let i = 0; i < message.keys.length; i += 300) {
+        const rows = db.getRowsByKey(message.keys.slice(i, i + 300))
+          .filter((row) => !hidden.isHidden(row.source, row.sessionId));
+        if (rows.length > 0) {
+          emit({ event: 'sessions.upserted', rows: decorate(rows) });
+        }
+      }
+      break;
+    case 'removed':
+      detail.invalidateAll();
+      claude.invalidateDiscovery();
+      emit({ event: 'sessions.removed', keys: message.keys });
+      break;
+    case 'ready':
+    case 'done':
+      break;
   }
 }
 
@@ -208,123 +237,10 @@ function refreshCounts(): void {
   status = { ...status, indexed: counts.indexed, total: counts.total };
 }
 
-/**
- * Run an index pass over every source. Rows are pushed as they are written so
- * the list fills in progressively instead of waiting for the whole sweep.
- *
- * A source that fails does not stop the others: a missing or locked Copilot
- * database should never cost the user their Claude sessions.
- */
+/** Schedule without blocking the RPC handler; progress arrives independently. */
 function runIndex(): IndexStatus {
-  if (indexing) {
-    // A settings change landing mid-pass must still apply: queue one more pass
-    // instead of silently dropping the request.
-    rerunQueued = true;
-    return status;
-  }
-  indexing = true;
-  status = { ...status, phase: 'discovering', message: undefined };
-  emit({ event: 'index.progress', status });
-
-  // The detail path keeps its own directory listing; forget it so a session
-  // created since the last pass can be opened as soon as it is listed.
-  claude.invalidateDiscovery();
-
-  const notes: string[] = [];
-  const onRows = (rows: SessionRow[]): void => {
-    // The indexer writes the source's own title, which is correct for the index
-    // but wrong to show: a user-chosen name has to be layered back on before
-    // these reach the list, or a refresh silently reverts every rename. Hidden
-    // sessions are dropped here for the same reason — a refresh must not put
-    // one back on screen.
-    const visible = rows.filter((r) => !hidden.isHidden(r.source, r.sessionId));
-    if (visible.length > 0) {
-      emit({ event: 'sessions.upserted', rows: decorate(visible) });
-    }
-    refreshCounts();
-    emit({ event: 'index.progress', status });
-  };
-  const onDiscovered = (total: number): void => {
-    // Sources are indexed one after another, so the total accumulates rather
-    // than being replaced — otherwise the progress bar would restart.
-    status = { ...status, total: status.total + total, phase: 'hydrating' };
-    emit({ event: 'index.progress', status });
-  };
-
-  // Start each pass from a clean total so a refresh does not double-count.
-  status = { ...status, total: 0 };
-
-  // A disabled source is purged rather than skipped: its indexers would leave
-  // the previously indexed rows on screen forever otherwise.
-  if (config.isClaudeEnabled()) {
-    try {
-      new ClaudeIndexer({ db, config, onDiscovered, onRows }).run();
-    } catch (err) {
-      notes.push(`Claude Code: ${errorText(err)}`);
-    }
-  } else {
-    purgeSource('claude');
-    notes.push('Claude Code is turned off in Settings');
-  }
-
-  if (config.isLocalTelemetryEnabled()) {
-    try {
-      // Before anything reads the archive: without the read layer's indexes the
-      // first session opened after a launch takes minutes, not seconds.
-      if (!archiveIndexesEnsured) {
-        archiveIndexesEnsured = true;
-        const note = ensureArchiveIndexes(config);
-        if (note !== undefined) {
-          notes.push(`Copilot: ${note}`);
-        }
-      }
-      const copilot = new CopilotIndexer({ db, config, onDiscovered, onRows }).run();
-      if (copilot.skipped !== undefined) {
-        notes.push(`Copilot: ${copilot.skipped}`);
-        // "No database" has a likely cause the user can fix: the trace
-        // exporter being off in VS Code. Say so next to the symptom.
-        notes.push(...copilotSetupNotes);
-      }
-    } catch (err) {
-      notes.push(`Copilot: ${errorText(err)}`);
-    }
-  } else {
-    purgeSource('copilot');
-    notes.push('Copilot is turned off in Settings');
-  }
-
-  refreshCounts();
-  indexing = false;
-  status = {
-    ...status,
-    phase: 'idle',
-    // Kept as an advisory note, not an error: the sources that did work are
-    // still listed, and the user should know which one did not.
-    message: notes.length === 0 ? undefined : notes.join(' · '),
-  };
-  emit({ event: 'index.progress', status });
-
-  if (rerunQueued) {
-    rerunQueued = false;
-    return runIndex();
-  }
-  // Only once the pass has settled: reading transcripts while the indexer is
-  // still writing rows would put two heavy jobs on this one thread at once.
-  analysis.start();
+  background.request();
   return status;
-}
-
-/** Drop every indexed row of a source and tell the list, so toggling a source off empties it live. */
-function purgeSource(source: string): void {
-  const keys = db.removeMissing(source, new Set());
-  if (keys.length > 0) {
-    emit({ event: 'sessions.removed', keys });
-    refreshCounts();
-  }
-}
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /** Settings keys shared with the extension, so both honour the same accepts. */
@@ -437,20 +353,19 @@ function handle(request: RpcRequest): unknown {
     }
     case 'sessions.delete': {
       const [source, sessionId] = request.params;
-      const result = deleteSession(source, sessionId, { config });
-      if (result.ok) {
-        // Drop it from the index too, or the next list would still show it
-        // until a re-index noticed the source data was gone.
-        db.removeSession(source, sessionId);
-        // …and forget its annotations, or the tag filter would keep offering a
-        // count that includes a session nothing can open any more.
-        tags.set(source, sessionId, []);
-        notes.set(source, sessionId, '');
-        detail.invalidate(source, sessionId);
-        emit({ event: 'sessions.removed', keys: [sessionKey(source, sessionId)] });
-        refreshCounts();
-      }
-      return result;
+      return background.exclusive(() => {
+        const result = deleteSession(source, sessionId, { config });
+        if (result.ok) {
+          // The stopped worker cannot reinsert this session after deletion.
+          db.removeSession(source, sessionId);
+          tags.set(source, sessionId, []);
+          notes.set(source, sessionId, '');
+          detail.invalidate(source, sessionId);
+          emit({ event: 'sessions.removed', keys: [sessionKey(source, sessionId)] });
+          refreshCounts();
+        }
+        return result;
+      });
     }
     case 'sessions.detail': {
       const [source, sessionId, theme, force] = request.params;
@@ -501,15 +416,17 @@ function handle(request: RpcRequest): unknown {
     }
     case 'sessions.contextAction': {
       const [source, sessionId, action] = request.params;
-      applyContextAction(action);
-      // The accepted lists are part of the analysis cache key, so this rebuilds
-      // rather than returning the stale breakdown.
-      return detail.renderBody(
-        source,
-        sessionId,
-        stampOf(source, sessionId),
-        detailContext(source, sessionId),
-      );
+      return background.exclusive(() => {
+        applyContextAction(action);
+        db.clearDeviations();
+        // The restarted worker sees the same accepted-missing configuration.
+        return detail.renderBody(
+          source,
+          sessionId,
+          stampOf(source, sessionId),
+          detailContext(source, sessionId),
+        );
+      });
     }
     case 'sessions.rename': {
       const [source, sessionId, title] = request.params;
@@ -549,7 +466,7 @@ function handle(request: RpcRequest): unknown {
       return {
         rows: db.hotspots(params, hiddenKeys),
         repositories: db.hotspotRepositories(hiddenKeys),
-        status: analysis.status(),
+        status: analysisStatus(),
       };
     }
     case 'hotspots.sessions': {
@@ -565,7 +482,7 @@ function handle(request: RpcRequest): unknown {
         const renamed = renames.get(row.source, row.sessionId);
         return renamed === undefined ? row : { ...row, title: renamed };
       });
-      return { rows: named, repositories, status: analysis.status() };
+      return { rows: named, repositories, status: analysisStatus() };
     }
     case 'retro.deep': {
       const [source, sessionId] = request.params;
@@ -585,7 +502,7 @@ function handle(request: RpcRequest): unknown {
       });
     }
     case 'analysis.status':
-      return analysis.status();
+      return analysisStatus();
     case 'improve.repoStatus':
       return improveRepoStatus(request.params[0], db);
     case 'improve.generate':
@@ -676,7 +593,7 @@ function handle(request: RpcRequest): unknown {
         verdictDaily,
         themes,
         hotspots,
-        status: analysis.status(),
+        status: analysisStatus(),
         window,
         windowDays,
         ...(dailyCapped === true ? { dailyCapped: true as const } : {}),
@@ -685,35 +602,28 @@ function handle(request: RpcRequest): unknown {
     case 'settings.get':
       return buildSettingsSnapshot(settings, config);
     case 'settings.update': {
-      const changed = applySettingsPatch(settings, request.params[0]);
-      if (changed.copilot) {
-        // The read layer caches open DB handles; drop them so the detail view
-        // follows a changed sqlitePath instead of the old database.
-        telemetry.refresh();
-      }
-      if (changed.deviation) {
-        // Every stored verdict was measured against the old threshold, and the
-        // open document carries cards drawn from it.
-        db.clearDeviations();
-        detail.invalidateAll();
-      }
-      if (changed.deepRetro) {
-        // The retrospective card's deep-retro affordance is baked into the
-        // rendered document, so toggling the gate must re-render.
-        detail.invalidateAll();
-      }
-      if (changed.ai) {
-        // The backend caches a successful CLI probe for its lifetime; a new
-        // path/model/effort needs a fresh backend or "Check again" would lie.
-        aiBackends.reload();
-      }
-      if (changed.claude || changed.copilot) {
-        // Respond with the snapshot first, then bring the index in line.
-        setTimeout(() => runIndex(), 0);
-      } else if (changed.deviation) {
-        setTimeout(() => analysis.start(), 0);
-      }
-      return buildSettingsSnapshot(settings, config);
+      return background.exclusive(() => {
+        const changed = applySettingsPatch(settings, request.params[0]);
+        if (changed.copilot) {
+          telemetry.refresh();
+          ensureArchiveIndexes = true;
+        }
+        if (changed.deviation) {
+          db.clearDeviations();
+          detail.invalidateAll();
+        }
+        if (changed.deepRetro) {
+          detail.invalidateAll();
+        }
+        if (changed.ai) {
+          aiBackends.reload();
+        }
+        if (changed.claude || changed.copilot) {
+          sources.refresh();
+          detail.invalidateAll();
+        }
+        return buildSettingsSnapshot(settings, config);
+      });
     }
     case 'copilot.setupStatus':
       return checkCopilotSetup(settings, config);
@@ -736,10 +646,15 @@ function handle(request: RpcRequest): unknown {
     case 'index.refresh':
       return runIndex();
     case 'index.rebuild':
-      db.clear();
-      refreshCounts();
-      emit({ event: 'index.progress', status });
-      return runIndex();
+      return background.exclusive(() => {
+        const keys = db.sessionKeys();
+        db.clear();
+        sources.refresh();
+        detail.invalidateAll();
+        emit({ event: 'sessions.removed', keys });
+        refreshCounts();
+        return status;
+      });
     default: {
       // Exhaustiveness: adding a method to RpcMethods without handling it here
       // is a compile error rather than a runtime "unknown method".
@@ -801,8 +716,7 @@ process.parentPort?.on('message', (event) => {
     // cheap enough to run before the index pass whose notes it feeds. The
     // renderer pulls the verdict itself via copilot.setupStatus.
     copilotSetupNotes = startupCopilotSetup(settings, config).notes;
-    // Deferred so the handshake completes and the first paint happens before
-    // the indexer starts competing for this process's single thread.
+    // A worker runs the pass; even a cold index no longer queues RPC behind it.
     setTimeout(() => runIndex(), 0);
   }
 });

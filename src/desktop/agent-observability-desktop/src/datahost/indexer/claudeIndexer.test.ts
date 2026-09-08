@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -112,6 +112,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   db.close();
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -156,6 +157,39 @@ describe('first pass', () => {
 });
 
 describe('incremental passes', () => {
+  it('retries an interrupted hydration without advancing the file fingerprint', () => {
+    const file = writeTranscript('sess-a', 2);
+    runIndexer();
+    const before = db.getRow('claude', 'sess-a');
+    const fingerprint = db.getFileState(file);
+    appendTurn(file, 'sess-a');
+    const write = vi.spyOn(db, 'upsertHydratedSessions').mockImplementationOnce(() => {
+      throw new Error('Interrupted before batch commit');
+    });
+    expect(() => runIndexer()).toThrow('Interrupted');
+    expect(db.getRow('claude', 'sess-a')).toEqual(before);
+    expect(db.getFileState(file)).toEqual(fingerprint);
+    write.mockRestore();
+    expect(runIndexer().hydrated).toBe(1);
+    expect(db.getRow('claude', 'sess-a')!.interactionCount).toBeGreaterThan(before!.interactionCount);
+  });
+
+  it('rolls back both summary and fingerprint when the fingerprint write fails', () => {
+    const file = writeTranscript('sess-a', 2);
+    runIndexer();
+    const before = db.getRow('claude', 'sess-a');
+    const fingerprint = db.getFileState(file);
+    appendTurn(file, 'sess-a');
+    const write = vi.spyOn(db, 'putFileState').mockImplementationOnce(() => {
+      throw new Error('Interrupted inside batch transaction');
+    });
+    expect(() => runIndexer()).toThrow('Interrupted');
+    expect(db.getRow('claude', 'sess-a')).toEqual(before);
+    expect(db.getFileState(file)).toEqual(fingerprint);
+    write.mockRestore();
+    expect(runIndexer().hydrated).toBe(1);
+  });
+
   it('parses nothing when no file changed', () => {
     writeTranscript('sess-a', 3);
     runIndexer();

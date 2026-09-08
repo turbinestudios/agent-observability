@@ -8,23 +8,11 @@ import { nextStartupStage, stageText, type StartupStage } from './startup';
 import { useNoteTick } from './useNoteTick';
 
 /**
- * A blocking "starting up" overlay for the FIRST index pass of a launch.
- *
- * The data host is single-threaded, so while it discovers and reads sessions
- * every other call queues behind that work — the app looks alive but nothing
- * responds. Rather than leave the user clicking a dead window, this says
- * plainly what is happening and how far along it is, and lifts only once the
- * app is actually ready to use.
- *
- * "Ready" is decided by a barrier, not a guess: once the pass settles, the
- * overlay issues the same queries the Dashboard and the Sessions list live on.
- * Calls drain in order on the MessagePort, so by the time the barrier resolves
- * every query the views queued during the pass has been answered too — the
- * overlay disappears onto populated screens, never onto "Reading totals…".
- *
- * The stage transitions live in `./startup.ts`, where a test pins the subtle
- * one: the data host emits a persisted `idle` status BEFORE the pass starts,
- * and taking that for completion is exactly the dead-window bug this fixes.
+ * A short readiness overlay: once connected, query the saved index and dismiss.
+ * Background indexing/analysis has its own worker and must never gate browsing.
+ * On a first install the list fills progressively rather than locking navigation
+ * until every transcript has been parsed. The state machine ignores background
+ * progress once these interactive readiness queries are in flight.
  *
  * `suppressed` lets the shell stand it down while something more important
  * owns the window — today an app upgrade the user consented to, which retires
@@ -42,14 +30,13 @@ export function StartupOverlay({
   suppressed?: boolean;
   /**
    * Fired once when the stage machine reaches 'done' — the shell's signal that
-   * startup surfaces may now appear. Derived here rather than by the callers
-   * because the machine knows the trap they would all fall into: the persisted
-   * `idle` status emitted BEFORE the first pass (see module comment).
+  * startup surfaces may now appear. Background progress cannot reopen it.
    */
   onDone?: () => void;
 }): JSX.Element | null {
   const [stage, setStage] = useState<StartupStage>(() =>
-    dataHost.connectionState() === 'failed' ? { kind: 'done' } : { kind: 'connecting' },
+    dataHost.connectionState() === 'failed' ? { kind: 'done' }
+      : dataHost.connectionState() === 'connected' ? { kind: 'preparing' } : { kind: 'connecting' },
   );
   // The rotating note restarts on each stage, so it always opens on the
   // stage's honest lead line before drifting into the fun pool, whose order
@@ -71,6 +58,7 @@ export function StartupOverlay({
     const offConnection = dataHost.onConnectionChange((state) => {
       setStage((current) => nextStartupStage(current, { kind: 'connection', state }));
     });
+    setStage((current) => nextStartupStage(current, { kind: 'connection', state: dataHost.connectionState() }));
     const offProgress = dataHost.on('index.progress', (event) => {
       if (event.event !== 'index.progress') {
         return;

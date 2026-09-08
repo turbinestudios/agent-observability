@@ -327,14 +327,29 @@ export function resolveIndexDbPath(): string {
 export class IndexDb {
   private readonly db: Database.Database;
 
-  constructor(file: string = resolveIndexDbPath()) {
-    this.db = new Database(file);
-    this.db.pragma('journal_mode = WAL');
+  constructor(file: string = resolveIndexDbPath(), options: { initialize?: boolean } = {}) {
+    this.db = new Database(file, { fileMustExist: options.initialize === false });
+    if (options.initialize !== false) {
+      this.db.pragma('journal_mode = WAL');
+    }
     // NORMAL is the right durability trade for a rebuildable cache: it survives
     // process crashes, and the worst a power loss costs is a re-index.
     this.db.pragma('synchronous = NORMAL');
-    this.db.exec(SCHEMA);
-    this.ensureVersion();
+    if (options.initialize !== false) {
+      this.db.exec(SCHEMA);
+      this.ensureVersion();
+    } else {
+      try {
+        const version = this.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
+          { value: string } | undefined;
+        if (Number(version?.value) !== SCHEMA_VERSION) {
+          throw new Error('Background worker requires an initialized, current index.');
+        }
+      } catch (error) {
+        this.db.close();
+        throw error;
+      }
+    }
   }
 
   /**
@@ -376,6 +391,12 @@ export class IndexDb {
 
   close(): void {
     this.db.close();
+  }
+
+  /** Metadata-only identities for removal notifications and rebuilds. */
+  sessionKeys(): string[] {
+    return (this.db.prepare('SELECT source, session_id FROM sessions').all() as
+      { source: string; session_id: string }[]).map((row) => `${row.source}:${row.session_id}`);
   }
 
   // -- reads ----------------------------------------------------------------
@@ -508,6 +529,16 @@ export class IndexDb {
            parsed_bytes = excluded.parsed_bytes, acc_state = excluded.acc_state`,
       )
       .run(state as unknown as Record<string, unknown>);
+  }
+
+  /** Commit parsed summaries and their source fingerprints as one unit. */
+  upsertHydratedSessions(entries: { row: SessionRow; file: FileState }[]): void {
+    this.db.transaction(() => {
+      this.upsertSessions(entries.map((entry) => entry.row));
+      for (const entry of entries) {
+        this.putFileState(entry.file);
+      }
+    })();
   }
 
   upsertSessions(rows: SessionRow[]): void {

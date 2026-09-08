@@ -6,20 +6,17 @@ import { rotatedNote } from './loadingNotes';
  * this package's node-only vitest setup (the component imports the data-host
  * client, which touches `window` at module load).
  *
- * Why a machine at all: the data host's startup chatter is easy to misread.
- * On attach it first emits `index.progress` with the PERSISTED status — whose
- * phase is `idle` — and only then schedules the real index pass. The first
- * version of the overlay took that idle for "startup finished" and dismissed
- * before the pass had begun, which is exactly the dead-window experience it
- * existed to prevent. Encoding "idle only counts after a non-idle phase" here,
- * where a test can pin it, keeps that from regressing.
+ * Background work has its own worker. Readiness now means the broker is
+ * connected and has answered the view queries, NOT that indexing has finished.
+ * Progress can still describe discovery before connection, but it must never
+ * move a preparing/ready UI back behind a blocking overlay.
  */
 
 export type StartupStage =
   | { kind: 'connecting' }
   | { kind: 'discovering' }
   | { kind: 'hydrating'; indexed: number; total: number }
-  /** Index settled; the queued view queries and the warm-up barrier drain. */
+  /** Broker connected; view readiness queries drain independently of indexing. */
   | { kind: 'preparing' }
   | { kind: 'done' };
 
@@ -43,13 +40,17 @@ export function nextStartupStage(current: StartupStage, event: StartupEvent): St
   if (event.kind === 'connection') {
     // The views render their own dead-host explanation; trapping the user
     // behind an overlay would only hide it.
-    return event.state === 'failed' ? { kind: 'done' } : current;
+    return event.state === 'failed' ? { kind: 'done' }
+      : event.state === 'connected' ? { kind: 'preparing' } : current;
   }
   if (event.kind === 'warmed') {
     return current.kind === 'preparing' ? { kind: 'done' } : current;
   }
 
   const { status } = event;
+  if (current.kind === 'preparing' && status.phase !== 'error') {
+    return current;
+  }
   switch (status.phase) {
     case 'discovering':
       return { kind: 'discovering' };
@@ -101,8 +102,8 @@ export const STAGE_NOTES: Record<Exclude<StartupStage, { kind: 'done' }>['kind']
     'Long transcripts take the longest — the count keeps moving.',
   ],
   preparing: [
-    'Almost there — making the first click instant.',
-    'Warming the session list and dashboard queries.',
+    'Opening the saved session list and dashboard.',
+    'Indexing continues separately while you browse.',
     'Pre-warming SQLite. It likes that.',
   ],
 };

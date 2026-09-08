@@ -8,7 +8,7 @@ import { GitRemoteResolver } from '@agent-observability/core/src/claude/gitRemot
 import type { TranscriptRecord } from '@agent-observability/core/src/claude/transcript';
 import type { Configuration } from '@agent-observability/core/src/config/configuration';
 import type { SessionRow } from '../../shared/rpc';
-import type { IndexDb } from './indexDb';
+import type { FileState, IndexDb } from './indexDb';
 
 /**
  * Builds and maintains the Claude Code slice of the session index.
@@ -31,6 +31,11 @@ const HEAD_HASH_BYTES = 1024;
 
 /** Sessions hydrated per batch before results are flushed to the callback. */
 const HYDRATE_BATCH = 20;
+
+interface HydratedSession {
+  row: SessionRow;
+  file: FileState;
+}
 
 export interface ClaudeIndexerDeps {
   db: IndexDb;
@@ -84,7 +89,7 @@ export class ClaudeIndexer {
     stale.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
     let hydrated = 0;
-    let batch: SessionRow[] = [];
+    let batch: HydratedSession[] = [];
     for (const session of stale) {
       const row = this.hydrate(session);
       if (row === undefined) {
@@ -103,9 +108,11 @@ export class ClaudeIndexer {
     return { discovered: sessions.length, hydrated };
   }
 
-  private flush(batch: SessionRow[]): void {
-    this.deps.db.upsertSessions(batch);
-    this.deps.onRows?.(batch);
+  private flush(batch: HydratedSession[]): void {
+    // The fingerprint must never commit ahead of its summary: terminating a
+    // worker between the two would make a stale row look up-to-date forever.
+    this.deps.db.upsertHydratedSessions(batch);
+    this.deps.onRows?.(batch.map((entry) => entry.row));
   }
 
   /** Insert discovery-only rows for sessions the index has never seen. */
@@ -167,7 +174,7 @@ export class ClaudeIndexer {
   }
 
   /** Parse one session and produce its indexed row. */
-  private hydrate(session: ClaudeSessionFiles): SessionRow | undefined {
+  private hydrate(session: ClaudeSessionFiles): HydratedSession | undefined {
     if (session.mainFile === undefined) {
       return undefined;
     }
@@ -202,7 +209,7 @@ export class ClaudeIndexer {
       docExts: this.deps.config.getDocFileExtensions(),
     });
 
-    this.deps.db.putFileState({
+    const file: FileState = {
       path: session.mainFile,
       source: 'claude',
       sessionId: session.sessionId,
@@ -213,9 +220,9 @@ export class ClaudeIndexer {
       // The whole file was consumed, so a later append can resume from here.
       parsedBytes: stat.size,
       accState: null,
-    });
+    };
 
-    return {
+    const row: SessionRow & { mainPath: string } = {
       source: 'claude',
       sessionId: summary.sessionId,
       repository: summary.repository,
@@ -238,7 +245,8 @@ export class ClaudeIndexer {
       indexedAtMs: this.now(),
       pending: false,
       mainPath: session.mainFile,
-    } as SessionRow & { mainPath: string };
+    };
+    return { row, file };
   }
 
   /**

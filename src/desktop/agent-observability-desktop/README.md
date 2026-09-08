@@ -58,10 +58,22 @@ The index uses the following optimizations:
   no idle reader prevents checkpointing. Titles come from the persisted local
   index overlaid on archived names, not a scan of workspace chat content.
 
-Parsing runs in a separate process, but that same synchronous data host also
-answers interactive queries. The startup overlay waits for the initial index
-pass and readiness queries; a warm list query alone does not measure this wait.
-Separating background work from interactive requests remains future work.
+Background indexing and analysis run in a dedicated worker thread with its own
+SQLite WAL connection. The interactive data host reads the saved index while
+the worker parses and writes short transactions. Startup waits only for the
+interactive readiness queries, not the background pass; even on a first install
+navigation is available while the list fills in. A warm list query alone still
+does not measure end-to-end startup or large-detail rendering.
+
+Refresh storms coalesce into one follow-up run. Deletion, rebuilding, and
+settings/context-analysis changes serialize behind worker termination before
+mutating the index, so an old pass cannot put removed rows or old verdicts back.
+The worker finishes any archive-maintenance lease before becoming interruptible.
+Late events from stopped workers are ignored, and row notifications are read
+and decorated by the broker with the latest names, tags, notes, and hidden state.
+Crashes report an error and can be retried with Refresh, without a restart loop.
+Claude hydration commits each summary and its file fingerprint together, so an
+interrupted worker cannot mark old counts as current and skip the next retry.
 
 Copilot change tokens are an additive index sidecar, so upgrading does not
 rebuild the index. The first refresh establishes a baseline for existing rows;
@@ -82,12 +94,20 @@ snapshots left behind by older desktop releases.
 main            thin broker: window, theme, open-external, and the handshake
                 that hands the renderer a direct port to the data host
 renderer        React + Vite. Sessions is the left nav; other views open beside it
-data host       utilityProcess owning the index, the source registry, and all parsing
+data host       utilityProcess serving interactive index queries, details, and AI requests
+background      worker thread indexing/analyzing with its own WAL connection
 ```
 
 Core's session API is synchronous, so it never runs on the main or renderer
 thread — a slow parse would freeze whatever thread it lands on. It is wrapped
 into promises exactly once, at the MessagePort boundary.
+
+Only the broker initializes/migrates the index. Background workers require an
+already-initialized schema and are disposable after each pass. The worker entry
+is bundled beside the broker and shipped by the existing `out/**` package rule.
+User-requested large detail/combined renders still run synchronously in the
+broker; deduplicating those calculations and rendering large timelines lazily
+remain separate performance work.
 
 ## Development
 
