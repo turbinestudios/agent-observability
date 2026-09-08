@@ -32,6 +32,7 @@ import type { CombinedRequest, DetailContext } from './detail/detailRenderer';
 import { AnalysisQueue } from './analysis/analysisQueue';
 import { scoreHotspots } from './analysis/hotspotScore';
 import { DesktopSettingsReader } from './drivers/desktopConfig';
+import { NativeTelemetryBackend } from './drivers/nativeTelemetryBackend';
 import { applySettingsPatch, buildSettingsSnapshot } from './settings';
 import { ClaudeIndexer } from './indexer/claudeIndexer';
 import { CopilotIndexer } from './indexer/copilotIndexer';
@@ -88,19 +89,13 @@ const db = new IndexDb();
 // startup. Without it the read layer falls back to Copilot's own short-lived
 // database, which holds a rolling handful of sessions — so every session the
 // indexer found in the archive fails to open with "database not found".
-const telemetry = new TelemetryService(config);
+const telemetry = new TelemetryService(config, undefined, new NativeTelemetryBackend(db));
 telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
 
-// Copilot snapshot copies live in OUR data directory, not the OS temp dir, and
-// every launch sweeps whatever the previous run left behind. The read layer
-// only cleans a snapshot up on a graceful dispose, but this process is stopped
-// with kill() — so before this sweep, every app exit stranded a copy of the
-// (gigabyte-plus) archive in %TEMP%, which Windows never reclaims, until the
-// disk filled. The temp-dir sweep heals those historical leaks too, with an
-// age gate so a concurrently running VS Code extension's fresh snapshot is
-// never raced.
+// Native detail/analysis reads no longer create snapshot copies. Keep healing
+// copies stranded by older releases, with the same age gate protecting fresh
+// snapshots owned by a concurrently running VS Code extension.
 const snapshotRoot = path.join(os.homedir(), '.agent-observability', 'desktop', 'snapshots');
-telemetry.setSnapshotRoot(snapshotRoot);
 sweepSnapshotDirs(snapshotRoot);
 sweepSnapshotDirs(os.tmpdir(), 60 * 60_000);
 

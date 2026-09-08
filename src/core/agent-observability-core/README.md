@@ -33,6 +33,14 @@ the host implements it. The existing seams are `Logger`, `SettingsReader`,
 `CancellationToken` — prefer extending one of those over inventing a new
 abstraction.
 
+The telemetry query layer also accepts `ReadonlySqliteConnection` and
+`TelemetryReadBackend` from `telemetry/readBackend.ts`. The extension keeps the
+default WASM snapshot reader. The desktop supplies native, read-only SQLite
+transactions and indexed titles, while sharing all queries, validation, and
+sanitization. Backend handles and derived caches are scoped to synchronous
+`readConsistently` calls; they must not survive a transaction or pin WAL files
+between requests. Core does not import the native driver.
+
 ## Consuming it
 
 There is no build step: `main` and `types` point at `src/index.ts`, and each

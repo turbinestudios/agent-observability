@@ -1,4 +1,4 @@
-import type { Database } from 'node-sqlite3-wasm';
+import type { ReadonlySqliteConnection } from './readBackend';
 import { sanitizeRepositorySlug, sanitizeRepositoryUrl, UNKNOWN_REPOSITORY } from './repositoryUrl';
 
 /**
@@ -85,7 +85,7 @@ export class RepositoryResolver {
   }
 
   /** Build the resolver by reading the sparse repo attributes from `db`. */
-  static fromDatabase(db: Database): RepositoryResolver {
+  static fromDatabase(db: Pick<ReadonlySqliteConnection, 'all'>): RepositoryResolver {
     const rows = db.all(REPO_BY_SESSION_SQL) as unknown as RepoRow[];
     // Per session, keep each key's value from the LATEST repo-bearing span, so
     // a mid-session `origin` re-point resolves to where the work ended up.

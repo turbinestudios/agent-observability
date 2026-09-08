@@ -24,12 +24,6 @@ interface Props {
   onAskAi?: (source: string, sessionId: string) => void;
 }
 
-/**
- * Whether a Copilot detail has been opened yet this run. The first one is slow
- * for reasons the user should be told about; the rest are not.
- */
-let copilotWarmed = false;
-
 /** What the embedded document posts out through the shimmed API. */
 interface DetailMessage {
   type?: string;
@@ -86,9 +80,6 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
     dataHost
       .call('sessions.detail', row.source, row.sessionId, theme, force)
       .then(async (doc) => {
-        if (row.source === 'copilot') {
-          copilotWarmed = true;
-        }
         // Loaded from a URL rather than inlined: an inline frame would inherit
         // this page's script policy, which blocks the document's own scripts
         // and leaves it looking fine but completely inert.
@@ -174,14 +165,7 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
   }
 
   if (loading || docUrl === undefined) {
-    // The first Copilot session opened in a run pays a large one-time cost:
-    // the shared read layer indexes the whole recorded tool output before it can
-    // answer anything. Every session after it is fast. Saying so beats letting a
-    // minutes-long wait look like a hang.
-    const firstCopilot = row.source === 'copilot' && !copilotWarmed;
-    const leads = firstCopilot
-      ? ['The first Copilot session takes a while to open — the rest of them will be quick.']
-      : row.source === 'claude'
+    const leads = row.source === 'claude'
         ? ['Parsing the transcript and every sub-agent it spawned…']
         : ['Reading the recorded telemetry…'];
     return (

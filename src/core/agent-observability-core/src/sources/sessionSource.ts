@@ -154,11 +154,17 @@ export class CopilotSource implements SessionDataSource {
     // Prefer the friendly subagent names the Overview tab resolved, so the two
     // tabs label the same agents identically; fall back to the analyzer's own
     // DB-derived names when the detail can't be loaded.
-    const detail = this.telemetry.getSessionDetail(sessionKey);
-    const subagentNamesList = detail.ok
-      ? [...new Set(detail.value.agentUsage.filter((u) => u.kind === 'subagent').map((u) => u.agentName))]
-      : undefined;
-    return analyzeContext(sessionKey, this.telemetry, acceptedMissing, undefined, subagentNamesList);
+    try {
+      return this.telemetry.readConsistently(() => {
+        const detail = this.telemetry.getSessionDetail(sessionKey);
+        const subagentNamesList = detail.ok
+          ? [...new Set(detail.value.agentUsage.filter((u) => u.kind === 'subagent').map((u) => u.agentName))]
+          : undefined;
+        return analyzeContext(sessionKey, this.telemetry, acceptedMissing, undefined, subagentNamesList);
+      });
+    } catch {
+      return undefined; // Optional analysis must not fail a detail view.
+    }
   }
   refresh(): void {
     this.telemetry.refresh();

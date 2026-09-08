@@ -9,6 +9,15 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.14.3] - 2026-09-08
+
+### Fixed
+
+- **Opening and analyzing Copilot sessions no longer copies the entire
+  archive.** The app reads the database directly, including newly committed
+  activity, without creating a large temporary copy. Session names reuse the
+  local index instead of rereading every workspace's chat history.
+
 ## [1.14.2] - 2026-09-08
 
 ### Fixed

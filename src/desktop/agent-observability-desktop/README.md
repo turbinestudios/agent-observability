@@ -41,8 +41,7 @@ The index uses the following optimizations:
   SQLite driver refuses a WAL database — so it copies all 1.6 GB and replays the
   WAL by hand on every refresh. `better-sqlite3` speaks WAL natively, so the copy
   disappears from indexing, which uses aggregate queries. Nothing is ever
-  written to Copilot's file. The detail and analysis paths still use core's
-  snapshot-based reader.
+  written to Copilot's file.
 - **Titles are indexed once.** They live in per-workspace stores totalling ~4 GB;
   the extension rereads all of them each refresh. Here a store whose mtime has
   not moved is skipped, and a changed session file is read only far enough to
@@ -52,6 +51,12 @@ The index uses the following optimizations:
   analysis. Only changed rows are pushed to the renderer. Any database/WAL
   change conservatively invalidates the Copilot source set, including
   attribute-only edits and child activity invisible in summary counts.
+- **Native detail and analysis reads.** These now read the archive in place too,
+  using core's unchanged queries and schema validation. A short-lived read-only
+  transaction pins each request's view, including related context queries, and
+  closes before returning. WAL-only commits are visible to the next request;
+  no idle reader prevents checkpointing. Titles come from the persisted local
+  index overlaid on archived names, not a scan of workspace chat content.
 
 Parsing runs in a separate process, but that same synchronous data host also
 answers interactive queries. The startup overlay waits for the initial index
@@ -65,6 +70,11 @@ a read force revalidation instead of preserving potentially stale analysis.
 
 The index is a cache and holds nothing that cannot be rederived — deleting it
 (or using **Rebuild index**) is always safe.
+
+The extension still uses its WASM snapshot reader. The desktop does not silently
+fall back to copying when a native source cannot be read: it reports the failure
+or uses another resolved native source. Startup retains cleanup of temporary
+snapshots left behind by older desktop releases.
 
 ## Architecture
 

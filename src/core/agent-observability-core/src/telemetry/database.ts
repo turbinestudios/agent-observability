@@ -1,5 +1,5 @@
 import { Database } from 'node-sqlite3-wasm';
-import type { BindValues } from 'node-sqlite3-wasm';
+import type { ReadBindings, ReadonlySqliteConnection } from './readBackend';
 import { RepositoryResolver } from './repositoryResolver';
 import { UNKNOWN_REPOSITORY } from './repositoryUrl';
 import { AggregationRow } from '../aggregate/aggregator';
@@ -120,23 +120,24 @@ export function ensureSnapshotIndexes(snapshotDbPath: string): void {
 }
 
 /**
- * Read-only wrapper over a snapshot-copy connection to `agent-traces.db`.
+ * Shared read-only queries over a consistent view of `agent-traces.db`.
  *
  * Opened with `{ readonly: true, fileMustExist: true }` against a temp COPY
  * (see {@link createReadonlySnapshot}) so it can never mutate the real DB.
- * Validates the schema on construction and exposes safe-metadata queries; the
+ * Hosts may instead supply a read-only connection scoped to a read transaction
+ * via fromConnection. Validates the schema and exposes safe-metadata queries; the
  * repository resolver guarantees every Session/Repository carries a sanitized
  * repository.
  */
 export class TelemetryDatabase {
-  private readonly db: Database;
+  private readonly db: ReadonlySqliteConnection;
   private resolverCache: RepositoryResolver | undefined;
   private spansColumnsCache: ReadonlySet<string> | undefined;
   private startedSessionsCache: ReadonlySet<string> | undefined;
   /** Scoped repository fallback threaded into the {@link RepositoryResolver}. */
   private repositoryFallback: ((sessionId: string) => string | undefined) | undefined;
 
-  private constructor(db: Database) {
+  private constructor(db: ReadonlySqliteConnection) {
     this.db = db;
   }
 
@@ -147,13 +148,13 @@ export class TelemetryDatabase {
    * prepared statement for us — unlike a raw `db.prepare(...)`, which would leak
    * WASM memory since `db.close()` does not finalize pending statements.
    */
-  private getRow<T>(sql: string, params?: BindValues): T | undefined {
+  private getRow<T>(sql: string, params?: ReadBindings): T | undefined {
     const row = this.db.get(sql, params);
-    return row === null ? undefined : (row as unknown as T);
+    return row === null || row === undefined ? undefined : (row as T);
   }
 
   /** Run a multi-row query via the auto-finalizing convenience method. */
-  private allRows<T>(sql: string, params?: BindValues): T[] {
+  private allRows<T>(sql: string, params?: ReadBindings): T[] {
     return this.db.all(sql, params) as unknown as T[];
   }
 
@@ -166,6 +167,15 @@ export class TelemetryDatabase {
    */
   static open(snapshotDbPath: string): TelemetryDatabase {
     const db = new Database(snapshotDbPath, { readOnly: true, fileMustExist: true });
+    return TelemetryDatabase.fromConnection(db);
+  }
+
+  /**
+   * Take ownership of a host-opened READ-ONLY connection. The host must pin a
+   * consistent view for this instance's lifetime: its caches assume immutable
+   * data. A failed schema check closes the connection before propagating.
+   */
+  static fromConnection(db: ReadonlySqliteConnection): TelemetryDatabase {
     const instance = new TelemetryDatabase(db);
     try {
       instance.validateSchema();
