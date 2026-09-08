@@ -153,24 +153,51 @@ try to sign the NSIS installer with it):
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.MAC_CERT_P12 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          if [ -n "$CSC_LINK" ] && [ -n "$APPLE_API_KEY_P8" ]; then
-            # Notarization wants the .p8 as a file; the secret holds its text.
-            echo "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/apple_api_key.p8"
-            export APPLE_API_KEY="$RUNNER_TEMP/apple_api_key.p8"
-            npx electron-builder --config electron-builder.yml --publish never
-          else
+          if [ -z "$MAC_CERT_P12" ] || [ -z "$APPLE_API_KEY_P8" ]; then
             # No credentials (fork, dry run): build unsigned, exactly as before.
             export CSC_IDENTITY_AUTO_DISCOVERY=false
             npx electron-builder --config electron-builder.yml --publish never \
               -c.mac.notarize=false
+            exit 0
           fi
+
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(openssl rand -base64 24)"
+          cert="$RUNNER_TEMP/certificate.p12"
+          echo "$MAC_CERT_P12" | base64 --decode > "$cert"
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert" -k "$keychain" -P "$MAC_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+          rm -f "$cert"
+
+          # Notarization wants the .p8 as a file; the secret holds its text.
+          echo "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/apple_api_key.p8"
+          export APPLE_API_KEY="$RUNNER_TEMP/apple_api_key.p8"
+          export CSC_KEYCHAIN="$keychain"
+          npx electron-builder --config electron-builder.yml --publish never
 ```
+
+The certificate is imported by the workflow rather than handed to
+electron-builder as `CSC_LINK` on purpose. electron-builder's own keychain
+import passes the `.p12` export password to `security set-key-partition-list
+-k`, which expects the *keychain* password; macOS tolerated the mismatch until
+the runner image reached Darwin 25.6, after which every signed build died with
+`SecKeychainUnlock: The user name or passphrase you entered is not correct`.
+Pointing electron-builder at a ready-made keychain with `CSC_KEYCHAIN` skips
+that code path — identity discovery still finds the certificate there.
 
 ## Step 5 — cut a release and verify (no Mac needed)
 
