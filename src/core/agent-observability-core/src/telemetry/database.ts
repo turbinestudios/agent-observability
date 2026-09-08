@@ -1,5 +1,5 @@
 import { Database } from 'node-sqlite3-wasm';
-import type { BindValues } from 'node-sqlite3-wasm';
+import type { ReadBindings, ReadonlySqliteConnection } from './readBackend';
 import { RepositoryResolver } from './repositoryResolver';
 import { UNKNOWN_REPOSITORY } from './repositoryUrl';
 import { AggregationRow } from '../aggregate/aggregator';
@@ -31,7 +31,8 @@ import {
   suggestionOnlySql,
 } from './sessionFilter';
 import { extractResponseText } from './responseText';
-import { countWrittenLines, sumWrittenLines, WriteLineDelta } from './locAnalysis';
+import { countWrittenLines, WriteLineDelta } from './locAnalysis';
+import { timeBucket } from './timeBucket';
 import { SessionTitleInfo } from './sessionTitles';
 import { READ_INDEX_DDL } from './schemaIndexes';
 
@@ -120,23 +121,34 @@ export function ensureSnapshotIndexes(snapshotDbPath: string): void {
 }
 
 /**
- * Read-only wrapper over a snapshot-copy connection to `agent-traces.db`.
+ * Shared read-only queries over a consistent view of `agent-traces.db`.
  *
  * Opened with `{ readonly: true, fileMustExist: true }` against a temp COPY
  * (see {@link createReadonlySnapshot}) so it can never mutate the real DB.
- * Validates the schema on construction and exposes safe-metadata queries; the
+ * Hosts may instead supply a read-only connection scoped to a read transaction
+ * via fromConnection. Validates the schema and exposes safe-metadata queries; the
  * repository resolver guarantees every Session/Repository carries a sanitized
  * repository.
  */
 export class TelemetryDatabase {
-  private readonly db: Database;
+  private readonly db: ReadonlySqliteConnection;
   private resolverCache: RepositoryResolver | undefined;
   private spansColumnsCache: ReadonlySet<string> | undefined;
   private startedSessionsCache: ReadonlySet<string> | undefined;
+  private modelCache: Map<string, string> | undefined;
+  private modesCache: Map<string, AgentMode[]> | undefined;
+  // Only ONE tree/classification retained, not an unbounded per-session cache.
+  // Handles describe immutable snapshots/transactions; native handles end with
+  // each request. Tool arguments are discarded; only numeric deltas survive.
+  private treeCache: { root: string; ids: string[] } | undefined;
+  private writesCache: {
+    root: string; extensions: string;
+    rows: Array<{ startMs: number; delta: WriteLineDelta }>;
+  } | undefined;
   /** Scoped repository fallback threaded into the {@link RepositoryResolver}. */
   private repositoryFallback: ((sessionId: string) => string | undefined) | undefined;
 
-  private constructor(db: Database) {
+  private constructor(db: ReadonlySqliteConnection) {
     this.db = db;
   }
 
@@ -147,13 +159,13 @@ export class TelemetryDatabase {
    * prepared statement for us — unlike a raw `db.prepare(...)`, which would leak
    * WASM memory since `db.close()` does not finalize pending statements.
    */
-  private getRow<T>(sql: string, params?: BindValues): T | undefined {
+  private getRow<T>(sql: string, params?: ReadBindings): T | undefined {
     const row = this.db.get(sql, params);
-    return row === null ? undefined : (row as unknown as T);
+    return row === null || row === undefined ? undefined : (row as T);
   }
 
   /** Run a multi-row query via the auto-finalizing convenience method. */
-  private allRows<T>(sql: string, params?: BindValues): T[] {
+  private allRows<T>(sql: string, params?: ReadBindings): T[] {
     return this.db.all(sql, params) as unknown as T[];
   }
 
@@ -166,6 +178,15 @@ export class TelemetryDatabase {
    */
   static open(snapshotDbPath: string): TelemetryDatabase {
     const db = new Database(snapshotDbPath, { readOnly: true, fileMustExist: true });
+    return TelemetryDatabase.fromConnection(db);
+  }
+
+  /**
+   * Take ownership of a host-opened READ-ONLY connection. The host must pin a
+   * consistent view for this instance's lifetime: its caches assume immutable
+   * data. A failed schema check closes the connection before propagating.
+   */
+  static fromConnection(db: ReadonlySqliteConnection): TelemetryDatabase {
     const instance = new TelemetryDatabase(db);
     try {
       instance.validateSchema();
@@ -631,7 +652,7 @@ export class TelemetryDatabase {
         outputTokens: row.total_output_tokens ?? 0,
         cachedTokens: row.total_cached_tokens ?? 0,
         model: modelBySession.get(row.session_id) ?? 'unknown',
-        agentModes: modesBySession.get(row.session_id) ?? ['default'],
+        agentModes: [...(modesBySession.get(row.session_id) ?? ['default'])],
       });
       if (limit !== undefined && summaries.length >= limit) {
         break;
@@ -1034,14 +1055,7 @@ export class TelemetryDatabase {
     // line totals.
     if (wantsLineCounts && turns.length > 0) {
       for (const w of this.treeWrittenLinesBySpan(sessionKey, codeExts, docExts)) {
-        let idx = 0;
-        for (let t = 0; t < turns.length; t++) {
-          if (turns[t].timestampMs <= w.startMs) {
-            idx = t;
-          } else {
-            break;
-          }
-        }
+        const idx = timeBucket(turns, w.startMs, (turn) => turn.timestampMs);
         const turn = turns[idx];
         turn.linesOfCode += w.delta.added.code;
         turn.linesOfDoc += w.delta.added.doc;
@@ -1069,7 +1083,7 @@ export class TelemetryDatabase {
       outputTokens,
       cachedTokens,
       model: this.modelBySession().get(sessionKey) ?? 'unknown',
-      agentModes: this.agentModesBySession().get(sessionKey) ?? ['default'],
+      agentModes: [...(this.agentModesBySession().get(sessionKey) ?? ['default'])],
     };
 
     // Whole-agent-tree rollup (incl. spawned sub-agents) for the GitHub-matching
@@ -1150,14 +1164,7 @@ export class TelemetryDatabase {
     const wantsLineCounts = codeExts.length > 0 || docExts.length > 0;
     if (wantsLineCounts && points.length > 0) {
       for (const w of this.treeWrittenLinesBySpan(sessionKey, codeExts, docExts)) {
-        let idx = 0;
-        for (let p = 0; p < points.length; p++) {
-          if (points[p].timestampMs <= w.startMs) {
-            idx = p;
-          } else {
-            break;
-          }
-        }
+        const idx = timeBucket(points, w.startMs, (point) => point.timestampMs);
         points[idx].linesOfCode += w.delta.added.code;
         points[idx].linesOfDoc += w.delta.added.doc;
         points[idx].linesOfCodeRemoved += w.delta.removed.code;
@@ -1245,24 +1252,15 @@ export class TelemetryDatabase {
     // file-writing tool calls. Skipped (counts stay 0) when no extension lists
     // are configured. The raw arguments are read here and discarded; only the
     // parsed integer line counts leave this method.
-    const writeLines =
-      codeExts.length > 0 || docExts.length > 0
-        ? sumWrittenLines(
-            this.allRows<{ tool_name: string | null; value: string | null }>(
-              `SELECT s.tool_name AS tool_name, a.value AS value
-                 FROM span_attributes a
-                 JOIN spans s ON s.span_id = a.span_id
-                 WHERE a.key = ?
-                   AND s.operation_name = 'execute_tool'
-                   AND (s.conversation_id IN (${inList}) OR s.chat_session_id IN (${inList}))`,
-              [TOOL_ARGUMENTS_KEY, ...ids, ...ids],
-            )
-              .filter((r): r is { tool_name: string | null; value: string } => r.value !== null)
-              .map((r) => ({ toolName: r.tool_name ?? '', argumentsJson: r.value })),
-            codeExts,
-            docExts,
-          )
-        : { added: { code: 0, doc: 0 }, removed: { code: 0, doc: 0 } };
+    const writeLines = { added: { code: 0, doc: 0 }, removed: { code: 0, doc: 0 } };
+    if (codeExts.length > 0 || docExts.length > 0) {
+      for (const { delta } of this.treeWrittenLinesBySpan(sessionKey, codeExts, docExts)) {
+        writeLines.added.code += delta.added.code;
+        writeLines.added.doc += delta.added.doc;
+        writeLines.removed.code += delta.removed.code;
+        writeLines.removed.doc += delta.removed.doc;
+      }
+    }
 
     const cachedTokens = agg.cached_tokens ?? 0;
     // TIN = fresh (non-cache-read) input; cache reads are the disjoint TCI bucket.
@@ -1469,14 +1467,7 @@ export class TelemetryDatabase {
       const turns = this.treeChatSpanKeys(rootKey);
       if (turns.length > 0) {
         for (const w of this.treeWrittenLinesBySpan(rootKey, codeExts, docExts)) {
-          let idx = 0;
-          for (let t = 0; t < turns.length; t++) {
-            if (turns[t].startMs <= w.startMs) {
-              idx = t;
-            } else {
-              break;
-            }
-          }
+          const idx = timeBucket(turns, w.startMs, (turn) => turn.startMs);
           const agent = usageByAgent.get(turns[idx].key);
           if (agent !== undefined) {
             agent.linesOfCode += w.delta.added.code;
@@ -1574,6 +1565,9 @@ export class TelemetryDatabase {
    * the component is exactly one agent run; independent sessions never share ids.
    */
   private sessionTreeIds(rootKey: string): string[] {
+    if (this.treeCache?.root === rootKey) {
+      return this.treeCache.ids;
+    }
     const seen = new Set<string>([rootKey]);
     let frontier: string[] = [rootKey];
     for (let hop = 0; hop < MAX_TREE_HOPS && frontier.length > 0; hop++) {
@@ -1602,7 +1596,9 @@ export class TelemetryDatabase {
     // Always includes rootKey. When rootKey is unknown (no spans), the walk adds
     // nothing and this is just [rootKey]; the caller detects emptiness via the
     // span COUNT, not the id-set size.
-    return [...seen];
+    const ids = [...seen];
+    this.treeCache = { root: rootKey, ids };
+    return ids;
   }
 
   /**
@@ -1706,6 +1702,10 @@ export class TelemetryDatabase {
     codeExts: readonly string[],
     docExts: readonly string[],
   ): Array<{ startMs: number; delta: WriteLineDelta }> {
+    const extensions = JSON.stringify([codeExts, docExts]);
+    if (this.writesCache?.root === rootKey && this.writesCache.extensions === extensions) {
+      return this.writesCache.rows;
+    }
     const ids = this.sessionTreeIds(rootKey);
     if (ids.length === 0) {
       return [];
@@ -1727,7 +1727,7 @@ export class TelemetryDatabase {
       [TOOL_ARGUMENTS_KEY, ...ids, ...ids],
     );
 
-    return rows
+    const deltas = rows
       .filter(
         (r): r is { start_time_ms: number; tool_name: string | null; value: string } =>
           r.value !== null && r.value.length > 0,
@@ -1736,6 +1736,8 @@ export class TelemetryDatabase {
         startMs: r.start_time_ms,
         delta: countWrittenLines(r.tool_name ?? '', r.value, codeExts, docExts),
       }));
+    this.writesCache = { root: rootKey, extensions, rows: deltas };
+    return deltas;
   }
 
 
@@ -1803,6 +1805,9 @@ export class TelemetryDatabase {
    * carry no model are absent (callers default to 'unknown').
    */
   private modelBySession(): Map<string, string> {
+    if (this.modelCache !== undefined) {
+      return this.modelCache;
+    }
     const rows = this.allRows<{
       sk: string;
       response_model: string | null;
@@ -1824,6 +1829,7 @@ export class TelemetryDatabase {
         map.set(row.sk, model);
       }
     }
+    this.modelCache = map;
     return map;
   }
 
@@ -1833,6 +1839,9 @@ export class TelemetryDatabase {
    * absent from the map (callers default to `['default']`).
    */
   private agentModesBySession(): Map<string, AgentMode[]> {
+    if (this.modesCache !== undefined) {
+      return this.modesCache;
+    }
     const rows = this.allRows<{ session_id: string; mode_name: string | null }>(
       `SELECT DISTINCT COALESCE(s.conversation_id, s.chat_session_id) AS session_id,
                 a.value AS mode_name
@@ -1858,6 +1867,7 @@ export class TelemetryDatabase {
     for (const [session, set] of map) {
       result.set(session, [...set].sort());
     }
+    this.modesCache = result;
     return result;
   }
 

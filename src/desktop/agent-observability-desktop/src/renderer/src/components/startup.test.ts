@@ -12,6 +12,19 @@ function run(events: StartupEvent[], from: StartupStage = { kind: 'connecting' }
 }
 
 describe('nextStartupStage', () => {
+  it('opens the saved index on connection without waiting for a background pass', () => {
+    expect(run([{ kind: 'connection', state: 'connected' }])).toEqual({ kind: 'preparing' });
+    expect(run([
+      { kind: 'connection', state: 'connected' }, progress('discovering'),
+      progress('hydrating', 2, 500), { kind: 'warmed' }, progress('hydrating', 3, 500),
+    ])).toEqual({ kind: 'done' });
+  });
+
+  it('background progress cannot reset a readiness barrier already in flight', () => {
+    expect(run([progress('discovering'), progress('hydrating', 0, 500), progress('idle')],
+      { kind: 'preparing' })).toEqual({ kind: 'preparing' });
+  });
+
   it('ignores the persisted idle the data host emits before the pass starts', () => {
     // This exact sequence dismissed the first version of the overlay at launch.
     expect(run([progress('idle', 120, 120)])).toEqual({ kind: 'connecting' });
@@ -84,7 +97,7 @@ describe('stageText', () => {
     // honest status; whimsy is reserved for rotations that had time to happen.
     expect(stageText({ kind: 'connecting' }, 0).note).toBe('First pass after a launch.');
     expect(stageText({ kind: 'preparing' }, 0).note).toBe(
-      'Almost there — making the first click instant.',
+      'Opening the saved session list and dashboard.',
     );
   });
 

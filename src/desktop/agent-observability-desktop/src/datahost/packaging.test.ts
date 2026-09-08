@@ -23,6 +23,19 @@ function manifest(): { dependencies?: Record<string, string> } {
 }
 
 describe('runtime dependencies', () => {
+  it('builds and ships the background worker beside the datahost broker', () => {
+    const packageDir = path.dirname(PACKAGE_JSON);
+    const config = fs.readFileSync(path.join(packageDir, 'electron.vite.config.ts'), 'utf8');
+    const packaging = fs.readFileSync(path.join(packageDir, 'electron-builder.yml'), 'utf8');
+    expect(config).toContain("background: resolve(__dirname, 'src/datahost/background/worker.ts')");
+    expect(packaging).toContain('- out/**');
+    const broker = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf8');
+    expect(broker).toContain("new ProcessingWorker(path.join(__dirname, 'background.js')");
+    expect(broker).not.toContain('new ClaudeIndexer(');
+    expect(broker).not.toContain('new CopilotIndexer(');
+    expect(broker).not.toContain('new AnalysisQueue(');
+  });
+
   it.each(['node-sqlite3-wasm', 'better-sqlite3', 'electron-updater'])(
     'declares %s so it is externalized rather than bundled',
     (name) => {

@@ -1,7 +1,7 @@
 {
   "$schema": "https://aka.ms/codetour-schema",
   "title": "2: Session detail & token trend",
-  "description": "End-to-end: one click on a session, through the ONE method that reads raw content, to the inline SVG token-trend graph. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
+  "description": "End-to-end: one click on a session, through the local-only detail query, to the inline SVG token-trend graph. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
   "nextTour": "3: Live updates",
   "steps": [
     {
@@ -19,14 +19,14 @@
     {
       "title": "Step 3 — Service delegates to the DB",
       "file": "src/core/agent-observability-core/src/telemetry/telemetryService.ts",
-      "line": 426,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-12.svg)\n\n**▶ Step 3 of 9 in the sequence diagram — `TelemetryService → TelemetryDatabase: getSessionDetail()`**\n\nThe Copilot source forwards to `TelemetryService.getSessionDetail`, which opens a read-only snapshot and delegates down to the database layer."
+      "line": 712,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-12.svg)\n\n**▶ Step 3 of 9 in the sequence diagram — `TelemetryService → TelemetryDatabase: getSessionDetail()`**\n\nThe Copilot source forwards to `TelemetryService.getSessionDetail`. The extension uses the default read-only snapshot; the desktop injects a native backend whose short-lived read transaction pins a consistent view. Both use the same database queries, while desktop titles come from its local index and archived names rather than a workspace-store scan."
     },
     {
-      "title": "Step 4 — The ONLY raw-content read",
+      "title": "Step 4 — Local-only detail assembly",
       "file": "src/core/agent-observability-core/src/telemetry/database.ts",
-      "line": 639,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-13.svg)\n\n**▶ Step 4 of 9 in the sequence diagram — `TelemetryDatabase → TelemetryService: SessionDetail (turns, tokens)`**\n\n`TelemetryDatabase.getSessionDetail` is, per its own comment just above (line 630), the ONLY method that reads raw content — prompts, completions, tool I/O. It assembles a `SessionDetail` that stays in-process and never reaches aggregation or sync."
+      "line": 826,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-13.svg)\n\n**▶ Step 4 of 9 in the sequence diagram — `TelemetryDatabase → TelemetryService: SessionDetail (turns, tokens)`**\n\n`TelemetryDatabase.getSessionDetail` assembles prompts, responses, turns, and agent-tree totals for local display. The tree traversal and numeric write deltas are reused across rollups within the immutable read view; raw tool arguments are discarded. Binary timestamp lookup attributes writes to turns without rescanning every preceding turn. Raw detail never enters aggregation or sync."
     },
     {
       "title": "Step 5 — Detail lands in the panel",
@@ -43,20 +43,20 @@
     {
       "title": "Step 7 — Call renderTokenTrend",
       "file": "src/core/agent-observability-core/src/views/sessionDetailHtml.ts",
-      "line": 362,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-16.svg)\n\n**▶ Step 7 of 9 in the sequence diagram — `sessionDetailHtml → sessionDetailHtml: renderTokenTrend(modelTurns)`**\n\nInside the content, `renderSessionDetailContent` calls `renderTokenTrend(modelTurns, trendSessions)` to draw the per-turn token trend graph."
+      "line": 974,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-16.svg)\n\n**▶ Step 7 of 9 in the sequence diagram — `sessionDetailHtml → sessionDetailHtml: renderTokenTrend(modelTurns)`**\n\nThe content's tree-summary card calls `renderTokenTrend(modelTurns, trendSessions)` to draw the per-turn token trend graph. Charts stay eager; event rows in large timelines are deferred until their disclosure opens."
     },
     {
       "title": "Step 8 — Build the inline SVG",
       "file": "src/core/agent-observability-core/src/views/sessionDetailHtml.ts",
-      "line": 472,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-17.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `sessionDetailHtml → sessionDetailPanel: HTML + SVG trend graph`**\n\n`renderTokenTrend` (defined here) buckets the model turns and emits an inline SVG — input, cached, and output token polylines — with an empty state when there are fewer than two points. No client-side JS or chart library is involved."
+      "line": 1211,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-17.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `sessionDetailHtml → sessionDetailPanel: HTML + SVG trend graph`**\n\n`renderTokenTrend` buckets model turns into inline SVG with an empty state for fewer than two points. The nonce-authorized controller handles legend filtering and lazy event pagination without an external chart library."
     },
     {
       "title": "Step 9 — Mount or live-update the webview",
       "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
       "line": 273,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-18.svg)\n\n**▶ Step 9 of 9 in the sequence diagram — `sessionDetailPanel → Dev: webview shows detail`**\n\nThe rendered HTML reaches the webview. On the first render the document is mounted; on later renders the panel posts a `{ type: 'update' }` message so the in-page controller swaps the body without a reload — preserving open collapsibles, the active tab, and scroll."
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-18.svg)\n\n**▶ Step 9 of 9 in the sequence diagram — `sessionDetailPanel → Dev: webview shows detail`**\n\nThe document mounts once. Subsequent `{ type: 'update' }` messages replace its body while preserving open sections, the active tab, scroll, and lazy timeline pages. Large timelines carry compact escaped data in inert templates; opening one constructs at most 100 rows with textContent, and Previous/Next keeps all events accessible."
     }
   ]
 }

@@ -12,6 +12,7 @@ import { SessionTitleInfo, workspaceStorageDirFor } from './sessionTitles';
 import { overlayTitle, readMergedSessionTitles, titleStorageDirs } from './titleStore';
 import { UNKNOWN_REPOSITORY } from './repositoryUrl';
 import { WorkspaceStoreSession } from './workspaceStore';
+import type { TelemetryReadBackend, TelemetryReadHandle } from './readBackend';
 import { AggregationRow } from '../aggregate/aggregator';
 import {
   Interaction,
@@ -101,7 +102,7 @@ interface CacheEntry {
  * has its own sibling `workspaceStorage` title store) and live exactly as
  * long as the snapshot.
  */
-interface OpenHandle {
+interface OpenHandle extends TelemetryReadHandle {
   snapshot: ReadonlySnapshot;
   db: TelemetryDatabase;
   /** Source DB path the snapshot was taken from. */
@@ -147,6 +148,8 @@ export class TelemetryService {
   private readonly config: ServiceConfig;
   private readonly environment: PathEnvironment | undefined;
   private handles: OpenHandle[] = [];
+  /** Native handles/caches live only for one synchronous read scope. */
+  private activeReadHandles: TelemetryReadHandle[] | undefined;
   private cache: CacheEntry = { sessions: new Map() };
   /** CURRENT workspace context for repo grouping + spanless synthesis. */
   private workspaceContext: WorkspaceSessionContext | undefined;
@@ -193,7 +196,11 @@ export class TelemetryService {
   /** Host-owned home for snapshot copies; OS temp dir when unset. */
   private snapshotRoot: string | undefined;
 
-  constructor(config: ServiceConfig | Configuration, environment?: PathEnvironment) {
+  constructor(
+    config: ServiceConfig | Configuration,
+    environment?: PathEnvironment,
+    private readonly readBackend?: TelemetryReadBackend,
+  ) {
     this.config = config;
     this.environment = environment;
   }
@@ -479,7 +486,7 @@ export class TelemetryService {
    * `conversation_id`, not the chat-session id), retries via the session's UUID
    * `chat_session_id`, which is what the title store is keyed by.
    */
-  private applyTitles(sessions: SessionSummary[], handle: OpenHandle): SessionSummary[] {
+  private applyTitles(sessions: SessionSummary[], handle: TelemetryReadHandle): SessionSummary[] {
     const titles = this.sessionTitlesFor(handle);
     if (titles.size === 0) {
       return sessions;
@@ -513,8 +520,12 @@ export class TelemetryService {
    * previously they resolved NO titles at all, which blanked every session
    * name once the archive became the read source.
    */
-  private sessionTitlesFor(handle: OpenHandle): Map<string, SessionTitleInfo> {
+  private sessionTitlesFor(handle: TelemetryReadHandle): Map<string, SessionTitleInfo> {
     if (handle.titles !== undefined) {
+      return handle.titles;
+    }
+    if (this.readBackend !== undefined) {
+      handle.titles = this.readBackend.readTitles(handle);
       return handle.titles;
     }
     const own = workspaceStorageDirFor(handle.sourcePath);
@@ -723,7 +734,7 @@ export class TelemetryService {
    * a typed {@link Result}. This is the single place that opens the DBs and
    * classifies errors, so every public method stays a small merge.
    */
-  private withDatabases<T>(fn: (handles: OpenHandle[]) => T): Result<T> {
+  private withDatabases<T>(fn: (handles: TelemetryReadHandle[]) => T): Result<T> {
     if (!this.config.isLocalTelemetryEnabled()) {
       return {
         ok: false,
@@ -732,15 +743,11 @@ export class TelemetryService {
       };
     }
 
-    let handles: OpenHandle[];
     try {
-      handles = this.ensureOpen();
-    } catch (err) {
-      return this.classify(err);
-    }
-
-    try {
-      return { ok: true, value: fn(handles) };
+      return this.readConsistently(() => {
+        const handles = this.activeReadHandles ?? this.ensureOpen();
+        return { ok: true, value: fn(handles) };
+      });
     } catch (err) {
       // A query-time failure (e.g. a connection went away). Drop the handles so
       // a later refresh re-snapshots cleanly, then classify.
@@ -750,17 +757,37 @@ export class TelemetryService {
   }
 
   /**
-   * Ensure an open, schema-valid handle per resolved source database,
-   * re-snapshotting a source only when its mtime has changed since the last
-   * snapshot (or there is no handle for it). Sources that fail to open are
-   * skipped so one broken environment (e.g. an unreachable WSL share) never
-   * hides the others; the first failure is rethrown only when NO source opens.
-   *
-   * @throws a typed error the caller classifies: a `{ code: 'ENOENT' }`-shaped
-   *   error for a missing DB, the native EACCES/EPERM error, or
-   *   {@link SchemaMismatchError}.
+   * Group related LOCAL queries (e.g. context analysis) in one host read view.
+   * No change for the extension's immutable snapshot path. Native backends
+   * start fresh on each outer call, so WAL-only commits never reuse stale
+   * repository, title, or query caches. The callback must be synchronous.
    */
-  private ensureOpen(): OpenHandle[] {
+  readConsistently<T>(run: () => T): T {
+    if (this.readBackend === undefined || this.activeReadHandles !== undefined ||
+        !this.config.isLocalTelemetryEnabled()) {
+      return run();
+    }
+    return this.readBackend.read(this.resolveTargets(), (handles) => {
+      this.activeReadHandles = handles;
+      this.cache = { sessions: new Map() };
+      for (const handle of handles) {
+        handle.db.setRepositoryFallback(this.repositoryFallbackFn);
+      }
+      try {
+        return run();
+      } finally {
+        this.activeReadHandles = undefined;
+        this.cache = { sessions: new Map() };
+      }
+    });
+  }
+
+  /**
+    * Source precedence is shared by the snapshot and host-native paths. A
+    * missing source produces an ENOENT-shaped error for the common classifier;
+    * denied-but-present sources remain candidates so open can report EACCES.
+   */
+  private resolveTargets(): Array<{ path: string; source: DatabaseSource }> {
     const resolved = resolveDatabasePaths(this.config, this.environment);
 
     // Source precedence, each SOLE when it applies (so the merge stays over one
@@ -791,7 +818,15 @@ export class TelemetryService {
       this.disposeHandles();
       throw missingDbError(resolved.primary.path);
     }
+    return targets;
+  }
 
+  /**
+   * Default WASM path: reuse immutable snapshot handles until source mtime
+   * changes. A broken source is skipped when another schema-valid one opens.
+   */
+  private ensureOpen(): OpenHandle[] {
+    const targets = this.resolveTargets();
     const previous = new Map(this.handles.map((h) => [h.sourcePath, h]));
     const next: OpenHandle[] = [];
     let changed = false;
@@ -839,7 +874,7 @@ export class TelemetryService {
 
     this.handles = next;
     if (next.length === 0) {
-      throw firstError ?? missingDbError(resolved.primary.path);
+      throw firstError ?? missingDbError(targets[0]?.path);
     }
     // Every open handle resolves repositories through the SAME scoped fallback,
     // so a just-started session groups under the current workspace's repo.
@@ -907,7 +942,7 @@ function disposeHandle(handle: OpenHandle): void {
 }
 
 /** Build (once per snapshot) a handle's session-key → chat-session-id lookup, cached. */
-function ensureChatSessionIds(handle: OpenHandle): Map<string, string> {
+function ensureChatSessionIds(handle: TelemetryReadHandle): Map<string, string> {
   if (handle.chatSessionIds === undefined) {
     handle.chatSessionIds = handle.db.chatSessionIdBySessionKey();
   }
@@ -923,7 +958,7 @@ function ensureChatSessionIds(handle: OpenHandle): Map<string, string> {
  * per source, before any measure is summed.
  */
 function mergeOverviews(
-  handles: OpenHandle[],
+  handles: TelemetryReadHandle[],
   excluded: ReadonlySet<string>,
   sinceMs?: number,
 ): OverviewMetrics {

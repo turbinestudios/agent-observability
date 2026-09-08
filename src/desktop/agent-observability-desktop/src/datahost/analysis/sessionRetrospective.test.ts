@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { SessionDataSource } from '@agent-observability/core/src/sources/sessionSource';
 import type { SessionDetail } from '@agent-observability/core/src/telemetry/models';
 import {
@@ -46,6 +46,13 @@ function detailOf(): SessionDetail {
 }
 
 describe('retrospectiveFor', () => {
+  it('passes the loaded detail through to source-specific scoring', () => {
+    const detail = detailOf();
+    const getSessionRetrospective = vi.fn(() => ({ ok: true as const, value: buildSessionRetrospective(detail) }));
+    retrospectiveFor({ getSessionRetrospective } as unknown as SessionDataSource, 's1', detail);
+    expect(getSessionRetrospective).toHaveBeenCalledWith('s1', detail);
+  });
+
   it("prefers the source's own retrospective — it can see transcript-only signals", () => {
     const enriched = buildSessionRetrospective(detailOf(), {
       interruptionCount: 2,

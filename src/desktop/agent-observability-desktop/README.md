@@ -8,48 +8,85 @@ sessions-first, and much faster to open.
 It reads the same on-disk data the extension does and coexists with it; running
 both at once is expected and safe.
 
-## Why it is fast
+## Indexing performance
 
 The extension builds its session list by parsing transcripts on demand, so the
 list cannot appear until hundreds of megabytes have been read. This app keeps a
 persisted index at `~/.agent-observability/desktop/index.db` and does that work
 once, in the background.
 
-Measured on a real corpus (686 Claude transcripts at 805 MB, plus a 1.6 GB
-Copilot archive — 230 sessions in total):
+Historical measurements on a real corpus (686 Claude transcripts at 805 MB,
+plus a 1.6 GB Copilot archive — 230 sessions in total). These measure first
+indexed rows and query execution, **not current end-to-end startup time**:
 
-| | Time to a usable list |
+| | Indexer / list-query time |
 | --- | --- |
 | Extension, Claude (parse on demand) | 3,696 ms, capped at 150 sessions |
 | Extension, Copilot (copy + WAL replay) | 68,365 ms for 47 sessions |
-| Desktop, first launch | **76 ms**, then hydrates behind the list |
-| Desktop, every launch after | **0.8 ms**, all 230 sessions, uncapped |
+| Desktop, first indexed rows | **76 ms**, before full hydration |
+| Desktop, warm list query | **0.8 ms**, all 230 sessions, uncapped |
 
 The Copilot rows match the extension's exactly — same 47 sessions, same step
 counts, same titles and repositories — which is the point: the speed is worth
 nothing if the data differs.
 
-Three things make that work:
+The index uses the following optimizations:
 
 - **Discovery before parsing.** A `readdir`/`stat` walk yields ids and mtimes,
   which is enough to paint a complete, correctly-ordered list. Real counts fill
   in afterwards, newest sessions first.
-- **Fingerprinting.** A file whose size, mtime, and head hash are unchanged is
-  never reopened, so a no-op refresh over the whole corpus costs ~113 ms.
-- **Copilot's database is read in place.** The extension cannot open it — its
+- **Claude fingerprinting.** A main transcript whose size and mtime are
+  unchanged is not parsed again by the indexer.
+- **Copilot's database is indexed in place.** The extension cannot open it — its
   SQLite driver refuses a WAL database — so it copies all 1.6 GB and replays the
   WAL by hand on every refresh. `better-sqlite3` speaks WAL natively, so the copy
-  disappears and a refresh becomes one aggregate query. Nothing is ever written
-  to Copilot's file.
+  disappears from indexing, which uses aggregate queries. Nothing is ever
+  written to Copilot's file.
 - **Titles are indexed once.** They live in per-workspace stores totalling ~4 GB;
   the extension rereads all of them each refresh. Here a store whose mtime has
   not moved is skipped, and a changed session file is read only far enough to
   reach its first line.
-- **Nothing heavy on the UI path.** Parsing runs in a separate process; the
-  interactive query is one indexed `SELECT`.
+- **Stable Copilot revisions.** Unchanged source metadata and database/WAL
+  fingerprints preserve each row's revision, cached detail, and persisted
+  analysis. Only changed rows are pushed to the renderer. Any database/WAL
+  change conservatively invalidates the Copilot source set, including
+  attribute-only edits and child activity invisible in summary counts.
+- **Native detail and analysis reads.** These now read the archive in place too,
+  using core's unchanged queries and schema validation. A short-lived read-only
+  transaction pins each request's view, including related context queries, and
+  closes before returning. WAL-only commits are visible to the next request;
+  no idle reader prevents checkpointing. Titles come from the persisted local
+  index overlaid on archived names, not a scan of workspace chat content.
+
+Background indexing and analysis run in a dedicated worker thread with its own
+SQLite WAL connection. The interactive data host reads the saved index while
+the worker parses and writes short transactions. Startup waits only for the
+interactive readiness queries, not the background pass; even on a first install
+navigation is available while the list fills in. A warm list query alone still
+does not measure end-to-end startup or large-detail rendering.
+
+Refresh storms coalesce into one follow-up run. Deletion, rebuilding, and
+settings/context-analysis changes serialize behind worker termination before
+mutating the index, so an old pass cannot put removed rows or old verdicts back.
+The worker finishes any archive-maintenance lease before becoming interruptible.
+Late events from stopped workers are ignored, and row notifications are read
+and decorated by the broker with the latest names, tags, notes, and hidden state.
+Crashes report an error and can be retried with Refresh, without a restart loop.
+Claude hydration commits each summary and its file fingerprint together, so an
+interrupted worker cannot mark old counts as current and skip the next retry.
+
+Copilot change tokens are an additive index sidecar, so upgrading does not
+rebuild the index. The first refresh establishes a baseline for existing rows;
+later unchanged refreshes reuse it. Unknown tokens or a database changing during
+a read force revalidation instead of preserving potentially stale analysis.
 
 The index is a cache and holds nothing that cannot be rederived — deleting it
 (or using **Rebuild index**) is always safe.
+
+The extension still uses its WASM snapshot reader. The desktop does not silently
+fall back to copying when a native source cannot be read: it reports the failure
+or uses another resolved native source. Startup retains cleanup of temporary
+snapshots left behind by older desktop releases.
 
 ## Architecture
 
@@ -57,12 +94,28 @@ The index is a cache and holds nothing that cannot be rederived — deleting it
 main            thin broker: window, theme, open-external, and the handshake
                 that hands the renderer a direct port to the data host
 renderer        React + Vite. Sessions is the left nav; other views open beside it
-data host       utilityProcess owning the index, the source registry, and all parsing
+data host       utilityProcess serving interactive index queries, details, and AI requests
+background      worker thread indexing/analyzing with its own WAL connection
 ```
 
 Core's session API is synchronous, so it never runs on the main or renderer
 thread — a slow parse would freeze whatever thread it lands on. It is wrapped
 into promises exactly once, at the MessagePort boundary.
+
+Only the broker initializes/migrates the index. Background workers require an
+already-initialized schema and are disposable after each pass. The worker entry
+is bundled beside the broker and shipped by the existing `out/**` package rule.
+User-requested detail/combined renders still run synchronously in the broker.
+Copilot reuses one tree traversal and parsed numeric write deltas per read view,
+with binary-search attribution to turns; context and retrospective analysis
+reuse the caller's detail instead of rebuilding it.
+
+Sessions with more than 100 events defer their event rows until each timeline
+opens. Previous/Next navigation materializes at most 100 rows per open timeline,
+and live updates preserve the selected page. Compact event metadata remains in
+the document (escaped, inert data); prompts, turn headings, charts, and context
+panels are still rendered eagerly. This bounds event DOM work, not total session
+payload size, and does not add any network requests or weaken the iframe sandbox.
 
 ## Development
 

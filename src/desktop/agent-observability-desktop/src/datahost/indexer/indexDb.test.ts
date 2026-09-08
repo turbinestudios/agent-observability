@@ -266,6 +266,125 @@ describe('placeholder rows', () => {
   });
 });
 
+describe('change-aware upserts', () => {
+  const fingerprint = 'stable-source-and-wal';
+
+  it('retains the revision and analysis when only the check time advances', () => {
+    const original = row({ source: 'copilot', sessionId: 'a' });
+    db.upsertChangedSessions([original], fingerprint);
+    db.putAnalysis('copilot', 'a', analysis({ deviationCount: 3 }), original.indexedAtMs, 9_000);
+
+    expect(db.upsertChangedSessions([{ ...original, indexedAtMs: 10_000 }], fingerprint)).toEqual([]);
+    expect(db.getRow('copilot', 'a')).toMatchObject({ indexedAtMs: 5_000, deviationCount: 3 });
+    expect(db.staleAnalysis(5)).toEqual([]);
+  });
+
+  it('invalidates on source-only changes even when summaries are identical', () => {
+    const original = row({ source: 'copilot', sessionId: 'a' });
+    db.upsertChangedSessions([original], fingerprint);
+    db.putAnalysis('copilot', 'a', analysis(), original.indexedAtMs, 9_000);
+
+    expect(db.upsertChangedSessions([{ ...original, indexedAtMs: 10_000 }], 'changed-wal')).toHaveLength(1);
+    expect(db.staleAnalysis(5)).toEqual([{ source: 'copilot', sessionId: 'a', indexedAtMs: 10_000 }]);
+  });
+
+  it.each([
+    { title: 'Updated title' },
+    { titleDerived: true },
+    { repository: 'github.com/acme/other' },
+    { costMicros: 0 },
+    { model: 'other-model' },
+    { agentModes: ['ask'] },
+  ])('does not hide metadata changes outside the source fingerprint: %j', (update) => {
+    const original = row({ source: 'copilot', sessionId: 'a' });
+    db.upsertChangedSessions([original], fingerprint);
+    expect(db.upsertChangedSessions([{ ...original, ...update, indexedAtMs: 10_000 }], fingerprint))
+      .toHaveLength(1);
+    expect(db.getRow('copilot', 'a')).toMatchObject({ ...update, indexedAtMs: 10_000 });
+  });
+
+  it('forces revalidation for an unknown or previously unrecorded fingerprint', () => {
+    const original = row({ source: 'copilot', sessionId: 'a' });
+    // A pre-upgrade index has session rows but no change-token sidecar entries.
+    db.upsertSessions([original]);
+    expect(db.upsertChangedSessions([original], fingerprint)).toHaveLength(1);
+    expect(db.upsertChangedSessions([original], undefined)).toHaveLength(1);
+    expect(db.upsertChangedSessions([original], undefined)).toHaveLength(1);
+    expect(db.upsertChangedSessions([original], fingerprint)).toHaveLength(1);
+    expect(db.upsertChangedSessions([original], fingerprint)).toEqual([]);
+  });
+
+  it('advances a changed revision when the clock stands still or moves backward', () => {
+    const original = row({ source: 'copilot', sessionId: 'a' });
+    db.upsertChangedSessions([original], fingerprint);
+    const [sameTick] = db.upsertChangedSessions([original], 'next');
+    const [backward] = db.upsertChangedSessions([{ ...original, indexedAtMs: 1 }], 'later');
+    expect(sameTick.indexedAtMs).toBe(5_001);
+    expect(backward.indexedAtMs).toBe(5_002);
+  });
+
+  it('replaces discovery placeholders with real values', () => {
+    const original = row({ source: 'copilot', sessionId: 'a', pending: true, interactionCount: 0 });
+    db.upsertChangedSessions([original], fingerprint);
+    db.upsertChangedSessions([{ ...original, pending: false, interactionCount: 7 }], fingerprint);
+    expect(db.getRow('copilot', 'a')?.interactionCount).toBe(7);
+    expect(db.getRow('copilot', 'a')?.pending).toBeUndefined();
+  });
+
+  it('survives reopening the index without discarding analysis', () => {
+    const original = row({ source: 'copilot', sessionId: 'a' });
+    db.upsertChangedSessions([original], fingerprint);
+    db.putAnalysis('copilot', 'a', analysis(), original.indexedAtMs, 9_000);
+    db.close();
+    db = new IndexDb(dbPath);
+    expect(db.upsertChangedSessions([{ ...original, indexedAtMs: 10_000 }], fingerprint)).toEqual([]);
+    expect(db.analysisCounts()).toEqual({ total: 1, analyzed: 1 });
+  });
+
+  it('adds fingerprints to an existing index without rebuilding its rows or analysis', () => {
+    const original = row({ source: 'copilot', sessionId: 'a' });
+    db.upsertSessions([original]);
+    db.putAnalysis('copilot', 'a', analysis(), original.indexedAtMs, 9_000);
+    db.close();
+    const legacy = new Database(dbPath);
+    legacy.exec('DROP TABLE session_fingerprints');
+    legacy.close();
+
+    db = new IndexDb(dbPath);
+    expect(db.getRow('copilot', 'a')?.indexedAtMs).toBe(5_000);
+    expect(db.analysisCounts()).toEqual({ total: 1, analyzed: 1 });
+    // One refresh validates the source that an older index never fingerprinted.
+    expect(db.upsertChangedSessions([original], fingerprint)).toHaveLength(1);
+    expect(db.upsertChangedSessions([original], fingerprint)).toEqual([]);
+  });
+
+  it('rolls back rows and fingerprints together when a batch fails', () => {
+    const original = row({ source: 'copilot', sessionId: 'a' });
+    db.upsertChangedSessions([original], fingerprint);
+    const invalid = row({ source: 'copilot', sessionId: 'bad', repository: null as unknown as string });
+    expect(() => db.upsertChangedSessions([{ ...original, title: 'new' }, invalid], 'changed'))
+      .toThrow();
+    expect(db.getRow('copilot', 'a')?.title).toBeUndefined();
+    expect(db.upsertChangedSessions([original], fingerprint)).toEqual([]);
+  });
+
+  it.each(['clear', 'removeSession', 'removeMissing'] as const)('cleans fingerprints on %s', (operation) => {
+    const original = row({ source: 'copilot', sessionId: 'a' });
+    db.upsertChangedSessions([original], fingerprint);
+    if (operation === 'clear') {
+      db.clear();
+    } else if (operation === 'removeSession') {
+      db.removeSession('copilot', 'a');
+    } else {
+      db.removeMissing('copilot', new Set());
+    }
+    // Simulate an older writer re-inserting the same row. A forgotten token
+    // would incorrectly classify this as unchanged instead of revalidating it.
+    db.upsertSessions([original]);
+    expect(db.upsertChangedSessions([original], fingerprint)).toHaveLength(1);
+  });
+});
+
 describe('groups', () => {
   it('counts sessions per source and repository, newest group first', () => {
     db.upsertSessions([

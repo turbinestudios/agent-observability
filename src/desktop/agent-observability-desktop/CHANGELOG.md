@@ -9,6 +9,49 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.14.5] - 2026-09-08
+
+### Fixed
+
+- **Large session timelines do less work before you open them.** Event rows
+  are created on demand, with Previous and Next controls for 100-event pages.
+  Every event remains available, including in comparisons, and live updates
+  preserve the selected page and open sections.
+- **Session details and background analysis avoid repeated calculations.**
+  Copilot agent-tree and line-count calculations are reused, and context and
+  retrospective analysis reuse details already loaded for the session.
+
+## [1.14.4] - 2026-09-08
+
+### Fixed
+
+- **Browse while history is being indexed and analyzed.** Background processing
+  no longer holds up searches, dashboard queries, or opening a session. Startup
+  opens the saved index without waiting for the full pass, and new sessions fill
+  in as they are discovered.
+- **Refreshes and settings changes no longer compete with each other.** Repeated
+  refreshes are combined, while deletion, rebuilding, and analysis-setting
+  changes safely stop old processing before applying. Background failures are
+  reported without taking down the interactive data service; Refresh retries.
+
+## [1.14.3] - 2026-09-08
+
+### Fixed
+
+- **Opening and analyzing Copilot sessions no longer copies the entire
+  archive.** The app reads the database directly, including newly committed
+  activity, without creating a large temporary copy. Session names reuse the
+  local index instead of rereading every workspace's chat history.
+
+## [1.14.2] - 2026-09-08
+
+### Fixed
+
+- **Refreshing unchanged Copilot history no longer repeats background analysis
+  or reloads the open session.** Completed analysis is reused across refreshes
+  and restarts when the recorded data has not changed. New tool and sub-agent
+  activity still triggers a fresh analysis.
+
 ## [1.14.1] - 2026-09-01
 
 ### Fixed

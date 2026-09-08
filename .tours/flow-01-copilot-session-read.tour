@@ -38,19 +38,19 @@
     {
       "title": "Step 6 — Read-only snapshot",
       "file": "src/core/agent-observability-core/src/telemetry/snapshot.ts",
-      "line": 72,
-      "description": "![1: Copilot session read](.tours/diagrams/d-6.svg)\n\n**▶ Step 6 of 9 in the sequence diagram — `CopilotSource → TelemetryDatabase: readonly snapshot + query`**\n\nReads never touch Copilot's live database directly. `createReadonlySnapshot` copies the on-disk DB (replaying its WAL) into a throwaway read-only snapshot, so queries can't race with or mutate the original file."
+      "line": 96,
+      "description": "![1: Copilot session read](.tours/diagrams/d-6.svg)\n\n**▶ Step 6 of 9 in the sequence diagram — `CopilotSource → TelemetryDatabase: readonly snapshot + query`**\n\nThe extension's default reader uses `createReadonlySnapshot` to copy the on-disk DB and replay its WAL on that private copy. The desktop instead supplies a native read-only transaction through `TelemetryReadBackend`; it shares the query layer without copying the archive. Neither reader mutates the source."
     },
     {
       "title": "Step 7 — Summary query returns rows",
       "file": "src/core/agent-observability-core/src/telemetry/database.ts",
-      "line": 417,
+      "line": 604,
       "description": "![1: Copilot session read](.tours/diagrams/d-7.svg)\n\n**▶ Step 7 of 9 in the sequence diagram — `TelemetryDatabase → CopilotSource: session rows`**\n\n`TelemetryDatabase.listSessions` runs the summary query against the snapshot and returns one row per session — counts, durations, token totals — but no raw prompt or completion text."
     },
     {
       "title": "Step 8 — Source returns SessionSummary[]",
       "file": "src/core/agent-observability-core/src/sources/sessionSource.ts",
-      "line": 107,
+      "line": 137,
       "description": "![1: Copilot session read](.tours/diagrams/d-8.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `CopilotSource → Sessions view: SessionRow[]`**\n\n`CopilotSource.listSessions` hands the `SessionSummary[]` back up through the registry to the view, unchanged. The source is a thin adapter over `TelemetryService`."
     },
     {

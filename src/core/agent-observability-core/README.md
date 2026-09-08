@@ -33,6 +33,26 @@ the host implements it. The existing seams are `Logger`, `SettingsReader`,
 `CancellationToken` — prefer extending one of those over inventing a new
 abstraction.
 
+The telemetry query layer also accepts `ReadonlySqliteConnection` and
+`TelemetryReadBackend` from `telemetry/readBackend.ts`. The extension keeps the
+default WASM snapshot reader. The desktop supplies native, read-only SQLite
+transactions and indexed titles, while sharing all queries, validation, and
+sanitization. Backend handles and derived caches are scoped to synchronous
+`readConsistently` calls; they must not survive a transaction or pin WAL files
+between requests. Core does not import the native driver.
+
+Detail queries reuse compact model/mode maps and a single tree/write-delta entry
+within that immutable read view. The write cache retains counts, not raw tool
+arguments; its key includes the code/document extension classification. Session
+sources optionally accept already-loaded detail for context labels and
+retrospective scoring, avoiding a second detail reconstruction.
+
+Large event timelines use escaped, inert JSON tuples and create at most 100
+rows per open page through `textContent`. The nonce/CSP boundary is unchanged;
+live updates restore the page alongside disclosure/tab/scroll state. The event
+metadata is still in the document, and charts/prompts remain eager: this bounds
+event DOM work, not all memory or payload size.
+
 ## Consuming it
 
 There is no build step: `main` and `types` point at `src/index.ts`, and each
@@ -55,6 +75,10 @@ Tests are co-located with the code they cover and run headless by construction:
 ```bash
 npm test -w @agent-observability/core
 ```
+
+The lazy timeline tests use the dev-only jsdom dependency to exercise the real
+controller, pagination, live updates, and hostile template content. Query reuse
+tests assert work counts rather than machine-dependent elapsed time.
 
 Some tests read fixtures from the repo root (`schemas/`, `tools/`) by relative
 path, which is why this package sits at the same directory depth as the

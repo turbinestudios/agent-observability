@@ -267,14 +267,15 @@ export class ClaudeCodeService implements SessionDataSource {
    * with the transcript-only signals ({@link extractRetrospectiveSignals}) the
    * generic model cannot see — interruptions, compactions, plan mode.
    */
-  getSessionRetrospective(sessionKey: string): Result<SessionRetrospective> {
+  getSessionRetrospective(sessionKey: string, detail?: SessionDetail): Result<SessionRetrospective> {
     return this.guard(() => {
-      const input = this.loadSessionInput(sessionKey, true);
+      const reused = detail?.summary.sessionId === sessionKey ? detail : undefined;
+      const input = this.loadSessionInput(sessionKey, reused === undefined);
       if (input === undefined) {
         throw new Error(`Claude Code session ${sessionKey} not found.`);
       }
       return buildSessionRetrospective(
-        buildSessionDetail(input),
+        reused ?? buildSessionDetail(input),
         extractRetrospectiveSignals(input.mainRecords),
       );
     });

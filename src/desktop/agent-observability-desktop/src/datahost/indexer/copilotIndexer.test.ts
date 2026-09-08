@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -7,6 +7,7 @@ import { Configuration } from '@agent-observability/core/src/config/configuratio
 import type { SettingsReader } from '@agent-observability/core/src/config/configuration';
 import type { PathEnvironment } from '@agent-observability/core/src/telemetry/paths';
 import { CopilotIndexer } from './copilotIndexer';
+import type { CopilotIndexerDeps } from './copilotIndexer';
 import { IndexDb } from './indexDb';
 
 /**
@@ -156,7 +157,7 @@ function run(
   gitRemote?: { resolve(p: string): string },
   environment?: PathEnvironment,
 ) {
-  return new CopilotIndexer({ db, config, gitRemote, environment }).run();
+  return new CopilotIndexer({ db, config, gitRemote, environment: environment ?? fakePlatform().environment }).run();
 }
 
 /**
@@ -402,6 +403,135 @@ describe('session content', () => {
 
     run(makeConfig({ excludedRepositories: ['https://github.com/acme/secret'] }));
     expect(db.listSessions({ source: 'copilot' })).toEqual([]);
+  });
+});
+
+describe('refresh revisions', () => {
+  const runAt = (now: number, extra: Partial<CopilotIndexerDeps> = {}) => new CopilotIndexer({
+    db,
+    config: makeConfig(),
+    environment: fakePlatform().environment,
+    now: () => now,
+    ...extra,
+  }).run();
+
+  const markAnalyzed = (): void => {
+    for (const row of db.listSessions({ source: 'copilot', limit: 300 })) {
+      db.putAnalysis('copilot', row.sessionId,
+        { deviationCount: 0, errorCount: 0, findings: [], contextFiles: [] }, row.indexedAtMs, 7_000);
+    }
+  };
+
+  it('does not requeue 300 analyzed sessions or push rows on an unchanged refresh', () => {
+    writeSourceDb(Array.from({ length: 300 }, (_, i) => ({
+      span_id: `span-${i}`,
+      chat_session_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      operation_name: 'chat',
+    })));
+    const onRows = vi.fn();
+    expect(runAt(5_000, { onRows }).hydrated).toBe(300);
+    markAnalyzed();
+    onRows.mockClear();
+
+    expect(runAt(10_000, { onRows })).toMatchObject({ discovered: 300, hydrated: 0 });
+    expect(onRows).not.toHaveBeenCalled();
+    expect(db.staleAnalysis(300)).toEqual([]);
+    expect(db.analysisCounts()).toEqual({ total: 300, analyzed: 300 });
+    expect(db.listSessions({ limit: 300 }).every((row) => row.indexedAtMs === 5_000)).toBe(true);
+  }, 30_000);
+
+  it('keeps revisions stable across a new indexer and index connection', () => {
+    writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }]);
+    runAt(5_000);
+    markAnalyzed();
+    db.close();
+    db = new IndexDb(indexPath);
+
+    expect(runAt(10_000).hydrated).toBe(0);
+    expect(db.getRow('copilot', UUID_A)?.indexedAtMs).toBe(5_000);
+    expect(db.staleAnalysis(5)).toEqual([]);
+  });
+
+  it('invalidates an attribute-only edit that does not change any summary counts', () => {
+    writeSourceDb(
+      [{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }],
+      [['s1', 'copilot_chat.user_request', 'before']],
+    );
+    runAt(5_000);
+    markAnalyzed();
+    const source = new Database(sourceDb);
+    source.prepare('UPDATE span_attributes SET value = ? WHERE span_id = ?').run('after!', 's1');
+    source.close();
+    const timestamp = new Date(2000, 0, 1);
+    fs.utimesSync(sourceDb, timestamp, timestamp);
+
+    expect(runAt(10_000).hydrated).toBe(1);
+    expect(db.getRow('copilot', UUID_A)?.interactionCount).toBe(1);
+    expect(db.staleAnalysis(5)).toEqual([{ source: 'copilot', sessionId: UUID_A, indexedAtMs: 10_000 }]);
+  });
+
+  it('invalidates child-only WAL writes before the main database is checkpointed', () => {
+    writeSourceDb([
+      { span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' },
+      { span_id: 'child', conversation_id: 'child-conversation', chat_session_id: 'toolu_child', operation_name: 'execute_tool' },
+      { span_id: 'spawn', conversation_id: UUID_A, chat_session_id: 'toolu_child', operation_name: 'invoke_agent' },
+    ]);
+    const source = new Database(sourceDb);
+    try {
+      source.pragma('journal_mode = WAL');
+      source.pragma('wal_autocheckpoint = 0');
+      runAt(5_000);
+      markAnalyzed();
+      const main = fs.statSync(sourceDb);
+      source.prepare('INSERT INTO span_attributes VALUES (?, ?, ?)')
+        .run('child', 'gen_ai.tool.call.arguments', '{"path":"synthetic.ts"}');
+
+      expect(fs.statSync(sourceDb).mtimeMs).toBe(main.mtimeMs);
+      expect(runAt(10_000).hydrated).toBe(1);
+      expect(db.getRow('copilot', UUID_A)?.interactionCount).toBe(2);
+      expect(db.staleAnalysis(5)).toHaveLength(1);
+      markAnalyzed();
+      expect(runAt(15_000).hydrated).toBe(0);
+      expect(db.staleAnalysis(5)).toEqual([]);
+    } finally {
+      source.close();
+    }
+  });
+
+  it('updates a changed title even when the source database did not change', () => {
+    writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }]);
+    runAt(5_000);
+    db.putTitle(UUID_A, 'New title', false, path.join(root, 'state.vscdb'), 1);
+
+    const onRows = vi.fn();
+    expect(runAt(10_000, { onRows }).hydrated).toBe(1);
+    expect(onRows.mock.calls[0][0][0]).toMatchObject({ title: 'New title', indexedAtMs: 10_000 });
+    expect(runAt(15_000).hydrated).toBe(0);
+  });
+
+  it('does not reuse an identical summary from a different database', () => {
+    writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }]);
+    runAt(5_000);
+    const replacement = path.join(root, 'replacement.db');
+    fs.copyFileSync(sourceDb, replacement);
+
+    expect(runAt(10_000, { config: makeConfig({ sqlitePath: replacement }) }).hydrated).toBe(1);
+    expect(db.getRow('copilot', UUID_A)?.indexedAtMs).toBe(10_000);
+  });
+
+  it('does not mark a racing read as a reusable baseline', () => {
+    writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }]);
+    runAt(5_000, { fingerprint: () => 'before' });
+    const racing = vi.fn().mockReturnValueOnce('before').mockReturnValueOnce('after');
+    expect(runAt(10_000, { fingerprint: racing }).hydrated).toBe(1);
+    expect(runAt(15_000, { fingerprint: () => 'after' }).hydrated).toBe(1);
+    expect(runAt(20_000, { fingerprint: () => 'after' }).hydrated).toBe(0);
+  });
+
+  it('never equates two unknown fingerprints', () => {
+    writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }]);
+    expect(runAt(5_000, { fingerprint: () => undefined }).hydrated).toBe(1);
+    expect(runAt(10_000, { fingerprint: () => undefined }).hydrated).toBe(1);
   });
 });
 

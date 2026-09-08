@@ -270,6 +270,17 @@ export function useSessions(
       // mid-hydration would make the filter chips flicker upward.
       if (event.status.phase === 'idle') {
         loadGroups();
+        // Browsing now overlaps indexing. Searches cannot merge unfiltered
+        // pushes, so settle them from SQL after the pass; keep ordinary lists
+        // (and their loaded pages/scroll position) intact.
+        if (queryRef.current.length > 0 || hiddenRef.current) {
+          void load();
+        } else {
+          const mine = generation.current;
+          void dataHost.call('sessions.count', listParams()).then((count) => {
+            if (generation.current === mine) { setTotal(count); }
+          }).catch(() => undefined);
+        }
       }
     });
 

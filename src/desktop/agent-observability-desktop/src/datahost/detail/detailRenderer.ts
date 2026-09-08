@@ -234,7 +234,7 @@ export class DetailRenderer {
     // rather than the whole document.
     let analysis: SessionContextAnalysis | undefined;
     try {
-      analysis = dataSource.getContextAnalysis?.(sessionId, context.acceptedMissing);
+      analysis = dataSource.getContextAnalysis?.(sessionId, context.acceptedMissing, result.value);
     } catch {
       analysis = undefined;
     }

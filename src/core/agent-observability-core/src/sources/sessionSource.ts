@@ -89,6 +89,8 @@ export interface SessionDataSource {
   getContextAnalysis?(
     sessionKey: string,
     acceptedMissing: AcceptedMissingConfig,
+    /** Already-loaded detail for this session; avoids rebuilding it for labels. */
+    detail?: SessionDetail,
   ): SessionContextAnalysis | undefined;
 
   /**
@@ -101,7 +103,7 @@ export interface SessionDataSource {
    * retrospective via `buildSessionRetrospective(detail)` at the call site.
    * Content-derived: never syncs, like everything else marked LOCAL-ONLY.
    */
-  getSessionRetrospective?(sessionKey: string): Result<SessionRetrospective>;
+  getSessionRetrospective?(sessionKey: string, detail?: SessionDetail): Result<SessionRetrospective>;
 }
 
 /**
@@ -150,15 +152,24 @@ export class CopilotSource implements SessionDataSource {
   getContextAnalysis(
     sessionKey: string,
     acceptedMissing: AcceptedMissingConfig,
+    loadedDetail?: SessionDetail,
   ): SessionContextAnalysis | undefined {
     // Prefer the friendly subagent names the Overview tab resolved, so the two
     // tabs label the same agents identically; fall back to the analyzer's own
     // DB-derived names when the detail can't be loaded.
-    const detail = this.telemetry.getSessionDetail(sessionKey);
-    const subagentNamesList = detail.ok
-      ? [...new Set(detail.value.agentUsage.filter((u) => u.kind === 'subagent').map((u) => u.agentName))]
-      : undefined;
-    return analyzeContext(sessionKey, this.telemetry, acceptedMissing, undefined, subagentNamesList);
+    try {
+      return this.telemetry.readConsistently(() => {
+        const detail = loadedDetail?.summary.sessionId === sessionKey
+          ? { ok: true as const, value: loadedDetail }
+          : this.telemetry.getSessionDetail(sessionKey);
+        const subagentNamesList = detail.ok
+          ? [...new Set(detail.value.agentUsage.filter((u) => u.kind === 'subagent').map((u) => u.agentName))]
+          : undefined;
+        return analyzeContext(sessionKey, this.telemetry, acceptedMissing, undefined, subagentNamesList);
+      });
+    } catch {
+      return undefined; // Optional analysis must not fail a detail view.
+    }
   }
   refresh(): void {
     this.telemetry.refresh();

@@ -1,6 +1,7 @@
 import type { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
 import type { SessionDataSource } from '@agent-observability/core/src/sources/sessionSource';
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
+import type { SessionDetail } from '@agent-observability/core/src/telemetry/models';
 import type {
   ContextFileCategory,
   ContextFileEntry,
@@ -94,14 +95,15 @@ export function analyzeSession(
     return undefined;
   }
 
+  const interactions = source.getSessionInteractions(sessionId);
   const deviationCount = detectTurnDeviations(
     source,
     sessionId,
     detail.value,
     deps.detector,
+    interactions,
   ).reduce((sum, turn) => sum + turn.length, 0);
 
-  const interactions = source.getSessionInteractions(sessionId);
   const errorCount = interactions.ok
     ? interactions.value.filter((i) => !i.success).length
     : 0;
@@ -124,7 +126,7 @@ export function analyzeSession(
     errorCount,
     ...(retro !== undefined ? { retro } : {}),
     findings,
-    contextFiles: contextFilesOf(source, sessionId, deps),
+    contextFiles: contextFilesOf(source, sessionId, deps, detail.value),
   };
 }
 
@@ -163,10 +165,11 @@ function contextFilesOf(
   source: SessionDataSource,
   sessionId: string,
   deps: AnalyzerDeps,
+  detail: SessionDetail,
 ): AnalyzedContextFile[] {
   let loaded: ContextFileEntry[];
   try {
-    const analysis = source.getContextAnalysis?.(sessionId, deps.acceptedMissing);
+    const analysis = source.getContextAnalysis?.(sessionId, deps.acceptedMissing, detail);
     if (analysis === undefined) {
       return [];
     }

@@ -14,13 +14,12 @@ import { analyzeSession } from './sessionAnalyzer';
  * re-read, and the Copilot indexer never materializes per-span rows at all.
  *
  * So it happens here instead — after the index settles, a few sessions at a
- * time, yielding to the event loop between batches. The data host is a single
- * synchronous thread, so yielding is the whole point: without it a first run
- * would lock the window for as long as the sweep takes. Results are persisted,
+ * time, yielding to the worker event loop between batches. The desktop runs
+ * this in its background worker, separate from interactive requests. Results are persisted,
  * so the cost is paid once per changed session rather than once per launch.
  */
 
-/** Sessions read per tick. Small enough that a batch never holds the thread long. */
+/** Sessions read per tick; elapsed time depends on transcript size. */
 const ANALYSIS_BATCH = 5;
 
 export interface AnalysisQueueDeps {
