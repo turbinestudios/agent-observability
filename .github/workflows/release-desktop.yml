@@ -95,24 +95,54 @@ jobs:
         # Signed and notarized when the secrets exist (see
         # docs/macos-signing-and-notarization.md); without them (forks, dry
         # runs) this falls back to the unsigned build exactly as before.
+        #
+        # The certificate is deliberately NOT handed to electron-builder as
+        # CSC_LINK. Its own keychain import passes the .p12 export password to
+        # `security set-key-partition-list -k`, which wants the KEYCHAIN
+        # password — macOS tolerated the mismatch until the runner image moved
+        # to Darwin 25.6 and started failing the build with "the user name or
+        # passphrase you entered is not correct". Building the keychain here
+        # and pointing electron-builder at it with CSC_KEYCHAIN sidesteps that
+        # code path entirely; identity discovery still finds the cert.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.MAC_CERT_P12 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          if [ -n "$CSC_LINK" ] && [ -n "$APPLE_API_KEY_P8" ]; then
-            # Notarization wants the .p8 as a file; the secret holds its text.
-            echo "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/apple_api_key.p8"
-            export APPLE_API_KEY="$RUNNER_TEMP/apple_api_key.p8"
-            npx electron-builder --config electron-builder.yml --publish never
-          else
+          if [ -z "$MAC_CERT_P12" ] || [ -z "$APPLE_API_KEY_P8" ]; then
             export CSC_IDENTITY_AUTO_DISCOVERY=false
             npx electron-builder --config electron-builder.yml --publish never \
               -c.mac.notarize=false
+            exit 0
           fi
+
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(openssl rand -base64 24)"
+          cert="$RUNNER_TEMP/certificate.p12"
+          echo "$MAC_CERT_P12" | base64 --decode > "$cert"
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          # No arguments: no lock timeout, so the keychain stays open across
+          # notarization, which takes minutes.
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert" -k "$keychain" -P "$MAC_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+          rm -f "$cert"
+          security find-identity -v -p codesigning "$keychain"
+
+          # Notarization wants the .p8 as a file; the secret holds its text.
+          echo "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/apple_api_key.p8"
+          export APPLE_API_KEY="$RUNNER_TEMP/apple_api_key.p8"
+          export CSC_KEYCHAIN="$keychain"
+          npx electron-builder --config electron-builder.yml --publish never
 
       - name: Verify signature and notarization (macOS)
         if: matrix.artifact == 'macos'
