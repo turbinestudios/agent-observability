@@ -9,6 +9,15 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.14.2] - 2026-09-08
+
+### Fixed
+
+- **Refreshing unchanged Copilot history no longer repeats background analysis
+  or reloads the open session.** Completed analysis is reused across refreshes
+  and restarts when the recorded data has not changed. New tool and sub-agent
+  activity still triggers a fresh analysis.
+
 ## [1.14.1] - 2026-09-01
 
 ### Fixed

@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import Database from 'better-sqlite3';
 import type {
   DayPoint,
@@ -122,6 +123,16 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_recent ON sessions (ended_at_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions (source, repository, ended_at_ms DESC);
 
+-- Optional change tokens for sources that aggregate again on each pass.
+-- Additive sidecar: existing v5 indexes need no rebuild. Missing tokens are
+-- treated as unknown, so their first refresh establishes a fresh baseline.
+CREATE TABLE IF NOT EXISTS session_fingerprints (
+  source      TEXT NOT NULL,
+  session_id  TEXT NOT NULL,
+  fingerprint TEXT,
+  PRIMARY KEY (source, session_id)
+);
+
 -- Copilot titles, so the multi-gigabyte chat-session scan happens once per
 -- changed file instead of on every refresh.
 CREATE TABLE IF NOT EXISTS titles (
@@ -207,6 +218,7 @@ CREATE TABLE IF NOT EXISTS repo_cache (
  */
 const SESSION_OWNED_TABLES = [
   'sessions',
+  'session_fingerprints',
   'files',
   'session_analysis',
   'session_findings',
@@ -342,6 +354,7 @@ export class IndexDb {
       this.db.exec(
         'DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS titles;' +
           ' DROP TABLE IF EXISTS repo_cache; DROP TABLE IF EXISTS session_analysis;' +
+          ' DROP TABLE IF EXISTS session_fingerprints;' +
           ' DROP TABLE IF EXISTS session_findings; DROP TABLE IF EXISTS context_files;',
       );
       this.db.exec(SCHEMA);
@@ -356,6 +369,7 @@ export class IndexDb {
   clear(): void {
     this.db.exec(
       'DELETE FROM files; DELETE FROM sessions; DELETE FROM titles; DELETE FROM repo_cache;' +
+        ' DELETE FROM session_fingerprints;' +
         ' DELETE FROM session_analysis; DELETE FROM session_findings; DELETE FROM context_files;',
     );
   }
@@ -539,6 +553,58 @@ export class IndexDb {
       }
     });
     run(rows);
+  }
+
+  /**
+   * Write only rows whose source or indexed metadata changed. The fingerprint
+   * covers data the summary cannot see (tool arguments, errors, child spans).
+   * An unknown fingerprint deliberately forces a write; a known one is never
+   * enough on its own, since titles/repositories can change outside the source.
+   *
+   * Keep indexedAtMs stable on a no-op so persisted analysis and open detail
+   * documents stay valid. On a change it is a strictly advancing revision,
+   * even for two passes in one millisecond or after a clock adjustment.
+   * Fingerprints and rows commit together, including when the app exits early.
+   */
+  upsertChangedSessions(rows: SessionRow[], fingerprint: string | undefined): SessionRow[] {
+    const previous = this.db.prepare(
+      `SELECT s.*, f.fingerprint FROM sessions s
+         LEFT JOIN session_fingerprints f ON f.source = s.source AND f.session_id = s.session_id
+        WHERE s.source = ? AND s.session_id = ?`,
+    );
+    const putFingerprint = this.db.prepare(
+      `INSERT INTO session_fingerprints (source, session_id, fingerprint) VALUES (?, ?, ?)
+       ON CONFLICT(source, session_id) DO UPDATE SET fingerprint = excluded.fingerprint`,
+    );
+    return this.db.transaction(() => {
+      const changed: SessionRow[] = [];
+      for (const row of rows) {
+        const old = previous.get(row.source, row.sessionId) as
+          | (StoredSession & { fingerprint: string | null })
+          | undefined;
+        if (old !== undefined && fingerprint !== undefined && old.fingerprint === fingerprint) {
+          const before = toStoredParams({ ...toSessionRow(old), mainPath: old.main_path ?? undefined });
+          const after = toStoredParams(row);
+          // Ignore the check time; compare only the persisted source metadata,
+          // never annotations or previously computed analysis on the list row.
+          before.indexedAtMs = after.indexedAtMs;
+          if (isDeepStrictEqual(before, after)) {
+            continue;
+          }
+        }
+        changed.push({
+          ...row,
+          indexedAtMs: old === undefined ? row.indexedAtMs : Math.max(row.indexedAtMs, old.indexed_at_ms + 1),
+        });
+      }
+      if (changed.length > 0) {
+        this.upsertSessions(changed);
+        for (const row of changed) {
+          putFingerprint.run(row.source, row.sessionId, fingerprint ?? null);
+        }
+      }
+      return changed;
+    })();
   }
 
   /** Remove sessions whose files are gone, returning the keys removed. */

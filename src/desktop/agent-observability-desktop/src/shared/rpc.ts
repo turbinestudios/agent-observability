@@ -64,7 +64,11 @@ export interface SessionRow {
    * not the same as smooth, so the list marks only rows that carry a verdict.
    */
   verdict?: RetroVerdict;
-  /** Epoch ms this row was last written by the indexer. */
+  /**
+   * Index revision, based on epoch ms. Unchanged Copilot refreshes preserve it;
+   * changed rows advance it even when the clock has not. Keys analysis/detail
+   * caches, not a user-facing "last checked" timestamp.
+   */
   indexedAtMs: number;
   /**
    * True while the row came from directory discovery alone and its counts have

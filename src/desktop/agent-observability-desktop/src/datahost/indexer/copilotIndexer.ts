@@ -18,6 +18,7 @@ import type { Configuration } from '@agent-observability/core/src/config/configu
 import type { SessionRow } from '../../shared/rpc';
 import type { IndexDb } from './indexDb';
 import { readCopilotTitles } from './copilotTitles';
+import { copilotFingerprint } from './copilotFingerprint';
 
 /**
  * Indexes GitHub Copilot sessions out of Copilot's own SQLite database.
@@ -91,6 +92,8 @@ export interface CopilotIndexerDeps {
    * multiple database locations without scanning the real machine.
    */
   environment?: PathEnvironment;
+  /** Metadata probe seam; unknown or changing tokens must never allow reuse. */
+  fingerprint?: (dbPath: string) => string | undefined;
   now?: () => number;
 }
 
@@ -197,8 +200,14 @@ export class CopilotIndexer {
     const aiu = new Map<string, number>();
     const opened: string[] = [];
     const problems: string[] = [];
+    const fingerprints: string[] = [];
+    let stable = true;
+    const fingerprint = this.deps.fingerprint ?? copilotFingerprint;
 
     for (const candidate of candidates) {
+      // Sample before opening too: a file replaced between open and the first
+      // query must not stamp results from the old handle with the new identity.
+      const before = fingerprint(candidate.path);
       let db: Database.Database;
       try {
         // readonly + fileMustExist: this is somebody else's live database and
@@ -220,18 +229,31 @@ export class CopilotIndexer {
         // Most span groups in this database are not sessions a person would
         // recognize — tool-call ids and chat-helper traffic. Without this the
         // list is mostly noise: 435 rows here instead of the real handful.
-        const started = this.startedSessions(db);
-        for (const aggregate of db.prepare(SESSIONS_SQL).all() as SessionAggregate[]) {
-          if (started.has(aggregate.session_id) && !aggregates.has(aggregate.session_id)) {
+        // All summaries in this source pass must describe the same SQLite
+        // snapshot, even if Copilot commits more spans while we are reading.
+        const read = db.transaction(() => ({
+          started: this.startedSessions(db),
+          aggregates: db.prepare(SESSIONS_SQL).all() as SessionAggregate[],
+          repositories: this.resolveRepositories(db),
+          aiu: this.sessionAiu(db),
+        }))();
+        const after = fingerprint(candidate.path);
+        if (before === undefined || before !== after) {
+          stable = false;
+        } else {
+          fingerprints.push(before);
+        }
+        for (const aggregate of read.aggregates) {
+          if (read.started.has(aggregate.session_id) && !aggregates.has(aggregate.session_id)) {
             aggregates.set(aggregate.session_id, aggregate);
           }
         }
-        for (const [id, repository] of this.resolveRepositories(db)) {
+        for (const [id, repository] of read.repositories) {
           if (!repositories.has(id)) {
             repositories.set(id, repository);
           }
         }
-        for (const [id, nano] of this.sessionAiu(db)) {
+        for (const [id, nano] of read.aiu) {
           if (!aiu.has(id)) {
             aiu.set(id, nano);
           }
@@ -286,11 +308,18 @@ export class CopilotIndexer {
       );
     }
 
-    this.deps.db.upsertSessions(rows);
-    this.deps.onRows?.(rows);
+    // Use the whole source set conservatively: a child span, attribute-only
+    // edit, or fallback from another database can change analysis without
+    // changing these summaries. Failed/racing reads never establish a reusable
+    // baseline. The next settled pass must read and invalidate them again.
+    const revision = stable && problems.length === 0 ? JSON.stringify(fingerprints) : undefined;
+    const changed = this.deps.db.upsertChangedSessions(rows, revision);
+    if (changed.length > 0) {
+      this.deps.onRows?.(changed);
+    }
     this.deps.db.removeMissing('copilot', new Set(rows.map((r) => r.sessionId)));
 
-    return { discovered: aggregates.size, hydrated: rows.length, sourcePath };
+    return { discovered: aggregates.size, hydrated: changed.length, sourcePath };
   }
 
   /**
