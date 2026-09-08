@@ -3,7 +3,8 @@ import type { LocalDeviationDetector } from '@agent-observability/core/src/devia
 import type { ContentLookup } from '@agent-observability/core/src/deviation/deviationDetector';
 import type { WorkflowDeviation } from '@agent-observability/core/src/deviation/models';
 import type { SessionDataSource } from '@agent-observability/core/src/sources/sessionSource';
-import type { SessionDetail } from '@agent-observability/core/src/telemetry/models';
+import type { Interaction, SessionDetail } from '@agent-observability/core/src/telemetry/models';
+import type { Result } from '@agent-observability/core/src/telemetry/telemetryService';
 
 /**
  * Per-turn workflow deviations for one session — the single place this app
@@ -24,13 +25,14 @@ export function detectTurnDeviations(
   sessionId: string,
   detail: SessionDetail,
   detector: LocalDeviationDetector,
+  loadedInteractions?: Result<Interaction[]>,
 ): WorkflowDeviation[][] {
   const empty = detail.turns.map(() => [] as WorkflowDeviation[]);
   if (detail.turns.length === 0) {
     return empty;
   }
 
-  const interactions = source.getSessionInteractions(sessionId);
+  const interactions = loadedInteractions ?? source.getSessionInteractions(sessionId);
   if (!interactions.ok) {
     // A session whose metadata cannot be read is not a session with no
     // deviations, but an empty array is the only shape the renderer can index.

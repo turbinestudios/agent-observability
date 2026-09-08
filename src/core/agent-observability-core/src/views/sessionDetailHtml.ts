@@ -24,6 +24,10 @@ import { aiuToUsd } from '../telemetry/pricing';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 import { OVERSIZED_THRESHOLD_TOKENS } from '../context/sizeEstimator';
 import { escapeHtml } from './escapeHtml';
+import { LAZY_TIMELINE_CONTROLLER } from './lazyTimelineController';
+
+/** Maximum event rows materialized per open large timeline. No events discarded. */
+export const TIMELINE_PAGE_SIZE = 100;
 
 // The cost basis of a session ({@link CostMode}) now lives on the shared model
 // types (so a source declares it via the `SessionDataSource` contract). Re-export
@@ -1813,8 +1817,11 @@ function renderTurns(
   turnDeviations: readonly (readonly WorkflowDeviation[])[] = [],
   keyPrefix = 't',
 ): string {
+  // Many small turns can be just as expensive as one giant turn: once the
+  // session exceeds the budget, defer EVERY nested event timeline.
+  const deferEvents = turns.reduce((count, turn) => count + turn.events.length, 0) > TIMELINE_PAGE_SIZE;
   const blocks = turns
-    .map((turn, i) => renderTurn(turn, turnDeviations[i] ?? [], `${keyPrefix}${i}`))
+    .map((turn, i) => renderTurn(turn, turnDeviations[i] ?? [], `${keyPrefix}${i}`, deferEvents))
     .join('\n');
   const issues = turnDeviations.reduce((total, list) => total + list.length, 0);
   const heading =
@@ -1841,12 +1848,27 @@ export function renderTurn(
   turn: SessionTurn,
   deviations: readonly WorkflowDeviation[] = [],
   key = 't0',
+  deferEvents = turn.events.length > TIMELINE_PAGE_SIZE,
 ): string {
   const time = escapeHtml(formatTime(turn.timestampMs));
-  const events = turn.events.map(renderTimelineRow).join('\n');
-  const timeline = `<details class="timeline-disclosure" data-k="${escapeHtml(key)}l"><summary>Timeline (${num(
+  const lazy = deferEvents && turn.events.length > 0;
+  // Only the fields shown by renderTimelineRow enter this payload. In
+  // particular, do not duplicate prompts or tool I/O in the event data.
+  const payload = lazy ? escapeHtml(JSON.stringify(turn.events.map((entry) => [
+    entry.timestampMs, entry.operation, entry.agentMode,
+    entry.toolName !== undefined && entry.toolName.length > 0 ? entry.toolName : entry.model,
+    entry.durationMs, entry.success,
+  ]))) : '';
+  const events = lazy ? '' : turn.events.map(renderTimelineRow).join('\n');
+  const timeline = `<details class="timeline-disclosure" data-k="${escapeHtml(key)}l"${lazy ? ' data-lazy-timeline data-page="0"' : ''}><summary>Timeline (${num(
     turn.events.length,
-  )} event(s))</summary><div class="timeline">${events}</div></details>`;
+  )} event(s))</summary><div class="timeline" id="${escapeHtml(key)}events">${events}</div>${lazy ? `
+    <template class="timeline-data">${payload}</template>
+    <nav class="timeline-pages" aria-label="Timeline event pages">
+      <button type="button" class="timeline-prev" aria-controls="${escapeHtml(key)}events" disabled>Previous</button>
+      <span class="timeline-page-status" role="status" aria-live="polite" aria-atomic="true">Open timeline to view events.</span>
+      <button type="button" class="timeline-next" aria-controls="${escapeHtml(key)}events">Next</button>
+    </nav>` : ''}</details>`;
 
   const hasRequest = turn.userRequest !== undefined && turn.userRequest.length > 0;
   const requestBody = hasRequest
@@ -2410,6 +2432,11 @@ const STYLE = `
   .tab-btn:hover { color: var(--vscode-foreground); }
   .tab-btn-active { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground)); font-weight: 600; }
   .tab-panel-hidden { display: none; }
+  .timeline-pages { display: flex; align-items: center; gap: .75rem; padding: .6rem; }
+  .timeline-pages button { color: var(--vscode-button-foreground, #fff); background: var(--vscode-button-background, #0e639c); border: 0; padding: .35rem .65rem; cursor: pointer; }
+  .timeline-pages button:disabled { opacity: .45; cursor: default; }
+  .timeline-pages button:focus-visible { outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
+  .timeline-page-status { font-size: .8rem; }
   .tab-panel-only { display: block; }
 
   /* ─── Context Analysis ─────────────────────────────────── */
@@ -2492,6 +2519,10 @@ const WEBVIEW_CONTROLLER = `
   var root = document.getElementById('live-root');
   var TOKEN_SERIES = ['input', 'cached', 'output'];
   var BAR_SERIES = ['loc', 'lod', 'nloc', 'nlod'];
+  var TIMELINE_PAGE_SIZE = ${TIMELINE_PAGE_SIZE};
+  var timelineTime = ${formatTime.toString()};
+  var timelineDuration = ${formatDuration.toString()};
+  ${LAZY_TIMELINE_CONTROLLER}
 
   // ── Token-trend legend filtering ─────────────────────────────────────────────
   function initTrend() {
@@ -2839,7 +2870,7 @@ const WEBVIEW_CONTROLLER = `
   });
   }
 
-  function initAll() { initTrend(); initTabs(); initAcceptMissing(); initCtxFileLinks(); initExternalLinks(); initRetro(); }
+  function initAll(pages) { initTrend(); initTabs(); initAcceptMissing(); initCtxFileLinks(); initExternalLinks(); initRetro(); initLazyTimelines(pages); }
 
   // ── Volatile UI state, preserved across a content swap ───────────────────────
   // Snapshot which collapsibles are open (by their stable data-k) and the active
@@ -2886,12 +2917,13 @@ const WEBVIEW_CONTROLLER = `
     var msg = event.data;
     if (!root || !msg || msg.type !== 'update' || typeof msg.html !== 'string') return;
     var openMap = snapshotOpen();
+    var timelinePages = snapshotTimelinePages();
     var tab = activeTab();
     var sx = window.scrollX, sy = window.scrollY;
     root.innerHTML = msg.html;
     restoreOpen(openMap);
     restoreTab(tab);
-    initAll();
+    initAll(timelinePages);
     window.scrollTo(sx, sy);
   });
 

@@ -168,6 +168,19 @@ describe('native snapshot lifetime', () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it('reuses the caller detail instead of reassembling it for context labels', () => {
+    const source = new CopilotSource(service, config);
+    const detail = value(source.getSessionDetail(SESSION));
+    const expected = source.getContextAnalysis(SESSION, ACCEPTED);
+    const readDetail = vi.spyOn(service, 'getSessionDetail');
+    expect(source.getContextAnalysis(SESSION, ACCEPTED, detail)).toEqual(expected);
+    expect(readDetail).not.toHaveBeenCalled();
+    source.getContextAnalysis(SESSION, ACCEPTED, {
+      ...detail, summary: { ...detail.summary, sessionId: 'other' },
+    });
+    expect(readDetail).toHaveBeenCalledTimes(1);
+  });
+
   it('releases readers when a callback throws, without pinning WAL', () => {
     const db = writer();
     try {

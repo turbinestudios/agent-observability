@@ -44,13 +44,13 @@
     {
       "title": "Step 7 — Summary query returns rows",
       "file": "src/core/agent-observability-core/src/telemetry/database.ts",
-      "line": 593,
+      "line": 604,
       "description": "![1: Copilot session read](.tours/diagrams/d-7.svg)\n\n**▶ Step 7 of 9 in the sequence diagram — `TelemetryDatabase → CopilotSource: session rows`**\n\n`TelemetryDatabase.listSessions` runs the summary query against the snapshot and returns one row per session — counts, durations, token totals — but no raw prompt or completion text."
     },
     {
       "title": "Step 8 — Source returns SessionSummary[]",
       "file": "src/core/agent-observability-core/src/sources/sessionSource.ts",
-      "line": 135,
+      "line": 137,
       "description": "![1: Copilot session read](.tours/diagrams/d-8.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `CopilotSource → Sessions view: SessionRow[]`**\n\n`CopilotSource.listSessions` hands the `SessionSummary[]` back up through the registry to the view, unchanged. The source is a thin adapter over `TelemetryService`."
     },
     {

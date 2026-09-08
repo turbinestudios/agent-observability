@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { SessionDataSource } from '@agent-observability/core/src/sources/sessionSource';
 import type {
   Interaction,
@@ -167,6 +167,16 @@ function analyze(source: SessionDataSource, maxSessionMinutes = 60) {
 }
 
 describe('analyzeSession', () => {
+  it('reuses loaded detail and queries interactions once for deviations and errors', () => {
+    const loaded = detail([turn(1_000)]);
+    const source = stubSource({ detail: loaded, interactions: [tool(1_000, false)] });
+    const interactions = vi.spyOn(source, 'getSessionInteractions');
+    const context = vi.spyOn(source, 'getContextAnalysis');
+    analyze(source);
+    expect(interactions).toHaveBeenCalledTimes(1);
+    expect(context).toHaveBeenCalledWith(SESSION, ACCEPTED, loaded);
+  });
+
   it('counts the deviations on a mostly-failing turn, with nothing configured', () => {
     const result = analyze(
       stubSource({

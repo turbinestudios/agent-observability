@@ -105,9 +105,17 @@ into promises exactly once, at the MessagePort boundary.
 Only the broker initializes/migrates the index. Background workers require an
 already-initialized schema and are disposable after each pass. The worker entry
 is bundled beside the broker and shipped by the existing `out/**` package rule.
-User-requested large detail/combined renders still run synchronously in the
-broker; deduplicating those calculations and rendering large timelines lazily
-remain separate performance work.
+User-requested detail/combined renders still run synchronously in the broker.
+Copilot reuses one tree traversal and parsed numeric write deltas per read view,
+with binary-search attribution to turns; context and retrospective analysis
+reuse the caller's detail instead of rebuilding it.
+
+Sessions with more than 100 events defer their event rows until each timeline
+opens. Previous/Next navigation materializes at most 100 rows per open timeline,
+and live updates preserve the selected page. Compact event metadata remains in
+the document (escaped, inert data); prompts, turn headings, charts, and context
+panels are still rendered eagerly. This bounds event DOM work, not total session
+payload size, and does not add any network requests or weaken the iframe sandbox.
 
 ## Development
 

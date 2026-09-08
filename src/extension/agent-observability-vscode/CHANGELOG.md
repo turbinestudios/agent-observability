@@ -4,6 +4,16 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.3] - 2026-09-08
+
+### Fixed
+
+- **Large timelines render events when opened, in 100-event pages**, instead
+  of building every hidden row up front. Previous and Next keep all events
+  accessible; live updates preserve the selected page and open sections.
+- **Copilot details avoid repeated agent-tree and line-count calculations**
+  while preserving the same token, cost, and code-change totals.
+
 ## [0.10.2] - 2026-09-08
 
 ### Changed

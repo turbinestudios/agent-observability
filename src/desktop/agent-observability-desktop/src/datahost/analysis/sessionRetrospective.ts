@@ -26,7 +26,7 @@ export function retrospectiveFor(
   sessionId: string,
   detail: SessionDetail,
 ): SessionRetrospective {
-  const viaSource = source.getSessionRetrospective?.(sessionId);
+  const viaSource = source.getSessionRetrospective?.(sessionId, detail);
   if (viaSource !== undefined && viaSource.ok) {
     return viaSource.value;
   }

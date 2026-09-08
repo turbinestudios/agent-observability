@@ -78,6 +78,15 @@ describe('ClaudeCodeService repository exclusion', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('reuses a loaded detail for retrospective scoring and rejects a different session hint', () => {
+    const loaded = service.getSessionDetail(SESSION_A);
+    if (!loaded.ok) { throw new Error(loaded.message); }
+    const expected = service.getSessionRetrospective(SESSION_A);
+    expect(service.getSessionRetrospective(SESSION_A, loaded.value)).toEqual(expected);
+    const different = { ...loaded.value, summary: { ...loaded.value.summary, sessionId: 'other' } };
+    expect(service.getSessionRetrospective(SESSION_A, different)).toEqual(expected);
+  });
+
   it('baseline: both sessions and both repositories are visible', () => {
     excluded = new Set();
     const repos = service.listRepositories();

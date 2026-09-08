@@ -9,6 +9,18 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.14.5] - 2026-09-08
+
+### Fixed
+
+- **Large session timelines do less work before you open them.** Event rows
+  are created on demand, with Previous and Next controls for 100-event pages.
+  Every event remains available, including in comparisons, and live updates
+  preserve the selected page and open sections.
+- **Session details and background analysis avoid repeated calculations.**
+  Copilot agent-tree and line-count calculations are reused, and context and
+  retrospective analysis reuse details already loaded for the session.
+
 ## [1.14.4] - 2026-09-08
 
 ### Fixed
