@@ -153,6 +153,8 @@ function explanatoryItem(reason: string, message: string): HotspotTreeItem {
       return infoItem('Telemetry source not found', message, 'database');
     case 'schemaMismatch':
       return infoItem('Unsupported telemetry schema', message, 'warning');
+    case 'unreadable':
+      return infoItem('Telemetry database locked', message, 'lock');
     case 'permission':
       return infoItem('Cannot read telemetry', message, 'lock');
     default:

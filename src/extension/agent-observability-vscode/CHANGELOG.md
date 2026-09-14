@@ -4,6 +4,22 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.4] - 2026-09-14
+
+### Fixed
+
+- **Copilot sessions no longer stop appearing after an interrupted write.** If
+  the editor was closed or crashed part-way through recording a session, the
+  local telemetry store could be left needing repair. The extension kept
+  accepting sessions from Copilot but quietly discarded every one of them, so
+  the views simply stopped filling up with no sign anything was wrong. It now
+  detects that state, stops rather than throwing telemetry away, and tells you
+  the database needs recovery.
+- **A locked telemetry database is reported as locked**, instead of as
+  "Unsupported telemetry schema". The old message pointed at the one thing that
+  was not wrong and suggested a permanent problem, when the database was
+  typically fine and simply in use by another window.
+
 ## [0.10.3] - 2026-09-08
 
 ### Fixed

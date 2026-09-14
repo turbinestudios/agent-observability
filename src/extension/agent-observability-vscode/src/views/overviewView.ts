@@ -131,6 +131,8 @@ function explanatoryItem(reason: string, message: string): OverviewItem {
       return new OverviewItem('Telemetry source not found', message, 'database');
     case 'schemaMismatch':
       return new OverviewItem('Unsupported telemetry schema', message, 'warning');
+    case 'unreadable':
+      return new OverviewItem('Telemetry database locked', message, 'lock');
     case 'permission':
       return new OverviewItem('Cannot read telemetry', message, 'lock');
     case 'cliMissing':
