@@ -71,6 +71,8 @@ export class LiveOtlpService implements LiveSource {
   readonly label = 'Copilot OTLP receiver';
 
   private store: IngestStore | undefined;
+  /** Guards the one-shot "spans arrived with no store" report in {@link onSpans}. */
+  private warnedNoStore = false;
   private receiver: OtlpReceiver | undefined;
   private client: EventStreamClient | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -139,7 +141,22 @@ export class LiveOtlpService implements LiveSource {
     this.receiver = receiver;
     this.failedCycles = 0;
     // The store opens only AFTER winning the election — it is single-writer.
-    this.store = new IngestStore(this.deps.ingestDbPath);
+    //
+    // This MUST NOT be left to throw: `tryBecomeReceiver` is invoked as
+    // `void tryBecomeReceiver()`, so an escaping rejection is swallowed while the
+    // receiver stays bound. Copilot then connects and exports happily, `onSpans`
+    // finds `store === undefined` and drops every batch on the floor, and nothing
+    // anywhere says so — an outage that reads exactly like "Copilot stopped
+    // sending telemetry". Surface it instead, and stop claiming to be listening.
+    try {
+      this.store = new IngestStore(this.deps.ingestDbPath);
+    } catch (err) {
+      this.store = undefined;
+      receiver.stop();
+      this.receiver = undefined;
+      this.deps.onStartError?.(err);
+      return;
+    }
     try {
       this.store.prune(this.deps.pruneMaxAgeMs ?? DEFAULT_PRUNE_MS, Date.now());
     } catch (err) {
@@ -230,6 +247,18 @@ export class LiveOtlpService implements LiveSource {
 
   private onSpans(rows: SpanRows): void {
     if (this.store === undefined) {
+      // Should be unreachable now that a failed store open tears the receiver
+      // down, but never drop telemetry in silence again: report the first batch
+      // lost, once, rather than discarding an unbounded stream invisibly.
+      if (!this.warnedNoStore) {
+        this.warnedNoStore = true;
+        this.deps.onError?.(
+          new Error(
+            'OTLP spans received but the ingest store is not open — dropping them. ' +
+              'The ingest database likely needs recovery.',
+          ),
+        );
+      }
       return;
     }
     try {

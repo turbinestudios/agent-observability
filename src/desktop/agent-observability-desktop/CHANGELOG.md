@@ -9,6 +9,15 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.14.6] - 2026-09-14
+
+### Fixed
+
+- **A telemetry database that is busy is reported as busy**, instead of as
+  "Unsupported telemetry schema". Reading Copilot data while another window was
+  writing to it could produce a message that pointed at the wrong problem and
+  sounded permanent, when waiting a moment was all that was needed.
+
 ## [1.14.5] - 2026-09-08
 
 ### Fixed

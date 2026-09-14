@@ -7,7 +7,12 @@ import {
   PathEnvironment,
 } from './paths';
 import { createReadonlySnapshot, ReadonlySnapshot, sourceMtime } from './snapshot';
-import { TelemetryDatabase, SchemaMismatchError, ensureSnapshotIndexes } from './database';
+import {
+  TelemetryDatabase,
+  SchemaMismatchError,
+  TelemetryUnreadableError,
+  ensureSnapshotIndexes,
+} from './database';
 import { SessionTitleInfo, workspaceStorageDirFor } from './sessionTitles';
 import { overlayTitle, readMergedSessionTitles, titleStorageDirs } from './titleStore';
 import { UNKNOWN_REPOSITORY } from './repositoryUrl';
@@ -50,6 +55,10 @@ export type FailureReason =
   | 'missingDb'
   | 'permission'
   | 'schemaMismatch'
+  /** The DB exists and is a supported shape but cannot be opened right now
+   *  (locked by another writer, stale lock sidecar, or a hot journal awaiting
+   *  rollback). Distinct from 'schemaMismatch': this one usually clears. */
+  | 'unreadable'
   | 'error'
   // Cloud-source (Copilot Cloud) failure modes — see the Copilot (Cloud) source.
   /** The GitHub CLI (`gh`) could not be found and no PAT-backed account exists. */
@@ -905,6 +914,13 @@ export class TelemetryService {
         message: err.message,
       };
     }
+    if (err instanceof TelemetryUnreadableError) {
+      return {
+        ok: false,
+        reason: 'unreadable',
+        message: err.message,
+      };
+    }
     const code = (err as NodeJS.ErrnoException | undefined)?.code;
     if (code === 'ENOENT') {
       return {
@@ -929,6 +945,20 @@ export class TelemetryService {
         ok: false,
         reason: 'schemaMismatch',
         message: 'Telemetry database is not a recognized SQLite database.',
+      };
+    }
+    // A lock/open failure raised outside validateSchema (a snapshot copy, or a
+    // query on an already-open handle) reaches here as a bare driver error. It
+    // is emphatically NOT a schema fault — keep it out of 'schemaMismatch'.
+    if (
+      /unable to open database|database is locked|database table is locked|attempt to write a readonly database|disk i\/o error|locking protocol/i.test(
+        message,
+      )
+    ) {
+      return {
+        ok: false,
+        reason: 'unreadable',
+        message: 'Telemetry database could not be read (it is locked or needs recovery).',
       };
     }
     return { ok: false, reason: 'error', message };

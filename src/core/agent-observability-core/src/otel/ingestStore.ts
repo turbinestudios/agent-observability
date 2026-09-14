@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import { Database } from 'node-sqlite3-wasm';
 import { SpanRows } from './otlpToRows';
 import { SessionTitleInfo } from '../telemetry/sessionTitles';
@@ -19,6 +20,61 @@ import { READ_INDEX_DDL } from '../telemetry/schemaIndexes';
 
 /** Schema version this store writes (must be in `TelemetryDatabase`'s supported set). */
 const SCHEMA_VERSION = 1;
+
+/**
+ * First 8 bytes of a live SQLite rollback journal. A journal carrying this magic
+ * is "hot": it holds pages from a transaction that never committed, and the next
+ * writer to open the DB is expected to roll them back.
+ */
+const HOT_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
+
+/**
+ * Thrown instead of opening a DB that needs hot-journal recovery.
+ *
+ * MEASURED, not theoretical: given the same 2 GB ingest DB with a 15.9 MB hot
+ * journal, `better-sqlite3` rolls back to 17609 spans / 359116 attributes with
+ * `PRAGMA integrity_check` = ok, while `node-sqlite3-wasm` — the driver this
+ * store uses — produces 17387 spans / 321263 attributes and a CORRUPT b-tree
+ * (rowids out of order, ~100 orphaned pages). It reports no error either way,
+ * so letting it recover silently destroys data and then keeps writing into the
+ * wreckage.
+ */
+export class IngestHotJournalError extends Error {
+  constructor(readonly dbPath: string) {
+    super(
+      `Ingest database needs recovery: a hot journal is present at ${dbPath}-journal. ` +
+        'Refusing to open it with the bundled WASM driver, which corrupts the file ' +
+        'while rolling back. Recover it with a native SQLite (sqlite3 ' +
+        `"${dbPath}" .tables) or move the file aside to start a fresh store.`,
+    );
+    this.name = 'IngestHotJournalError';
+  }
+}
+
+/**
+ * Refuse to open `dbPath` when a hot journal sits beside it.
+ *
+ * A missing/empty/zeroed journal is fine — SQLite leaves a finalized journal
+ * behind in some modes, and only the magic proves pages are pending.
+ */
+function assertNoHotJournal(dbPath: string): void {
+  const journal = `${dbPath}-journal`;
+  let fd: number;
+  try {
+    fd = fs.openSync(journal, 'r');
+  } catch {
+    return; // absent (or unreadable) — nothing to guard against
+  }
+  try {
+    const head = Buffer.alloc(HOT_JOURNAL_MAGIC.length);
+    const read = fs.readSync(fd, head, 0, head.length, 0);
+    if (read === head.length && head.equals(HOT_JOURNAL_MAGIC)) {
+      throw new IngestHotJournalError(dbPath);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 /** The columns of the `spans` table, in the order {@link SpanRows} carries them. */
 export const SPAN_COLUMNS = [
@@ -135,6 +191,7 @@ export class IngestStore {
   private readonly db: Database;
 
   constructor(private readonly path: string) {
+    assertNoHotJournal(path);
     this.db = new Database(path);
     // Enable FK cascade so pruning spans also removes their attributes/events.
     this.db.exec('PRAGMA foreign_keys = ON;');

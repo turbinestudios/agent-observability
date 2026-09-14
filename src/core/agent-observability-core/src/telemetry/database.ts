@@ -54,6 +54,49 @@ export class SchemaMismatchError extends Error {
   }
 }
 
+/**
+ * Thrown when the DB cannot be READ at all — locked by another writer, held by a
+ * stale lock sidecar, wedged by an un-rolled-back hot journal, or an I/O error.
+ *
+ * Deliberately distinct from {@link SchemaMismatchError}: the file may be a
+ * perfectly valid, fully supported telemetry DB that simply cannot be opened
+ * right now. Conflating the two told users their schema was unsupported (an
+ * unfixable-sounding, permanent-sounding problem) when the real fault was a
+ * transient lock they could clear — see {@link TelemetryDatabase.validateSchema}.
+ */
+export class TelemetryUnreadableError extends Error {
+  constructor(
+    message: string,
+    /** Machine-readable detail for the service layer / diagnostics. */
+    readonly detail: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'TelemetryUnreadableError';
+  }
+}
+
+/**
+ * True when `err` reports that SQLite could not open/read the file, as opposed
+ * to the file being readable but the wrong shape.
+ *
+ * Matches on message text because the two drivers in play report the same
+ * conditions differently: `better-sqlite3` exposes a `code` (`SQLITE_CANTOPEN`,
+ * `SQLITE_BUSY`, …) while `node-sqlite3-wasm` throws a bare `SQLite3Error`
+ * carrying only a message. `file is not a database` is excluded on purpose — a
+ * present-but-invalid file stays a schema mismatch.
+ */
+function isUnreadableError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | undefined)?.code;
+  if (typeof code === 'string' && /^SQLITE_(CANTOPEN|BUSY|LOCKED|READONLY|IOERR|PROTOCOL|NOLFS)/.test(code)) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /unable to open database|database is locked|database table is locked|attempt to write a readonly database|disk i\/o error|locking protocol/i.test(
+    message,
+  );
+}
+
 /** Default agent name when a span carries none. */
 const DEFAULT_AGENT = 'copilot';
 
@@ -229,6 +272,16 @@ export class TelemetryDatabase {
     } catch (err) {
       if (err instanceof SchemaMismatchError) {
         throw err;
+      }
+      // A failure to OPEN/READ is not a schema fault — the file may be a valid
+      // telemetry DB held by another writer or wedged by a hot journal. Only a
+      // query that actually resolved and found no such table proves the schema.
+      if (isUnreadableError(err)) {
+        throw new TelemetryUnreadableError(
+          'Telemetry database could not be read (it is locked or needs recovery).',
+          'unreadable',
+          { cause: err },
+        );
       }
       throw new SchemaMismatchError(
         'Telemetry database is missing the schema_version table.',
