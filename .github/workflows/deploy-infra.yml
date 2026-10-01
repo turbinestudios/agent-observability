@@ -1,11 +1,9 @@
 name: Deploy Infrastructure
 
+# Manual only. The team dashboard is not deployed for now; start this from
+# the Actions tab when it should be. Re-adding a `push:` trigger deploys on
+# every merge to main.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'infra/**'
-      - '.github/workflows/deploy-infra.yml'
   workflow_dispatch:
 
 permissions:

@@ -94,8 +94,9 @@ dotnet test src/dashboard/AgentObservability.Dashboard.Tests/AgentObservability.
 
 [ci.yml](.github/workflows/ci.yml) runs typecheck, lint and tests for every
 workspace on Windows and macOS, plus the dashboard tests, on every pull request
-and push to `main`. The deploy workflows publish the dashboard and infra, gated
-behind the `production` environment.
+and push to `main`. The deploy workflows publish the dashboard and infra. They
+run only when started by hand, and in the `production` environment. The
+dashboard is not deployed for now, so do not add a `push:` trigger back.
 
 ## Tests must not depend on the machine that runs them
 

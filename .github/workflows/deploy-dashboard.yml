@@ -1,11 +1,9 @@
 name: Build & Deploy Dashboard
 
+# Manual only. The team dashboard is not deployed for now; start this from
+# the Actions tab when it should be. Re-adding a `push:` trigger deploys on
+# every merge to main.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'src/dashboard/**'
-      - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
 
 permissions:
