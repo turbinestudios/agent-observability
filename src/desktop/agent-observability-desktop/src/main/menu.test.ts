@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { MenuItemConstructorOptions } from 'electron';
 import { buildMenuTemplate } from './menu';
+
+// `menu.ts` imports Electron's `Menu`, and loading the real `electron` package
+// downloads its binary on first use. That makes the test depend on the network
+// (a failed download fails the release), and the template under test needs no
+// Electron runtime at all.
+vi.mock('electron', () => ({ Menu: {} }));
 
 /**
  * The menu exists for one reason: Electron's default carries Toggle Developer
