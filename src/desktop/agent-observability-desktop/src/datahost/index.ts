@@ -428,6 +428,16 @@ function handle(request: RpcRequest): unknown {
         );
       });
     }
+    case 'sessions.contextPrompt': {
+      const [source, sessionId, section] = request.params;
+      return detail.contextPromptFacts(
+        source,
+        sessionId,
+        section,
+        stampOf(source, sessionId),
+        detailContext(source, sessionId),
+      );
+    }
     case 'sessions.rename': {
       const [source, sessionId, title] = request.params;
       renames.set(source, sessionId, title);

@@ -1,11 +1,12 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
-import type { AiAvailability, AiBackendInfo, SessionRow, TagCount } from '../../../../shared/rpc';
+import type { AiAvailability, AiBackendInfo, ContextPromptFacts, SessionRow, TagCount } from '../../../../shared/rpc';
 import { useThemeValue } from '../../theme/ThemeContext';
 import { Spinner } from '../../components/Spinner';
 import { rotatedNote } from '../../components/loadingNotes';
 import { useNoteTick } from '../../components/useNoteTick';
+import { ImprovePromptDialog } from './ImprovePromptDialog';
 
 /**
  * Renders a session using the shared detail renderer, inside a sandboxed iframe.
@@ -31,6 +32,7 @@ interface DetailMessage {
   url?: string;
   file?: string;
   source?: string;
+  section?: unknown;
 }
 
 export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
@@ -49,6 +51,9 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
   const [deepAvailability, setDeepAvailability] = useState<AiAvailability | undefined>(undefined);
   // The active backend, so the consent copy names the actual vendor and CLI.
   const [deepBackend, setDeepBackend] = useState<AiBackendInfo | undefined>(undefined);
+  // The "Improve context files" prompt. The document's button posts only a
+  // section index; the facts come from the data host, never from the frame.
+  const [promptFacts, setPromptFacts] = useState<ContextPromptFacts | undefined>(undefined);
   const frameRef = useRef<HTMLIFrameElement>(null);
   // Bumped by the refresh button; the ref marks the next fetch as forced so
   // only a deliberate refresh re-parses (a theme change reuses the cache).
@@ -123,6 +128,18 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
       }
       if (payload.type === 'open-external-url' && typeof payload.url === 'string') {
         void window.desktop.openExternal(payload.url);
+        return;
+      }
+      if (
+        payload.type === 'improve-context-files' &&
+        typeof payload.section === 'number' &&
+        Number.isInteger(payload.section) &&
+        payload.section >= 0
+      ) {
+        void dataHost
+          .call('sessions.contextPrompt', row.source, row.sessionId, payload.section)
+          .then((facts) => setPromptFacts(facts))
+          .catch(() => undefined);
         return;
       }
       if (payload.type === 'deep-retrospective') {
@@ -257,6 +274,9 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
           onCancel={() => setDeepConfirm(false)}
           onConfirm={runDeep}
         />
+      )}
+      {promptFacts !== undefined && (
+        <ImprovePromptDialog facts={promptFacts} onClose={() => setPromptFacts(undefined)} />
       )}
       <iframe
         ref={frameRef}

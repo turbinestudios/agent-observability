@@ -49,6 +49,17 @@ describe('toolCallDetector', () => {
       }
     });
 
+    it('categorizes role definitions under a context directory as agent', () => {
+      const rows: ToolReadRow[] = [
+        { filePath: 'c:\\Projects\\example-app\\.agents\\roles\\reviewer.md', conversationId: 'conv-1', chatSessionId: 'chat-1' },
+        { filePath: '/repo/.agents/roles/planner.md', conversationId: 'conv-1', chatSessionId: 'chat-1' },
+      ];
+
+      const result = parseToolReads(rows, new Set());
+
+      expect(result.map((r) => r.category)).toEqual(['agent', 'agent']);
+    });
+
     it('skips files already known from discovery', () => {
       const rows: ToolReadRow[] = [
         {

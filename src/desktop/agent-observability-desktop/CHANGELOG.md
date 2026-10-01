@@ -9,6 +9,25 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.15.0] - 2026-10-01
+
+### Added
+
+- **Improve context files, straight from a session.** In a session's Context
+  Analysis tab, the new **Improve context files** button next to "Loaded
+  context files" opens a ready-made prompt to paste into Claude Code or
+  Copilot. It lists the files that were flagged as oversized or that point to
+  files that never loaded, along with what this session measured about each
+  one, and tells your agent how to tighten them without losing any rules.
+  Switch to **All loaded files** for a general tidy-up. The prompt is built on
+  your machine and only copied to your clipboard, so nothing is sent anywhere.
+
+### Changed
+
+- Files under `.agents/roles/` (and the same folder in `.github`, `.claude` or
+  `.copilot`) now show as **agent** in the Context Analysis tab instead of
+  **unknown**.
+
 ## [1.14.7] - 2026-10-01
 
 ### Changed

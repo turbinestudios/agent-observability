@@ -132,6 +132,29 @@ export interface TagCount {
  */
 export type RetroVerdict = 'smooth' | 'bumpy' | 'struggled' | 'abandoned';
 
+/**
+ * One loaded context file as the "Improve context files" prompt describes it.
+ * Mirrors core's `ContextPromptFile`, kept local so this contract file stays
+ * import-free (the datahost's assignment from core's type makes drift a
+ * compile error). `category` is core's `ContextFileCategory`.
+ */
+export interface ContextPromptFile {
+  name: string;
+  path?: string;
+  category: 'instruction' | 'skill' | 'agent' | 'hook' | 'prompt' | 'unknown';
+  estimatedTokens?: number;
+  oversized: boolean;
+  missingRefs: string[];
+}
+
+/** One Context Analysis section's facts for the prompt. Mirrors core's `ContextPromptFacts`. */
+export interface ContextPromptFacts {
+  agentName: string;
+  files: ContextPromptFile[];
+  contextFileTokens: number;
+  totalContextTokens: number;
+}
+
 /** What deleting a session would actually remove, for the confirmation dialog. */
 export interface DeletionPlan {
   supported: boolean;
@@ -818,6 +841,14 @@ export interface RpcMethods {
    * view reflects it.
    */
   'sessions.contextAction'(source: string, sessionId: string, action: ContextAction): string;
+  /**
+   * The facts behind one Context Analysis section (0 = the total, i = the
+   * i-th agent), for the "Improve context files" prompt. Read from the same
+   * analysis the open document shows; `undefined` when the session has none or
+   * the section does not exist. The renderer builds the prompt locally —
+   * nothing is sent anywhere.
+   */
+  'sessions.contextPrompt'(source: string, sessionId: string, section: number): ContextPromptFacts | undefined;
   /**
    * Give a session a user-chosen name, or clear it with an empty string.
    * Returns the row as it now reads.

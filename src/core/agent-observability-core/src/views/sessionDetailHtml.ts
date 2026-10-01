@@ -151,6 +151,7 @@ export function renderSessionDetailHtml(
   costMode: CostMode = 'aiu',
   extraHeadHtml = '',
   retrospective?: RetrospectiveView,
+  contextImprovePrompt = false,
 ): string {
   const { summary } = detail;
   const csp = [
@@ -176,7 +177,7 @@ export function renderSessionDetailHtml(
   ${extraHeadHtml}
 </head>
 <body>
-  <div id="live-root">${renderSessionDetailContent(detail, turnDeviations, contextAnalysis, costMode, retrospective)}</div>
+  <div id="live-root">${renderSessionDetailContent(detail, turnDeviations, contextAnalysis, costMode, retrospective, contextImprovePrompt)}</div>
   <script nonce="${nonce}">${WEBVIEW_CONTROLLER}</script>
 </body>
 </html>`;
@@ -197,6 +198,7 @@ export function renderSessionDetailContent(
   contextAnalysis?: SessionContextAnalysis,
   costMode: CostMode = 'aiu',
   retrospective?: RetrospectiveView,
+  contextImprovePrompt = false,
 ): string {
   const hasContext = contextAnalysis !== undefined;
   return `${hasContext ? `<nav class="tab-bar">
@@ -211,7 +213,7 @@ export function renderSessionDetailContent(
   ${renderSubAgentUsage(detail.agentUsage, costMode)}
   ${renderTurns(detail.turns, turnDeviations)}
   </div>
-  ${hasContext ? `<div class="tab-panel tab-panel-hidden" id="tab-context">${renderContextAnalysis(contextAnalysis)}</div>` : ''}`;
+  ${hasContext ? `<div class="tab-panel tab-panel-hidden" id="tab-context">${renderContextAnalysis(contextAnalysis, contextImprovePrompt)}</div>` : ''}`;
 }
 
 /**
@@ -2005,8 +2007,12 @@ function formatDuration(ms: number): string {
 /**
  * Render the full context analysis tab content: a series of collapsible sections
  * (Total Overview, Main Agent, Subagent A, B, ...).
+ *
+ * `improvePrompt` is a host gate, like the deep-retro button: only a host that
+ * answers the `improve-context-files` message renders the button, so no host
+ * shows a control that does nothing.
  */
-function renderContextAnalysis(analysis: SessionContextAnalysis): string {
+function renderContextAnalysis(analysis: SessionContextAnalysis, improvePrompt = false): string {
   const sections: string[] = [];
 
   // Optional provenance caption (e.g. the Claude disk-state caveat).
@@ -2015,11 +2021,11 @@ function renderContextAnalysis(analysis: SessionContextAnalysis): string {
   }
 
   // Total Overview (open by default)
-  sections.push(renderAgentContextSection(analysis.total, true, 0));
+  sections.push(renderAgentContextSection(analysis.total, true, 0, improvePrompt));
 
   // Per-agent sections (collapsed by default)
   analysis.agents.forEach((agent, i) => {
-    sections.push(renderAgentContextSection(agent, false, i + 1));
+    sections.push(renderAgentContextSection(agent, false, i + 1, improvePrompt));
   });
 
   return `<div class="context-analysis">${sections.join('\n')}</div>`;
@@ -2028,7 +2034,7 @@ function renderContextAnalysis(analysis: SessionContextAnalysis): string {
 /**
  * Render one agent's context analysis as a collapsible `<details>` section.
  */
-function renderAgentContextSection(agent: AgentContextAnalysis, open: boolean, index = 0): string {
+function renderAgentContextSection(agent: AgentContextAnalysis, open: boolean, index = 0, improvePrompt = false): string {
   const kindBadge = agent.kind === 'total'
     ? ''
     : `<span class="ctx-badge ctx-badge-${agent.kind}">${escapeHtml(agent.kind)}</span>`;
@@ -2044,7 +2050,7 @@ function renderAgentContextSection(agent: AgentContextAnalysis, open: boolean, i
   </summary>
   <div class="ctx-section-body">
     ${renderContextBudget(agent)}
-    ${renderLoadedFilesTable(agent)}
+    ${renderLoadedFilesTable(agent, improvePrompt ? index : undefined)}
     ${renderExpectedMissing(agent)}
     ${renderOversizedCallouts(agent)}
   </div>
@@ -2122,9 +2128,11 @@ function parentFolderName(filePath: string | undefined): string | undefined {
 }
 
 /**
- * Render the loaded files table.
+ * Render the loaded files table. With a `promptSection`, the heading carries
+ * the "Improve context files" button; the click posts only that section index,
+ * and the host builds the prompt from its own copy of the analysis.
  */
-function renderLoadedFilesTable(agent: AgentContextAnalysis): string {
+function renderLoadedFilesTable(agent: AgentContextAnalysis, promptSection?: number): string {
   const files = agent.loadedFiles;
   if (files.length === 0) {
     return '<p class="muted">No context files detected.</p>';
@@ -2153,8 +2161,15 @@ function renderLoadedFilesTable(agent: AgentContextAnalysis): string {
     </tr>`;
   }).join('\n');
 
+  const heading = promptSection === undefined
+    ? '<h3>Loaded context files</h3>'
+    : `<div class="ctx-files-heading">
+    <h3>Loaded context files</h3>
+    <button type="button" class="ctx-improve-btn" data-section="${num(promptSection)}" title="Get a prompt to paste into your coding agent">Improve context files</button>
+  </div>`;
+
   return `<div class="ctx-files-section">
-  <h3>Loaded context files</h3>
+  ${heading}
   <table class="ctx-table">
     <thead><tr><th>Name</th><th>Category</th><th class="n">Est. Tokens</th><th>Status</th></tr></thead>
     <tbody>${rows}</tbody>
@@ -2486,6 +2501,9 @@ const STYLE = `
   .ctx-accept-btn { background: none; border: 1px solid var(--vscode-button-secondaryBackground, #555); color: var(--vscode-button-secondaryForeground, #ccc); border-radius: 3px; padding: .1rem .4rem; cursor: pointer; font-size: .75rem; }
   .ctx-accept-btn:hover { background: var(--vscode-button-secondaryHoverBackground, #444); }
   .ctx-accept-btn:disabled { opacity: .4; cursor: default; }
+  .ctx-files-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .ctx-improve-btn { flex: none; background: var(--vscode-button-secondaryBackground, transparent); color: var(--vscode-button-secondaryForeground, inherit); border: 1px solid var(--vscode-panel-border, #555); border-radius: 4px; padding: .25rem .65rem; font: inherit; font-size: .78rem; cursor: pointer; }
+  .ctx-improve-btn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.15)); }
   .ctx-accept-source, .ctx-accept-file { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
   .ctx-accept-source:hover, .ctx-accept-file:hover { color: var(--vscode-textLink-activeForeground, #4e94ce); }
   .ctx-oversized-section { display: flex; flex-direction: column; gap: .4rem; }
@@ -2870,7 +2888,19 @@ const WEBVIEW_CONTROLLER = `
   });
   }
 
-  function initAll(pages) { initTrend(); initTabs(); initAcceptMissing(); initCtxFileLinks(); initExternalLinks(); initRetro(); initLazyTimelines(pages); }
+  // ── "Improve context files" (Context Analysis tab) ───────────────────────────
+  // Posts only the section index; the host builds and shows the prompt from its
+  // own copy of the analysis, so nothing in this document can author it.
+  function initImprovePrompt() {
+  (root || document).querySelectorAll('.ctx-improve-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var section = Number(btn.getAttribute('data-section'));
+      vscode.postMessage({ type: 'improve-context-files', section: section });
+    });
+  });
+  }
+
+  function initAll(pages) { initTrend(); initTabs(); initAcceptMissing(); initCtxFileLinks(); initExternalLinks(); initRetro(); initImprovePrompt(); initLazyTimelines(pages); }
 
   // ── Volatile UI state, preserved across a content swap ───────────────────────
   // Snapshot which collapsibles are open (by their stable data-k) and the active

@@ -11,13 +11,14 @@ import type { LocalDeviationDetector } from '@agent-observability/core/src/devia
 import type { WorkflowDeviation } from '@agent-observability/core/src/deviation/models';
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
 import type { SessionContextAnalysis } from '@agent-observability/core/src/context/models';
+import { contextPromptFacts } from '@agent-observability/core/src/context/improvePrompt';
 import type { CostMode, SessionDetail } from '@agent-observability/core/src/telemetry/models';
 import type {
   RetrospectiveLlmVerdict,
   SessionRetrospective,
 } from '@agent-observability/core/src/analysis/retrospective';
 import type { RetrospectiveView } from '@agent-observability/core/src/views/sessionDetailHtml';
-import type { CombinedDetailResult } from '../../shared/rpc';
+import type { CombinedDetailResult, ContextPromptFacts } from '../../shared/rpc';
 import { detectTurnDeviations } from '../analysis/turnDeviations';
 import { retrospectiveFor } from '../analysis/sessionRetrospective';
 import { chooseCostBasis } from './costBasis';
@@ -106,6 +107,8 @@ export class DetailRenderer {
       // Host-authored only — never interpolate session content here.
       detailHeadHtml(nonce, theme),
       retrospectiveView(entry, context),
+      // This host answers the button's message (see SessionDetail.tsx).
+      true,
     );
   }
 
@@ -118,7 +121,29 @@ export class DetailRenderer {
       entry.context,
       this.costMode(source),
       retrospectiveView(entry, context),
+      true,
     );
+  }
+
+  /**
+   * The "Improve context files" facts for one section of the Context Analysis
+   * tab: 0 is the total, i is `agents[i - 1]`, matching the indices the
+   * document's buttons carry. Served from the same memoized analysis the
+   * document was drawn from, so the prompt describes what the user sees.
+   */
+  contextPromptFacts(
+    source: string,
+    sessionId: string,
+    section: number,
+    stamp: number,
+    context: DetailContext,
+  ): ContextPromptFacts | undefined {
+    const analysis = this.load(source, sessionId, stamp, context).context;
+    if (analysis === undefined || !Number.isInteger(section) || section < 0) {
+      return undefined;
+    }
+    const agent = section === 0 ? analysis.total : analysis.agents[section - 1];
+    return agent === undefined ? undefined : contextPromptFacts(agent);
   }
 
   /**

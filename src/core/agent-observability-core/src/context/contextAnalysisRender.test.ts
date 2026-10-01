@@ -139,6 +139,18 @@ describe('sessionDetailHtml — context analysis tab', () => {
     expect(html).toContain('Loaded context files');
   });
 
+  it('renders the "Improve context files" button only when the host enables it', () => {
+    const without = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', minimalContextAnalysis());
+    expect(without).not.toContain('class="ctx-improve-btn"');
+
+    const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', minimalContextAnalysis(), 'aiu', '', undefined, true);
+    // One per section — Total Overview, Main Agent, Subagent — each naming its own index.
+    expect(html.match(/class="ctx-improve-btn"/g)).toHaveLength(3);
+    expect(html).toContain('data-section="0"');
+    expect(html).toContain('data-section="2"');
+    expect(html).toContain("type: 'improve-context-files'");
+  });
+
   it('renders expected-but-missing section', () => {
     const html = renderSessionDetailHtml(minimalDetail(), [], 'test-nonce', minimalContextAnalysis());
     expect(html).toContain('testing.instructions.md');

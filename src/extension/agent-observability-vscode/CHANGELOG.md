@@ -4,6 +4,14 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.1] - 2026-10-01
+
+### Changed
+
+- Files under `.agents/roles/` (and the same folder in `.github`, `.claude` or
+  `.copilot`) now show as **agent** in the session view's Context Analysis tab
+  instead of **unknown**.
+
 ## [0.11.0] - 2026-10-01
 
 ### Changed

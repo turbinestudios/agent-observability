@@ -68,6 +68,8 @@ function categoryFromPath(normalized: string): ContextFileCategory {
   }
   if (normalized.includes('/skills/')) return 'skill';
   if (normalized.includes('/agents/')) return 'agent';
+  // Role definitions (e.g. `.agents/roles/reviewer.md`) are agent personas.
+  if (/\/\.(?:agents|github|claude|copilot)\/roles\//i.test(normalized)) return 'agent';
   if (normalized.includes('/hooks/')) return 'hook';
   if (normalized.includes('/prompts/')) return 'prompt';
 
