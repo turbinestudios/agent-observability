@@ -9,6 +9,18 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.14.7] - 2026-10-01
+
+### Changed
+
+- **Agent Observability is now open source**, under the MIT license. The code,
+  release notes and installers live in the public
+  [GitHub repository](https://github.com/turbinestudios/agent-observability),
+  and that is where the app now looks for updates. If your app does not offer
+  you this version, download it once from the Releases page; later updates
+  arrive in the app as before.
+- **Security fixes from an updated Electron**, the runtime the app is built on.
+
 ## [1.14.6] - 2026-09-14
 
 ### Fixed
