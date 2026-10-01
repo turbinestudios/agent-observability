@@ -34,7 +34,7 @@ jobs:
     name: Tag and start release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history so every desktop-v* tag is available to count from.
           fetch-depth: 0
