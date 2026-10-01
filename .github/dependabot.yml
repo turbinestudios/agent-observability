@@ -1,19 +1,32 @@
 version: 2
 updates:
+  # Minor and patch updates arrive as one grouped PR. Major versions are
+  # skipped: tools like vite, vitest, electron-vite and the React plugin must
+  # move together, and TypeScript or ESLint majors need code changes, so
+  # majors are upgraded by hand rather than one package at a time.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      dev-dependencies:
-        dependency-type: development
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: nuget
     directory: /src/dashboard
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /
