@@ -25,6 +25,13 @@ param agentRelayEnabled bool = true
 @description('Retention in days for raw autonomous-agent OTLP batches before lifecycle deletion')
 param agentOtlpRetentionDays int = 7
 
+@description('Client id of the Entra ID app registration for dashboard sign-in. Empty turns sign-in off.')
+param dashboardAuthClientId string = ''
+
+@secure()
+@description('Client secret of the dashboard sign-in app registration')
+param dashboardAuthClientSecret string = ''
+
 // Azure Container Registry
 module acr 'modules/acr.bicep' = {
   params: {
@@ -106,6 +113,8 @@ module dashboard 'modules/dashboard-app.bicep' = {
     ingestionKeyPepper: ingestionKeyPepper
     analyticsOrgId: analyticsOrgId
     agentRelayEnabled: agentRelayEnabled
+    authClientId: dashboardAuthClientId
+    authClientSecret: dashboardAuthClientSecret
   }
   dependsOn: [dashboardAcrPullRole]
 }

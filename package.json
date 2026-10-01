@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "description": "Workspace root for the Agent Observability extension, shared core, and desktop app. Not published; the .NET dashboard and Bicep infra are built separately.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "workspaces": [
     "src/core/agent-observability-core",
     "src/extension/agent-observability-vscode",

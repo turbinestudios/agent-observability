@@ -65,14 +65,12 @@ jobs:
 
       - name: Build renderer, preload, and data host
         env:
-          # Fine-grained PAT (contents: read, this repo only, ≤1-year expiry)
-          # baked into the main bundle so installed apps can read the update
-          # feed on this INTERNAL repo. Belongs on THIS step, not the
-          # electron-builder one: the token is embedded when electron-vite
-          # writes the bundle. When the secret is absent (dry runs, forks) the
-          # app builds fine and simply disables update checks. Rotating the
-          # PAT only helps future builds — ship a release soon after.
-          MAIN_VITE_UPDATE_TOKEN: ${{ secrets.DESKTOP_UPDATE_TOKEN }}
+          # Turns on update checks in the app. The repo is public, so the
+          # update feed needs no token. Belongs on THIS step, not the
+          # electron-builder one: the flag is baked in when electron-vite
+          # writes the bundle. Only this repo's releases set it, so a fork's
+          # builds never offer upstream's installers.
+          MAIN_VITE_ENABLE_UPDATES: ${{ github.repository == 'turbinestudios/agent-observability' && '1' || '' }}
         run: npm run build -w agent-observability-desktop
 
       # Split per platform so the macOS certificate never reaches the Windows

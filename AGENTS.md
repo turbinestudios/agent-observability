@@ -1,19 +1,20 @@
-# Agent Observability — Agent Guide
+# Agent Observability: agent guide
 
-Privacy-first agent observability for GitHub Copilot, built as a **split model**:
-a local VS Code extension reads on-disk Copilot telemetry and keeps all raw
-content on the machine, while a cloud dashboard serves org-level **aggregate-only**
-analytics. See [README.md](README.md) for the full overview.
+A local tool for looking back at GitHub Copilot and Claude Code sessions. A
+desktop app and a VS Code extension read the sessions the agents record on disk
+and keep all raw content on the machine. An optional team dashboard receives
+only the totals a user chooses to share. See [README.md](README.md) for the
+overview.
 
 ## Never commit or push
 
 Do not run `git commit`, `git push`, `git tag`, `gh pr create`, or anything else
-that writes to history or to GitHub — unless the user asks for it in that
+that writes to history or to GitHub, unless the user asks for it in that
 message. Leave finished work in the working tree, say what changed, and let them
 decide what gets committed and when.
 
 Permission does not carry over: being told to commit once says nothing about the
-next change. Everything else in git is fine unasked — reading history, `git
+next change. Everything else in git is fine unasked: reading history, `git
 status`, `git diff`, creating a branch to work on, staging.
 
 ## Repository map
@@ -52,18 +53,18 @@ Or across all workspaces from the root: `npm run typecheck --workspaces
 --if-present` (same for `lint`, `test`, `compile`).
 
 `node-sqlite3-wasm` is external to the esbuild bundle and is staged into
-`dist/node_modules` by `scripts/stageSqliteWasm.js` — workspace hoisting puts it
+`dist/node_modules` by `scripts/stageSqliteWasm.js`, because workspace hoisting puts it
 in the root `node_modules`, out of reach of `.vscodeignore`. Never re-add a
 `!node_modules/**` re-include; verify packaging with `npx vsce ls
 --no-dependencies` and check the `.wasm` sidecar is listed.
 
 Press <kbd>F5</kbd> to launch an Extension Development Host. See the
-[extension README](src/extension/agent-observability-vscode/README.md) for
-architecture seams and the `node-sqlite3-wasm` packaging notes.
+extension's [DEVELOPMENT.md](src/extension/agent-observability-vscode/DEVELOPMENT.md)
+for the code layout and the `node-sqlite3-wasm` packaging notes.
 
 ### Where code goes: core vs. extension
 
-Most of the logic lives in **`src/core/agent-observability-core`** — session
+Most of the logic lives in **`src/core/agent-observability-core`**: session
 sources and parsing, the telemetry/SQLite layer, aggregation, sync, deviation
 and context analysis, the OTLP stack, and the pure HTML renderers. It is
 host-independent: importing `vscode` there is a lint error, because the same
@@ -71,9 +72,9 @@ code is consumed by a standalone desktop app where that module does not exist.
 
 The extension package keeps only what genuinely needs the VS Code API: the tree
 views, the webview panel and chat provider, commands, `extension.ts` wiring, and
-five small host adapters — `OutputChannelLogger`, `VscodeSettingsReader`,
+five small host adapters (`OutputChannelLogger`, `VscodeSettingsReader`,
 `SecretManager`, `ConsentManager`, `GlobalStateSyncStateStore`, and
-`vscodeFileWatchFactory`. When something needs a host capability, add an
+`vscodeFileWatchFactory`). When something needs a host capability, add an
 interface in core and implement it here rather than reaching for `vscode`.
 
 Core is consumed as TypeScript source and bundled in by esbuild, so there is no
@@ -91,8 +92,10 @@ dotnet run  --project src/dashboard/AgentObservability.Dashboard/AgentObservabil
 dotnet test src/dashboard/AgentObservability.Dashboard.Tests/AgentObservability.Dashboard.Tests.csproj
 ```
 
-CI deploys the dashboard and infra via [.github/workflows](.github/workflows);
-the extension is not part of CI.
+[ci.yml](.github/workflows/ci.yml) runs typecheck, lint and tests for every
+workspace on Windows and macOS, plus the dashboard tests, on every pull request
+and push to `main`. The deploy workflows publish the dashboard and infra, gated
+behind the `production` environment.
 
 ## Tests must not depend on the machine that runs them
 
@@ -101,7 +104,7 @@ release twice: once on a slow runner overrunning vitest's 5s default, once on
 a US-locale runner formatting a date as `Aug 7` where the author's machine
 said `7 Aug`. The release workflow is triggered **by the tag**
 ([release-desktop.yml](.github/workflows/release-desktop.yml)), so the tests
-run *after* the version is tagged — a failure there means a tagged version
+run *after* the version is tagged. A failure there means a tagged version
 with no installers, recoverable only by another version bump.
 
 Never assert on a value the environment chooses:
@@ -109,7 +112,7 @@ Never assert on a value the environment chooses:
 - **Locale.** `toLocaleDateString`, `toLocaleTimeString`, `toLocaleString`,
   anything `Intl`. The runner is `en-US`; a European dev machine is not.
   Compute the expectation by calling the same formatter, and assert the logic
-  *around* it — that a range joins two names, that a prefix is added — rather
+  *around* it (that a range joins two names, that a prefix is added) rather
   than what `Intl` chose to return. `formatCost` shows the other way out: when
   a figure must read identically everywhere, format it by hand and say so.
 - **Timezone.** Build fixture dates with `new Date(y, m, d)` and compare
@@ -128,8 +131,8 @@ on the answer to "whose machine?", the assertion is wrong, not the runner.
 
 ## Privacy invariant (do not break)
 
-Raw content — prompts, completions, tool I/O, file paths, identities, branch and
-commit names — **never leaves the machine**. The only thing uploaded is the
+Raw content (prompts, completions, tool I/O, file paths, identities, branch and
+commit names) **never leaves the machine**. The only thing uploaded is the
 opt-in aggregate batch defined by
 [schemas/aggregate-batch.schema.json](schemas/aggregate-batch.schema.json), which
 is `additionalProperties: false` at every level.
@@ -139,29 +142,32 @@ is `additionalProperties: false` at every level.
   `src/core/agent-observability-core/src/sync/*`).
 - Cloud sharing is **off by default** and gated on explicit consent plus an API
   key in VS Code SecretStorage (never in `settings.json`).
-- The dashboard ingestion URL is a hardcoded constant, not a user setting.
+- The dashboard address (`agentObservability.sync.dashboardUrl`) is an
+  `application`-scoped setting, so only the user's own settings can set it and
+  a workspace can never redirect the API key. Only `https://` addresses are
+  accepted; anything else counts as unset and blocks sync.
 - **Three sanctioned exceptions**, all desktop-only and all strictly the
-  user's **own local AI CLI login** — Claude Code (`claude`, sends to
+  user's **own local AI CLI login**: Claude Code (`claude`, sends to
   Anthropic) or the GitHub Copilot CLI (`copilot`, sends to GitHub),
   whichever backend the user selects in Settings; their account, never a
-  product API key — only ever user-initiated, never in the background, and
-  never on the aggregate/sync path — which continues to carry no raw content,
-  ever:
+  product API key. They are only ever user-initiated, never in the background,
+  and never on the aggregate/sync path, which continues to carry no raw
+  content, ever:
   1. The **Deep Retrospective**: when the user turns it on in Settings (off by
      default) *and* confirms a per-session dialog stating exactly what is
      sent and to which vendor, that one session's transcript digest goes to
      that vendor to write a retrospective.
   2. The **AI Helper**: after a one-time first-use notice in the view stating
-     exactly what each message carries — the user's question, a summary of
-     recent sessions (titles, repositories, verdicts, token and cost
-     figures), and, when the user attaches a session, capped excerpts of its
-     prompts and responses — each explicit send in the chat goes to the
+     exactly what each message carries (the user's question, a summary of
+     recent sessions with titles, repositories, verdicts, token and cost
+     figures, and, when the user attaches a session, capped excerpts of its
+     prompts and responses), each explicit send in the chat goes to the
      selected vendor the same way.
   3. The **Context Improvement Plan**: when the user turns it on in Settings
      (off by default) *and* confirms a per-generation dialog naming the
-     vendor and exactly what is sent — the selected context files' usage
-     statistics, the selected sessions' retrospective evidence (titles and
-     goals included), and the repository's context-file contents (capped) —
+     vendor and exactly what is sent (the selected context files' usage
+     statistics, the selected sessions' retrospective evidence with titles and
+     goals included, and the repository's context-file contents, capped),
      that payload goes to the selected vendor to write an improvement plan
      for the repository's context files.
 
@@ -170,8 +176,8 @@ is `additionalProperties: false` at every level.
 - **One sanctioned local write path.** Applying a Context Improvement Plan may
   write **only** allowlisted context files (`CLAUDE.md`, `AGENTS.md`,
   `copilot-instructions.md`, `SKILL.md`, `*.instructions.md`, `*.prompt.md`,
-  `*.agent.md`, `*.skill.md`) inside the plan's re-verified repository root —
-  each file approved individually after a diff preview, refused when the file
+  `*.agent.md`, `*.skill.md`) inside the plan's re-verified repository root,
+  with each file approved individually after a diff preview, refused when the file
   changed since the plan was generated, backed up before the first byte is
   written, and never deleting anything. No other code may write into a user's
   repository.
@@ -193,7 +199,7 @@ them rather than by reviewers:
 
 **Add an entry when, and only when, a user can see or do something differently
 because of the change.** A new capability, changed behaviour, a bug they could
-actually hit, a speed-up they would notice — those earn an entry. Internal work
+actually hit, a speed-up they would notice: those earn an entry. Internal work
 earns none, however large: refactors, test coverage, build and CI changes,
 comments, documentation, dependency bumps that change nothing observable.
 
@@ -205,15 +211,15 @@ When a change qualifies, in the same commit as the change itself:
    version you set.
 3. **Group the notes** under `### Added`, `### Changed`, `### Fixed`,
    `### Removed`. Omit a heading with nothing under it.
-4. **Write it for the person using the app** — what changed and why it matters to
+4. **Write it for the person using the app**: what changed and why it matters to
    them. Not a diff summary, and never a file, class or function name. If an
    entry cannot be written without naming internals, that is the signal it was
    not a user-facing change.
 
 The desktop changelog is parsed and rendered by the app itself
 ([parseChangelog.ts](src/desktop/agent-observability-desktop/src/renderer/src/changelog/parseChangelog.ts)),
-so it has to stay in that exact shape — `## [version] - date`, `### Group`,
-`- item` — with `**bold**`, `` `code` `` and `[links](url)` as the only inline
+so it has to stay in that exact shape (`## [version] - date`, `### Group`,
+`- item`), with `**bold**`, `` `code` `` and `[links](url)` as the only inline
 markup. Its tests parse the real file, so a malformed entry fails the build
 rather than reaching a user as an empty dialog.
 

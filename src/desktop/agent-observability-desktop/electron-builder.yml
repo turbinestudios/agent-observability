@@ -21,15 +21,14 @@ npmRebuild: false
 # metadata electron-updater needs (latest*.yml, *.blockmap) and embeds a correct
 # app-update.yml in the package — but nothing is ever uploaded from here: every
 # invocation runs with --publish never, and the release workflow attaches the
-# artifacts to a GitHub Release itself. owner/repo are explicit because no
-# package.json declares a repository field. `private: true` records that the
-# feed needs auth; the read-only PAT is baked into the main bundle at build
-# time (see src/main/updater.ts), never written into this file.
+# artifacts to a GitHub Release itself. owner/repo are explicit so the update
+# feed never depends on package.json metadata. The repo is public, so the feed
+# needs no token (see src/main/updater.ts).
 publish:
   provider: github
   owner: turbinestudios
   repo: agent-observability
-  private: true
+  private: false
 
 mac:
   category: public.app-category.developer-tools

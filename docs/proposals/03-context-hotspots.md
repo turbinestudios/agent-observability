@@ -34,7 +34,7 @@ first). The sidebar already promises exactly this view.
 datahost service that aggregates core's per-session context analyses into a
 ranked context-file table.
 
-**Grounding — what already exists**
+**Grounding: what already exists**
 
 - Placeholder:
   `src/desktop/agent-observability-desktop/src/renderer/src/views/PlaceholderView.tsx`,
@@ -46,7 +46,7 @@ ranked context-file table.
   (`CopilotContextHotspotsProvider`, `HotspotTelemetry` interface,
   `HOTSPOT_SESSION_LIMIT = 150`) and
   `src/core/agent-observability-core/src/aggregate/contextHotspotsIndex.ts`
-  (`ContextHotspot`, `ContextHotspotSession` — applied counts, est tokens,
+  (`ContextHotspot`, `ContextHotspotSession`: applied counts, est tokens,
   hadError/hadDeviation per session).
 - Per-session analyses come from core's context analyzer
   (`src/core/agent-observability-core/src/context/contextAnalyzer.ts`) and the
@@ -56,8 +56,8 @@ ranked context-file table.
   (`src/desktop/agent-observability-desktop/src/datahost/detail/detailRenderer.ts`)
   already invokes them for the Context Analysis tab and memoizes per session.
 - Reference UI (tree flavor): the extension's
-  `src/extension/agent-observability-vscode/src/views/contextHotspotsView.ts`
-  — files ranked busiest-first, expandable to contributing sessions.
+  `src/extension/agent-observability-vscode/src/views/contextHotspotsView.ts`,
+  which ranks files busiest-first and expands each to its contributing sessions.
 - The oversized threshold is `OVERSIZED_THRESHOLD_TOKENS = 2000` in
   `src/core/agent-observability-core/src/context/sizeEstimator.ts`.
 
@@ -65,29 +65,29 @@ ranked context-file table.
 
 1. **RPC.** Add `hotspots.get(params?: { repository?: string })` to
    `src/desktop/agent-observability-desktop/src/shared/rpc.ts`, returning
-   typed rows (not HTML — build this view in React like Overview so rows can
+   typed rows (not HTML; build this view in React like Overview so rows can
    expand and navigate). Implement in the datahost dispatch switch
    (`src/datahost/index.ts`).
 2. **Datahost service.** Walk the most recent N indexed sessions per source
    (start with core's `HOTSPOT_SESSION_LIMIT`), obtain each session's
-   `SessionContextAnalysis` — reusing `DetailRenderer`'s memoized parses when
-   present — and feed observations into `contextHotspotsIndex`. This is
+   `SessionContextAnalysis` (reusing `DetailRenderer`'s memoized parses when
+   present) and feed observations into `contextHotspotsIndex`. This is
    parse-heavy: run it off the request path (kick off after hydration
    completes, cache the result keyed on the set of `indexedAtMs` values, and
    let `hotspots.get` return the cache plus a `building` flag the UI can show
    as a progress note). Either implement `HotspotTelemetry` over the desktop's
    source registry or build hotspots from per-session analyses directly via
-   `contextHotspotsIndex` — pick whichever needs less new core surface.
+   `contextHotspotsIndex`. Pick whichever needs less new core surface.
 3. **Renderer.** New `views/hotspots/` view: ranked table (file, category,
    applied, skipped, est tokens with an oversized badge, errors co-occur,
    deviations co-occur, last seen), a repository dropdown, and expandable
    per-file session rows. Clicking a session switches to the Sessions view
-   with that session opened — add a small cross-view "open session" intent at
+   with that session opened; add a small cross-view "open session" intent at
    the `App.tsx` level (the Sessions view is permanently mounted, so the
    intent can be passed down as a prop/callback).
 4. **Changelog + version.** Minor bump; entry under `### Added` in user terms
    ("See which instruction and customization files your agents actually
-   load…" — the placeholder's own promise is a good starting point).
+   load…"; the placeholder's own promise is a good starting point).
 
 **Constraints.** All ground rules in
 [README.md](README.md#ground-rules-every-agent-spec-inherits-these). This view
@@ -107,6 +107,6 @@ the app.
   when a session's `indexedAtMs` changes.
 - `npm run typecheck -w agent-observability-desktop`,
   `npm test -w agent-observability-desktop`.
-- Manual: open Context Hotspots on a real corpus — ranking appears (with a
+- Manual: open Context Hotspots on a real corpus: ranking appears (with a
   progress note while building), oversized files are flagged, expanding a
   file lists sessions, and clicking one lands on that session's detail.

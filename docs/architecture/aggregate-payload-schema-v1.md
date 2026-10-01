@@ -1,6 +1,6 @@
 # Aggregate Payload Schema v1
 
-Status: Accepted (Phase 0 contract)
+Status: Implemented. Producer: `src/core/agent-observability-core/src/aggregate/aggregator.ts`. Consumer: `src/dashboard/AgentObservability.Dashboard/Services/Ingestion/` (`AggregateBatchValidator.cs`, `IngestionEndpoints.cs`).
 Schema file: [`schemas/aggregate-batch.schema.json`](../../schemas/aggregate-batch.schema.json)
 `schemaVersion`: `"1.0"`
 
@@ -9,10 +9,10 @@ VS Code extension (TypeScript **producer**) POSTs to the dashboard ingestion API
 It is a **single shared contract**: the JSON Schema is the source of truth, and the TypeScript
 interface and C# record below are kept identical in shape to it.
 
-The contract exists to enforce the privacy-first split described in the refactor plan: individual
+The contract exists to enforce the privacy-first split: individual
 raw usage data (prompts, tool arguments, file paths, identities) stays local; only **pre-aggregated,
 non-sensitive measures** travel to the cloud. The mechanism that guarantees this is
-`"additionalProperties": false` at **every** object level — the API rejects any payload that
+`"additionalProperties": false` at **every** object level: the API rejects any payload that
 carries a field not explicitly listed here, so a coding mistake in the extension cannot silently
 leak a raw column.
 
@@ -20,9 +20,9 @@ leak a raw column.
 
 ## 1. Why aggregate, and what the cloud must still produce
 
-The legacy cloud path (`LogAnalyticsService`) queried raw `AppDependencies` rows and computed the
-web pages on the fly. The aggregate store must reproduce the **same four pages** from pre-summed
-buckets:
+The earlier cloud dashboard (`LogAnalyticsService`, since removed) queried raw `AppDependencies` rows
+and computed the web pages on the fly. The aggregate store reproduces the **same four pages** from
+pre-summed buckets:
 
 | Web page (model)                                  | What it needs from the aggregate store                                                                   |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -45,12 +45,12 @@ one developer.
 | Field                     | Type             | Required | Notes                                                                                                                                                                                       |
 | ------------------------- | ---------------- | :------: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `schemaVersion`           | string const     |    yes   | Always `"1.0"`. The API rejects anything else.                                                                                                                                              |
-| `batchId`                 | string (1–128)   |    yes   | **Batch idempotency hint (optimization only).** Deterministic hash of `pseudonymousDeveloperId + window.start + window.end + schemaVersion`. Re-uploading the same window yields the same `batchId`. The API MAY skip re-processing a byte-identical retry, but correctness comes from per-row `rowKey` upserts — a repeated `batchId` carrying corrected/fuller buckets MUST still re-apply row upserts. See §5. |
+| `batchId`                 | string (1–128)   |    yes   | **Batch idempotency hint (optimization only).** Deterministic hash of `pseudonymousDeveloperId + window.start + window.end + schemaVersion`. Re-uploading the same window yields the same `batchId`. The API MAY skip re-processing a byte-identical retry, but correctness comes from per-row `rowKey` upserts: a repeated `batchId` carrying corrected/fuller buckets MUST still re-apply row upserts. See §5. |
 | `generatedAt`             | date-time        |    yes   | UTC time the extension built the batch. Diagnostics only; not part of any idempotency key.                                                                                                  |
 | `toolVersion`             | string (semver)  |    yes   | Extension version, e.g. `"1.4.2"`. For schema-drift triage.                                                                                                                                 |
-| `pseudonymousDeveloperId` | string (36)      |    yes   | Opaque salted hash: literal `dev_` + 32 lowercase hex chars (`^dev_[0-9a-f]{32}$`, exactly 36 chars) — **NOT** an email, OS username, or machine name. See §6. Used as a server-side distinct-count dimension for "active developers".                                       |
+| `pseudonymousDeveloperId` | string (36)      |    yes   | Opaque salted hash: literal `dev_` + 32 lowercase hex chars (`^dev_[0-9a-f]{32}$`, exactly 36 chars), **NOT** an email, OS username, or machine name. See §6. Used as a server-side distinct-count dimension for "active developers".                                       |
 | `window`                  | object           |    yes   | Closed-open UTC range `[start, end)` covered by the buckets. `end` MUST be `> start`.                                                                                                       |
-| `buckets`                 | array            |    yes   | Pre-aggregated rows (may be empty — an empty array is a valid "no activity" heartbeat).                                                                                                     |
+| `buckets`                 | array            |    yes   | Pre-aggregated rows (may be empty; an empty array is a valid "no activity" heartbeat).                                                                                                     |
 
 `window.start` / `window.end` are both required `date-time` values and the only properties of
 `window` (`additionalProperties: false`).
@@ -71,8 +71,8 @@ scoped to the envelope's single `pseudonymousDeveloperId`.
 | ----------------------- | --------------- | :------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rowKey`                | string (1–128)  |    yes   | **Row idempotency key.** Hash of the full grain tuple + `pseudonymousDeveloperId`. Server upserts by `rowKey` (latest-wins). See §5.                                       |
 | `bucketStart`           | date-time       |    yes   | Aligned UTC bin start. **Always 30-minute-aligned in v1** (minutes ∈ {00,30}, seconds=0, ms=0).                                                                            |
-| `bucketDurationSeconds` | integer const   |    yes   | Bin width in seconds. **GLOBAL INVARIANT: const `1800` (30 minutes)** — matches the legacy `bin(TimeGenerated,30m)`. Bin width is globally fixed, not per-batch; changing it is a `schemaVersion` bump, never a re-send.                                                                 |
-| `repository`            | string (1–512)  |    yes   | **SANITIZED** git remote resolved per session (see §4) — normalized to `https://{host}/{owner}/{repo}`, else `"unknown"`. Pattern `^(unknown\|https?://[A-Za-z0-9.\-]+(:[0-9]+)?/[^\s@?#]+)$` structurally forbids `@`, `?`, `#`, and whitespace so credential-bearing remotes cannot pass. **May be hashed in a future version** — consumers must not assume it stays a plain URL.   |
+| `bucketDurationSeconds` | integer const   |    yes   | Bin width in seconds. **GLOBAL INVARIANT: const `1800` (30 minutes)**, matching the earlier dashboard's `bin(TimeGenerated,30m)`. Bin width is globally fixed, not per-batch; changing it is a `schemaVersion` bump, never a re-send.                                                                 |
+| `repository`            | string (1–512)  |    yes   | **SANITIZED** git remote resolved per session (see §4), normalized to `https://{host}/{owner}/{repo}`, else `"unknown"`. Pattern `^(unknown\|https?://[A-Za-z0-9.\-]+(:[0-9]+)?/[^\s@?#]+)$` structurally forbids `@`, `?`, `#`, and whitespace so credential-bearing remotes cannot pass. **May be hashed in a future version**, so consumers must not assume it stays a plain URL.   |
 | `repositoryBranch`      | string (≤256)   |    no    | **OMITTED by default.** Source `copilot_chat.repo.head_branch_name`. Privacy tradeoff in §7. Never required.                                                               |
 | `model`                 | string (1–128)  |    yes   | COALESCE of `gen_ai.response.model` / `gen_ai.request.model`, else `"unknown"`.                                                                                            |
 | `agentMode`             | string (1–64)   |    yes   | `copilot_chat.mode_name`, default `"default"`. The extension MUST map any mode outside the known set `{default, ask, edit, agent}` to the literal `"custom"` (custom mode names can embed project/customer identifiers). See §5.1.                                                                                                                            |
@@ -92,7 +92,7 @@ scoped to the envelope's single `pseudonymousDeveloperId`.
 | `reasoningTokens`      | integer ≥ 0 |    no    |    yes    | Σ `reasoning_tokens`. Omitted when provider does not report it.                                              |
 | `durationMsSum`        | number ≥ 0  |    yes   |    yes    | Σ (`end_time_ms − start_time_ms`). Average latency = `durationMsSum / interactionCount`, computed **after** merge. A pre-computed average is intentionally not shipped (averages are not additive). |
 | `latencyHistogram`     | object      |    yes   |    yes*   | Fixed-bound histogram; counts merge bound-for-bound. See §8.                                                 |
-| `distinctSessionCount` | integer ≥ 0 |    yes   |  **NO**   | Distinct `COALESCE(conversation_id, chat_session_id)` **within this row only**. NOT additive — see §9.       |
+| `distinctSessionCount` | integer ≥ 0 |    yes   |  **NO**   | Distinct `COALESCE(conversation_id, chat_session_id)` **within this row only**. NOT additive (see §9).       |
 | `lastActivityAtMs`     | integer ≥ 0 |    no    |  max**    | Unix epoch **milliseconds** of the latest span `start_time_ms` in this row (max over the row). Lets the server recover `DeveloperActivitySummary.LastSeen` at true event resolution (max across a developer's rows) instead of degrading it to the 30-minute `bucketStart`. Non-sensitive (a timestamp). |
 
 \* `latencyHistogram.counts` is additive element-wise; `boundsMs` is a fixed constant shared by all rows.
@@ -102,13 +102,13 @@ scoped to the envelope's single `pseudonymousDeveloperId`.
 
 ## 4. Repository resolution (mirrors `LogAnalyticsService`)
 
-`copilot_chat.repo.remote_url` is **sparse** — present on only ~17 of 429 spans in the captured DB.
+`copilot_chat.repo.remote_url` is **sparse**: present on only ~17 of 429 spans in the captured DB.
 The extension resolves it per session before bucketing, exactly like the cloud's `RepoBySession`
 join:
 
 1. For each session `COALESCE(conversation_id, chat_session_id)`, take any non-empty
    `copilot_chat.repo.remote_url`.
-2. **SANITIZE the resolved URL (MANDATORY — applied before it can ever be bucketed or shipped).**
+2. **SANITIZE the resolved URL (MANDATORY: applied before it can ever be bucketed or shipped).**
 3. Apply the sanitized value to every span in the session.
 4. Spans whose session never observed a remote URL are bucketed under `repository = "unknown"`.
 
@@ -122,12 +122,12 @@ A raw git remote can embed credentials (`https://user:token@host/...`,
 value would leak a PAT/credential to the cloud. The extension MUST normalize every resolved remote
 to canonical `https://{host}/{owner}/{repo}` form **before** it touches a bucket key or payload:
 
-- **Strip userinfo** — drop any `user:token@` / `x-access-token@` segment entirely.
-- **Strip query and fragment** — drop everything from `?` or `#` onward.
+- **Strip userinfo:** drop any `user:token@` / `x-access-token@` segment entirely.
+- **Strip query and fragment:** drop everything from `?` or `#` onward.
 - **Drop a trailing `.git`** suffix.
-- **Convert SSH remotes** — `git@host:owner/repo` (and `ssh://git@host/owner/repo`) become
+- **Convert SSH remotes:** `git@host:owner/repo` (and `ssh://git@host/owner/repo`) become
   `https://host/owner/repo`.
-- **Fallback** — anything that cannot be normalized to the canonical host/path form becomes the
+- **Fallback:** anything that cannot be normalized to the canonical host/path form becomes the
   literal `"unknown"`.
 
 The schema enforces this structurally: the `repository` pattern
@@ -143,22 +143,22 @@ Two layers, both deterministic so retries and overlapping windows never double-c
 upsert on `rowKey` (latest-wins) is the authoritative correctness mechanism; `batchId` is only an
 optimization layered on top.**
 
-- **`rowKey`** (authoritative) — `hash(bucketStart | bucketDurationSeconds | repository | model | agentMode | operation | toolName | pseudonymousDeveloperId)`.
+- **`rowKey`** (authoritative): `hash(pseudonymousDeveloperId | bucketStart | bucketDurationSeconds | repository | model | agentMode | operation | toolName)`.
   The API **upserts** aggregate rows keyed by `rowKey` (latest-wins). If two windows overlap, or the
   extension re-aggregates the same bin, the row converges to a single stored value instead of summing
   twice.
-- **`batchId`** (optimization only) — `hash(pseudonymousDeveloperId | window.start | window.end | schemaVersion)`.
+- **`batchId`** (optimization only): `hash(pseudonymousDeveloperId | window.start | window.end | schemaVersion)`.
   It is at most a fast-path for **byte-identical retries**: the API MAY skip re-processing a payload
   whose `batchId` it has already fully applied. It **MUST NOT** be used to short-circuit a batch that
   differs in content. A repeated `batchId` carrying corrected or fuller buckets (e.g. late-arriving
-  spans re-aggregated into the same window) **MUST still re-apply every row upsert** — the API must
+  spans re-aggregated into the same window) **MUST still re-apply every row upsert**. The API must
   never silently drop a batch solely because the `batchId` was seen before. Correctness is owed to
   `rowKey`, not to `batchId` dedup.
 
-Recommended hash: lowercase hex SHA-256 over the UTF-8 of the fields joined by `` (unit
-separator), with `null`/absent optional fields rendered as the empty string. The exact recipe lives
-with the extension's aggregate engine; the contract only requires the keys to be stable and
-collision-resistant.
+Hash recipe (as implemented in `aggregator.ts`): lowercase hex SHA-256 over the UTF-8 of the fields
+joined by `|`, in the order shown above, with an absent `toolName` rendered as the empty string,
+`bucketStart` and the window bounds as ISO 8601 UTC strings, and `schemaVersion` as `1.0`. The
+contract itself only requires the keys to be stable and collision-resistant.
 
 > Upsert semantics matter: because `rowKey` is an upsert key, the server stores the **latest** value
 > for a row, not a sum of submissions. The extension must therefore emit the *complete* aggregate for
@@ -170,12 +170,12 @@ Two dimension values are user-/vendor-defined and could embed project, customer,
 identifiers. The extension MUST collapse the open-ended cases to a fixed literal **before** computing
 `rowKey` or emitting the bucket, so no free text reaches the cloud and the grain stays low-cardinality:
 
-- **`agentMode`** — values in the known set `{default, ask, edit, agent}` pass through verbatim
+- **`agentMode`:** values in the known set `{default, ask, edit, agent}` pass through verbatim
   (`copilot_chat.mode_name`, defaulting to `"default"` when absent). **Any mode outside that set maps
   to the literal `"custom"`.** Custom chat-mode names are user-defined and may carry identifiers.
-- **`toolName`** — built-in Copilot tool names (e.g. `read_file`, `run_in_terminal`, `list_dir`,
-  `grep_search`, `create_file`) pass through verbatim. **Any third-party / MCP tool name — i.e. one
-  outside the built-in allowlist — maps to the literal `"custom"`.** Third-party tool names are
+- **`toolName`:** built-in Copilot tool names (e.g. `read_file`, `run_in_terminal`, `list_dir`,
+  `grep_search`, `create_file`) pass through verbatim. **Any third-party / MCP tool name (one outside
+  the built-in allowlist) maps to the literal `"custom"`.** Third-party tool names are
   vendor-defined and may embed identifiers.
 
 Only the mapped value appears in the payload and contributes to `rowKey`.
@@ -190,7 +190,7 @@ pseudonymous id locally:
 - Opaque, stable per developer within an org, salted hash (see the pseudonymization strategy doc).
   Specifically: literal `dev_` prefix + 32 lowercase hex chars (first 16 bytes of
   `HMAC-SHA256(orgSalt, normalizedGitEmail)`), e.g. `dev_9f2c1ab47e0d3f5a8b6c2d1e4f70a9c3`.
-- Constrained by the schema to `^dev_[0-9a-f]{32}$`, **exactly 36 characters** — which structurally
+- Constrained by the schema to `^dev_[0-9a-f]{32}$`, **exactly 36 characters**, which structurally
   **excludes** an email address or any free-text PII (no `@`, no uppercase, no characters outside
   `[0-9a-f]` after the `dev_` prefix; an email simply cannot satisfy the pattern).
 - Used server-side purely as a **distinct-count dimension** for "active developers" and to scope
@@ -204,7 +204,7 @@ The following MUST NEVER appear anywhere in the payload. Because every object se
 `additionalProperties: false`, the API will **reject the whole batch** if any of them (or any other
 unlisted field) is present. This is the raw-field-rejection mechanism and a privacy regression test.
 
-Raw content (12 sensitive `span_attributes` keys — matches the snapshot's `sensitive: true` set):
+Raw content (12 sensitive `span_attributes` keys, matching the snapshot's `sensitive: true` set):
 
 - `copilot_chat.user_request`
 - `gen_ai.input.messages`, `gen_ai.output.messages`
@@ -216,7 +216,7 @@ Raw content (12 sensitive `span_attributes` keys — matches the snapshot's `sen
 
 Raw / sensitive request internals (also `sensitive: true` in the snapshot):
 
-- `copilot_chat.request.options` — flagged sensitive in the captured DB (may embed request
+- `copilot_chat.request.options`: flagged sensitive in the captured DB (may embed request
   internals); never shipped.
 
 Identifying / environment data:
@@ -225,13 +225,13 @@ Identifying / environment data:
 - machine name, OS username, developer email / `user.email` / `UserId`
 - raw session ids, conversation ids, trace/span ids (only the *count* of distinct sessions ships)
 
-Borderline — kept local, NOT shipped:
+Borderline, kept local, NOT shipped:
 
 - `repositoryBranch` (`copilot_chat.repo.head_branch_name`) is **the only borderline field with a
   defined slot**, and it is **omitted by default** (§3). Branch names can encode feature, customer,
   or ticket identifiers, so it ships only when an org explicitly opts in.
-- `status_message` (`spans.status_message`) — may echo an error string; kept local, never shipped.
-- `error.type` — an error classification; kept local for diagnostics, not part of any v1 bucket
+- `status_message` (`spans.status_message`) may echo an error string; kept local, never shipped.
+- `error.type` is an error classification, kept local for diagnostics, not part of any v1 bucket
   field. (Error volume reaches the cloud only as the aggregate `errorCount`, see §7.1.)
 
 ### 7.1 Success / error semantics
@@ -246,8 +246,8 @@ Borderline — kept local, NOT shipped:
 
 **Treatment of `unset` (0):** `status_code = 0` (unset) is deliberately counted as a **non-error**
 (folded into `successCount`), because Copilot leaves many non-`chat` spans (tools, hooks) at the
-unset default and treating those as failures would inflate the error rate. There was **no legacy
-success/error baseline** to preserve — `LogAnalyticsService` did not compute a success rate — so this
+unset default and treating those as failures would inflate the error rate. There was **no earlier
+success/error baseline** to preserve (`LogAnalyticsService` did not compute a success rate), so this
 unset-as-success convention is a new, explicit definition rather than a reproduction of prior cloud
 behavior. (In the captured snapshot the split is `0`→147, `1`→148, `2`→134.)
 
@@ -300,7 +300,7 @@ Therefore:
   - `ActiveRepositories` = `COUNT(DISTINCT repository)` (excluding `"unknown"`, matching the
     legacy `where Repository != "unknown"`).
   - `UniqueModels` per repo/developer = `COUNT(DISTINCT model)` over that subset.
-  - True distinct sessions over a range = `COUNT(DISTINCT session)` — which is why the *count* alone
+  - True distinct sessions over a range = `COUNT(DISTINCT session)`, which is why the *count* alone
     is insufficient and `distinctSessionCount` stays per-row context only.
 
 Additive measures (`interactionCount`, token sums, `durationMsSum`, histogram `counts`) **are**
@@ -332,7 +332,7 @@ export interface LatencyHistogram {
 export interface AggregateBucket {
   rowKey: string;
   bucketStart: string;            // ISO 8601 UTC, 30-min-aligned (minutes in {00,30}, sec=0)
-  bucketDurationSeconds: 1800;    // const 1800 (30 minutes) — global invariant in v1
+  bucketDurationSeconds: 1800;    // const 1800 (30 minutes), global invariant in v1
   repository: string;             // SANITIZED https://{host}/{owner}/{repo} or "unknown"
   repositoryBranch?: string;      // OMITTED by default
   model: string;                  // or "unknown"
@@ -373,9 +373,13 @@ export interface AggregateBatch {
 
 ## 11. C# record (consumer)
 
-Kept identical in shape to the JSON Schema. The dashboard API deserializes into these records and
-relies on `additionalProperties: false` (enforced via JSON Schema validation before binding) to
-reject unexpected fields. `JsonIgnoreCondition.WhenWritingNull` keeps optional fields omitted.
+Kept identical in shape to the JSON Schema. The records live in
+`src/dashboard/AgentObservability.Dashboard/Models/Ingestion/AggregateBatch.cs` (namespace
+`AgentObservability.Dashboard.Models.Ingestion`). Each record there also carries
+`[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]`, omitted below. That attribute is
+how the server enforces `additionalProperties: false`: an unexpected field makes deserialization
+fail and the batch is rejected with 400. `AggregateBatchValidator` then checks the remaining schema
+rules. `JsonIgnoreCondition.WhenWritingNull` keeps optional fields omitted.
 
 ```csharp
 using System.Text.Json.Serialization;
@@ -561,14 +565,14 @@ public sealed record LatencyHistogram
 
 ## 13. Tradeoffs chosen
 
-- **30-minute bins (`bucketDurationSeconds` const 1800).** Matches the legacy overview
+- **30-minute bins (`bucketDurationSeconds` const 1800).** Matches the earlier dashboard's
   `bin(TimeGenerated,30m)` query exactly so no resolution is lost. The width is a **global invariant**,
   not a per-batch field: because both width and alignment are fixed, `rowKey`s for the same wall-clock
   window always collide and upserts converge. Changing the bin width is a breaking change requiring a
-  `schemaVersion` bump — never a re-send at a different width.
+  `schemaVersion` bump, never a re-send at a different width.
 - **Upsert by `rowKey` (latest-wins), full aggregate per cell (not deltas).** This is the
   authoritative idempotency mechanism; it tolerates retries and overlapping windows. `batchId` is only
-  an optimization for byte-identical retries and never authoritative — a repeated `batchId` with
+  an optimization for byte-identical retries and never authoritative: a repeated `batchId` with
   corrected/fuller buckets still re-applies row upserts. Cost: the extension must emit the complete
   value for a cell each time.
 - **Fixed histogram bounds over t-digest/exact percentiles.** Slightly approximate p95, but trivially
@@ -582,4 +586,3 @@ public sealed record LatencyHistogram
   change, while defaulting to the privacy-safe choice.
 - **`additionalProperties: false` everywhere.** Turns the schema validator into the privacy
   enforcement layer: any raw/forbidden field causes outright rejection rather than silent storage.
-```

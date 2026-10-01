@@ -9,9 +9,10 @@ import type { UpdateStatus } from '../shared/updates';
  * Startup update check. Nothing downloads without consent: the app asks
  * before downloading and again before restarting.
  *
- * The repo is INTERNAL-visibility, so the feed is read through a fine-grained
- * PAT (contents: read, this repo only) baked in at build time — builds without
- * it (local packaging, forks) log one line and skip checks entirely.
+ * The repo is public, so the feed needs no credentials. Only official release
+ * builds check it: the release workflow sets MAIN_VITE_ENABLE_UPDATES=1 at build
+ * time, and builds without it (local packaging, forks) log one line and skip
+ * checks entirely, so a fork is never offered upstream's installers.
  *
  * Windows installs updates itself. macOS builds are unsigned, and Squirrel.Mac
  * refuses to update an unsigned app, so that platform is notify-only: its
@@ -44,15 +45,14 @@ let pendingVersion = '';
 
 export function initAutoUpdater(getWindow: () => BrowserWindow | undefined): void {
   // AO_UPDATER_DEV=1 exercises the real feed from a dev run (pair it with
-  // MAIN_VITE_UPDATE_TOKEN in the environment when the bundle is built).
+  // MAIN_VITE_ENABLE_UPDATES=1 in the environment when the bundle is built).
   const devOverride = process.env.AO_UPDATER_DEV === '1';
   if (!app.isPackaged && !devOverride) {
     return;
   }
 
-  const token = import.meta.env.MAIN_VITE_UPDATE_TOKEN;
-  if (token === undefined || token === '') {
-    console.log('[updater] built without an update token; update checks disabled');
+  if (import.meta.env.MAIN_VITE_ENABLE_UPDATES !== '1') {
+    console.log('[updater] not an official release build; update checks disabled');
     return;
   }
 
@@ -63,10 +63,10 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | undefined): voi
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
-  // Passing a token selects the authenticated provider, which resolves the
-  // latest *published* release via the GitHub API — drafts stay invisible,
-  // which is what makes the release workflow's draft a safe smoke-test gate.
-  autoUpdater.setFeedURL({ provider: 'github', owner: OWNER, repo: REPO, private: true, token });
+  // The public provider resolves the latest *published* release from the
+  // repo's release feed. Drafts never appear there, which is what makes the
+  // release workflow's draft a safe smoke-test gate.
+  autoUpdater.setFeedURL({ provider: 'github', owner: OWNER, repo: REPO });
 
   autoUpdater.on('error', (err) => {
     // Expected on every launch until the first updater-era release is

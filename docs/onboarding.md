@@ -1,180 +1,152 @@
-# Onboarding to Agent Observability (Extension-First)
+# Getting started
 
-Agent Observability is **privacy-first** and **extension-first**. You install a
-local VS Code extension that reads your GitHub Copilot agent telemetry from an
-on-disk SQLite database. **Raw content (prompts, responses, tool I/O,
-source-file paths, file contents, identities) never leaves your machine.** Only
-**opt-in, aggregated, non-sensitive** statistics — plus, for context-engineering
-hotspots, the **repository-relative paths of customization files**
-(instructions/skills/prompts/agents/hooks) with counts only — are ever shared
-with your organization dashboard.
+Agent Observability reads the sessions your AI coding agents record on your
+computer and lets you look back at them. You can use the desktop app, the VS
+Code extension, or both. They read the same data.
 
-There is **no OpenTelemetry collector, no OTLP endpoint, no
-`OTEL_EXPORTER_OTLP_*` environment variables, and no committed
-`.vscode/settings.json`** in this flow. The previous collector-based onboarding
-is archived (one release, rollback only) at
-[`docs/legacy/onboarding-otel-collector.md`](legacy/onboarding-otel-collector.md).
+Everything in steps 1 to 3 stays on your computer. Step 4, team sharing, is
+optional and off by default.
 
-## Prerequisites
+## Step 1: Install
 
-- VS Code with the GitHub Copilot extension installed and used (so a local
-  Copilot agent telemetry database exists on your machine).
-- The **Agent Observability (Local)** VS Code extension (see Step 1).
-- *Only if you want to contribute org aggregates:* an **organization API key**
-  from your platform team (key format `aoa_<keyId>_<secret>`). The dashboard URL
-  is built into the extension — there is nothing to configure.
+**Desktop app (recommended).** Download the installer for your system from
+[Releases](https://github.com/turbinestudios/agent-observability/releases).
 
-## Step 1: Install the extension
+- **macOS:** open the `.dmg` and drag the app to Applications. There are builds
+  for Apple Silicon (`arm64`) and Intel (`x64`). The app is signed and
+  notarized.
+- **Windows:** run the `.exe`. The installer is not signed yet, so SmartScreen
+  may warn you. Choose **More info**, then **Run anyway**.
 
-Install **Agent Observability (Local)** from
-`src/extension/agent-observability-vscode`.
+The app checks for updates when it starts and always asks before downloading.
 
-- From a packaged build: `code --install-extension agent-observability-<version>.vsix`.
-- From source for development: open the folder in VS Code and press
-  <kbd>F5</kbd> to launch an Extension Development Host. See the extension
-  [`README.md`](../src/extension/agent-observability-vscode/README.md) for build
-  and native-module packaging notes.
+**VS Code extension.** Build the `.vsix` as described in the
+[README](../README.md#build-from-source), then install it:
 
-Once installed, open the **Agent Observability** container in the Activity Bar.
-You will see three views: **Local Overview**, **Sessions**, and **Sync**.
+```bash
+code --install-extension agent-observability-<version>.vsix
+```
 
-## Step 2: View your local activity (no configuration needed)
+Open **Agent Observability** in the Activity Bar. It has five views:
+**Local Overview**, **Sessions**, **Sync**, **Context Hotspots** and
+**AI Helper**.
 
-The extension **auto-detects** the local Copilot `agent-traces.db` SQLite
-database (override with `agentObservability.sqlitePath` only if auto-detect
-fails). It opens the file **read-only** and shows:
+## Step 2: Make sure your agent is recording
 
-> **Copilot has to be writing that database first.** Copilot Chat creates
-> `agent-traces.db` lazily, and only while its SQLite span exporter is enabled —
-> which is **off by default**. A machine can use Copilot daily and still have no
-> database at all. Turn it on in VS Code settings, then chat with Copilot once:
->
-> ```jsonc
-> "github.copilot.chat.otel.dbSpanExporter.enabled": true
-> ```
->
-> The file lands in the extension's `globalStorage`, e.g. on macOS
-> `~/Library/Application Support/Code/User/globalStorage/github.copilot-chat/agent-traces.db`.
-> Auto-detect scans the equivalent path for every VS Code–based editor
-> installed (stable, Insiders, Cursor, VSCodium, …).
->
-> The **desktop app** (1.10.0+) checks this at every launch and can add the
-> setting for you — accept the offer it shows when nothing is being recorded,
-> or use the per-editor **Enable** button in its Settings. Fully restart the
-> editor afterwards.
+**Claude Code** always saves its sessions under `~/.claude/projects`. There is
+nothing to set up.
 
-- **Local Overview** — a summary of your local Copilot agent activity.
-- **Sessions** — your local agent sessions with prompt, tool, model, duration
-  and success detail. **This detail is local-only** and is never uploaded.
-- **Copilot (Cloud)** *(opt-in)* — your GitHub Copilot **cloud coding-agent**
-  sessions, shown as their own source beside *Copilot* and *Claude Code*. Enable
-  it with the `agentObservability.copilotCloud.enabled` setting. A background
-  poller pulls your cloud-agent task/session logs (prompt, state, tool timeline,
-  model, AI-credit cost) via the GitHub API into a local sink and renders them
-  like any other session. Authentication uses the **`gh` CLI** (signed in via
-  `gh auth login`), or you can supply a token directly with the **Copilot
-  (Cloud): Set account token** command. Which accounts are polled is pinned via
-  `agentObservability.copilotCloud.accounts` (leave empty to capture the active
-  `gh` login once, or list usernames to poll several) — so a `gh auth switch`
-  never silently changes what you see. These sessions are **pulled down and
-  rendered locally only** and are never uploaded.
+**GitHub Copilot** only saves sessions while one setting is on, and it is off
+by default. Without it there is nothing to read, even if you use Copilot every
+day.
 
-Nothing is uploaded at this stage. No OTLP settings, no env vars, and no
-workspace `.vscode/settings.json` are required. (Optional: configure expected
-per-repository workflows in the `agentObservability.workflows` setting to enable
-the on-machine deviation detector — this also runs entirely locally.)
+- **In the desktop app:** when nothing is being recorded, the app offers to
+  turn the setting on for you. You can also do it per editor under
+  **Settings > Copilot**. It works for VS Code, Insiders, Cursor, VSCodium and
+  Windsurf. Restart the editor afterwards.
+- **By hand:** add this to your VS Code user settings, restart, and chat with
+  Copilot once:
 
-## Step 3 (optional): Contribute org aggregates
+  ```jsonc
+  "github.copilot.chat.otel.dbSpanExporter.enabled": true
+  ```
 
-Sharing is **opt-in and OFF by default**. The dashboard URL is **built into the
-extension**, so there is no endpoint to configure. To contribute aggregate
-analytics to your organization dashboard:
+Copilot then writes a file called `agent-traces.db`, which both apps find on
+their own. If yours is somewhere unusual, set `agentObservability.sqlitePath`
+in the extension.
 
-1. **Open the Sync view** in the Agent Observability container.
-2. **Enable Cloud Sharing.** Run **Agent Observability: Toggle Cloud Sharing**
-   (or use the Sync view). A consent dialog states exactly **what is shared**
-   vs **not shared** (see below). This flips `agentObservability.sync.enabled`
-   to `true`.
-3. **Set the Organization API key.** Run **Agent Observability: Set
-   Organization API Key** and paste the key (`aoa_<keyId>_<secret>`). It is
-   stored only in **VS Code SecretStorage** (OS keychain / Windows Credential
-   Manager / libsecret). It is **never** written to `settings.json`, any
-   committed file, or logs.
-4. **(Optional) Enable background sync.** With consent on and a key set,
-   background uploads run on `agentObservability.sync.intervalMinutes` (default
-   60, minimum 5). You can also push on demand with **Agent Observability: Sync
-   Now**.
+## Step 3: Look at your sessions
 
-> Sync is blocked unless **both** consent is on **and** an API key is present.
-> Turning consent off stops all uploads immediately.
+Your sessions appear in the **Sessions** list. Open one to see it turn by turn:
+tokens, tools, time and estimated cost.
 
-### Preview exactly what would be uploaded
+Some things worth trying:
 
-Run **Agent Observability: Preview Aggregate Payload** to inspect the exact
-aggregate batch (the only thing ever sent) before any upload.
+- **Compare** a few sessions on the same task.
+- Read the **retrospective** for a session that went badly.
+- Open **Context Hotspots** to see which instruction files and skills your
+  agents actually read.
+- In the desktop app, open **Improve** to get a suggested plan for your context
+  files.
 
-## Step 4: Verify aggregates arrive
+### Optional sources in the VS Code extension
 
-1. With sharing on and a key set, run **Agent Observability: Sync Now**.
-2. The **Sync** view shows the last sync status (success/failure, counts).
-3. In the org dashboard, confirm your org's aggregate analytics update (filtered
-   by repo / model / mode / tool). Your contribution appears under a
-   **pseudonymous developer id** — never your name or email.
+- **Copilot (Cloud):** sessions from the GitHub Copilot coding agent that runs
+  on GitHub. Turn on `agentObservability.copilotCloud.enabled`. It signs in
+  through the `gh` command-line tool (`gh auth login`). You can also give it a
+  token with **Copilot (Cloud): Set account token**. These sessions are
+  downloaded to your computer and never uploaded.
+- **Workflows:** describe the steps you expect for a repository in
+  `agentObservability.workflows`, and sessions that drift from them are
+  flagged. This runs on your computer only.
 
-### Troubleshooting
+## Step 4 (optional): Share totals with your team
 
-| Symptom | Likely cause | Fix |
-|---------|--------------|-----|
-| Local views empty | No local telemetry DB found | Use Copilot agent features once; or set `agentObservability.sqlitePath`. Ensure `agentObservability.localTelemetry.enabled` is `true`. |
-| Sync never runs | Consent off or no key | Toggle Cloud Sharing on **and** set the Organization API key. |
-| Upload rejected (401) | Bad/expired API key | Re-run **Set Organization API Key** with a current `aoa_<keyId>_<secret>` from the platform team. |
-| Upload rejected (400) | Schema/validation failure | The server enforces the aggregate contract strictly; update the extension. See [`docs/privacy-validation.md`](privacy-validation.md). |
-| Upload rejected (503) | Ingestion disabled server-side | Platform team must set `Ingestion:Enabled=true` on the dashboard. |
-| Copilot (Cloud) empty — "GitHub CLI not found" | `gh` not on PATH | Set `agentObservability.copilotCloud.ghCliPath` to the `gh` executable, or set a token per account via **Copilot (Cloud): Set account token**. |
-| Copilot (Cloud) empty — "not signed in" / token expired | Account not authenticated | Run `gh auth login` for that account, or supply a token with **Copilot (Cloud): Set account token**. |
+Only do this if your team runs the
+[team dashboard](../src/dashboard/AgentObservability.Dashboard). Team sharing
+is in the VS Code extension.
 
-## What is shared vs NOT shared
+You need two things from whoever runs the dashboard: its **address** and an
+**API key** (it looks like `aoa_<keyId>_<secret>`).
 
-**Shared** (aggregate, non-sensitive measures only):
+1. **Set the address.** Open your **user** settings and set
+   `agentObservability.sync.dashboardUrl`, for example
+   `https://dashboard.example.com`. Only `https://` addresses work. This
+   setting is ignored in workspace settings, so a repository you open cannot
+   change where your data goes.
+2. **Turn on sharing.** Run **Agent Observability: Toggle Cloud Sharing**. A
+   dialog shows exactly what is shared and what is not.
+3. **Add the API key.** Run **Agent Observability: Set Organization API Key**.
+   The key is kept in your system's secure storage (Keychain on macOS,
+   Credential Manager on Windows), never in a settings file.
+4. **Pick repositories.** Run **Agent Observability: Choose Repositories to
+   Sync**. Nothing is uploaded until you pick at least one.
+5. **Check it.** Run **Agent Observability: Preview Aggregate Payload** to see
+   exactly what would be sent. Then run **Agent Observability: Sync Now**. The
+   **Sync** view shows the result.
 
-- **Usage aggregates:** aggregate **counts**, token totals
-  (input/output/cached/reasoning), and **latency buckets** per **30-minute
-  bin**, grouped by **repository**, **model**, **agent mode**, and **tool**,
-  under a **pseudonymous developer id**.
-- **Context-engineering hotspots:** for **customization files only**
-  (instructions, skills, prompts, agents, hooks) — their **repository-relative
-  path**, category, and per-30-minute-bin **counts** (applied / skipped, an
-  estimated token size derived from file **size** only, and how many sessions
-  saw an error or workflow deviation while the file was applied). Skip reasons
-  are reduced to a fixed taxonomy (`applyToNoMatch` / `other`) — never the raw
-  reason text.
+To sync in the background, turn on `agentObservability.sync.enabled`. It runs
+every 60 minutes by default (`agentObservability.sync.intervalMinutes`,
+minimum 5). Turning sharing off stops all uploads at once.
 
-**NOT shared** (never leaves your machine): no prompts, no responses, no file
-contents, **no source- or document-file paths**, no commit hashes, no branch
-names, no machine name, no OS username, and no email or personal identity. Only
-customization-file paths (above) are shared — path plus counts, never contents.
+### What is shared
 
-**Copilot (Cloud) sessions are local-only.** When the cloud source is enabled,
-its task/session logs are *pulled DOWN* from the GitHub API and rendered on your
-machine, but they are **never uploaded** by this extension — the cloud source
-contributes nothing to the aggregate batch (its `getAggregationRows` returns an
-empty set in the current phases). Raw cloud prompts, tool I/O, and assistant
-text live only in the local sink under your home directory.
+- Counts, token totals and timing ranges, in 30-minute blocks, grouped by
+  repository, model, agent mode and tool.
+- For your context files only (instructions, skills, prompts, agents, hooks):
+  the path inside the repository, and counts of how often each was used and
+  how those sessions went. Never the file contents.
+- All of it under an anonymous id, never your name or email.
 
-Two strict contracts are the only payloads uploaded — the aggregate batch
-([`schemas/aggregate-batch.schema.json`](../schemas/aggregate-batch.schema.json))
-and the context-insights batch
-([`schemas/context-insights-batch.schema.json`](../schemas/context-insights-batch.schema.json))
-— both locked with `additionalProperties: false` at every level and re-validated
-server-side. The full privacy guarantee and how it is enforced/tested is
-documented in [`docs/privacy-validation.md`](privacy-validation.md).
+### What is not shared
 
-## Reference
+Prompts, responses, file contents, paths of any other files, commit hashes,
+branch names, your computer's name, your username, and your email. Sessions
+from the Copilot coding agent are never shared either.
 
-- Architecture & contracts: [`docs/architecture/`](architecture/) —
-  [aggregate payload schema](architecture/aggregate-payload-schema-v1.md),
-  [API auth lifecycle](architecture/api-auth.md),
-  [pseudonymization strategy](architecture/pseudonymization-strategy.md).
-- Migrating off the legacy collector flow: [`docs/migration.md`](migration.md).
-- Extension settings & commands: the extension
-  [`README.md`](../src/extension/agent-observability-vscode/README.md).
+The upload formats are fixed in
+[schemas/aggregate-batch.schema.json](../schemas/aggregate-batch.schema.json)
+and
+[schemas/context-insights-batch.schema.json](../schemas/context-insights-batch.schema.json).
+The dashboard rejects anything that does not match. The full rules, and how
+they are tested, are in [privacy-validation.md](privacy-validation.md).
+
+## Troubleshooting
+
+| What you see | Likely cause | What to do |
+| --- | --- | --- |
+| No Copilot sessions | Copilot tracing is off | See step 2, then restart the editor and chat with Copilot once. |
+| No Claude Code sessions | Sessions are stored somewhere else | Set `agentObservability.claudeCode.projectsPath` (extension) or the path in the app's Settings. |
+| Sync view says "Dashboard URL: Not set" | No address, or not `https://` | Set `agentObservability.sync.dashboardUrl` in your user settings. |
+| Sync never runs | Sharing off or no API key | Turn on sharing and add the API key (step 4). |
+| Upload rejected (401) | Wrong or expired API key | Ask for a new key and set it again. |
+| Upload rejected (400) | The app and dashboard disagree on the format | Update the extension. |
+| Upload rejected (503) | The dashboard has uploads turned off | Ask whoever runs the dashboard to set `Ingestion:Enabled=true`. |
+| Copilot (Cloud) says "GitHub CLI not found" | `gh` is not on your PATH | Set `agentObservability.copilotCloud.ghCliPath`, or add a token with **Copilot (Cloud): Set account token**. |
+
+## More reading
+
+- [Privacy rules and how they are enforced](privacy-validation.md)
+- [Architecture and upload formats](architecture/)
+- [VS Code extension settings and commands](../src/extension/agent-observability-vscode/README.md)
+- [Desktop app](../src/desktop/agent-observability-desktop/README.md)

@@ -4,6 +4,21 @@ All notable changes to the Agent Observability (Local) extension are documented
 in this file. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] - 2026-10-01
+
+### Changed
+
+- **You now choose which team dashboard to share with.** Set
+  `agentObservability.sync.dashboardUrl` in your user settings to your team's
+  dashboard address. Until you do, nothing is uploaded, even with sharing on
+  and an API key stored. Only `https://` addresses are accepted, and a
+  workspace's settings can never change it, so a repository you open cannot
+  send your API key anywhere else. If you shared with a dashboard before, add
+  its address to keep sharing.
+- **Safer in untrusted folders.** In a folder you have not trusted, the
+  extension ignores that folder's settings for the Copilot database path and
+  the Claude Code projects path, and uses only your own.
+
 ## [0.10.4] - 2026-09-14
 
 ### Fixed

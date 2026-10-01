@@ -1,8 +1,8 @@
 # macOS signing & notarization
 
-How to make the desktop app open on a Mac with a plain double-click — no
-"damaged and can't be opened" dialog, no `xattr` workaround. Requires an Apple
-Developer Program membership (you have one). Signing also unlocks real macOS
+How to make the desktop app open on a Mac with a plain double-click: no
+"damaged and can't be opened" dialog, no `xattr` workaround. The maintainer doing
+this needs an Apple Developer Program membership. Signing also unlocks real macOS
 auto-updates later: the updater is notify-only today *because* Squirrel.Mac
 refuses to update unsigned apps.
 
@@ -10,28 +10,28 @@ Three ingredients, then one release:
 
 | # | What | Where it comes from | Where it goes |
 | --- | --- | --- | --- |
-| 1 | Developer ID Application certificate (`.p12`) | Apple Developer portal + OpenSSL — any OS, a Mac is NOT required | GitHub secret |
+| 1 | Developer ID Application certificate (`.p12`) | Apple Developer portal + OpenSSL (any OS; a Mac is NOT required) | GitHub secret |
 | 2 | App Store Connect API key (`.p8`) | App Store Connect (browser) | GitHub secret |
 | 3 | Small config changes | this repo | `electron-builder.yml` + `release-desktop.yml` |
 
 No Mac is needed at any point: the actual signing and notarization run on
 GitHub's macOS runners using the secrets, CI verifies the result itself, and
-the only Mac-flavored ritual left — creating the certificate — works with
+the only Mac-flavored ritual left (creating the certificate) works with
 OpenSSL on Windows. A real Mac only matters for the human double-click test at
 the end.
 
 ---
 
-## Step 1 — Developer ID Application certificate (~10 min)
+## Step 1: Developer ID Application certificate (~10 min)
 
 This is the identity that signs the app. **Developer ID Application** is the
-exact type — not "Apple Development", not "Developer ID Installer". A
+exact type, not "Apple Development", not "Developer ID Installer". A
 certificate is just a key pair plus Apple's blessing of the public half, and
-OpenSSL mints key pairs on any OS — do this on the PC. Generate the private
+OpenSSL mints key pairs on any OS, so this works on a Windows PC. Generate the private
 key locally, never in a workflow: a key that has ever passed through CI logs
 or artifacts is not private.
 
-On Windows, in **Git Bash — not PowerShell** (OpenSSL ships with Git for
+On Windows, in **Git Bash, not PowerShell** (OpenSSL ships with Git for
 Windows but is not on PowerShell's PATH, and the `\` line continuations below
 are Bash syntax). Work in a folder OUTSIDE any git repository: a private key
 inside a working tree is one careless `git add` away from being committed.
@@ -45,14 +45,14 @@ inside a working tree is one careless `git add` away from being committed.
    # for a filesystem path and mangling it.
    MSYS2_ARG_CONV_EXCL='*' openssl req -new -key developerid.key \
      -out developerid.certSigningRequest \
-     -subj "/emailAddress=YOUR_APPLE_ID_EMAIL/CN=Your Name/C=SE"
+     -subj "/emailAddress=YOUR_APPLE_ID_EMAIL/CN=Your Name/C=YOUR_COUNTRY_CODE"
    ```
 
 2. Go to [developer.apple.com/account/resources/certificates](https://developer.apple.com/account/resources/certificates/list)
    → **+** → under *Software*, pick **Developer ID Application** → upload
    `developerid.certSigningRequest` → **Download** the resulting
    `developerID_application.cer`.
-3. Bundle Apple's certificate with your private key into a `.p12`:
+3. Bundle Apple's certificate with the private key into a `.p12`:
 
    ```bash
    openssl x509 -inform DER -in developerID_application.cer -out developerid.pem
@@ -70,7 +70,7 @@ inside a working tree is one careless `git add` away from being committed.
    base64 -w0 certificate.p12 | clip
    ```
 
-   The base64 string is now on your clipboard.
+   The base64 string is now on the clipboard.
 
 <details>
 <summary>Doing this on a Mac instead</summary>
@@ -83,21 +83,21 @@ replaces step 4.
 
 </details>
 
-## Step 2 — App Store Connect API key (~5 min)
+## Step 2: App Store Connect API key (~5 min)
 
-This is what lets CI *notarize* — upload the signed app to Apple's malware
+This is what lets CI *notarize*: upload the signed app to Apple's malware
 scan and staple the approval ticket, which is what silences Gatekeeper.
 
 1. Go to [appstoreconnect.apple.com](https://appstoreconnect.apple.com) →
    **Users and Access** → **Integrations** → **App Store Connect API** →
    **Team Keys** → **Generate API Key**.
 2. Name it e.g. `agent-observability-notarize`, role **Developer**.
-3. **Download the `.p8` file — this is offered exactly once.** Store it with
+3. **Download the `.p8` file. It is offered exactly once.** Store it with
    the `.p12`.
 4. Note two values shown on that page: the key's **Key ID** and the page's
    **Issuer ID**.
 
-## Step 3 — GitHub secrets
+## Step 3: GitHub secrets
 
 Repo → **Settings → Secrets and variables → Actions → New repository secret**,
 five of them:
@@ -110,9 +110,9 @@ five of them:
 | `APPLE_API_KEY_ID` | the Key ID from step 2.4 |
 | `APPLE_API_ISSUER` | the Issuer ID from step 2.4 |
 
-## Step 4 — repo changes
+## Step 4: repo changes
 
-Two files. (Or just ask Claude to apply this section.)
+Two files. (A coding agent can also apply this section.)
 
 ### `src/desktop/agent-observability-desktop/electron-builder.yml`
 
@@ -197,14 +197,14 @@ import passes the `.p12` export password to `security set-key-partition-list
 the runner image reached Darwin 25.6, after which every signed build died with
 `SecKeychainUnlock: The user name or passphrase you entered is not correct`.
 Pointing electron-builder at a ready-made keychain with `CSC_KEYCHAIN` skips
-that code path — identity discovery still finds the certificate there.
+that code path; identity discovery still finds the certificate there.
 
-## Step 5 — cut a release and verify (no Mac needed)
+## Step 5: cut a release and verify (no Mac needed)
 
 1. Tag and push a release as usual (`desktop-v<version>`); watch the mac leg.
-   The log should show `signing` lines naming your Developer ID, then
-   `notarization successful` — notarization adds a few minutes (Apple's scan).
-2. Let CI prove the result on its own macOS runner — add this step right
+   The log should show `signing` lines naming the Developer ID, then
+   `notarization successful`. Notarization adds a few minutes (Apple's scan).
+2. Let CI prove the result on its own macOS runner: add this step right
    after **Package installers (macOS)**:
 
    ```yaml
@@ -219,10 +219,10 @@ that code path — identity discovery still finds the certificate there.
    ```
 
    A green step means both architectures are signed through and carry the
-   stapled notarization ticket — from your PC, that is the whole proof.
-3. The human check: have your buddy download the arm64 DMG fresh from the
+   stapled notarization ticket. Without a Mac, that is the whole proof.
+3. The human check: have someone with a Mac download the arm64 DMG fresh from the
    release page, drag the app to Applications, and **double-click it**. It
-   must open with no dialog — no right-click ritual, no `xattr`. (On a Mac,
+   must open with no dialog: no right-click ritual, no `xattr`. (On a Mac,
    `spctl -a -vv "/Applications/Agent Observability.app"` should print
    `accepted, source=Notarized Developer ID`.)
 
@@ -231,32 +231,32 @@ that code path — identity discovery still finds the certificate there.
 - **Turn on real macOS auto-updates.** `src/desktop/agent-observability-desktop/src/main/updater.ts`
   keeps macOS notify-only (it links to the release page instead of
   downloading) purely because the builds were unsigned. Once a signed release
-  is live, that branch can use the same download-and-install flow as Windows —
-  a small change; ask Claude for it when the first signed release is out.
+  is live, that branch can use the same download-and-install flow as Windows.
+  It is a small change to make once the first signed release is out.
 - **Simplify the release notes.** The template in `release-desktop.yml` tells
   mac users to right-click → Open or run `xattr -cr …`; from the first signed
   release onward that paragraph can go.
 
 ## Troubleshooting
 
-- **`Env WIN_CSC_LINK/CSC_LINK is not correct` or a keychain error on CI** —
+- **`Env WIN_CSC_LINK/CSC_LINK is not correct` or a keychain error on CI**:
   the base64 is truncated or the `.p12` password secret is wrong. Re-export
   and re-paste both. If the error is `SecKeychainItemImport` failing on the
-  import itself, the `.p12` was exported without `-legacy` — re-run the
+  import itself, the `.p12` was exported without `-legacy`; re-run the
   `openssl pkcs12 -export -legacy …` command.
 - **`errSecInternalComponent` / "unable to build chain to self-signed root"
-  while signing** — the `.p12` carries only your leaf certificate and the
+  while signing**: the `.p12` carries only the leaf certificate and the
   runner lacks Apple's intermediate. Download **Developer ID - G2** from
   [apple.com/certificateauthority](https://www.apple.com/certificateauthority/),
   convert and include it:
   `openssl x509 -inform DER -in DeveloperIDG2CA.cer -out g2.pem`, then re-run
   the pkcs12 export with `-certfile g2.pem` added.
-- **Notarization fails with an "invalid" status** — the log line includes a
+- **Notarization fails with an "invalid" status**: the log line includes a
   URL to Apple's JSON report naming the offending binary; almost always a
   nested unsigned binary, which `hardenedRuntime` + electron-builder's deep
   signing normally prevents.
-- **`HTTP 401` during notarization** — Key ID / Issuer ID mismatch, or the
+- **`HTTP 401` during notarization**: Key ID / Issuer ID mismatch, or the
   `.p8` content lost its header/footer lines when pasted into the secret.
-- **It still says "damaged" on someone's Mac** — they are opening an OLD
+- **It still says "damaged" on someone's Mac**: they are opening an OLD
   download. Only releases built after this setup are notarized; earlier ones
   keep needing `xattr -cr`.

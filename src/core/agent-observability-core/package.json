@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Host-independent core for Agent Observability: session sources, parsing, telemetry, aggregation, sync, and pure renderers. Imports no host API (no `vscode`, no Electron) so both the VS Code extension and the desktop app can consume it.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {

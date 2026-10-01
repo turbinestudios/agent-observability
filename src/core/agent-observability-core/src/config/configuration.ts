@@ -15,15 +15,30 @@ export { MIN_SESSION_MINUTES } from './workflowParsing';
 export const CONFIG_SECTION = 'agentObservability';
 
 /**
- * Built-in cloud ingestion base URL — the dashboard deployed to Azure.
- *
- * This is intentionally NOT a user setting: hard-coding it means aggregate
- * uploads always target the org dashboard and a workspace can never redirect the
- * bearer API key to an arbitrary host. Uploads remain gated on consent + a stored
- * API key, so baking in the URL only removes the endpoint-configuration step.
+ * Normalize the user's dashboard address: trimmed, and only an `https:` URL is
+ * accepted. Anything else (empty, `http:`, unparseable) yields `''`, which the
+ * sync engine reports as "misconfigured" rather than sending the API key over a
+ * plain or malformed connection. A trailing slash is dropped so endpoint paths
+ * join cleanly.
  */
-export const DASHBOARD_INGESTION_URL =
-  'https://ca-ao-dashboard.example.swedencentral.azurecontainerapps.io';
+export function normalizeDashboardUrl(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return '';
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:') {
+      return '';
+    }
+  } catch {
+    return '';
+  }
+  return trimmed.replace(/\/+$/, '');
+}
 
 /**
  * Stable, fully-qualified configuration key constants.
@@ -33,6 +48,7 @@ export const DASHBOARD_INGESTION_URL =
  * these exact keys — e.g. the sync engine reads `sync.enabled`).
  */
 export const ConfigKeys = {
+  syncDashboardUrl: 'sync.dashboardUrl',
   syncEnabled: 'sync.enabled',
   syncIntervalMinutes: 'sync.intervalMinutes',
   syncRepositoryMode: 'sync.repositoryMode',
@@ -81,6 +97,7 @@ export const ConfigKeys = {
 
 /** Default values mirroring the package.json contribution defaults. */
 export const ConfigDefaults = {
+  syncDashboardUrl: '',
   syncEnabled: false,
   syncIntervalMinutes: 60,
   syncRepositoryMode: 'include',
@@ -194,9 +211,17 @@ export class Configuration {
     return this.settings;
   }
 
-  /** Built-in cloud ingestion base URL (the deployed Azure dashboard). */
+  /**
+   * The team dashboard's base URL, or `''` when unset or not `https:`.
+   *
+   * The extension declares this setting with `application` scope, so only the
+   * user's own settings can set it. A workspace or folder `settings.json` can
+   * never redirect the bearer API key to another host.
+   */
   getDashboardUrl(): string {
-    return DASHBOARD_INGESTION_URL;
+    return normalizeDashboardUrl(
+      this.config().get<string>(ConfigKeys.syncDashboardUrl, ConfigDefaults.syncDashboardUrl),
+    );
   }
 
   /** Whether the user has opted in to cloud aggregate sharing (opt-out default). */

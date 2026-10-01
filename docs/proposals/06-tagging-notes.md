@@ -34,34 +34,34 @@ are also the natural input for comparisons and future per-tag rollups.
 **Goal.** Add per-session tags and notes, stored in JSON stores beside the
 existing renames, with tag chips, a tag filter, and note editing in the UI.
 
-**Grounding — what already exists**
+**Grounding: what already exists**
 
 - The exact pattern to copy: `RenameStore` in
   `src/desktop/agent-observability-desktop/src/datahost/renames.ts` (tests in
-  `renames.test.ts`) and `HiddenStore` in `src/datahost/hidden.ts` — JSON
+  `renames.test.ts`) and `HiddenStore` in `src/datahost/hidden.ts`: JSON
   files in `~/.agent-observability/desktop/` keyed by source + sessionId,
   deliberately **outside** `index.db` so a cache rebuild cannot lose user
   data. Atomic temp-file-plus-rename writes as in
   `src/datahost/drivers/desktopConfig.ts`.
 - Overlay precedent: search already runs a union pass over renames because
-  the index stores original titles (`indexDb.ts` + `useSessions.ts`) — tag
+  the index stores original titles (`indexDb.ts` + `useSessions.ts`). Tag
   filtering is the same kind of overlay: the store is small and in-memory in
   the datahost, so filter by intersecting the SQL page with the tag's session
   keys (or pass the keys into SQL as a list).
 - Row updates flow through the existing `sessions.upserted` push event, so
-  tagging updates rows in place without reordering — same as rename does
+  tagging updates rows in place without reordering, the same as rename does
   today.
 - RPC contract: `src/desktop/agent-observability-desktop/src/shared/rpc.ts`;
   dispatch: `src/datahost/index.ts`. List UI:
   `src/renderer/src/views/sessions/SessionsView.tsx` (row hover actions:
-  rename, remove — follow their interaction patterns); detail pane chrome:
+  rename, remove; follow their interaction patterns); detail pane chrome:
   `SessionDetail.tsx` (add tag/note controls in the React chrome around the
   iframe, **not** inside the rendered HTML document).
 
 **Implementation outline**
 
 1. **Stores.** `TagStore` (`tags.json`: map of `source:sessionId` to string
-   array, plus normalization — trim, collapse case for matching, keep display
+   array, plus normalization: trim, collapse case for matching, keep display
    case) and `NoteStore` (`notes.json`: map to a single string). Follow
    `RenameStore`'s shape, loading, and atomic-write behavior.
 2. **RPC.** `sessions.setTags(source, id, tags)`,
@@ -94,6 +94,6 @@ rename/merge tooling, syncing tags anywhere.
   list path.
 - `npm run typecheck -w agent-observability-desktop`,
   `npm test -w agent-observability-desktop`.
-- Manual: tag two sessions, filter by the tag — only they show; use **Rebuild
-  index** in the flow (or delete `index.db`) — tags and notes survive; note
+- Manual: tag two sessions, filter by the tag: only they show; use **Rebuild
+  index** in the flow (or delete `index.db`): tags and notes survive; note
   indicator appears and the note text round-trips after an app restart.

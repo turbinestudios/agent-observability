@@ -77,6 +77,7 @@ const EXPECTED_VIEWS = [
 ] as const;
 
 const EXPECTED_CONFIG_KEYS = [
+  'agentObservability.sync.dashboardUrl',
   'agentObservability.sync.enabled',
   'agentObservability.sync.intervalMinutes',
   'agentObservability.sync.repositoryMode',
@@ -154,6 +155,10 @@ describe('manifest contract is stable', () => {
     expect(Object.keys(props).sort()).toEqual([...EXPECTED_CONFIG_KEYS].sort());
 
     expect(props['agentObservability.sync.enabled'].default).toBe(false);
+    // The dashboard address decides where the API key goes: empty by default,
+    // and never settable from a workspace.
+    expect(props['agentObservability.sync.dashboardUrl'].default).toBe('');
+    expect(props['agentObservability.sync.dashboardUrl'].scope).toBe('application');
     expect(props['agentObservability.sync.intervalMinutes'].default).toBe(60);
     expect(props['agentObservability.sync.intervalMinutes'].minimum).toBe(5);
     expect(props['agentObservability.localTelemetry.enabled'].default).toBe(true);

@@ -1,8 +1,8 @@
 # Pseudonymization Strategy: Developer Identity
 
-Status: Proposed (Phase 0 contract)
-Owner: Aggregation and Privacy workstream
-Related: `docs/plans/planned/agent-observability-vscode-extension-refactor.md` (Phases 0, 4, 5)
+Status: Implemented, with one gap: the org-shared salt has no provisioning path yet (see
+[Implementation status](#implementation-status)). Code:
+`src/core/agent-observability-core/src/aggregate/pseudonymizer.ts`.
 
 ## Problem
 
@@ -14,16 +14,16 @@ The `spans`, `span_attributes`, and `span_events` tables carry only operational
 metadata (span timings, token counts, tool names, model names, session/conversation
 IDs) plus raw content attributes that must never leave the machine.
 
-By contrast, the cloud product the aggregate store must eventually replace
-(`Services/LogAnalyticsService.cs`) derives a developer dimension from
-`Properties["user.email"]` falling back to `UserId`:
+By contrast, the earlier cloud dashboard (`Services/LogAnalyticsService.cs`, since
+removed) derived a developer dimension from `Properties["user.email"]` falling back
+to `UserId`:
 
 ```kusto
 | extend Developer=coalesce(tostring(Properties["user.email"]), tostring(UserId), "unknown")
 ```
 
 That `user.email` came from the OTEL collector's enrichment context, **not** from
-Copilot telemetry. Once the collector path is retired (Phase 11), the only way to
+Copilot telemetry. With the collector path retired, the only way to
 populate a developer dimension for org-level pages
 (`DeveloperActivitySummary.Developer`, `DashboardMetrics.ActiveDevelopers`) is for
 the VS Code extension to **mint a pseudonymous developer id locally** and attach it
@@ -43,7 +43,7 @@ This document specifies how that id is minted.
 5. **Not cross-correlatable** outside the organization: the id must not be a global,
    org-independent fingerprint that lets a third party link the same person across
    unrelated orgs or datasets.
-6. **No raw identity input ever leaves the machine** — only the derived id does.
+6. **No raw identity input ever leaves the machine.** Only the derived id does.
 
 ## Identity inputs available locally
 
@@ -53,10 +53,10 @@ ambient host/VS Code signals.
 
 | Input | Source API | Stability | Collision risk | PII sensitivity |
 |---|---|---|---|---|
-| Git `user.email` | `git config --get user.email` (effective config) | High — set once per machine/global, rarely changes | Very low — globally unique by construction | High (is PII; must be hashed, never sent) |
-| Git `user.name` | `git config --get user.name` | Medium — display name, may be non-unique | Medium — common names collide | Medium |
-| OS username | `os.userInfo().username` / `$env:USERNAME` / `$USER` | Medium — stable per OS account, but resets on reinstall and differs per machine | Medium — "admin", "dev", "user" collide across machines | Medium |
-| VS Code `machineId` | `vscode.env.machineId` | High per machine — but **per machine, not per developer** | Low | Low (opaque) but identifies a device, not a person |
+| Git `user.email` | `git config --get user.email` (effective config) | High: set once per machine/global, rarely changes | Very low: globally unique by construction | High (is PII; must be hashed, never sent) |
+| Git `user.name` | `git config --get user.name` | Medium: display name, may be non-unique | Medium: common names collide | Medium |
+| OS username | `os.userInfo().username` / `$env:USERNAME` / `$USER` | Medium: stable per OS account, but resets on reinstall and differs per machine | Medium: "admin", "dev", "user" collide across machines | Medium |
+| VS Code `machineId` | `vscode.env.machineId` | High per machine, but **per machine, not per developer** | Low | Low (opaque) but identifies a device, not a person |
 
 ### Why git `user.email` is the primary input
 
@@ -67,7 +67,7 @@ ambient host/VS Code signals.
   so two developers will not collide.
 - **Org consistency across machines.** A developer who works from a laptop and a
   desktop usually configures the same git email on both. With an org-shared salt
-  (see below) this yields the **same** developer id from both machines — which is
+  (see below) this yields the **same** developer id from both machines, which is
   exactly the cross-machine dedup behavior `ActiveDevelopers` needs. `machineId`
   cannot do this because it is per device; `os username` cannot reliably do this
   because accounts differ per machine.
@@ -109,7 +109,7 @@ devId           = "dev_" + lowercaseHex(mac[0 .. 16])    // first 16 bytes -> 32
   thousands of developers) while keeping the id compact for storage as an Azure Table
   Storage key and for display.
 - **Prefix:** `dev_` so the value is self-describing in payloads, logs, and the
-  `Developer` column that replaces `LogAnalyticsService`'s `coalesce(...user.email...)`.
+  `Developer` dimension on the dashboard.
 
 Example output: `dev_9f2c1ab47e0d3f5a8b6c2d1e4f70a9c3`
 
@@ -117,25 +117,25 @@ Example output: `dev_9f2c1ab47e0d3f5a8b6c2d1e4f70a9c3`
 
 The salt is the security-critical parameter. Two options:
 
-**Option A — per-INSTALL random salt.** Generate 32 random bytes on first run, store
+**Option A: per-INSTALL random salt.** Generate 32 random bytes on first run, store
 in VS Code `SecretStorage`. The same developer is consistent **within that single
 install** but produces a *different* id on every reinstall and on every machine,
 because each install has its own salt. Cloud-side dedup across machines is impossible.
 
 - Pro: strongest unlinkability; no shared secret to distribute or protect.
-- Con: breaks goal 4 (org-level dedup). `ActiveDevelopers` would overcount —
+- Con: breaks goal 4 (org-level dedup). `ActiveDevelopers` would overcount:
   one person with a laptop + desktop counts as two, and a reinstall creates a third.
   Per-developer rollups fragment. This defeats the purpose of having a developer
   dimension at all.
 
-**Option B — ORG-shared salt.** A single secret salt is provisioned per organization
-(alongside the organization API key already planned in Phase 4) and stored in VS Code
+**Option B: ORG-shared salt.** A single secret salt is provisioned per organization
+(alongside the organization API key) and stored in VS Code
 `SecretStorage`. Every install in the org keys HMAC with the **same** salt, so the
 same git email deterministically produces the **same** id everywhere in the org.
 
-- Pro: satisfies goal 4 — cross-machine and cross-reinstall dedup works; `dcount`
+- Pro: satisfies goal 4. Cross-machine and cross-reinstall dedup works; `dcount`
   of developer id is a true headcount; per-developer rollups are stable.
-- Pro: still satisfies goals 3 and 5 — the id is not reversible without the salt, and
+- Pro: still satisfies goals 3 and 5. The id is not reversible without the salt, and
   because the salt is org-scoped the id is *not* a global fingerprint usable to
   correlate the same person across unrelated orgs.
 - Con: the salt is a shared secret. Anyone holding the org salt **plus** a candidate
@@ -147,15 +147,29 @@ same git email deterministically produces the **same** id everywhere in the org.
 > **Use Option B: an organization-shared salt.** It is the only option that delivers
 > org-level pseudonymity that is *stable for a developer within the org* while keeping
 > the id non-reversible to PII for the cloud service and non-correlatable across orgs.
-> The salt is provisioned with the org API key during Phase 4 setup and stored in VS
-> Code `SecretStorage`. It is used purely as the HMAC key and is **never transmitted**
+> The salt is meant to be provisioned with the org API key and stored in VS Code
+> `SecretStorage`. It is used purely as the HMAC key and is **never transmitted**
 > in any aggregate batch.
 
 Provisioning detail: the org salt is delivered to the extension out of band (e.g.,
 together with the org API key at onboarding) and written to `SecretStorage`. It is
 high-entropy (>= 32 random bytes), opaque, and rotatable. Rotating the salt
-re-pseudonymizes the whole org (all developers get new ids) — acceptable as a rare,
+re-pseudonymizes the whole org (all developers get new ids). That is acceptable as a rare,
 deliberate operation, not part of normal flow.
+
+### Implementation status
+
+The hashing, normalization, fallback order and output format below are implemented in
+`aggregate/pseudonymizer.ts` and used by the sync engine. Salt provisioning is not finished:
+
+- The VS Code extension keeps the salt in `SecretStorage`. If none is stored, it generates a
+  random 32-byte salt on first use (`SecretManager.getOrCreatePseudonymSalt`).
+- `SecretManager.setPseudonymSalt` can store an org-shared salt, but no command or setting
+  calls it yet, so there is no way for a developer to enter one.
+- In practice every install therefore uses its own random salt, which is Option A behavior: the
+  same developer gets a different id on each machine or reinstall, and `ActiveDevelopers` can
+  overcount. Ids are still not reversible and not correlatable across orgs.
+- The identity tier (below) is computed alongside the id but is not currently stored or shown.
 
 ## Output format
 
@@ -170,16 +184,15 @@ deliberate operation, not part of normal flow.
 | Example | `dev_9f2c1ab47e0d3f5a8b6c2d1e4f70a9c3` |
 
 This single string is the only identity-derived value placed in outgoing batches.
-It maps onto the `Developer` dimension currently produced by
-`LogAnalyticsService.GetDeveloperActivityAsync` and the `ActiveDevelopers` count in
-`DashboardMetrics`. The same pseudonymous id (and nothing more identity-derived) is
+It fills the `Developer` dimension of `DeveloperActivitySummary` and the
+`ActiveDevelopers` count in `DashboardMetrics`. The same pseudonymous id (and nothing more identity-derived) is
 also carried by the additive **context-insights batch**
 (`schemas/context-insights-batch.schema.json`), which conveys repository-relative
 **customization-file paths** (instructions/skills/prompts/agents/hooks) with counts
 only so teams can review context-engineering hotspots; it reuses this id derivation
 unchanged and ships no other identity input.
 
-### Identity tier marker (LOCAL-ONLY diagnostic — NOT shipped in v1)
+### Identity tier marker (LOCAL-ONLY diagnostic, NOT shipped in v1)
 
 Because the input may fall back from email to username to machineId, the extension
 records which input was used as a **tier** marker (`email` | `os_user` | `machine`).
@@ -187,7 +200,7 @@ records which input was used as a **tier** marker (`email` | `os_user` | `machin
 > **The tier marker is a LOCAL-ONLY diagnostic and MUST NOT appear in v1 aggregate
 > batches.** There is **no `tier` (or equivalent) field in the v1 aggregate batch
 > schema** (`schemas/aggregate-batch.schema.json`), and that schema sets
-> `additionalProperties: false` at every object level — so attaching a tier marker
+> `additionalProperties: false` at every object level, so attaching a tier marker
 > to a batch would cause the **entire batch to be rejected** by the ingestion API.
 > The tier is kept on the developer's machine only (e.g. for local diagnostics and
 > to flag lower-confidence ids in local tooling); it never travels to the cloud. If
@@ -195,7 +208,7 @@ records which input was used as a **tier** marker (`email` | `os_user` | `machin
 > explicit field and bump `schemaVersion` first.
 
 The tier is a category label, not an identity value, and reveals nothing about the
-developer — but it is still excluded from outgoing batches per the rule above.
+developer, but it is still excluded from outgoing batches per the rule above.
 
 ## Guarantees
 
@@ -205,7 +218,7 @@ developer — but it is still excluded from outgoing batches per the rule above.
   known candidate list.
 - **Salt never sent to cloud.** The org salt lives only in VS Code `SecretStorage` on
   developer machines and is used solely as the HMAC key. No payload field, log line,
-  sync-health report, or telemetry carries it. Privacy tests (Phase 5/6) must assert
+  sync-health report, or telemetry carries it. Privacy tests must assert
   the salt, all raw identity inputs, **and the local-only tier marker** are absent
   from every outgoing batch (the v1 schema has no `tier` field and would reject one).
 - **Same developer ⇒ same id within the org.** Deterministic HMAC + org-shared salt +
@@ -236,7 +249,7 @@ developer — but it is still excluded from outgoing batches per the rule above.
 
 - **Machine reinstall / new OS account.** With the recommended email input and the
   org-shared salt, a reinstall yields the **same** id as long as the developer
-  reconfigures the same git email — which is the normal case. (Under the rejected
+  reconfigures the same git email, which is the normal case. (Under the rejected
   per-install salt option this would have produced a new id, fragmenting the
   developer's history.) If the fallback tier was in use (username/machineId), a
   reinstall *will* produce a new id; this is an inherent limitation of those inputs.

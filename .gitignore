@@ -39,3 +39,24 @@ secrets.json
 Thumbs.db
 
 .env
+.env.*
+
+# Signing material. Never commit certificates or keys.
+*.p12
+*.p8
+*.pem
+*.pfx
+
+# TypeScript incremental build state
+*.tsbuildinfo
+
+# Local agent state (worktrees, local settings)
+.claude/
+
+# Telemetry databases and exports can hold real prompts and paths.
+# Only the sanitized test fixture is allowed in.
+*.db
+*.db-wal
+*.db-shm
+!tools/copilot-telemetry/fixtures/sample-agent-traces.db
+docs/agent-debug-logs/

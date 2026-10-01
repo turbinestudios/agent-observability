@@ -4,8 +4,8 @@ The host-independent core of Agent Observability: everything that reads, parses,
 analyzes, and renders agent sessions, with no dependency on any particular
 application shell.
 
-Two hosts consume it — the [VS Code extension](../../extension/agent-observability-vscode)
-and the standalone desktop app — so a fix to session parsing or a new data source
+Two hosts consume it (the [VS Code extension](../../extension/agent-observability-vscode)
+and the standalone desktop app), so a fix to session parsing or a new data source
 lands in both at once. The package is `private` and never published; it is
 consumed inside this repo through npm workspaces.
 
@@ -13,7 +13,7 @@ consumed inside this repo through npm workspaces.
 
 | Area | Contents |
 | --- | --- |
-| `sources/` | `SessionDataSource` + `SourceRegistry` — the central abstraction every UI reads through |
+| `sources/` | `SessionDataSource` + `SourceRegistry`: the central abstraction every UI reads through |
 | `telemetry/` | Copilot SQLite read layer, the shared session model (`models.ts`), snapshotting, titles, repository resolution |
 | `claude/` | Claude Code JSONL discovery, parsing, and mapping to the shared model |
 | `cloud/`, `cloud-agent/` | Copilot Cloud and autonomous-agent sources with their local sinks |
@@ -30,7 +30,7 @@ applies to Electron: this package must load in a plain Node process.
 When core needs something only a host can provide, it declares an interface and
 the host implements it. The existing seams are `Logger`, `SettingsReader`,
 `FileWatchFactory`, `SyncStateStore`, `HttpPoster`, `Clock`, and
-`CancellationToken` — prefer extending one of those over inventing a new
+`CancellationToken`. Prefer extending one of those over inventing a new
 abstraction.
 
 The telemetry query layer also accepts `ReadonlySqliteConnection` and
@@ -60,7 +60,7 @@ consumer's bundler compiles the TypeScript directly. Edit core and the extension
 picks it up on its next build, with no `dist` to keep in sync.
 
 `src/index.ts` re-exports the common entry points. Deep imports work too, and are
-preferred in large consumers so imports stay traceable — note the `/src/` segment,
+preferred in large consumers so imports stay traceable. Note the `/src/` segment,
 which is what makes the same specifier resolve under tsc, esbuild, vitest, and Vite:
 
 ```ts

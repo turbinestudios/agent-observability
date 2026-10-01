@@ -35,7 +35,7 @@ export {
   CONFIG_SECTION,
   ConfigKeys,
   ConfigDefaults,
-  DASHBOARD_INGESTION_URL,
+  normalizeDashboardUrl,
 } from './config/configuration';
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # Context-Insights Payload Schema v1
 
-Status: Accepted (context-engineering hotspots for sprint retros)
+Status: Implemented. Producer: `src/core/agent-observability-core/src/aggregate/contextInsightsAggregator.ts`. Consumer: `src/dashboard/AgentObservability.Dashboard/Services/Ingestion/ContextInsightsBatchValidator.cs`.
 Schema file: [`schemas/context-insights-batch.schema.json`](../../schemas/context-insights-batch.schema.json)
 `schemaVersion`: `"1.0"`
 
@@ -11,7 +11,7 @@ the JSON Schema is the source of truth and `"additionalProperties": false` at **
 is the privacy-enforcement mechanism.
 
 It is a **separate** contract from [`aggregate-batch.schema.json`](../../schemas/aggregate-batch.schema.json):
-the frozen v1 aggregate batch is untouched, so its privacy tests and invariants are unaffected. The
+the v1 aggregate batch is unchanged by it, so its privacy tests and invariants still hold. The
 two batches are produced in the same gated sync cycle, share the same `pseudonymousDeveloperId`
 derivation and 30-minute `bucketStart` alignment, and are reviewed over the same sprint window.
 
@@ -30,7 +30,7 @@ refining. Four signals are aggregated per file:
 | Friction co-occurrence | `sessionsWithErrorCount`, `sessionsWithDeviationCount` | Files present when errors / workflow deviations occurred |
 | Frequently applied  | `appliedCount`, `distinctSessionCount`       | High-impact files worth investing in                     |
 
-The two friction measures are **co-occurrence only** — a file being present in a session that
+The two friction measures are **co-occurrence only**: a file being present in a session that
 errored or deviated is **not** a causal claim. The dashboard labels them accordingly.
 
 ---
@@ -45,7 +45,7 @@ scoped so the incremental disclosure is bounded and predictable:
 - **Repo-relative POSIX paths only.** The extension resolves each customization file against the
   developer's **open workspace** and emits a repo-relative path. Files that do not resolve inside
   the repo (user/global-scope customization files, e.g. in the VS Code user prompts folder) are
-  **dropped** — this is how "repo-scoped only" is enforced.
+  **dropped**. This is how "repo-scoped only" is enforced.
 - **The path pattern forbids**, structurally: a leading `/`, drive letters, backslashes, `..`
   segments (no traversal), and any character outside `[A-Za-z0-9_.-]` per segment (no whitespace,
   `@`, `?`, `#`, `:`). The filename MUST match an allowlist suffix
@@ -78,7 +78,7 @@ One batch covers one contiguous UTC `window` for one developer.
 | `toolVersion`             | string (semver) |   yes    | Extension version.                                                                     |
 | `pseudonymousDeveloperId` | string (36)     |   yes    | `^dev_[0-9a-f]{32}$`. Same derivation as the aggregate batch.                           |
 | `window`                  | object          |   yes    | Closed-open UTC range `[start, end)`; `end` > `start`; `additionalProperties:false`.   |
-| `rows`                    | array           |   yes    | Pre-aggregated context-file rows (may be empty — a valid heartbeat).                   |
+| `rows`                    | array           |   yes    | Pre-aggregated context-file rows (may be empty, a valid heartbeat).                    |
 
 ---
 
@@ -90,12 +90,12 @@ repository, contextFile, category].join('|'))`.
 
 | Field                        | Type                | Additive? | Notes                                                                       |
 | ---------------------------- | ------------------- | :-------: | --------------------------------------------------------------------------- |
-| `rowKey`                     | string (1–128)      |     —     | Per-row idempotency key (upsert, latest-wins).                              |
-| `bucketStart`                | date-time           |     —     | 30-minute-aligned UTC bin start.                                            |
-| `bucketDurationSeconds`      | integer const 1800  |     —     | Global invariant.                                                          |
-| `repository`                 | string (sanitized)  |     —     | `https://{host}/{owner}/{repo}` or `unknown`.                               |
-| `contextFile`                | string (repo-rel)   |     —     | Allowlisted repo-relative POSIX path. See §2.                              |
-| `category`                   | enum                |     —     | `instruction \| skill \| agent \| hook \| prompt` (`unknown` dropped).      |
+| `rowKey`                     | string (1–128)      |    n/a    | Per-row idempotency key (upsert, latest-wins).                              |
+| `bucketStart`                | date-time           |    n/a    | 30-minute-aligned UTC bin start.                                            |
+| `bucketDurationSeconds`      | integer const 1800  |    n/a    | Global invariant.                                                          |
+| `repository`                 | string (sanitized)  |    n/a    | `https://{host}/{owner}/{repo}` or `unknown`.                               |
+| `contextFile`                | string (repo-rel)   |    n/a    | Allowlisted repo-relative POSIX path. See §2.                              |
+| `category`                   | enum                |    n/a    | `instruction \| skill \| agent \| hook \| prompt` (`unknown` dropped).      |
 | `appliedCount`               | integer ≥ 0         |    yes    | Times applied (loaded into context).                                       |
 | `skippedCount`               | integer ≥ 0         |    yes    | Times discovered but skipped.                                              |
 | `skipReasonCounts`           | object (closed-set) |    yes    | OPTIONAL; `{ applyToNoMatch?, other? }`. Omitted when `skippedCount` = 0.   |

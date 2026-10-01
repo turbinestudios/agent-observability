@@ -32,6 +32,19 @@ param ingestionKeyPepper string
 @description('Organization id filter for aggregate analytics (Analytics:OrgId). Empty = all orgs.')
 param analyticsOrgId string = ''
 
+@description('Client id of the Entra ID app registration used to sign in to the dashboard. Empty turns sign-in off, which leaves the dashboard pages open to anyone with the URL.')
+param authClientId string = ''
+
+@secure()
+@description('Client secret of that app registration. Required when authClientId is set.')
+param authClientSecret string = ''
+
+@description('Entra ID tenant that users sign in with.')
+param authTenantId string = subscription().tenantId
+
+var authEnabled = !empty(authClientId)
+var authSecretName = 'microsoft-provider-authentication-secret'
+
 resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
@@ -56,12 +69,17 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
           identity: dashboardIdentityId
         }
       ]
-      secrets: [
+      secrets: concat([
         {
           name: 'ingestion-key-pepper'
           value: ingestionKeyPepper
         }
-      ]
+      ], authEnabled ? [
+        {
+          name: authSecretName
+          value: authClientSecret
+        }
+      ] : [])
     }
     template: {
       containers: [
@@ -103,6 +121,42 @@ resource dashboardApp 'Microsoft.App/containerApps@2024-03-01' = {
       scale: {
         minReplicas: 0
         maxReplicas: 3
+      }
+    }
+  }
+}
+
+// Sign-in for the dashboard pages (Container Apps built-in authentication).
+// The ingestion and relay endpoints stay outside it: they are called by the
+// extension and agents, not people, and check an org API key themselves.
+resource dashboardAuth 'Microsoft.App/containerApps/authConfigs@2024-03-01' = if (authEnabled) {
+  parent: dashboardApp
+  name: 'current'
+  properties: {
+    platform: {
+      enabled: true
+    }
+    globalValidation: {
+      unauthenticatedClientAction: 'RedirectToLoginPage'
+      redirectToProvider: 'azureactivedirectory'
+      excludedPaths: [
+        '/api/ingest/*'
+        '/agent-otlp/*'
+      ]
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: authClientId
+          clientSecretSettingName: authSecretName
+          openIdIssuer: '${environment().authentication.loginEndpoint}${authTenantId}/v2.0'
+        }
+        validation: {
+          allowedAudiences: [
+            'api://${authClientId}'
+          ]
+        }
       }
     }
   }

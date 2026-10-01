@@ -5,12 +5,11 @@
  */
 interface ImportMetaEnv {
   /**
-   * Fine-grained GitHub PAT (contents: read, this repo only) that lets the
-   * auto-updater read release assets on the INTERNAL-visibility repo. CI sets
-   * it from the DESKTOP_UPDATE_TOKEN secret; local builds lack it, which
-   * disables update checks.
+   * `'1'` in official release builds, which turns on update checks against the
+   * public release feed. The release workflow sets it; local builds and forks
+   * lack it, which disables update checks. Not a secret.
    */
-  readonly MAIN_VITE_UPDATE_TOKEN?: string;
+  readonly MAIN_VITE_ENABLE_UPDATES?: string;
 }
 
 interface ImportMeta {

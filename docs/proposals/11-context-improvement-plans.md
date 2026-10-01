@@ -5,7 +5,7 @@
 As a developer maintaining CLAUDE.md, AGENTS.md, and instruction files, I want
 to pick the context files my agents overload or skip and the sessions that
 struggled, send that evidence to my own AI CLI, and get back a concrete,
-appliable plan for how those files should change — so that tuning context
+appliable plan for how those files should change, so that tuning context
 stops being guesswork and the observability data starts fixing the thing it
 measures.
 
@@ -15,13 +15,13 @@ measures.
   (from the hotspots ranking) and up to 5 of its judged sessions (from the
   retro ranking), and generate a plan; the Hotspots and Retro views offer an
   "Improve context…" door once a repository is selected.
-- Generation runs through my selected AI backend — Claude Code or the GitHub
-  Copilot CLI — and is double-gated: a default-off Settings toggle, plus a
+- Generation runs through my selected AI backend (Claude Code or the GitHub
+  Copilot CLI) and is double-gated: a default-off Settings toggle, plus a
   per-generation dialog naming the vendor and exactly what is sent. The
   datahost refuses a gate-off call independently of the renderer.
 - The plan renders as markdown with a machine-readable edit list; proposals
   that fail validation are dropped and counted visibly. A reply with no
-  readable edit block still shows its narrative — Apply is simply absent.
+  readable edit block still shows its narrative; Apply is simply absent.
 - Each proposed edit can be previewed as a diff against the file **as it is
   now** and applied individually; a file changed since generation refuses as
   stale, applied files can be undone from an automatic backup, and nothing is
@@ -34,7 +34,7 @@ measures.
 
 Every prior proposal measures context: proposal 3 ranks the files agents
 load, proposal 9 judges how sessions went, proposal 10 lets the developer ask
-why. This one closes the loop the product exists for — it turns that evidence
+why. This one closes the loop the product exists for: it turns that evidence
 into reviewed, reversible changes to the instruction files themselves, which
 are the main lever a team has over agent behavior.
 
@@ -46,13 +46,13 @@ JSON contract (full-file replacements, never hunks), a gated datahost runner
 mirroring the deep retrospective's, a JSON plan store with undo backups, and
 an apply path constrained to the customization allowlist.
 
-**Grounding — what already exists (all shipped with this proposal)**
+**Grounding: what already exists (all shipped with this proposal)**
 
 - Core task: `src/core/agent-observability-core/src/chat/tasks/contextImprovement.ts`
   (`IMPROVE_LIMITS`, `buildContextImprovementPrompt`, `parseContextPlan`);
   diffing in `core/src/text/lineDiff.ts`; repo-root climb via `findRepoRoot`
   in `chat/tasks/projectContext.ts`, contents via `gatherProjectContextFiles`.
-- Backends: the shared `ChatBackend` registry — `claudeCodeBackend.ts` and
+- Backends: the shared `ChatBackend` registry: `claudeCodeBackend.ts` and
   `copilotCliBackend.ts` (`copilotCliArgs.ts` documents the probed CLI
   behavior, including the payload-file transport for large prompts).
 - Desktop: `datahost/improve/contextPlan.ts` (gate `improve.enabled`, 240 s
@@ -65,7 +65,7 @@ an apply path constrained to the customization allowlist.
 
 **Constraints**
 
-- **Privacy — the third sanctioned exception.** See `AGENTS.md` (which also
+- **Privacy: the third sanctioned exception.** See `AGENTS.md` (which also
   defines the one sanctioned local write path this proposal introduces) and
   `docs/privacy-validation.md` rows 17–18. Ground rule 1 in this folder's
   README names all three exceptions. Nothing else may cite them as precedent.

@@ -1,39 +1,41 @@
 # Privacy Validation: Checklist & Enforcement
 
-This document states the **end-to-end privacy guarantee** of Agent Observability
+This document states the **overall privacy guarantee** of Agent Observability
 and lists exactly **how each part is enforced and tested** in code. It is the
-reference for auditing the privacy-first refactor.
+reference for a privacy audit.
 
 ## End-to-end guarantee
 
-> **No raw prompt, response, tool I/O, reasoning, hook, or session content — and
+> **No raw prompt, response, tool I/O, reasoning, hook, or session content, and
 > no source-file paths, file contents, commit hashes, branch names, machine
-> name, OS username, or developer email — ever reaches the cloud.** Raw content
+> name, OS username, or developer email, ever reaches the cloud.** Raw content
 > is readable **only locally** inside the VS Code extension. The cloud receives
-> **only** two strict batch contracts — the **aggregate batch** and the
-> **context-insights batch** — and **only** after explicit, per-developer
-> opt-in. The single exception to "no paths" is deliberate and narrow: the
+> **only** two strict batch contracts (the **aggregate batch** and the
+> **context-insights batch**), and **only** after explicit, per-developer
+> opt-in. Those batches go **only** to the dashboard address the user sets in
+> `agentObservability.sync.dashboardUrl`, a user-settings-only, `https://`-only
+> setting that is empty by default, so nothing uploads until the user sets it. The single exception to "no paths" is deliberate and narrow: the
 > context-insights batch carries the **repository-relative paths of
 > customization files only** (instructions/skills/prompts/agents/hooks), with
 > counts and never contents, so teams can review context-engineering hotspots.
 > Three further deliberate, narrow exceptions exist for **content**, all
-> confined to the desktop app and to the user's own local AI CLI login —
+> confined to the desktop app and to the user's own local AI CLI login:
 > Claude Code (`claude`, to Anthropic) or the GitHub Copilot CLI (`copilot`,
 > to GitHub), whichever backend Settings selects; never an API key of this
-> product — all only ever user-initiated and never background, and all
-> entirely independent of the aggregate/context-insights upload paths, which
+> product. All three are only ever user-initiated and never background, and
+> all are entirely independent of the aggregate/context-insights upload paths, which
 > never carry raw content. The opt-in **Deep Retrospective** sends one
-> session's transcript digest to the selected vendor — only after the user
+> session's transcript digest to the selected vendor, only after the user
 > enables it in Settings (off by default) **and** confirms a per-session
 > dialog naming exactly what is sent. The **AI Helper** chat sends each
-> message the user explicitly submits — their question, a summary of recent
-> sessions (titles, repositories, verdicts, token and cost figures), and,
+> message the user explicitly submits (their question, a summary of recent
+> sessions with titles, repositories, verdicts, token and cost figures, and,
 > when the user attaches a session, capped excerpts of its prompts and
-> responses — after a one-time first-use notice in the view naming exactly
+> responses) after a one-time first-use notice in the view naming exactly
 > that, enforced again in the data host. The opt-in **Context Improvement
 > Plan** sends the selected context files' usage statistics, the selected
 > sessions' retrospective evidence (titles and goals included), and the
-> repository's context-file contents (capped) — only after the user enables
+> repository's context-file contents (capped), only after the user enables
 > it in Settings (off by default) **and** confirms a per-generation dialog
 > naming the vendor and that payload, enforced again in the data host.
 > Applying a plan is the product's one sanctioned **local write path**:
@@ -52,21 +54,22 @@ and rejects raw/free-text fields even though it does not trust the client.
 | 1 | Extension reads only **safe metadata** for aggregation; raw content is shown **locally only** | `src/extension/.../telemetry/database.ts` (typed safe-metadata queries; the single raw-content read feeds only the local session-detail view) | `telemetry/safety.test.ts`, `telemetry/sessionDetail.test.ts` |
 | 2 | Local DB opened **read-only**: extension on a snapshot, desktop in a short-lived native read transaction; source never mutated | core `telemetry/snapshot.ts`, `telemetry/database.ts`; desktop `datahost/drivers/nativeTelemetryBackend.ts` | core `telemetry/safety.test.ts`; desktop `datahost/drivers/nativeTelemetryBackend.test.ts` (writes throw, source unchanged, snapshot parity, WAL readers released) |
 | 3 | Aggregate batch contains **no raw-content markers**, no redaction placeholder, no email-shaped string, no `@` in repositories | `aggregate/aggregator.ts` (+ `pseudonymizer.ts`, `repositoryUrl.ts`) | `aggregate/privacy.test.ts` (real fixture, scans every string) |
-| 4 | Aggregate batch validates against the strict shared schema — `additionalProperties:false` so unexpected/raw fields are rejected | `schemas/aggregate-batch.schema.json` (shared contract) | `aggregate/privacy.test.ts` test (1) compiles with ajv 2020 `strict:true` and validates |
-| 5 | Repository is `unknown` or a sanitized `https?://host/path` URL — no credentials/PII | `telemetry/repositoryUrl.ts` (`REPOSITORY_PATTERN`) + schema pattern | `aggregate/privacy.test.ts` tests (2),(3); `telemetry/repositoryUrl.test.ts` |
+| 4 | Aggregate batch validates against the strict shared schema: `additionalProperties:false`, so unexpected/raw fields are rejected | `schemas/aggregate-batch.schema.json` (shared contract) | `aggregate/privacy.test.ts` test (1) compiles with ajv 2020 `strict:true` and validates |
+| 5 | Repository is `unknown` or a sanitized `https?://host/path` URL, with no credentials/PII | `telemetry/repositoryUrl.ts` (`REPOSITORY_PATTERN`) + schema pattern | `aggregate/privacy.test.ts` tests (2),(3); `telemetry/repositoryUrl.test.ts` |
 | 6 | Developer id is **pseudonymous** (`dev_[0-9a-f]{32}`), salted, irreversible | `aggregate/pseudonymizer.ts`, `secrets/pseudonymize.ts` | `aggregate/privacy.test.ts` test (4); `secrets/pseudonymize.test.ts` |
 | 7 | `repositoryBranch` is **omitted by default** and length/charset-capped when present | extension aggregator; server `AggregateBatchValidator` | `aggregate/privacy.test.ts` (branch marker absent); server `ValidatorTests` |
 | 8 | Sharing is **opt-in, off by default**; sync blocked unless consent **and** key present | `consent/consentManager.ts`, `consent/syncGate.ts`, package `agentObservability.sync.enabled=false` | `consent/syncGate.test.ts`, `consent/consentDisclosure.test.ts` |
 | 9 | API key stored **only** in SecretStorage; never in settings/files/logs | `secrets/secretManager.ts` | `secrets/*` tests; see `docs/architecture/api-auth.md` §2 |
 | 10 | Server re-validates the batch and **rejects raw/free-text fields** (defense in depth) | `Services/Ingestion/AggregateBatchValidator.cs` | `ValidatorTests.cs`, `IngestionPipelineTests.cs` |
 | 11 | `orgId` derived from the **key record**, never the payload | `Services/Ingestion/IngestionAuthenticator.cs` | `IngestionPipelineTests.cs` |
-| 12 | Dashboard exposes **no raw-telemetry query or polling surface** — AI/KQL widget queries and cloud-side deviation polling were removed; it renders only aggregate analytics from Table Storage | `Services/Analytics/AggregateAnalyticsService.cs` (sole analytics path) | `AggregateAnalyticsServiceTests.cs` |
+| 12 | Dashboard exposes **no raw-telemetry query or polling surface**: AI/KQL widget queries and cloud-side deviation polling were removed; it renders only aggregate analytics from Table Storage | `Services/Analytics/AggregateAnalyticsService.cs` (sole analytics path) | `AggregateAnalyticsServiceTests.cs` |
 | 13 | **Context-insights** batch carries customization-file paths **only** (allowlisted, repo-relative, no `..`/drive/`@`), never source/doc paths or contents | extension `aggregate/customizationFilter.ts` (`SAFE_CONTEXT_FILE_PATTERN`, repo-scoped resolver) + `schemas/context-insights-batch.schema.json` | `aggregate/contextInsightsPrivacy.test.ts` (adversarial inputs; scans every string) |
-| 14 | Skip reasons reduced to a **closed taxonomy** (`applyToNoMatch`/`other`) — raw reason text never transmitted | `aggregate/contextInsightsExtractor.ts` (`classifySkipReason`) | `aggregate/contextInsightsPrivacy.test.ts` (raw reason absent) |
+| 14 | Skip reasons reduced to a **closed taxonomy** (`applyToNoMatch`/`other`); raw reason text never transmitted | `aggregate/contextInsightsExtractor.ts` (`classifySkipReason`) | `aggregate/contextInsightsPrivacy.test.ts` (raw reason absent) |
 | 15 | Server re-validates the context-insights batch and **rejects absolute/traversal/non-allowlisted paths** and unknown fields | `Services/Ingestion/ContextInsightsBatchValidator.cs` | `ContextInsightsValidatorTests.cs`, `ContextInsightsIngestionTests.cs` |
-| 16 | **Copilot (Cloud)** source is **pull-only**: raw cloud prompts / tool I/O / assistant text land on **local disk only** (home-dir sink) and the source uploads **nothing** — `getAggregationRows` returns `[]` in the current phases | `src/cloud/cloudSink.ts` (local sink), `src/cloud/copilotCloudSource.ts` (`getAggregationRows` → `[]`) | `src/cloud/copilotCloudSource.test.ts → getAggregationRows returns [] (cloud sessions are local-only through Phase 3)` |
+| 16 | **Copilot (Cloud)** source is **pull-only**: raw cloud prompts / tool I/O / assistant text land on **local disk only** (home-dir sink) and the source uploads **nothing**: `getAggregationRows` returns `[]` | `src/cloud/cloudSink.ts` (local sink), `src/cloud/copilotCloudSource.ts` (`getAggregationRows` → `[]`) | `src/cloud/copilotCloudSource.test.ts` (`getAggregationRows returns []` test) |
 | 17 | **Context Improvement Plans** are double-gated (default-off setting + per-generation dialog naming vendor and payload) and the data host refuses a gate-off call **before** anything is assembled or sent | desktop `datahost/improve/contextPlan.ts` (`IMPROVE_ENABLED_KEY` check first) | `datahost/improve/contextPlan.test.ts` ("gate off … CLI seam is never touched") |
-| 18 | The plan **write path** is constrained to `SAFE_CONTEXT_FILE_PATTERN` files under the plan's re-verified repo root — traversal refused, staleness-checked (sha256 against generation), backed up before writing, **no delete action exists** | desktop `datahost/improve/contextPlanApply.ts` (allowlist re-check, `path.relative` guard, backup-then-write) | `datahost/improve/contextPlanApply.test.ts` (tampered path, moved root, stale, undo, never-delete) |
+| 18 | The plan **write path** is constrained to `SAFE_CONTEXT_FILE_PATTERN` files under the plan's re-verified repo root: traversal refused, staleness-checked (sha256 against generation), backed up before writing, **no delete action exists** | desktop `datahost/improve/contextPlanApply.ts` (allowlist re-check, `path.relative` guard, backup-then-write) | `datahost/improve/contextPlanApply.test.ts` (tampered path, moved root, stale, undo, never-delete) |
+| 19 | Batches go **only** to the user-set dashboard address: `agentObservability.sync.dashboardUrl` is `application`-scoped (user settings only, so a workspace or folder setting cannot redirect the API key), **empty by default**, and **`https://` only**; any other value counts as unset, and sync reports "misconfigured" and uploads nothing | extension `package.json` (`"scope": "application"`, `https://`-or-empty pattern); core `config/configuration.ts` (`normalizeDashboardUrl`), `sync/syncClient.ts` | `config/configuration.test.ts`; `sync/syncClient.test.ts` ("missing dashboard URL -> misconfigured (no POST attempted)"); `sync/syncEngine.test.ts` |
 
 ## Client-side enforcement (VS Code extension)
 
@@ -90,28 +93,27 @@ The **Copilot (Cloud)** source *pulls* GitHub Copilot cloud coding-agent
 sessions **down** from the GitHub API into a local sink under the home directory
 (`src/cloud/cloudSink.ts`) and renders them like any other session. Like the
 local Copilot content read, the sink stores **raw prompts, tool input/output,
-and assistant text on local disk only** — the same sensitivity class as
+and assistant text on local disk only**, the same sensitivity class as
 Copilot's local `span_attributes`. This source uploads **nothing**: its
 `getAggregationRows` returns `[]`, so nothing cloud-agent-related enters the
-aggregate batch in the current phases. Enforced in
-`src/cloud/copilotCloudSource.ts` and locked by
-**`src/cloud/copilotCloudSource.test.ts → getAggregationRows returns [] (cloud
-sessions are local-only through Phase 3)`**.
+aggregate batch. Enforced in `src/cloud/copilotCloudSource.ts` and locked by
+the **`getAggregationRows returns []`** test in
+`src/cloud/copilotCloudSource.test.ts`.
 
 One nuance is inherent to pulling org-visible data down rather than reading only
 your own machine: with `agentObservability.copilotCloud.scope` set to `'repos'`,
 the source also fetches the workspace repositories' tasks, so a user can see
-**teammates' prompts locally** — exactly the same access control github.com
+**teammates' prompts locally**. This is exactly the same access control github.com
 already grants that user, and still nothing is uploaded. The default scope
 `'my-tasks'` keeps it **personal** (only the authenticated user's own tasks).
 
 ### The critical regression test: `aggregate/privacy.test.ts`
 
 This test builds a **real** aggregate batch from real fixture telemetry (the same
-read path the extension uses) and proves the contract end-to-end:
+read path the extension uses) and proves the whole contract:
 
 1. The batch validates against the strict shared JSON Schema via **ajv 2020**
-   (`strict:true`) — proving `additionalProperties:false` holds, so no
+   (`strict:true`), proving `additionalProperties:false` holds, so no
    unexpected/raw field can leak.
 2. No string anywhere in the batch contains any of the **16 forbidden markers**
    (the 12 raw-content attribute keys plus borderline/identifying fields such as
@@ -127,12 +129,12 @@ read path the extension uses) and proves the contract end-to-end:
 
 This test drives the **real producer pipeline** (build repo customization index →
 extract observations → aggregate batch) with a deliberately **adversarial** mix
-of inputs — absolute/global-scope prompt paths, `..` traversal, ambiguous names,
+of inputs (absolute/global-scope prompt paths, `..` traversal, ambiguous names,
 non-allowlisted files, and a skip event whose raw reason embeds a username and
-absolute path — and proves end-to-end that:
+absolute path) and proves that:
 
 1. The batch validates against `schemas/context-insights-batch.schema.json` via
-   **ajv 2020** (`strict:true`) — `additionalProperties:false` holds.
+   **ajv 2020** (`strict:true`): `additionalProperties:false` holds.
 2. **Only** safe, in-repo, allowlisted customization paths survive; every
    adversarial input is dropped.
 3. No string in the batch contains an absolute path, drive letter, `..`, `@`,
@@ -166,7 +168,7 @@ in an allowlisted customization suffix (`*.instructions.md`, `*.prompt.md`,
 every level, reuses the repository and `dev_[0-9a-f]{32}` patterns, fixes the
 category enum (`instruction|skill|agent|hook|prompt`), and restricts skip
 reasons to the closed `{applyToNoMatch, other}` set. File **contents** are never
-read — token size is estimated from file **size** only.
+read; token size is estimated from file **size** only.
 
 ## Server-side enforcement (dashboard)
 
@@ -179,7 +181,7 @@ Located at
 `src/dashboard/AgentObservability.Dashboard/Services/Ingestion/AggregateBatchValidator.cs`.
 Re-validates a deserialized batch and rejects (400) on any problem. Key guards:
 
-- **Repository `@`/`?`/`#`/whitespace rejection** — belt-and-suspenders so a
+- **Repository `@`/`?`/`#`/whitespace rejection**: belt-and-suspenders so a
   producer sanitization mistake cannot leak a PAT/credential or free text to
   storage; repository must be `unknown` or a sanitized `https?://host/path` URL.
 - **`agentMode`** restricted to the closed set `default|ask|edit|agent|custom`
@@ -201,9 +203,9 @@ Located at
 `src/dashboard/AgentObservability.Dashboard/Services/Ingestion/ContextInsightsBatchValidator.cs`.
 Re-validates the context-insights batch and rejects (400) on any problem. Its
 most important guard is `ValidateContextFile`, which **independently** rejects
-any `contextFile` that is not a repo-relative, allowlisted customization path —
-running explicit pre-checks for `\`, `:`, leading `/`, `..`, `@`, `?`, `#`, and
-whitespace **before** the allowlist regex — so an absolute path, home directory,
+any `contextFile` that is not a repo-relative, allowlisted customization path.
+It runs explicit pre-checks for `\`, `:`, leading `/`, `..`, `@`, `?`, `#`, and
+whitespace **before** the allowlist regex, so an absolute path, home directory,
 drive letter, traversal, or non-customization (source/doc) file can never reach
 storage. It also re-checks the repository, developer-id, category, and bucket
 duration, and that `skipReasonCounts` are non-negative and sum to `<=
@@ -235,7 +237,6 @@ detection runs **locally** in the extension.
 
 There is no runtime rollback to raw behavior: the raw-query/alert code paths and
 their config flags no longer exist. Restoring legacy raw analytics requires
-redeploying a pre-cleanup `infra/` + dashboard image tag. See
-[`docs/migration.md`](migration.md) §(f). Under the current configuration the
-end-to-end guarantee above holds by construction: no raw prompt/response/session
+redeploying a pre-cleanup `infra/` + dashboard image tag. Under the current
+configuration the guarantee above holds by construction: no raw prompt/response/session
 content reaches the cloud.

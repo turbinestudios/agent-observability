@@ -3,8 +3,8 @@
 ## User story
 
 As a developer reviewing agent runs, I want abnormal runs flagged
-automatically — turns that failed too often, ran too long, or skipped expected
-workflow steps — so that I know where to look first instead of reading every
+automatically (turns that failed too often, ran too long, or skipped expected
+workflow steps), so that I know where to look first instead of reading every
 session.
 
 **Acceptance criteria**
@@ -13,7 +13,7 @@ session.
   whose tool-failure rate exceeds 50% (over at least 3 interactions) or a
   session exceeding the configured duration limit produces a deviation card on
   the affected turn in the detail Timeline.
-- The Timeline heading counts them ("N turn(s) · M workflow divergence(s)") —
+- The Timeline heading counts them ("N turn(s) · M workflow divergence(s)");
   core already renders this once deviations are supplied.
 - Session list rows show an unobtrusive indicator when a session has
   deviations, and a filter chip shows only flagged sessions.
@@ -25,8 +25,8 @@ session.
 
 ## Why this matters for research
 
-This is the product's built-in anomaly detector — four deviation types,
-evaluated per user-request turn, with a sensible zero-config default — and the
+This is the product's built-in anomaly detector (four deviation types,
+evaluated per user-request turn, with a sensible zero-config default), and the
 desktop app deliberately stubs it off. Turning it on converts "scroll and
 hope" into "start with the flagged runs", and the list-level flag makes
 deviation rate a trackable process metric over time.
@@ -37,7 +37,7 @@ deviation rate a trackable process metric over time.
 detector, surface per-turn cards in the detail view, and add a per-session
 deviation count to the index for list badges and filtering.
 
-**Grounding — what already exists**
+**Grounding: what already exists**
 
 - The stub: `noDeviations()` at
   `src/desktop/agent-observability-desktop/src/datahost/detail/detailRenderer.ts:149`
@@ -51,7 +51,7 @@ deviation count to the index for list badges and filtering.
   `deviation/models.ts`. When no workflow is configured it synthesizes a
   default per repository: empty sequence, timeout and tool-anomaly checks on.
 - Card rendering already exists in core's `views/sessionDetailHtml.ts` (around
-  lines 1279–1310) — cards appear as soon as non-empty deviation arrays are
+  lines 1279–1310); cards appear as soon as non-empty deviation arrays are
   passed.
 - Config plumbing is free: the desktop's `DesktopSettingsReader`
   (`src/desktop/agent-observability-desktop/src/datahost/drivers/desktopConfig.ts`)
@@ -60,7 +60,7 @@ deviation count to the index for list badges and filtering.
   `config.json` unchanged. Workflow config schema:
   `schemas/workflow-config.schema.json`; parser:
   `src/core/agent-observability-core/src/config/workflowParsing.ts`.
-- Wiring reference — how the VS Code extension produces per-turn deviations
+- Wiring reference: how the VS Code extension produces per-turn deviations
   for the same renderer:
   `src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts`.
 - Content predicates need a `ContentLookup` (attribute to span-value map):
@@ -75,7 +75,7 @@ deviation count to the index for list badges and filtering.
    `Interaction`s by user-request turn (core's `turnGrouping`; mirror the
    extension's wiring) and call `LocalDeviationDetector.detectForTurns`,
    passing the source-appropriate `ContentLookup`. If content-lookup plumbing
-   proves heavy, ship metadata-only predicates first — content predicates are
+   proves heavy, ship metadata-only predicates first; content predicates are
    additive.
 2. **Index flag.** Add an INTEGER `deviation_count` column to the `sessions`
    table in
@@ -95,7 +95,7 @@ deviation count to the index for list badges and filtering.
 
 **Constraints.** All ground rules in
 [README.md](README.md#ground-rules-every-agent-spec-inherits-these).
-Deviations are local-only by design — content-derived ones are barred from
+Deviations are local-only by design: content-derived ones are barred from
 sync by construction; do not add any deviation field to aggregate paths.
 
 **Out of scope.** A workflow editor UI; toast notifications (the extension's
@@ -105,12 +105,12 @@ sync by construction; do not add any deviation field to aggregate paths.
 
 - Unit tests: an indexer populates `deviation_count` for a fixture session
   with a mostly-failing turn; the detail renderer passes non-empty deviation
-  arrays through (assert cards present in rendered HTML — see core's
+  arrays through (assert cards present in rendered HTML; see core's
   `sessionDetailHtml.test.ts` for patterns).
 - `npm run typecheck -w agent-observability-desktop`,
   `npm test -w agent-observability-desktop`; if core needed a small export,
   run workspace-wide tests too.
-- Manual: open a session known to contain failed tool calls — a deviation
+- Manual: open a session known to contain failed tool calls: a deviation
   card appears on the turn; the filter chip shows only flagged sessions;
   setting a tiny `deviation.maxSessionMinutes` in config flags long sessions
   after a refresh.

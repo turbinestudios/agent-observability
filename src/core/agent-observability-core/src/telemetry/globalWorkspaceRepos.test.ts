@@ -10,8 +10,8 @@ const norm = (p: string | undefined): string | undefined => p?.replace(/\\/g, '/
 
 describe('workspaceFolderLocalPath', () => {
   it('decodes a Windows file: folder URI to a drive path', () => {
-    expect(norm(workspaceFolderLocalPath('file:///c%3A/Projects/example-org/cm'))).toBe(
-      'c:/Projects/example-org/cm',
+    expect(norm(workspaceFolderLocalPath('file:///c%3A/Projects/example-org/app'))).toBe(
+      'c:/Projects/example-org/app',
     );
   });
 

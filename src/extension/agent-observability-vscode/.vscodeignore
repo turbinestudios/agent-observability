@@ -34,3 +34,5 @@ node_modules/**
 # rule above (they live outside src/ and are not .ts), so they ship by default.
 # Made explicit here so the assistant's context is always present in the .vsix.
 !context/**
+
+DEVELOPMENT.md

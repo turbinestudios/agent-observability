@@ -12,7 +12,7 @@ compare how different prompts, models, or agent setups handled the same task.
   Ctrl/Cmd-click), and a compare bar appears offering "Compare N sessions".
 - The combined view shows merged totals and a token trend in which each
   session's span is delimited and labeled, plus one collapsible section per
-  session — so I can see at a glance which run burned more tokens, took more
+  session, so I can see at a glance which run burned more tokens, took more
   turns, or wrote more code.
 - Sessions from different sources (Claude Code + Copilot) can be combined;
   when their cost bases differ the view uses a single cost basis and says so.
@@ -26,15 +26,15 @@ compare how different prompts, models, or agent setups handled the same task.
 Comparing runs is the core loop of agent research: same task, two prompts;
 same prompt, two models; before and after an instruction-file change. Today
 the only way is opening two sessions one after another and remembering
-numbers. Core already contains a complete, tested combined-view renderer —
-this proposal is almost entirely wiring.
+numbers. Core already contains a complete, tested combined-view renderer,
+so this proposal is almost entirely wiring.
 
 ## Agent spec
 
 **Goal.** Add multi-select to the desktop session list and a combined detail
 view rendered by core's existing combined-session renderer.
 
-**Grounding — what already exists**
+**Grounding: what already exists**
 
 - Core renderer, fully built and tested: `renderCombinedSessionDetailHtml`
   (line ~204) and `renderCombinedSessionDetailContent` (line ~239) in
@@ -67,7 +67,7 @@ view rendered by core's existing combined-session renderer.
    `sessionDetailPanel.ts` does, and render with
    `renderCombinedSessionDetailHtml` plus `detailHeadHtml`.
 2. **Memoization.** Cache keyed on the sorted set of
-   `(source, sessionId, indexedAtMs)` tuples — same pattern as
+   `(source, sessionId, indexedAtMs)` tuples, the same pattern as
    `DetailRenderer`.
 3. **Renderer.** Multi-select state in
    `src/desktop/agent-observability-desktop/src/renderer/src/views/sessions/SessionsView.tsx`:
@@ -84,7 +84,7 @@ view rendered by core's existing combined-session renderer.
 [README.md](README.md#ground-rules-every-agent-spec-inherits-these). No index
 schema change is needed.
 
-**Out of scope.** Repository rollup views (`renderRepositoryDetailHtml` — see
+**Out of scope.** Repository rollup views (`renderRepositoryDetailHtml`; see
 the README's future candidates), transcript content diffing, persisting
 selections across restarts.
 
@@ -95,6 +95,6 @@ selections across restarts.
   RPC handler (combined totals equal the sum of the parts) and the selection
   reducer.
 - Manual (`npm run dev -w agent-observability-desktop`): select two Claude
-  sessions — combined totals equal the sum of the two details and the token
-  trend shows two labeled spans; select Claude + Copilot — the cost-basis
+  sessions: combined totals equal the sum of the two details and the token
+  trend shows two labeled spans; select Claude + Copilot: the cost-basis
   note appears; Escape returns to the normal flow.

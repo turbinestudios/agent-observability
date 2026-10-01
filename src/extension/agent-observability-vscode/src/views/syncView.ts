@@ -103,9 +103,11 @@ export class SyncViewProvider implements vscode.TreeDataProvider<SyncItem> {
       // Repository scope (which repos are eligible to upload). Clickable → picker.
       this.syncScopeRow(),
       new SyncItem(
-        `Dashboard URL: ${dashboardUrl}`,
-        'Built-in cloud ingestion endpoint. Aggregates are delivered here when cloud sharing is on and an API key is set.',
-        new vscode.ThemeIcon('link'),
+        `Dashboard URL: ${dashboardUrl || 'Not set'}`,
+        dashboardUrl
+          ? 'Aggregates are delivered here when cloud sharing is on and an API key is set. Set by agentObservability.sync.dashboardUrl in your user settings.'
+          : 'No dashboard address set. Sync is blocked until you set agentObservability.sync.dashboardUrl (https only) in your user settings.',
+        new vscode.ThemeIcon(dashboardUrl ? 'link' : 'warning'),
       ),
       // Last sync row.
       this.lastSyncRow(last),

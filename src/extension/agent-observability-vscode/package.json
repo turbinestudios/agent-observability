@@ -2,11 +2,30 @@
   "name": "agent-observability",
   "displayName": "Agent Observability (Local)",
   "description": "Privacy-first local view of GitHub Copilot, GitHub Copilot cloud coding-agent, and Claude Code agent telemetry. Raw data stays on your machine; only opt-in aggregates are ever shared.",
-  "version": "0.10.4",
+  "version": "0.11.0",
   "publisher": "turbinestudios",
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/turbinestudios/agent-observability.git",
+    "directory": "src/extension/agent-observability-vscode"
+  },
+  "homepage": "https://github.com/turbinestudios/agent-observability#readme",
+  "bugs": {
+    "url": "https://github.com/turbinestudios/agent-observability/issues"
+  },
   "engines": {
     "vscode": "^1.90.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In an untrusted workspace, the extension ignores workspace values for the database and Claude Code paths and uses only your user settings.",
+      "restrictedConfigurations": [
+        "agentObservability.sqlitePath",
+        "agentObservability.claudeCode.projectsPath"
+      ]
+    }
   },
   "categories": [
     "Other"
@@ -308,6 +327,14 @@
     "configuration": {
       "title": "Agent Observability",
       "properties": {
+        "agentObservability.sync.dashboardUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "pattern": "^$|^https://",
+          "patternErrorMessage": "Use an https:// address, or leave empty.",
+          "markdownDescription": "Address of your team's dashboard, for example `https://dashboard.example.com`. Only `https://` is accepted. Leave empty to keep sharing off. This can only be set in your user settings, never by a workspace, so a repository cannot send your API key somewhere else."
+        },
         "agentObservability.sync.enabled": {
           "type": "boolean",
           "default": false,

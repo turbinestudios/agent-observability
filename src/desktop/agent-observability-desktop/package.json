@@ -4,8 +4,17 @@
   "version": "1.14.6",
   "private": true,
   "description": "Standalone desktop app for Agent Observability: a sessions-first view of Copilot and Claude Code agent activity, reading the same on-disk data as the VS Code extension.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "author": "Turbine Studios",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/turbinestudios/agent-observability.git",
+    "directory": "src/desktop/agent-observability-desktop"
+  },
+  "homepage": "https://github.com/turbinestudios/agent-observability#readme",
+  "bugs": {
+    "url": "https://github.com/turbinestudios/agent-observability/issues"
+  },
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

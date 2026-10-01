@@ -22,11 +22,11 @@ Any edit to extension code or its manifest counts, including:
   user-facing terms; do not mention the package split unless it matters to them.
 
 Core itself is `private` and never published, so its own `version` field is a
-coordination signal for the desktop app, not a release number — bump it only on
+coordination signal for the desktop app, not a release number. Bump it only on
 a breaking API change. The desktop app versions independently and keeps its own
 changelog.
 
-Documentation-only edits — `README.md` or `CHANGELOG.md` itself — do **not**
+Documentation-only edits (`README.md` or `CHANGELOG.md` itself) do **not**
 require a bump.
 
 ## Required steps for every qualifying change
@@ -60,6 +60,6 @@ require a bump.
 ## Privacy reminder
 
 If the change touches the aggregate or sync path, re-confirm that no raw content
-field is added to the upload — see
+field is added to the upload. See
 [AGENTS.md](../../AGENTS.md) and
 [docs/privacy-validation.md](../../docs/privacy-validation.md).

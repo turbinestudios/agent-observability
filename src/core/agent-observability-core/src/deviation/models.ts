@@ -6,7 +6,8 @@
  * grown a structured predicate DSL ({@link StepPredicate}, {@link WorkflowStep},
  * {@link ContentPredicate}) that gives the local detector the same expressive
  * power as the cloud's `TriggerKqlQuery` + `WorkflowStep.KqlQuery` model —
- * without KQL. See `docs/plans/planned/workflow-predicate-dsl.md`.
+ * without KQL. The user-facing reference is the "Workflows and flagged
+ * sessions" section of the extension README.
  *
  * Two tiers of matching:
  * - METADATA ({@link StepPredicate}) over the safe {@link ../telemetry/models.Interaction}
