@@ -968,7 +968,7 @@
     "@agent-observability/core": "*",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.138.0",
-    "@typescript-eslint/eslint-plugin": "^8.70.1",
+    "@typescript-eslint/eslint-plugin": "^8.71.0",
     "@typescript-eslint/parser": "^8.0.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.28.2",
