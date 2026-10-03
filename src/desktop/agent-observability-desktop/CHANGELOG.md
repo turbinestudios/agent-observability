@@ -9,6 +9,60 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.17.0] - 2026-10-03
+
+### Added
+
+- **Team view.** A new sidebar entry shows how your team uses agents: members
+  active per day, sessions, tokens and estimated cost, how sessions went, the
+  busiest repositories, shared context hotspots, adoption over time, and how
+  your own numbers compare with the team's. It works through a folder your
+  team already shares (OneDrive, SharePoint, a network drive): each member's
+  app writes one file there and reads everyone else's. No server, no account.
+- **Share my aggregates with the team folder**, under **Settings > Team**. Off
+  by default. Turning it on shows exactly which repositories are included and
+  what the file contains: counts and totals under an anonymous id, never
+  prompts, responses, names or session titles. **Preview what will be shared**
+  shows the exact file before you decide, and an hourly automatic export can
+  be switched on once you have.
+
+### Changed
+
+- The sharing disclosure now says precisely which paths can leave the machine:
+  only the repo-relative names of context files such as `AGENTS.md` or a skill
+  file, never source files.
+
+## [1.16.0] - 2026-10-03
+
+### Added
+
+- **Workspace view.** A new sidebar entry shows every Claude Code and Copilot
+  session active in the last 30 minutes, across all your repositories, with a
+  live status: **working**, **waiting for you**, **idle** or **finished**. Each
+  card names the repository, branch, start time, last activity and tokens so
+  far; click it to open the session. Status comes from reading the end of the
+  session's own log on this computer. Nothing is installed into your agents and
+  nothing is uploaded.
+- **Repository hubs.** Below the live board, one card per repository opens a hub
+  with its live and recent sessions, how its sessions went compared with the
+  previous period, the friction that recurs, the rules, skills and instruction
+  files found on disk together with how often agents actually load or skip
+  them, the improvement plans written for it, and its models and spend.
+- **"What the agents learned here".** Each hub can build a short digest of the
+  repository, entirely on your machine, and copy it as Markdown: how sessions
+  went, recurring friction, the advice that applies most often, the context
+  files agents use, models, tools and spend. No session text, file paths or
+  branch names are included. An **Ask AI Helper about this repository** button
+  opens the AI Helper with a question filled in; nothing is sent until you press
+  Send.
+- **Optional desktop notifications** when a live session starts waiting for you
+  or finishes. Off by default; turn it on under **Settings > Workspace**.
+
+### Changed
+
+- The session list and the Dashboard now refresh on their own shortly after an
+  agent writes to a transcript, instead of only when you press Refresh.
+
 ## [1.15.0] - 2026-10-01
 
 ### Added

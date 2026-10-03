@@ -18,8 +18,10 @@ import { UpdateIndicator } from './UpdateIndicator';
 export type ViewId =
   | 'sessions'
   | 'overview'
+  | 'workspace'
   | 'hotspots'
   | 'retro'
+  | 'team'
   | 'improve'
   | 'assistant'
   | 'settings';
@@ -40,6 +42,19 @@ const ENTRIES: RailEntry[] = [
         <rect x="3" y="12" width="4.5" height="9" rx="1" />
         <rect x="9.75" y="7" width="4.5" height="14" rx="1" />
         <rect x="16.5" y="3" width="4.5" height="18" rx="1" />
+      </>
+    ),
+  },
+  {
+    id: 'workspace',
+    label: 'Workspace',
+    // Three tiles and a live dot: many sessions on one board.
+    icon: (
+      <>
+        <rect x="3" y="3" width="8" height="8" rx="2" />
+        <rect x="13" y="3" width="8" height="8" rx="2" />
+        <rect x="3" y="13" width="8" height="8" rx="2" />
+        <circle cx="17" cy="17" r="3.5" />
       </>
     ),
   },
@@ -65,6 +80,14 @@ const ENTRIES: RailEntry[] = [
     // A backwards-looping arrow: looking back over what already ran.
     icon: (
       <path d="M12 4.5V1.6L6.8 6l5.2 4.4V7.5a6 6 0 1 1-5.9 7.1l-2.5.5A8.5 8.5 0 1 0 12 4.5Z" />
+    ),
+  },
+  {
+    id: 'team',
+    label: 'Team',
+    // Two overlapping silhouettes: the people behind the shared folder.
+    icon: (
+      <path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7 1a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-7 1c-3.3 0-7 1.7-7 4.2V20h14v-2.8C16 14.7 12.3 13 9 13Zm7 1c-.5 0-1 0-1.5.1 1.5 1 2.5 2.3 2.5 3.9V20h5v-2.2c0-2.1-3.1-3.8-6-3.8Z" />
     ),
   },
   {

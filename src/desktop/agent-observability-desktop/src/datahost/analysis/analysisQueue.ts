@@ -32,6 +32,12 @@ export interface AnalysisQueueDeps {
   onProgress: (status: AnalysisStatus) => void;
   /** Sessions whose stored analysis just changed, so their list rows can update. */
   onAnalyzed: (targets: readonly AnalysisTarget[]) => void;
+  /**
+   * When set, sessions that ended after this instant are left for a later
+   * pass — a live-triggered run must not re-analyze a transcript the agent is
+   * still writing to. Startup and Refresh passes leave it undefined.
+   */
+  settledBeforeMs?: () => number | undefined;
   /** Seams, so a test can drive the queue to completion synchronously. */
   schedule?: (run: () => void) => void;
   batch?: number;
@@ -74,7 +80,7 @@ export class AnalysisQueue {
    * still recorded so the queue cannot spin on it forever.
    */
   private tick(): void {
-    const targets = this.deps.db.staleAnalysis(this.batch);
+    const targets = this.deps.db.staleAnalysis(this.batch, undefined, this.deps.settledBeforeMs?.());
     if (targets.length === 0) {
       this.running = false;
       this.deps.onProgress(this.status());

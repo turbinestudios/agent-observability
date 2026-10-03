@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import type { HotspotRow } from '../../shared/rpc';
-import { HOTSPOT_TOKEN_BUDGET, scoreHotspots } from './hotspotScore';
+import { HOTSPOT_TOKEN_BUDGET, scoreHotspots, type Scorable } from './hotspotScore';
+
+/** The desktop's hotspot row shape, so the fixtures read like the view's. */
+interface HotspotRow extends Scorable {
+  name: string;
+  category: string;
+  sessionCount: number;
+  readCount: number;
+  lastSeenMs: number;
+}
 
 /**
  * The composite must mirror the cloud dashboard's formula exactly — the two

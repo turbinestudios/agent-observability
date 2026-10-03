@@ -27,7 +27,7 @@ export const CONTEXT_DIRS: readonly string[] = ['.github', '.copilot', '.claude'
 export const ROOT_FILES: readonly string[] = ['AGENTS.md', 'CLAUDE.md', 'copilot-instructions.md'];
 
 /** Directory names never descended into during the repo scan. */
-const EXCLUDE_DIRS: ReadonlySet<string> = new Set([
+export const EXCLUDE_DIRS: ReadonlySet<string> = new Set([
   'node_modules',
   '.git',
   '.vs',
@@ -42,8 +42,8 @@ const EXCLUDE_DIRS: ReadonlySet<string> = new Set([
 ]);
 
 /** Hard bounds so a pathological tree can never make a background sync hang. */
-const MAX_SCAN_FILES = 5000;
-const MAX_DEPTH = 12;
+export const MAX_SCAN_FILES = 5000;
+export const MAX_DEPTH = 12;
 
 /**
  * The single source of truth for a SAFE repo-relative customization path. Mirrors
@@ -225,7 +225,7 @@ function baseName(p: string): string {
 }
 
 /** Convert an absolute path under `root` to a repo-relative POSIX path, or undefined when outside. */
-function toRepoRelative(root: string, absPath: string): string | undefined {
+export function toRepoRelative(root: string, absPath: string): string | undefined {
   const rel = path.relative(root, absPath);
   if (rel.length === 0 || rel.startsWith('..') || path.isAbsolute(rel)) {
     return undefined;

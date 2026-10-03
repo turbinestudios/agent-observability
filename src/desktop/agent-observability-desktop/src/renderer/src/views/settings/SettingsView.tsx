@@ -13,6 +13,9 @@ import type { AiAvailability, AiBackendInfo, SettingsSnapshot } from '../../../.
 import { dataHost } from '../../api/client';
 import { Spinner } from '../../components/Spinner';
 import { CopilotSetupSection } from './CopilotSetupSection';
+import { TeamConsentDialog } from '../team/TeamConsentDialog';
+import { TeamPreviewDialog } from '../team/TeamPreviewDialog';
+import '../team/team.css';
 import { useSettings } from './useSettings';
 import './settings.css';
 
@@ -29,6 +32,9 @@ export function SettingsView(): JSX.Element {
   const { snapshot, error, saving, save } = useSettings();
   const [availability, setAvailability] = useState<AiAvailability | undefined>(undefined);
   const [backends, setBackends] = useState<AiBackendInfo[] | undefined>(undefined);
+  // The team consent gate and the preview, both overlays of this page.
+  const [teamConsentOpen, setTeamConsentOpen] = useState(false);
+  const [teamPreviewOpen, setTeamPreviewOpen] = useState(false);
 
   const checkAvailability = useCallback(() => {
     dataHost
@@ -188,6 +194,109 @@ export function SettingsView(): JSX.Element {
         </p>
       </section>
 
+      <section className="settings-card" aria-label="Workspace">
+        <h2>Workspace</h2>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.liveNotifications}
+            disabled={saving}
+            onChange={(e) => save({ liveNotifications: e.target.checked })}
+          />
+          Notify me when a live session is waiting for me or has finished
+        </label>
+        <p className="settings-hint">
+          Shown by this computer only. The notification names the session using the title from your local logs;
+          nothing is sent anywhere. Status comes from the end of each session&apos;s own log, so a tool call waiting
+          for your approval can look like a running one until it has been pending a while.
+        </p>
+      </section>
+
+      <section className="settings-card" aria-label="Team">
+        <h2>Team</h2>
+        <p className="settings-hint">
+          See how your team uses agents through a folder you already share (OneDrive, SharePoint, a network
+          drive). Each member&apos;s app writes one file there with counts and totals under an anonymous id, and
+          reads everyone else&apos;s. No server, no account.
+        </p>
+        <div className="settings-row">
+          <span className="settings-label">Team folder</span>
+          <div className="team-folder-row">
+            <code>{snapshot.teamFolder.length > 0 ? snapshot.teamFolder : 'Not chosen'}</code>
+            <button
+              type="button"
+              className="settings-action settings-action-inline"
+              disabled={saving}
+              onClick={() =>
+                void window.desktop
+                  .pickFolder()
+                  .then((folder) => {
+                    if (folder !== undefined) {
+                      save({ teamFolder: folder });
+                    }
+                  })
+                  .catch(() => undefined)
+              }
+            >
+              Choose…
+            </button>
+            {snapshot.teamFolder.length > 0 && (
+              <button
+                type="button"
+                className="settings-action settings-action-inline"
+                disabled={saving}
+                onClick={() => save({ teamFolder: '' })}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {snapshot.teamFolder.length > 0 && !snapshot.teamFolderExists && (
+            <p className="settings-hint">This folder does not exist right now.</p>
+          )}
+        </div>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.teamShareEnabled}
+            disabled={saving || snapshot.teamFolder.length === 0}
+            onChange={(e) => {
+              if (e.target.checked) {
+                setTeamConsentOpen(true);
+              } else {
+                save({ teamShareEnabled: false });
+              }
+            }}
+          />
+          Share my aggregates with the team folder
+        </label>
+        {snapshot.teamFolder.length === 0 && (
+          <p className="settings-hint">Choose a team folder first.</p>
+        )}
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.teamAutoExport}
+            disabled={saving || !snapshot.teamShareEnabled}
+            onChange={(e) => save({ teamAutoExport: e.target.checked })}
+          />
+          Export automatically every hour while the app runs
+        </label>
+        <button type="button" className="settings-action" onClick={() => setTeamPreviewOpen(true)}>
+          Preview what will be shared
+        </button>
+        <p className="settings-hint">
+          Reading the folder is always on and read-only; every file is checked against the format before it
+          is merged.
+        </p>
+        <p className="settings-hint">
+          Each install has its own anonymous id, so the same person on two computers counts twice.
+        </p>
+        <p className="settings-hint">
+          Your anonymous id: <code>{snapshot.teamDeveloperId}</code>
+        </p>
+      </section>
+
       <section className="settings-card" aria-label="AI">
         <h2>AI</h2>
         <p className="settings-hint">
@@ -303,6 +412,18 @@ export function SettingsView(): JSX.Element {
           Open config folder
         </button>
       </section>
+
+      {teamConsentOpen && (
+        <TeamConsentDialog
+          folder={snapshot.teamFolder}
+          onCancel={() => setTeamConsentOpen(false)}
+          onConfirm={(mode, repositories) => {
+            setTeamConsentOpen(false);
+            save({ teamShareEnabled: true, teamRepositoryMode: mode, teamRepositories: repositories });
+          }}
+        />
+      )}
+      {teamPreviewOpen && <TeamPreviewDialog onClose={() => setTeamPreviewOpen(false)} />}
     </div>
   );
 }

@@ -50,8 +50,14 @@ sends no session data.
 
 ## Privacy
 
-Your sessions are read on your computer and stay there. The app has no team
-sharing.
+Your sessions are read on your computer and stay there. Team sharing is off
+by default. If you turn it on under **Settings > Team** and choose a folder
+your team shares, the app writes one JSON file there, named after your
+anonymous id, with counts and totals only: sessions, tokens, estimated cost,
+how sessions went, repositories, and the repo-relative paths of context files
+such as `AGENTS.md`. It reads the files your teammates put in the same folder.
+There is no server, and **Preview what will be shared** shows the exact file
+first.
 
 Three optional AI features send content, only when you ask, through your own
 Claude Code or GitHub Copilot CLI login (choose which in **Settings > AI**):

@@ -11,6 +11,7 @@ import {
   MAX_TIPS,
   assessPrompt,
   buildSessionRetrospective,
+  evaluateAdvice,
   isCorrectionPrompt,
   sessionCodeChurn,
   type RetrospectiveSignals,
@@ -636,6 +637,21 @@ describe('buildSessionRetrospective — tips and counts', () => {
     for (const tip of retro.tips) {
       expect(tip.evidence.length).toBeGreaterThan(0);
     }
+  });
+
+  it('evaluateAdvice over the finding ids and counts reproduces the session tips exactly', () => {
+    const fail = ev({ success: false });
+    const retro = buildSessionRetrospective(
+      detailOf([
+        turn({ userRequest: 'fix the bug', finalResponse: 'ok', linesOfCode: 100, linesOfCodeRemoved: 60 }),
+        turn({ userRequest: 'no, the other module', finalResponse: 'ok', events: [fail, fail, fail] }),
+        turn({ userRequest: "that's not right, look again", finalResponse: 'ok' }),
+      ]),
+      sig({ endedWithInterruption: true, interruptionCount: 2, compactionCount: 2 }),
+    );
+    const replayed = evaluateAdvice(new Set(retro.findings.map((f) => f.id)), retro.counts);
+    expect(replayed).toEqual(retro.tips);
+    expect(evaluateAdvice(new Set(), retro.counts)).toEqual([]);
   });
 
   it('orders findings blockers first, then friction, then info', () => {

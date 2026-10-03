@@ -1123,7 +1123,20 @@ function buildTips(
   findings: readonly RetrospectiveFinding[],
   counts: RetrospectiveCounts,
 ): RetrospectiveTip[] {
-  const present = new Set(findings.map((f) => f.id));
+  return evaluateAdvice(new Set(findings.map((f) => f.id)), counts);
+}
+
+/**
+ * Evaluate the static advice table against a set of finding ids and the
+ * session's counts: at most {@link MAX_TIPS} tips, priority order, every
+ * `requires` id present and the optional `when` condition satisfied. Exported
+ * so a repository-level digest can rank the same tips across many sessions
+ * from the counts the index already stores, without re-running the detectors.
+ */
+export function evaluateAdvice(
+  present: ReadonlySet<RetrospectiveSignalId>,
+  counts: RetrospectiveCounts,
+): RetrospectiveTip[] {
   const tips: RetrospectiveTip[] = [];
   const rules = [...ADVICE_RULES].sort((a, b) => a.priority - b.priority);
   for (const rule of rules) {

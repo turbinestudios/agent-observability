@@ -13,6 +13,16 @@ import type { DesktopSettingsReader } from './drivers/desktopConfig';
 import { resolveConfigPath } from './drivers/desktopConfig';
 import { DEEP_RETRO_ENABLED_KEY } from './deepRetro';
 import { IMPROVE_ENABLED_KEY } from './improve/contextPlan';
+import { LIVE_NOTIFICATIONS_KEY } from './live/liveBoard';
+import {
+  TEAM_AUTO_EXPORT_KEY,
+  TEAM_CONSENTED_AT_KEY,
+  TEAM_FOLDER_KEY,
+  TEAM_REPOSITORIES_KEY,
+  TEAM_REPOSITORY_MODE_KEY,
+  TEAM_SHARE_ENABLED_KEY,
+  teamSharingOn,
+} from './team/teamExport';
 import { pickCopilotDatabases, type CopilotDatabaseCandidate } from './indexer/copilotIndexer';
 
 /**
@@ -29,6 +39,9 @@ export interface SettingsSeams {
   copilotCandidates?: (config: Configuration) => string[];
   exists?: (p: string) => boolean;
   configPath?: string;
+  /** This install's anonymous team id; absent in tests so no salt file is minted. */
+  teamDeveloperId?: () => string;
+  now?: () => number;
 }
 
 /** The current settings plus their resolved effect, for `settings.get`. */
@@ -43,6 +56,10 @@ export function buildSettingsSnapshot(
   const claudeProjectsPath = storedString(settings, ConfigKeys.claudeProjectsPath);
   const sqlitePath = storedString(settings, ConfigKeys.sqlitePath);
   const configPath = seams.configPath ?? resolveConfigPath();
+  const teamFolder = storedString(settings, TEAM_FOLDER_KEY);
+  const storedMode = storedString(settings, TEAM_REPOSITORY_MODE_KEY);
+  const teamMode: SettingsSnapshot['teamRepositoryMode'] =
+    storedMode === 'include' || storedMode === 'exclude' ? storedMode : 'all';
 
   return {
     claudeEnabled: config.isClaudeEnabled(),
@@ -73,6 +90,16 @@ export function buildSettingsSnapshot(
     // it to Claude Code — the page must show where sends actually go.
     aiBackend: config.getAiHelperBackend() === 'copilot-cli' ? 'copilot-cli' : 'claude-code',
     copilotCliPath: storedString(settings, ConfigKeys.aiHelperCopilotCliPath),
+    liveNotifications: storedBoolean(settings, LIVE_NOTIFICATIONS_KEY, false),
+    teamFolder,
+    teamFolderExists: teamFolder !== '' && exists(teamFolder),
+    // Sharing reads as ON only when the toggle is on AND consent was recorded —
+    // the same pair the datahost's export gate checks.
+    teamShareEnabled: teamSharingOn(settings),
+    teamAutoExport: storedBoolean(settings, TEAM_AUTO_EXPORT_KEY, true),
+    teamRepositoryMode: teamMode,
+    teamRepositories: storedStringList(settings, TEAM_REPOSITORIES_KEY),
+    teamDeveloperId: seams.teamDeveloperId?.() ?? '',
     configPath,
     configDir: path.dirname(configPath),
   };
@@ -87,9 +114,10 @@ export function buildSettingsSnapshot(
 export function applySettingsPatch(
   settings: DesktopSettingsReader,
   patch: SettingsPatch,
-): { claude: boolean; copilot: boolean; deviation: boolean; deepRetro: boolean; ai: boolean } {
+  seams: Pick<SettingsSeams, 'now'> = {},
+): { claude: boolean; copilot: boolean; deviation: boolean; deepRetro: boolean; ai: boolean; team: boolean } {
   const update: Record<string, unknown> = {};
-  const changed = { claude: false, copilot: false, deviation: false, deepRetro: false, ai: false };
+  const changed = { claude: false, copilot: false, deviation: false, deepRetro: false, ai: false, team: false };
 
   if (typeof patch.claudeEnabled === 'boolean' && patch.claudeEnabled !== storedBoolean(settings, ConfigKeys.claudeEnabled, ConfigDefaults.claudeEnabled)) {
     update[ConfigKeys.claudeEnabled] = patch.claudeEnabled;
@@ -185,7 +213,64 @@ export function applySettingsPatch(
     }
   }
 
-  if (changed.claude || changed.copilot || changed.deviation || changed.deepRetro || changed.ai) {
+  // The live-board notification toggle: a plain preference, stored only on a
+  // real boolean like the consent gates (RPC payloads are untyped on the wire).
+  // Rides the `deepRetro` flag because nothing needs rebuilding either.
+  if (
+    typeof patch.liveNotifications === 'boolean' &&
+    patch.liveNotifications !== storedBoolean(settings, LIVE_NOTIFICATIONS_KEY, false)
+  ) {
+    update[LIVE_NOTIFICATIONS_KEY] = patch.liveNotifications;
+    changed.deepRetro = true;
+  }
+
+  // The team keys. The folder is a plain path; sharing is a consent surface
+  // and records WHEN it was granted, which the export gate requires alongside
+  // the boolean — a hand-edited `true` in config.json alone does not share.
+  if (typeof patch.teamFolder === 'string') {
+    const next = patch.teamFolder.trim();
+    if (next !== storedString(settings, TEAM_FOLDER_KEY)) {
+      update[TEAM_FOLDER_KEY] = next.length > 0 ? next : undefined;
+      changed.team = true;
+    }
+  }
+  if (
+    typeof patch.teamShareEnabled === 'boolean' &&
+    patch.teamShareEnabled !== storedBoolean(settings, TEAM_SHARE_ENABLED_KEY, false)
+  ) {
+    update[TEAM_SHARE_ENABLED_KEY] = patch.teamShareEnabled;
+    update[TEAM_CONSENTED_AT_KEY] = patch.teamShareEnabled ? (seams.now?.() ?? Date.now()) : undefined;
+    changed.team = true;
+  }
+  if (
+    typeof patch.teamAutoExport === 'boolean' &&
+    patch.teamAutoExport !== storedBoolean(settings, TEAM_AUTO_EXPORT_KEY, true)
+  ) {
+    update[TEAM_AUTO_EXPORT_KEY] = patch.teamAutoExport;
+    changed.team = true;
+  }
+  if (
+    patch.teamRepositoryMode === 'all' ||
+    patch.teamRepositoryMode === 'include' ||
+    patch.teamRepositoryMode === 'exclude'
+  ) {
+    if (patch.teamRepositoryMode !== storedString(settings, TEAM_REPOSITORY_MODE_KEY)) {
+      update[TEAM_REPOSITORY_MODE_KEY] = patch.teamRepositoryMode;
+      changed.team = true;
+    }
+  }
+  if (Array.isArray(patch.teamRepositories)) {
+    const next = patch.teamRepositories
+      .filter((r): r is string => typeof r === 'string' && r.trim().length > 0)
+      .map((r) => r.trim());
+    const current = storedStringList(settings, TEAM_REPOSITORIES_KEY);
+    if (next.length !== current.length || next.some((r, i) => r !== current[i])) {
+      update[TEAM_REPOSITORIES_KEY] = next;
+      changed.team = true;
+    }
+  }
+
+  if (changed.claude || changed.copilot || changed.deviation || changed.deepRetro || changed.ai || changed.team) {
     settings.update(update);
   }
   return changed;
@@ -204,6 +289,12 @@ function effectiveConfig(settings: DesktopSettingsReader): Configuration {
 function storedString(settings: DesktopSettingsReader, key: string): string {
   const value = settings.get<unknown>(key, '');
   return typeof value === 'string' ? value.trim() : '';
+}
+
+/** The stored string list for a key; anything else reads as empty. */
+function storedStringList(settings: DesktopSettingsReader, key: string): string[] {
+  const value = settings.get<unknown>(key, []);
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
 }
 
 /** The stored boolean for a key; non-booleans read as the default. */

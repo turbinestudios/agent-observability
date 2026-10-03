@@ -1,0 +1,312 @@
+/*
+ * Workspace: the live board and the repository hubs.
+ *
+ * Shares the Dashboard's card, tile, table and chart classes (overview.css is
+ * in the bundle because App.tsx imports the Dashboard). Status colours alias
+ * the verdict ramp so "waiting for you" and "went smoothly" never disagree
+ * about what attention-worthy looks like.
+ */
+
+.workspace {
+  --live-waiting: var(--warning);
+  --live-working: var(--accent);
+  --live-idle: var(--fg-subtle);
+  --live-finished: color-mix(in srgb, var(--fg-subtle) 55%, transparent);
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding: 24px 28px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workspace-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.workspace-header p {
+  margin: 6px 0 0;
+  max-width: 80ch;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.workspace-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.hub-back {
+  border: none;
+  background: none;
+  padding: 0 0 8px;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.hub-back:hover {
+  text-decoration: underline;
+}
+
+.hub-root {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.hub-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* ── live board ── */
+
+.live-grid,
+.repo-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.live-card-button,
+.repo-card-button {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.live-card-button:hover,
+.repo-card-button:hover {
+  border-color: var(--accent);
+}
+
+.live-card.live-waiting .live-card-button {
+  border-color: var(--live-waiting);
+  box-shadow: inset 3px 0 0 var(--live-waiting);
+}
+
+.live-card.live-finished .live-card-button {
+  opacity: 0.7;
+}
+
+.live-card-top,
+.repo-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.live-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--live-idle);
+}
+
+.live-status-waiting {
+  background: var(--live-waiting);
+}
+
+.live-status-working {
+  background: var(--live-working);
+}
+
+.live-status-finished {
+  background: var(--live-finished);
+}
+
+.live-source,
+.live-meta-muted,
+.repo-card-sources,
+.repo-card-stats {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.live-title,
+.repo-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-meta,
+.repo-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+}
+
+.live-branch {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--fg-muted);
+}
+
+.live-hint {
+  font-size: 12px;
+  color: var(--live-waiting);
+}
+
+.live-error {
+  color: var(--danger);
+}
+
+/* ── repository cards ── */
+
+.live-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--live-working);
+  white-space: nowrap;
+}
+
+.live-badge-waiting {
+  background: var(--live-waiting);
+}
+
+.verdict-bar {
+  display: flex;
+  height: 8px;
+  width: 100%;
+  border-radius: 4px;
+  overflow: hidden;
+  gap: 2px;
+  background: color-mix(in srgb, var(--fg-subtle) 15%, transparent);
+}
+
+.verdict-seg {
+  display: block;
+  height: 100%;
+}
+
+.verdict-seg-smooth {
+  background: var(--verdict-smooth, var(--accent));
+}
+
+.verdict-seg-bumpy {
+  background: var(--verdict-bumpy, var(--warning));
+}
+
+.verdict-seg-struggled {
+  background: var(--verdict-struggled, var(--danger));
+}
+
+.verdict-seg-abandoned {
+  background: var(--verdict-abandoned, var(--fg-subtle));
+}
+
+.verdict-seg-unjudged {
+  background: var(--verdict-unjudged, color-mix(in srgb, var(--fg-subtle) 35%, transparent));
+}
+
+/* ── hub ── */
+
+.hub-verdict-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 4px 16px;
+  font-size: 13px;
+}
+
+.hub-verdict-list li {
+  display: contents;
+}
+
+.hub-trend {
+  color: var(--fg-muted);
+  min-width: 6ch;
+  text-align: right;
+}
+
+.hub-sessions td:first-child {
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-inventory code {
+  font-size: 12px;
+}
+
+.hub-inventory-unused {
+  color: var(--fg-muted);
+}
+
+.hub-plans {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.hub-plans li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ── digest dialog ── */
+
+.digest-dialog {
+  width: min(760px, 92vw);
+}
+
+.digest-intro {
+  margin: 0 0 12px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.digest-text {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}

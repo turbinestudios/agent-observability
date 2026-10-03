@@ -19,10 +19,16 @@ import './assistant.css';
  * an external link opens the OS browser, never this window.
  */
 
-/** A session another view asked the helper to focus on ("Ask AI"). */
+/**
+ * What another view asked the helper to do: focus on a session ("Ask AI"
+ * from the Sessions view), or start from a question ("Ask AI Helper about
+ * this repository" from the Workspace). A prefilled question only fills the
+ * box — nothing is sent until the user presses Send.
+ */
 export interface AskAiIntent {
-  source: string;
-  sessionId: string;
+  source?: string;
+  sessionId?: string;
+  prefill?: string;
   /** Distinguishes two asks for the same session, like `OpenSessionIntent`. */
   at: number;
 }
@@ -85,7 +91,13 @@ export function AssistantView({ onOpenSession, askIntent }: Props): JSX.Element 
     if (askIntent === undefined) {
       return;
     }
+    if (askIntent.prefill !== undefined) {
+      setInput(askIntent.prefill);
+    }
     const { source, sessionId } = askIntent;
+    if (source === undefined || sessionId === undefined) {
+      return;
+    }
     setFocus({ source, sessionId, label: sessionId });
     void dataHost.call('sessions.row', source, sessionId).then((row) => {
       if (row?.title !== undefined) {

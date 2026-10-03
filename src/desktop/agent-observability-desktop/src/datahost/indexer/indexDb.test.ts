@@ -1028,3 +1028,121 @@ describe('retro ranking', () => {
     expect(filtered.repositories).toEqual(['github.com/acme/app']);
   });
 });
+
+describe('staleAnalysis with a settle bound', () => {
+  it('leaves sessions that ended after the bound for a later pass', () => {
+    db.upsertSessions([
+      row({ sessionId: 'settled', endedAtMs: 1_000 }),
+      row({ sessionId: 'moving', endedAtMs: 9_000 }),
+    ]);
+    expect(db.staleAnalysis(10, undefined, 5_000).map((t) => t.sessionId)).toEqual(['settled']);
+    expect(db.staleAnalysis(10).map((t) => t.sessionId)).toEqual(['moving', 'settled']);
+  });
+});
+
+describe('repository hub queries', () => {
+  it('scopes totals, verdicts and themes to one repository and an end-time range', () => {
+    db.upsertSessions([
+      row({ sessionId: 'in', repository: 'r1', endedAtMs: 5_000 }),
+      row({ sessionId: 'before', repository: 'r1', endedAtMs: 1_000 }),
+      row({ sessionId: 'after', repository: 'r1', endedAtMs: 9_000 }),
+      row({ sessionId: 'other', repository: 'r2', endedAtMs: 5_000 }),
+    ]);
+    db.putAnalysis(
+      'claude',
+      'in',
+      analysis({
+        retro: retroCounts({ verdict: 'bumpy' }),
+        findings: [{ id: 'repeated-prompt', severity: 'friction', count: 2 }],
+      }),
+      5_000,
+      9_000,
+    );
+    db.putAnalysis('claude', 'after', analysis({ retro: retroCounts({ verdict: 'smooth' }) }), 5_000, 9_000);
+
+    expect(db.repoTotals('r1', 2_000, 8_000).sessions).toBe(1);
+    expect(db.repoTotals('r1', 0, undefined).sessions).toBe(3);
+    expect(db.repoVerdicts('r1', 2_000, 8_000)).toEqual({ smooth: 0, bumpy: 1, struggled: 0, abandoned: 0, unjudged: 0 });
+    expect(db.repoVerdicts('r1', 0, undefined)).toEqual({ smooth: 1, bumpy: 1, struggled: 0, abandoned: 0, unjudged: 1 });
+    expect(db.repoThemes('r1', 0, undefined)).toEqual([{ signalId: 'repeated-prompt', sessions: 1, occurrences: 2 }]);
+    expect(db.repoThemes('r2', 0, undefined)).toEqual([]);
+    expect(db.repoModels('r1', 0)).toEqual([
+      { model: 'claude-sonnet-4', sessions: 3, llmCalls: 12, inputTokens: 300, outputTokens: 150, costMicros: null },
+    ]);
+  });
+
+  it('returns judged sessions with their finding ids for the advice ranking', () => {
+    db.upsertSessions([row({ sessionId: 'a', repository: 'r1' }), row({ sessionId: 'b', repository: 'r1' })]);
+    db.putAnalysis(
+      'claude',
+      'a',
+      analysis({
+        retro: retroCounts({ verdict: 'struggled', maxErrorStreak: 6, planModeUsed: true, firstPromptRating: 'vague' }),
+        findings: [
+          { id: 'tool-error-streak', severity: 'friction', count: 1 },
+          { id: 'vague-first-prompt', severity: 'info', count: 1 },
+        ],
+      }),
+      5_000,
+      9_000,
+    );
+    db.putAnalysis('claude', 'b', analysis(), 5_000, 9_000);
+
+    const rows = db.repoSessionFindings('r1', 0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      sessionId: 'a',
+      verdict: 'struggled',
+      maxErrorStreak: 6,
+      planModeUsed: true,
+      firstPromptRating: 'vague',
+    });
+    expect([...rows[0].signalIds].sort()).toEqual(['tool-error-streak', 'vague-first-prompt']);
+  });
+
+  it('excludes hidden sessions from every hub query', () => {
+    db.upsertSessions([row({ sessionId: 'shown', repository: 'r1' }), row({ sessionId: 'hidden', repository: 'r1' })]);
+    const hidden = ['claude:hidden'];
+    expect(db.repoTotals('r1', 0, undefined, hidden).sessions).toBe(1);
+    expect(db.repositoryCards('all', hidden).cards[0]?.sessions).toBe(1);
+  });
+});
+
+describe('team shard inputs', () => {
+  it('lists hydrated sessions in the window with verdict and cost, hidden ones excluded', () => {
+    db.upsertSessions([
+      row({ sessionId: 'a', endedAtMs: 5_000, costMicros: 10 }),
+      row({ sessionId: 'b', endedAtMs: 5_000, repository: 'r2' }),
+      row({ sessionId: 'late', endedAtMs: 9_000 }),
+      row({ sessionId: 'pending', endedAtMs: 5_000, pending: true }),
+    ]);
+    db.putAnalysis('claude', 'a', analysis({ retro: retroCounts({ verdict: 'struggled' }) }), 5_000, 9_000);
+    const rows = db.outcomeInputs(2_000, 8_000, ['claude:b']);
+    expect(rows).toEqual([
+      { endedAtMs: 5_000, repository: 'github.com/acme/app', source: 'claude', verdict: 'struggled', costMicros: 10 },
+    ]);
+  });
+
+  it('joins context files with the session repository and friction counts', () => {
+    db.upsertSessions([row({ sessionId: 'a', endedAtMs: 5_000, startedAtMs: 4_000 })]);
+    db.putAnalysis(
+      'claude',
+      'a',
+      analysis({ errorCount: 2, contextFiles: [file({ filePath: path.join('C:', 'repo', 'AGENTS.md'), status: 'skipped' })] }),
+      5_000,
+      9_000,
+    );
+    const rows = db.contextFileObservationRows(0, 8_000);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      sessionId: 'a',
+      repository: 'github.com/acme/app',
+      startedAtMs: 4_000,
+      file: path.join('C:', 'repo', 'AGENTS.md'),
+      category: 'instruction',
+      status: 'skipped',
+      errorCount: 2,
+      deviationCount: 0,
+    });
+  });
+});

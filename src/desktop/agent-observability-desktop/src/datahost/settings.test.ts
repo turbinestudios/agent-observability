@@ -134,7 +134,7 @@ describe('applySettingsPatch', () => {
       sqlitePath: '  /custom/traces.db  ',
     });
 
-    expect(changed).toEqual({ claude: true, copilot: true, deviation: false, deepRetro: false, ai: false });
+    expect(changed).toEqual({ claude: true, copilot: true, deviation: false, deepRetro: false, ai: false, team: false });
     // Round-trip through a fresh reader: the write really hit the disk.
     const reread = new DesktopSettingsReader(file);
     expect(reread.get('claudeCode.enabled', true)).toBe(false);
@@ -164,7 +164,7 @@ describe('applySettingsPatch', () => {
       claudeEffort: '',
     });
 
-    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: false, ai: false });
+    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: false, ai: false, team: false });
     // Nothing changed, so nothing was written — first save is what creates the file.
     expect(fs.existsSync(file)).toBe(false);
   });
@@ -178,7 +178,7 @@ describe('applySettingsPatch', () => {
       claudeCliPath: 7 as unknown as string,
     });
 
-    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: false, ai: false });
+    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: false, ai: false, team: false });
     expect(fs.existsSync(file)).toBe(false);
   });
 
@@ -186,7 +186,7 @@ describe('applySettingsPatch', () => {
     const settings = new DesktopSettingsReader(file);
     const changed = applySettingsPatch(settings, { deepRetroEnabled: true });
 
-    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: true, ai: false });
+    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: true, ai: false, team: false });
     const reread = new DesktopSettingsReader(file);
     expect(reread.get('retrospective.deepEnabled', false)).toBe(true);
   });
@@ -199,7 +199,7 @@ describe('applySettingsPatch', () => {
       claudeEffort: 'medium',
     });
 
-    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: false, ai: true });
+    expect(changed).toEqual({ claude: false, copilot: false, deviation: false, deepRetro: false, ai: true, team: false });
     const reread = new DesktopSettingsReader(file);
     expect(reread.get('aiHelper.claudeCliPath', '')).toBe('C:\\tools\\claude.exe');
     expect(reread.get('aiHelper.claudeModel', '')).toBe('haiku');
@@ -292,5 +292,64 @@ describe('pickCopilotDatabases', () => {
 
     expect(picked.map((c) => c.path)).toEqual([stable, insiders]);
     expect(picked.every((c) => !c.archive && !c.override)).toBe(true);
+  });
+});
+
+describe('live notifications toggle', () => {
+  it('defaults off, round-trips a real boolean and ignores anything else', () => {
+    const settings = new DesktopSettingsReader(file);
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).liveNotifications).toBe(false);
+
+    applySettingsPatch(settings, { liveNotifications: true });
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).liveNotifications).toBe(true);
+
+    applySettingsPatch(settings, { liveNotifications: 'yes' as unknown as boolean });
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).liveNotifications).toBe(true);
+  });
+});
+
+describe('team settings', () => {
+  it('defaults to no folder, sharing off, auto-export on, all repositories, and no id without the seam', () => {
+    const settings = new DesktopSettingsReader(file);
+    const snapshot = buildSettingsSnapshot(settings, new Configuration(settings), seams());
+    expect(snapshot.teamFolder).toBe('');
+    expect(snapshot.teamFolderExists).toBe(false);
+    expect(snapshot.teamShareEnabled).toBe(false);
+    expect(snapshot.teamAutoExport).toBe(true);
+    expect(snapshot.teamRepositoryMode).toBe('all');
+    expect(snapshot.teamRepositories).toEqual([]);
+    expect(snapshot.teamDeveloperId).toBe('');
+  });
+
+  it('records consent time when sharing turns on and clears it when it turns off', () => {
+    const settings = new DesktopSettingsReader(file);
+    const changed = applySettingsPatch(settings, { teamFolder: '  ' + dir + '  ', teamShareEnabled: true }, { now: () => 123 });
+    expect(changed.team).toBe(true);
+    expect(settings.get('team.folder', '')).toBe(dir);
+    expect(settings.get('team.consentedAtMs', undefined)).toBe(123);
+    const snapshot = buildSettingsSnapshot(settings, new Configuration(settings), seams({ exists: () => true, teamDeveloperId: () => 'dev_x' }));
+    expect(snapshot.teamShareEnabled).toBe(true);
+    expect(snapshot.teamFolderExists).toBe(true);
+    expect(snapshot.teamDeveloperId).toBe('dev_x');
+
+    applySettingsPatch(settings, { teamShareEnabled: false });
+    expect(settings.get('team.consentedAtMs', undefined)).toBeUndefined();
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).teamShareEnabled).toBe(false);
+  });
+
+  it('does not read a hand-edited true as consent', () => {
+    const settings = new DesktopSettingsReader(file);
+    settings.update({ 'team.shareEnabled': true });
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).teamShareEnabled).toBe(false);
+  });
+
+  it('stores the repository policy and clears the folder on an empty string', () => {
+    const settings = new DesktopSettingsReader(file);
+    applySettingsPatch(settings, { teamFolder: dir, teamRepositoryMode: 'exclude', teamRepositories: ['https://github.com/o/r', ' ', 7 as unknown as string] });
+    expect(settings.get('team.repositoryMode', '')).toBe('exclude');
+    expect(settings.get('team.repositories', [])).toEqual(['https://github.com/o/r']);
+    applySettingsPatch(settings, { teamRepositoryMode: 'nonsense' as unknown as 'all', teamFolder: '' });
+    expect(settings.get('team.repositoryMode', '')).toBe('exclude');
+    expect(settings.get('team.folder', 'unset')).toBe('unset');
   });
 });

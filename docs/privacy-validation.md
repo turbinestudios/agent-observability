@@ -14,7 +14,14 @@ reference for a privacy audit.
 > **context-insights batch**), and **only** after explicit, per-developer
 > opt-in. Those batches go **only** to the dashboard address the user sets in
 > `agentObservability.sync.dashboardUrl`, a user-settings-only, `https://`-only
-> setting that is empty by default, so nothing uploads until the user sets it. The single exception to "no paths" is deliberate and narrow: the
+> setting that is empty by default, so nothing uploads until the user sets it.
+> The desktop app additionally offers an opt-in **team shard**: one JSON file
+> per member, written only to a shared folder the user chose (no server),
+> containing the same two batch contracts unchanged plus per-day,
+> per-repository session-outcome counts (`schemas/team-shard.schema.json`). It
+> is off by default, previewable byte for byte before sharing, and the app
+> reads other members' shards only after validating them against the same
+> rules the server applies. The single exception to "no paths" is deliberate and narrow: the
 > context-insights batch carries the **repository-relative paths of
 > customization files only** (instructions/skills/prompts/agents/hooks), with
 > counts and never contents, so teams can review context-engineering hotspots.
@@ -70,6 +77,11 @@ and rejects raw/free-text fields even though it does not trust the client.
 | 17 | **Context Improvement Plans** are double-gated (default-off setting + per-generation dialog naming vendor and payload) and the data host refuses a gate-off call **before** anything is assembled or sent | desktop `datahost/improve/contextPlan.ts` (`IMPROVE_ENABLED_KEY` check first) | `datahost/improve/contextPlan.test.ts` ("gate off … CLI seam is never touched") |
 | 18 | The plan **write path** is constrained to `SAFE_CONTEXT_FILE_PATTERN` files under the plan's re-verified repo root: traversal refused, staleness-checked (sha256 against generation), backed up before writing, **no delete action exists** | desktop `datahost/improve/contextPlanApply.ts` (allowlist re-check, `path.relative` guard, backup-then-write) | `datahost/improve/contextPlanApply.test.ts` (tampered path, moved root, stale, undo, never-delete) |
 | 19 | Batches go **only** to the user-set dashboard address: `agentObservability.sync.dashboardUrl` is `application`-scoped (user settings only, so a workspace or folder setting cannot redirect the API key), **empty by default**, and **`https://` only**; any other value counts as unset, and sync reports "misconfigured" and uploads nothing | extension `package.json` (`"scope": "application"`, `https://`-or-empty pattern); core `config/configuration.ts` (`normalizeDashboardUrl`), `sync/syncClient.ts` | `config/configuration.test.ts`; `sync/syncClient.test.ts` ("missing dashboard URL -> misconfigured (no POST attempted)"); `sync/syncEngine.test.ts` |
+| 20 | **Team shard** carries only the aggregate batch, the context-insights batch (unchanged builders) and closed-set outcome counts; `additionalProperties:false` at every level; the two batch schemas are embedded by `$ref`, never copied | core `team/teamShardBuilder.ts`, `schemas/team-shard.schema.json` | core `team/teamShardPrivacy.test.ts` (ajv 2020 `strict:true`; scans every string for raw markers, `@`, paths, a planted title) |
+| 21 | Team export is **opt-in, off by default**, gated by the disclosure dialog **and** re-checked in the data host (toggle + recorded consent time) before anything is assembled; the shard is validated before it is written; a hand-edited `true` alone does not share | desktop `datahost/team/teamExport.ts` (`teamSharingOn` first), `datahost/settings.ts` (`team.consentedAtMs`) | `datahost/team/teamExport.test.ts` ("refuses before gathering anything"), `datahost/settings.test.ts` ("does not read a hand-edited true as consent") |
+| 22 | Imported shards are re-validated with the TypeScript ports of the server validators (unknown keys, repository/path/id patterns, enums, partition invariants); unknown `schemaVersion`, oversized, malformed or mis-named files are **skipped with a notice**, never merged | core `aggregate/batchValidators.ts`, `team/teamShardValidator.ts`, `team/teamMerge.ts`; desktop `datahost/team/teamFolder.ts` | `aggregate/batchValidators.test.ts` (parity with ajv), `team/teamShardValidator.test.ts`, `team/teamMerge.test.ts`, `datahost/team/teamFolder.test.ts` |
+| 23 | The desktop pseudonym salt lives in its own file (`~/.agent-observability/desktop/team-salt`, 0600 where honoured), never in `config.json`, never in a shard or the shared folder | desktop `datahost/team/teamSalt.ts` | `datahost/team/teamSalt.test.ts` |
+| 24 | Desktop context-insights rows pass the same `SAFE_CONTEXT_FILE_PATTERN` gate as the extension's: absolute `context_files` paths are made repo-relative under a re-verified checkout root or **dropped** (user-level `~/.claude/CLAUDE.md` never leaves) | desktop `datahost/team/teamShardSource.ts` + core `aggregate/customizationFilter.ts` | `datahost/team/teamExport.test.ts` ("drops files outside the checkout and off the allowlist") |
 
 ## Client-side enforcement (VS Code extension)
 

@@ -8,7 +8,6 @@ import type {
   OverviewWindow,
   RetroVerdict,
 } from '../../../../shared/rpc';
-import { OVERVIEW_WINDOWS } from '../../../../shared/rpc';
 import {
   formatCost,
   formatDuration,
@@ -25,7 +24,8 @@ import { Spinner } from '../../components/Spinner';
 import { HorizontalBars, Legend, StackedBarChart } from './charts';
 import type { SeriesStyle, StackedColumn } from './charts';
 import { VERDICT_SERIES, themeTitle, verdictColumns } from './insights';
-import { persistWindow, readStoredWindow, windowDescription, windowLabel, windowRange } from './window';
+import { persistWindow, readStoredWindow, windowDescription, windowRange } from './window';
+import { WindowSelector } from './WindowSelector';
 import './overview.css';
 
 /**
@@ -721,36 +721,6 @@ function Tile({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
-/**
- * How far back the whole page looks.
- *
- * A segmented control rather than a dropdown: there are four choices, they are
- * ordered, and which one is active has to be readable at a glance from anywhere
- * on the page — every number below it depends on the answer.
- */
-function WindowSelector({
-  value,
-  onChange,
-}: {
-  value: OverviewWindow;
-  onChange: (next: OverviewWindow) => void;
-}): JSX.Element {
-  return (
-    <div className="window-selector" role="group" aria-label="Time window">
-      {OVERVIEW_WINDOWS.map((option) => (
-        <button
-          key={String(option)}
-          type="button"
-          className="window-option"
-          aria-pressed={option === value}
-          onClick={() => onChange(option)}
-        >
-          {windowLabel(option)}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 interface DayBucket {
   /** `YYYY-MM-DD`, local — the identity a click on this column drills into. */

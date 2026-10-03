@@ -1,6 +1,6 @@
 # Desktop App: Research-Functionality Proposals
 
-Eleven proposals for new functionality in the **Agent Observability desktop app**
+Thirteen proposals for new functionality in the **Agent Observability desktop app**
 (`src/desktop/agent-observability-desktop`), aimed at two goals: better
 **research into how agents behaved**, and better **feedback into the developer's own
 working practices** (prompts, instruction files, workflows, cost).
@@ -12,7 +12,7 @@ embed the concrete file paths and existing assets they build on, so no
 re-exploration is needed.
 
 Proposals 1–4 are mostly wiring capability that **already exists in core** but
-was never connected to the desktop app: high value, low risk. Proposals 5–11
+was never connected to the desktop app: high value, low risk. Proposals 5–13
 add genuinely new research capability.
 
 | # | Proposal | User story in one line | Status | Effort | Builds on |
@@ -28,6 +28,8 @@ add genuinely new research capability.
 | 9 | [Session retrospective](09-session-retrospective.md) | Each session tells me what it set out to do, how it went, and what to change | Completed (1.7.0) | M/L | Unread transcript markers + the turn data every source already parses |
 | 10 | [AI Helper](10-ai-helper.md) | Ask questions about my own sessions and get grounded, cited answers | Completed (1.8.0) | M/L | Core's chat stack + the Claude CLI backend the deep retrospective already spawns |
 | 11 | [Context Improvement Plans](11-context-improvement-plans.md) | Turn hotspot + retro evidence into reviewed, appliable edits to my context files | Completed (1.14.0) | L | The hotspot/retro rankings, the chat-backend registry (now two CLIs), and the deep-retro runner pattern |
+| 12 | [Workspace: live board & repository hubs](12-workspace-live-board.md) | See every agent session running right now, and what each repository has taught my agents | Completed (1.16.0) | L | Core's unwired `ClaudeWatcher`/`LiveUpdateController`, repo-scoped SQL over the existing index, the retro advice table |
+| 13 | [Team perspective](13-team-perspective.md) | See how my team uses agents, anonymously, through a shared folder and no server | Completed (1.17.0) | L | The aggregate and context-insights builders, the retro verdict projection, the repo-sync policy, the JSON-store pattern |
 
 **Suggested order:** 1 → 4 → 5 → 2 → 3 → 6 → 7 → 8. Proposal 5's cross-view
 navigation ("open Sessions pre-filtered") is reused by 3, 7, and 8, so build it
@@ -53,33 +55,36 @@ and duplicate.
 
 ## Future candidates (no spec yet)
 
-- **Live session watching.** `chokidar@^5` is already a declared dependency of
-  the desktop app but is never imported, and core ships
-  `src/core/agent-observability-core/src/live/claudeWatcher.ts` and
-  `liveUpdateController.ts`. Watching the active transcript would let the list
-  and an open detail update while an agent is still running.
 - **Export.** Nothing in the product can export a report today. A "Save as
   Markdown/JSON" on the session detail, comparison view, and overview would
   make findings shareable in retros. Local file writes only, user-initiated;
   any export path must exclude content-derived deviations by construction.
 - **Repository detail view.** Core's
   `src/core/agent-observability-core/src/views/sessionDetailHtml.ts` exports
-  `renderRepositoryDetailHtml` (whole-repository rollups), which is unwired in the
-  desktop app; a natural extension of proposal 5's drill-down.
+  `renderRepositoryDetailHtml` (whole-repository rollups), still unwired in the
+  desktop app. Proposal 12's repository hub covers the same ground with the
+  index; the renderer could still be reused for an exportable HTML report.
 
 ## Ground rules (every agent spec inherits these)
 
 1. **Privacy invariant (absolute).** Raw content (prompts, completions, tool
    I/O, file paths, identities, branch and commit names) never leaves the
-   machine. The only upload is the opt-in aggregate batch defined by
-   `schemas/aggregate-batch.schema.json`. Cloud sharing is off by default and
+   machine. The only data that leaves it is schema-bound aggregates: the
+   opt-in aggregate batch (`schemas/aggregate-batch.schema.json`, with
+   `schemas/context-insights-batch.schema.json`) uploaded by the extension,
+   and proposal 13's opt-in team shard (`schemas/team-shard.schema.json`), a
+   file written to a user-chosen shared folder that embeds those two batches
+   unchanged plus session-outcome counts. Cloud sharing is off by default and
    needs explicit consent plus an API key in VS Code SecretStorage. The
    dashboard address is the user setting `agentObservability.sync.dashboardUrl`,
    which is application-scoped (a workspace can never redirect the API key)
    and accepts only `https://` addresses. Every feature in this folder is
-   **local-only**. Never add fields to the aggregate/sync paths
-   (`src/core/agent-observability-core/src/aggregate/*`, `…/src/sync/*`) or to
-   `schemas/*.json`. See the privacy invariant in `AGENTS.md` and
+   **local-only**, with proposal 13's shared-folder exchange as the one
+   sanctioned file-exchange path. Never add fields to the aggregate/sync/team
+   paths (`src/core/agent-observability-core/src/aggregate/*`, `…/src/sync/*`,
+   `…/src/team/*`) or to `schemas/*.json`; the team shard may only embed the
+   two batch schemas by reference, never copy or extend them. See the privacy
+   invariant in `AGENTS.md` and
    `docs/privacy-validation.md`. There are three sanctioned, gated
    exceptions. All are desktop-only, all use strictly the user's **own AI CLI
    login** (Claude Code to Anthropic, or the GitHub Copilot CLI to GitHub,

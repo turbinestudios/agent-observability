@@ -426,6 +426,327 @@ export interface RetroResult {
   status: AnalysisStatus;
 }
 
+// ── Workspace: live board + repository hubs ─────────────────────────────────
+
+/**
+ * What a session is doing right now, derived from the tail of its own log on
+ * this machine (no hooks installed into the agent). Mirrors core's
+ * `live/liveStatus.ts`; kept as a local union so this file stays import-free.
+ */
+export type LiveStatus = 'working' | 'waiting' | 'idle' | 'finished';
+
+/** The last substantive record in the transcript, for the status hint. */
+export type LiveLastEvent =
+  | 'tool-pending'
+  | 'assistant-text'
+  | 'turn-ended'
+  | 'user-prompt'
+  | 'tool-result'
+  | 'interruption'
+  | 'unknown';
+
+/** One card on the live board. */
+export interface LiveSessionRow {
+  source: string;
+  sessionId: string;
+  repository: string;
+  title?: string;
+  status: LiveStatus;
+  lastEvent: LiveLastEvent;
+  startedAtMs: number;
+  lastActivityMs: number;
+  /** Git branch from the transcript. LOCAL-ONLY display; never leaves the machine. */
+  branch?: string;
+  /** Tool calls issued without a result yet (names only). */
+  pendingTools: string[];
+  model?: string;
+  inputTokens: number;
+  outputTokens: number;
+  costMicros?: number;
+  /** When the token/cost figures were indexed; they can lag the transcript. */
+  countsIndexedAtMs: number;
+}
+
+export interface LiveBoardSnapshot {
+  rows: LiveSessionRow[];
+  generatedAtMs: number;
+  /** False when no transcript directory could be watched (source off, or none found). */
+  watching: boolean;
+  watchedDirs: number;
+  idleMs: number;
+  finishedMs: number;
+  /** A human-readable reason the board is degraded, when it is. */
+  note?: string;
+}
+
+/** One repository card below the live board. */
+export interface RepositoryCard {
+  repository: string;
+  sessions: number;
+  lastActivityMs: number;
+  /** Live sessions on the board right now (any status but finished). */
+  live: number;
+  waiting: number;
+  bySource: { source: string; sessions: number }[];
+  verdicts: Record<RetroVerdict | 'unjudged', number>;
+  costMicros: number;
+  costSessions: number;
+}
+
+export interface RepositoryCards {
+  cards: RepositoryCard[];
+  /** Sessions in the window whose repository could not be resolved. */
+  unknownSessions: number;
+  window: OverviewWindow;
+}
+
+/** One rule / skill / instruction file found on disk in a repository checkout. */
+export interface ContextInventoryFile {
+  /** Repo-relative POSIX path. */
+  relPath: string;
+  kind: 'memory' | 'rule' | 'instruction' | 'skill' | 'agent' | 'prompt';
+  agent: 'claude' | 'copilot' | 'shared';
+  bytes: number;
+  estTokens: number;
+  /** How agents used this file across indexed sessions; absent when never seen. */
+  usage?: {
+    /** Absolute path as the index knows it — the Hotspots view's row identity. */
+    file: string;
+    sessionCount: number;
+    appliedCount: number;
+    skippedCount: number;
+    readCount: number;
+    estTokensMax: number;
+    lastSeenMs: number;
+  };
+}
+
+export interface ContextInventory {
+  /** The resolved checkout. LOCAL-ONLY — never leaves this machine. */
+  root: string;
+  files: ContextInventoryFile[];
+  /** Context files agents loaded that live OUTSIDE the checkout (user-level memory). */
+  outsideRepo: HotspotRow[];
+  truncated: boolean;
+}
+
+/** Everything the repository hub shows. */
+export interface RepoHubData {
+  repository: string;
+  window: OverviewWindow;
+  windowDays: number;
+  totals: OverviewData['totals'];
+  /** The equal-length window before this one, for the trend figures. */
+  previousTotals: { sessions: number; costMicros: number };
+  verdicts: Record<RetroVerdict | 'unjudged', number>;
+  previousVerdicts: Record<RetroVerdict | 'unjudged', number>;
+  themes: (ThemeRow & { previousSessions: number })[];
+  models: OverviewData['byModel'];
+  recent: SessionRow[];
+  live: LiveSessionRow[];
+  contextUsage: HotspotRow[];
+  inventory: ContextInventory | { error: string };
+  plans: ContextPlanSummary[];
+  status: AnalysisStatus;
+}
+
+/**
+ * The input to the locally built "what the agents learned here" digest.
+ * Field-for-field mirror of core's `analysis/repositoryDigest.ts`
+ * `RepositoryDigestInput`; the datahost assigns core's value to this type, so
+ * drift is a compile error. Carries NO absolute paths and NO branch names.
+ */
+export interface RepositoryDigestInput {
+  repository: string;
+  windowDays: number;
+  generatedAtMs: number;
+  sessions: {
+    total: number;
+    previousTotal: number;
+    bySource: { source: string; sessions: number }[];
+    verdicts: Record<RetroVerdict | 'unjudged', number>;
+    previousVerdicts: Record<RetroVerdict | 'unjudged', number>;
+  };
+  themes: { signalId: string; label: string; sessions: number; previousSessions: number; occurrences: number }[];
+  tips: { id: string; text: string; sessions: number }[];
+  hotspots: {
+    path: string;
+    category: string;
+    sessionCount: number;
+    appliedCount: number;
+    skippedCount: number;
+    estTokensMax: number;
+  }[];
+  models: { model: string; sessions: number; costMicros: number | null }[];
+  tools?: { name: string; calls: number; failures: number; sampledSessions: number }[];
+  tokens: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+    costMicros: number;
+    costSessions: number;
+  };
+  contextFiles: {
+    relPath: string;
+    kind: string;
+    agent: string;
+    estTokens: number;
+    seenInSessions: number;
+    skippedCount: number;
+  }[];
+}
+
+// ── Team: anonymous aggregates through a shared folder ──────────────────────
+
+/** How far back the Team view looks. Mirrors core's `team/teamViewModels.ts`. */
+export type TeamWindow = 7 | 30 | 90;
+export const TEAM_WINDOWS: readonly TeamWindow[] = [7, 30, 90];
+export const DEFAULT_TEAM_WINDOW: TeamWindow = 30;
+
+export function toTeamWindow(value: unknown): TeamWindow {
+  return TEAM_WINDOWS.includes(value as TeamWindow) ? (value as TeamWindow) : DEFAULT_TEAM_WINDOW;
+}
+
+export type TeamVerdict = RetroVerdict | 'unjudged';
+export type TeamCostMode = 'usd' | 'aiu' | 'credits';
+export type ShardProblemReason = 'unknown-schema-version' | 'invalid' | 'id-mismatch' | 'too-large' | 'unreadable';
+
+export interface TeamStatus {
+  /** The chosen folder, or '' when unset. */
+  folder: string;
+  folderState: 'unset' | 'ok' | 'missing' | 'unreadable';
+  watchMode: 'events+poll' | 'poll' | 'off';
+  shareEnabled: boolean;
+  autoExport: boolean;
+  /** The viewer's own anonymous id, so the view can mark "you". */
+  developerId: string;
+  lastExportAtMs?: number;
+  lastExportBytes?: number;
+  lastExportError?: string;
+  exporting: boolean;
+  /** Shards merged from the folder, the viewer's own included. */
+  memberCount: number;
+  problems: { fileName: string; reason: ShardProblemReason; detail?: string }[];
+  lastReadAtMs?: number;
+}
+
+export interface TeamMemberInfo {
+  developerId: string;
+  isMe: boolean;
+  generatedAtMs: number;
+  toolVersion: string;
+  windowStartMs: number;
+  windowEndMs: number;
+  bucketCount: number;
+  contextRowCount: number;
+  outcomeRowCount: number;
+  stale: boolean;
+}
+
+/** The exact file that sharing would write, for the preview dialog. */
+export interface TeamPreview {
+  json: string;
+  bytes: number;
+  developerId: string;
+  windowStartMs: number;
+  windowEndMs: number;
+  /** Repositories that would appear in the file, sanitized form. */
+  repositories: string[];
+  bucketCount: number;
+  contextRowCount: number;
+  outcomeRowCount: number;
+  shareEnabled: boolean;
+}
+
+/** Error-as-value, like {@link DeepRetroResult}. */
+export interface TeamExportResult {
+  ok: boolean;
+  path?: string;
+  bytes?: number;
+  bucketCount?: number;
+  contextRowCount?: number;
+  outcomeRowCount?: number;
+  error?: string;
+}
+
+export interface TeamDayPoint {
+  day: string;
+  members: number;
+  sessions: number;
+  inputTokens: number;
+  outputTokens: number;
+  costMicros: number;
+}
+
+export interface TeamVerdictDayPoint {
+  day: string;
+  verdict: TeamVerdict;
+  sessions: number;
+}
+
+export interface TeamRepositoryRow {
+  repository: string;
+  sessions: number;
+  members: number;
+  mine: number;
+}
+
+export interface TeamHotspotRow {
+  repository: string;
+  contextFile: string;
+  category: string;
+  appliedCount: number;
+  skippedCount: number;
+  estTokensMax: number;
+  errorSessions: number;
+  deviationSessions: number;
+  members: number;
+  score: number;
+}
+
+export interface TeamFigures {
+  sessions: number;
+  inputTokens: number;
+  outputTokens: number;
+  costMicros: number;
+  verdictMix: Record<TeamVerdict, number>;
+}
+
+export interface TeamMeVsTeam {
+  mine: TeamFigures;
+  teamMedian: TeamFigures;
+  teamMean: TeamFigures;
+  rankBySessions?: number;
+  comparedMembers: number;
+}
+
+/** Everything the Team view draws. Mirrors core's `TeamMetrics` plus the status. */
+export interface TeamViewData {
+  window: TeamWindow;
+  days: string[];
+  totals: {
+    members: number;
+    activeMembers: number;
+    sessions: number;
+    inputTokens: number;
+    outputTokens: number;
+    costMicros: number;
+    pricedSessions: number;
+    repositories: number;
+  };
+  daily: TeamDayPoint[];
+  verdictDaily: TeamVerdictDayPoint[];
+  verdictMix: Record<TeamVerdict, number>;
+  topRepositories: TeamRepositoryRow[];
+  hotspots: TeamHotspotRow[];
+  adoption: { day: string; members: number }[];
+  me?: TeamMeVsTeam;
+  costModes: Record<TeamCostMode, number>;
+  staleMembers: number;
+  members: TeamMemberInfo[];
+  status: TeamStatus;
+}
+
 /** How many friction themes the Dashboard's insight card ranks. */
 export const INSIGHT_THEME_LIMIT = 8;
 
@@ -621,6 +942,29 @@ export interface SettingsSnapshot {
   aiBackend: string;
   /** `aiHelper.copilotCliPath`; empty string means `copilot` on PATH. */
   copilotCliPath: string;
+  /**
+   * `workspace.notifications` — desktop notifications when a live session
+   * starts waiting for the user or finishes. OFF by default. Shown by this
+   * computer only; nothing is sent anywhere.
+   */
+  liveNotifications: boolean;
+  /** `team.folder` — the shared folder the Team view reads; '' when unset. */
+  teamFolder: string;
+  teamFolderExists: boolean;
+  /**
+   * `team.shareEnabled` — whether this app writes its own shard into the team
+   * folder. OFF by default: turning it on is the consent gate for the team
+   * shard, which carries the same aggregates as cloud sharing plus per-day
+   * session-outcome counts, and nothing else. Reading the folder is always on.
+   */
+  teamShareEnabled: boolean;
+  /** `team.autoExport` — rewrite the shard hourly while the app runs (only when sharing is on). */
+  teamAutoExport: boolean;
+  /** `team.repositoryMode` — which repositories the shard covers. */
+  teamRepositoryMode: 'all' | 'include' | 'exclude';
+  teamRepositories: string[];
+  /** The viewer's own anonymous id, as it appears in the folder. */
+  teamDeveloperId: string;
   /** Absolute path of the desktop config file. */
   configPath: string;
   /** Its directory, for the "open config folder" affordance. */
@@ -746,6 +1090,13 @@ export interface SettingsPatch {
   /** Which CLI the AI features route through. */
   aiBackend?: 'claude-code' | 'copilot-cli';
   copilotCliPath?: string;
+  liveNotifications?: boolean;
+  /** '' clears the folder. */
+  teamFolder?: string;
+  teamShareEnabled?: boolean;
+  teamAutoExport?: boolean;
+  teamRepositoryMode?: 'all' | 'include' | 'exclude';
+  teamRepositories?: string[];
 }
 
 /**
@@ -986,6 +1337,29 @@ export interface RpcMethods {
   /** Restore applied files from their backups (refused after outside edits). */
   'improve.undo'(id: string, paths: string[]): ApplyResult;
   /** The editable settings plus what auto-detection currently resolves to. */
+  /** The live board: sessions active in the last 30 minutes, with derived status. */
+  'workspace.live'(): LiveBoardSnapshot;
+  /** One card per repository active in the window, with live counts folded in. */
+  'workspace.repositories'(params?: { window?: OverviewWindow }): RepositoryCards;
+  /** Everything the repository hub shows, in one call. */
+  'workspace.repoHub'(repository: string, params?: { window?: OverviewWindow }): RepoHubData;
+  /**
+   * The input for the locally built digest. The renderer renders it with
+   * core's pure digest module; nothing here leaves the machine and no vendor
+   * is called.
+   */
+  'workspace.repoDigest'(repository: string, params?: { window?: OverviewWindow }): RepositoryDigestInput;
+  /** Folder, sharing and export state of the Team feature. */
+  'team.status'(): TeamStatus;
+  /** Re-read the folder now. */
+  'team.refresh'(): TeamStatus;
+  /** The exact JSON sharing would write. Allowed whether or not sharing is on: previewing is not sharing. */
+  'team.preview'(): TeamPreview;
+  /** Write this member's shard now. Refused in the datahost unless sharing is on and consented. */
+  'team.exportNow'(): TeamExportResult;
+  /** Everything the Team view draws, over the merged shards. */
+  'team.view'(params?: { window?: TeamWindow }): TeamViewData;
+  'team.members'(): TeamMemberInfo[];
   'settings.get'(): SettingsSnapshot;
   /**
    * Persist a partial settings update. Sources whose settings changed are
@@ -1037,7 +1411,11 @@ export type RpcEvent =
    * carries the WHOLE accumulated answer, so the view replaces rather than
    * appends and a dropped event can never corrupt the markup.
    */
-  | { event: 'ai.assistantDelta'; runId: number; html: string };
+  | { event: 'ai.assistantDelta'; runId: number; html: string }
+  /** The live board changed: a session appeared, changed status, or finished. */
+  | { event: 'workspace.live'; snapshot: LiveBoardSnapshot }
+  /** The team folder was re-read or this member's shard was written. */
+  | { event: 'team.changed'; status: TeamStatus };
 
 export type RpcEventName = RpcEvent['event'];
 

@@ -20,10 +20,12 @@ import type {
 } from '../shared/rpc';
 import {
   DEFAULT_OVERVIEW_WINDOW,
+  DEFAULT_TEAM_WINDOW,
   INSIGHT_HOTSPOT_LIMIT,
   MAX_COMPARE_SESSIONS,
   sessionKey,
   toOverviewWindow,
+  toTeamWindow,
   windowStartMs,
 } from '../shared/rpc';
 import { DetailRenderer } from './detail/detailRenderer';
@@ -52,6 +54,9 @@ import {
   planView,
 } from './improve/contextPlan';
 import { applyContextPlan, diffForEdit, undoContextPlan } from './improve/contextPlanApply';
+import { LiveBoardService } from './live/liveBoard';
+import { TeamController } from './team/teamController';
+import { buildRepoDigestInput, buildRepoHub, buildRepositoryCards } from './workspace/repoHub';
 import { AiBackendHolder, backendVendor } from './aiBackends';
 import { AiHelperController } from './aiHelper';
 import {
@@ -141,16 +146,26 @@ const ports: MessagePortMain[] = [];
 
 let cleanupSnapshots = true;
 let ensureArchiveIndexes = true;
+/**
+ * Set when the live board asked for the next pass. Such a pass skips
+ * re-analyzing sessions that are still being written to; a user-initiated
+ * Refresh or the startup pass analyzes everything.
+ */
+let liveTriggered = false;
+/** Sessions that ended within this long before a live-triggered pass are left for later. */
+const LIVE_ANALYSIS_SETTLE_MS = 120_000;
 const background = new BackgroundController({
   spawn: () => {
     const worker = new ProcessingWorker(path.join(__dirname, 'background.js'), {
       workerData: {
         indexPath, settings: settings.all(), copilotNotes: copilotSetupNotes,
         cleanupSnapshots, ensureArchiveIndexes,
+        ...(liveTriggered ? { skipAnalysisNewerThanMs: Date.now() - LIVE_ANALYSIS_SETTLE_MS } : {}),
       } satisfies BackgroundInput,
     });
     cleanupSnapshots = false;
     ensureArchiveIndexes = false;
+    liveTriggered = false;
     return worker;
   },
   onStart: () => {
@@ -176,11 +191,64 @@ function analysisStatus(): AnalysisStatus {
   return { ...db.analysisCounts(), running: analysisRunning };
 }
 
+// The live board: watches the transcripts the agents are writing right now
+// and derives each session's status from its tail. Started once the first
+// index pass settles, so a cold start paints the list before any watch is
+// armed; its own re-index requests are marked so the analysis pass leaves
+// still-moving transcripts alone.
+const live = new LiveBoardService({
+  db,
+  config,
+  hidden,
+  renames,
+  emit,
+  requestIndex: () => {
+    liveTriggered = true;
+    background.request();
+  },
+});
+
+/**
+ * The app version, for the team shard's `toolVersion`. Only main knows it, so
+ * it rides the port handshake; until that arrives nothing can export anyway.
+ */
+let toolVersion = '0.0.0';
+
+// The Team feature: reads the shared folder (always, read-only) and writes
+// this member's shard (only when sharing is on and consented). Exports run
+// behind the background controller like every other write.
+const team = new TeamController({
+  db,
+  settings,
+  sources,
+  hidden,
+  emit,
+  exclusive: (work) => background.exclusive(work),
+  toolVersion: () => toolVersion,
+});
+
+/** The identity seam Settings needs; the salt is minted lazily on first use. */
+const settingsSeams = { teamDeveloperId: () => team.developerId() };
+
+const hubDeps = {
+  db,
+  hiddenKeys: () => hidden.all(),
+  decorate,
+  liveRows: () => live.snapshot().rows,
+  plans: (repository: string) => contextPlans.list(repository).map(planSummary),
+  analysisStatus,
+  sources,
+};
+
 function onBackgroundMessage(message: BackgroundMessage): void {
   switch (message.type) {
     case 'index':
       status = message.status;
       emit({ event: 'index.progress', status });
+      if (message.status.phase === 'idle') {
+        live.ensureStarted();
+        live.onIndexSettled();
+      }
       break;
     case 'analysis':
       analysisRunning = message.status.running;
@@ -609,8 +677,41 @@ function handle(request: RpcRequest): unknown {
         ...(dailyCapped === true ? { dailyCapped: true as const } : {}),
       };
     }
+    case 'workspace.live':
+      return live.snapshot();
+    case 'workspace.repositories':
+      return buildRepositoryCards(
+        toOverviewWindow(request.params[0]?.window ?? DEFAULT_OVERVIEW_WINDOW),
+        db,
+        hidden.all(),
+        live.snapshot().rows,
+      );
+    case 'workspace.repoHub':
+      return buildRepoHub(
+        request.params[0],
+        toOverviewWindow(request.params[1]?.window ?? DEFAULT_OVERVIEW_WINDOW),
+        hubDeps,
+      );
+    case 'workspace.repoDigest':
+      return buildRepoDigestInput(
+        request.params[0],
+        toOverviewWindow(request.params[1]?.window ?? DEFAULT_OVERVIEW_WINDOW),
+        hubDeps,
+      );
+    case 'team.status':
+      return team.status();
+    case 'team.refresh':
+      return team.refresh();
+    case 'team.preview':
+      return team.preview();
+    case 'team.exportNow':
+      return team.exportNow();
+    case 'team.view':
+      return team.view(toTeamWindow(request.params[0]?.window ?? DEFAULT_TEAM_WINDOW));
+    case 'team.members':
+      return team.members();
     case 'settings.get':
-      return buildSettingsSnapshot(settings, config);
+      return buildSettingsSnapshot(settings, config, settingsSeams);
     case 'settings.update': {
       return background.exclusive(() => {
         const changed = applySettingsPatch(settings, request.params[0]);
@@ -631,8 +732,13 @@ function handle(request: RpcRequest): unknown {
         if (changed.claude || changed.copilot) {
           sources.refresh();
           detail.invalidateAll();
+          // The watched directories and databases follow the sources.
+          live.restart();
         }
-        return buildSettingsSnapshot(settings, config);
+        if (changed.team) {
+          team.settingsChanged();
+        }
+        return buildSettingsSnapshot(settings, config, settingsSeams);
       });
     }
     case 'copilot.setupStatus':
@@ -717,9 +823,14 @@ process.parentPort?.on('message', (event) => {
     console.log(`[datahost] message from main, ports=${event.ports.length}`);
   }
   const [port] = event.ports;
+  const data = event.data as { type?: string; version?: string } | undefined;
+  if (typeof data?.version === 'string' && data.version.length > 0) {
+    toolVersion = data.version;
+  }
   if (port !== undefined) {
     attach(port);
     refreshCounts();
+    team.start();
     // Paint from whatever the last run left behind, then bring it up to date.
     emit({ event: 'index.progress', status });
     // The launch-time Copilot setup check: a few stats and small file parses,

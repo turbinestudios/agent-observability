@@ -89,6 +89,7 @@ try {
 
   const analysis = new AnalysisQueue({
     db, sources, detector: new LocalDeviationDetector(config),
+    settledBeforeMs: () => input.skipAnalysisNewerThanMs,
     acceptedMissing: () => ({
       files: settings.get<string[]>('context.acceptedMissingFiles', []),
       sources: settings.get<string[]>('context.acceptedMissingSources', []),

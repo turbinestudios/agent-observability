@@ -3,7 +3,9 @@ import {
   WHAT_IS_SHARED,
   WHAT_IS_NOT_SHARED,
   DISCLOSURE_SUMMARY,
+  TEAM_WHAT_IS_SHARED,
   consentModalDetail,
+  teamConsentDetail,
 } from './consentDisclosure';
 
 /**
@@ -44,5 +46,24 @@ describe('consent disclosure copy', () => {
     const off = consentModalDetail(false);
     expect(off).toContain(WHAT_IS_NOT_SHARED);
     expect(off.toLowerCase()).toContain('disable');
+  });
+
+  it('the team disclosure names the outcome block it adds and nothing beyond counts', () => {
+    const lower = TEAM_WHAT_IS_SHARED.toLowerCase();
+    expect(TEAM_WHAT_IS_SHARED).toContain(WHAT_IS_SHARED);
+    expect(lower).toContain('session');
+    expect(lower).toContain('cost');
+    for (const verdict of ['smooth', 'bumpy', 'struggled', 'abandoned', 'not judged']) {
+      expect(lower).toContain(verdict);
+    }
+  });
+
+  it('the team consent dialog names the folder, both halves and every repository', () => {
+    const detail = teamConsentDetail('Z:/shared/ao-team', ['https://github.com/o/a', 'https://github.com/o/b']);
+    expect(detail).toContain('Z:/shared/ao-team');
+    expect(detail).toContain(TEAM_WHAT_IS_SHARED);
+    expect(detail).toContain(WHAT_IS_NOT_SHARED);
+    expect(detail).toContain('https://github.com/o/a, https://github.com/o/b');
+    expect(teamConsentDetail('/f', [])).toContain('Repositories included: none yet');
   });
 });

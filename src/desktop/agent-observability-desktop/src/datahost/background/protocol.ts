@@ -8,6 +8,11 @@ export interface BackgroundInput {
   /** Once per launch only; tests omit this to avoid touching real temp data. */
   cleanupSnapshots?: boolean;
   ensureArchiveIndexes?: boolean;
+  /**
+   * Set on passes the live board triggered: sessions that ended after this
+   * instant are not re-analyzed yet, because their transcript is still moving.
+   */
+  skipAnalysisNewerThanMs?: number;
 }
 
 /** Rows are re-read/decorated by the broker; user annotations never go stale. */

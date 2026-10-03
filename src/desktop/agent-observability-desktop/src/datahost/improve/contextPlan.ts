@@ -264,7 +264,12 @@ function buildHotspotStats(
 }
 
 /** Repo-relative POSIX path under the root; anything else collapses to its name. */
-function promptSafePath(file: string, root: string): string {
+/**
+ * A context file's identity without its absolute path: repo-relative POSIX
+ * under `root`, else the bare file name. Shared with the Workspace digest so
+ * no feature builds a second, slightly different rule.
+ */
+export function promptSafePath(file: string, root: string): string {
   if (!path.isAbsolute(file)) {
     return file.replace(/\\/g, '/');
   }

@@ -34,6 +34,13 @@ It runs on your machine and keeps your data there.
   context files (such as `AGENTS.md` or a skill file), sent with their counts.
   The exact format is fixed in
   [schemas/aggregate-batch.schema.json](schemas/aggregate-batch.schema.json).
+- **The Team view in the desktop app is also off by default and needs no
+  server.** If you turn it on and pick a folder your team shares (OneDrive,
+  SharePoint, a network drive), the app writes one file there with the same
+  counts and totals under your anonymous id, plus how many sessions ran each
+  day in each repository and how they went, and reads the files your teammates
+  put there. You can preview the exact file before sharing. The format is
+  fixed in [schemas/team-shard.schema.json](schemas/team-shard.schema.json).
 - **Three optional AI features in the desktop app send content, and only when
   you ask.** They use your own Claude Code or GitHub Copilot CLI login, never a
   key of ours. Each one tells you exactly what it sends before it sends it:

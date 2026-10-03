@@ -32,6 +32,7 @@ declare global {
       openPath(path: string): Promise<string>;
       showItem(path: string): Promise<void>;
       getVersion(): Promise<string>;
+      pickFolder(): Promise<string | undefined>;
       setNativeTheme(theme: 'dark' | 'light'): void;
       onUpdateStatus(listener: (status: UpdateStatus) => void): () => void;
       stashDetail(html: string): Promise<string | undefined>;

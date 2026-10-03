@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import {
   app,
   BrowserWindow,
+  dialog,
   MessageChannelMain,
   protocol,
   shell,
@@ -132,7 +133,7 @@ function connectRendererToDataHost(): void {
     return;
   }
   const { port1, port2 } = new MessageChannelMain();
-  dataHost.postMessage({ type: 'renderer-port' }, [port1]);
+  dataHost.postMessage({ type: 'renderer-port', version: app.getVersion() }, [port1]);
   mainWindow.webContents.postMessage('datahost:port', null, [port2]);
   if (process.env.AO_DEBUG === '1') {
     console.log('[main] handed renderer a data-host port');
@@ -211,6 +212,19 @@ app.whenReady().then(() => {
   ipcMain.handle('app:open-path', async (_event, path: string) => shell.openPath(path));
   ipcMain.handle('app:show-item', (_event, path: string) => shell.showItemInFolder(path));
   ipcMain.handle('app:get-version', () => app.getVersion());
+  // The Team folder picker. A native dialog, parented to the window when there
+  // is one so it opens over the app rather than behind it.
+  ipcMain.handle('app:pick-folder', async () => {
+    const options: Electron.OpenDialogOptions = {
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Choose the team folder',
+    };
+    const result =
+      mainWindow === undefined
+        ? await dialog.showOpenDialog(options)
+        : await dialog.showOpenDialog(mainWindow, options);
+    return result.canceled ? undefined : result.filePaths[0];
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -133,14 +133,34 @@ on the answer to "whose machine?", the assertion is wrong, not the runner.
 ## Privacy invariant (do not break)
 
 Raw content (prompts, completions, tool I/O, file paths, identities, branch and
-commit names) **never leaves the machine**. The only thing uploaded is the
-opt-in aggregate batch defined by
-[schemas/aggregate-batch.schema.json](schemas/aggregate-batch.schema.json), which
-is `additionalProperties: false` at every level.
+commit names) **never leaves the machine**. The only things that do are two
+opt-in, schema-bound aggregate artifacts: the **aggregate batch** (with its
+companion **context-insights batch**) that the VS Code extension uploads to
+the dashboard, defined by
+[schemas/aggregate-batch.schema.json](schemas/aggregate-batch.schema.json) and
+[schemas/context-insights-batch.schema.json](schemas/context-insights-batch.schema.json);
+and the desktop app's **team shard**, a JSON file written to a folder the user
+chose, defined by
+[schemas/team-shard.schema.json](schemas/team-shard.schema.json), which embeds
+those same two batches unchanged plus per-day session-outcome counts
+(sessions, verdict mix, estimated cost) by repository and source. All three
+schemas are `additionalProperties: false` at every level.
 
-- Never add a raw-content field to any aggregate / sync path
+- Never add a raw-content field to any aggregate / sync / team path
   (`src/core/agent-observability-core/src/aggregate/*`,
-  `src/core/agent-observability-core/src/sync/*`).
+  `src/core/agent-observability-core/src/sync/*`,
+  `src/core/agent-observability-core/src/team/*`,
+  `src/desktop/agent-observability-desktop/src/datahost/team/*`). The team
+  shard may only embed the two batch schemas by `$ref`, never copy or extend
+  them; update the TypeScript validators in `aggregate/batchValidators.ts` in
+  the same change as the C# ones.
+- Team sharing in the desktop app is **off by default**, gated on a disclosure
+  dialog that lists the repositories involved and records when consent was
+  given, writes only to the folder the user picked, and offers a byte-exact
+  preview of the file first. Reading the folder is always on and read-only:
+  every shard is validated against the schema before merging, and anything
+  that fails is skipped with a visible notice. The per-install salt behind the
+  anonymous id lives in its own file, never in `config.json`, never in a shard.
 - Cloud sharing is **off by default** and gated on explicit consent plus an API
   key in VS Code SecretStorage (never in `settings.json`).
 - The dashboard address (`agentObservability.sync.dashboardUrl`) is an
@@ -185,8 +205,9 @@ is `additionalProperties: false` at every level.
 
 Before changing anything on the producer→consumer path, read
 [docs/privacy-validation.md](docs/privacy-validation.md) and
-[docs/architecture](docs/architecture), and keep the schema, the extension
-aggregator, and the dashboard `AggregateBatchValidator` in sync.
+[docs/architecture](docs/architecture), and keep the schemas, the extension
+aggregator, the dashboard `AggregateBatchValidator`, and core's
+`aggregate/batchValidators.ts` / `team/teamShardValidator.ts` in sync.
 
 ## Changelogs: user-facing change only
 

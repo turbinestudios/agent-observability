@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://turbine.dev/schemas/team-shard.schema.json",
+  "title": "Agent Observability Team Shard (v1)",
+  "description": "Privacy-first per-member file written by the desktop app into a folder the team shares (OneDrive, SharePoint, a network drive). There is no server: every member's app writes one shard named after its pseudonymous developer id and reads everyone else's. The shard EMBEDS the two existing upload contracts UNCHANGED — the aggregate batch and the context-insights batch, by $ref to their own schemas, so the embedded parts can never drift from what the dashboard would accept — and adds exactly ONE new block, 'outcomes': per UTC day, repository and source, how many sessions ran, how they went (verdict counts) and their estimated cost. That block is the only thing in this file that is new relative to the embedded contracts. Counts and closed-set labels only: no session titles, prompts, responses, tool I/O, branch names, identities, or paths beyond the already-sanctioned repo-relative context-file names the context-insights contract carries. additionalProperties is false at every object level so an importer REJECTS any unexpected (potentially raw/sensitive) field, and the TypeScript importer re-validates every shard against the same rules the dashboard's C# validators apply before merging it.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "toolVersion",
+    "pseudonymousDeveloperId",
+    "window",
+    "aggregate",
+    "contextInsights",
+    "outcomes"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Contract version of the shard envelope. The importer skips (with a visible notice, never a silent merge) any shard whose version it does not know. Independent of the embedded batches' own schemaVersion fields."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 / ISO 8601 UTC timestamp of when the producing app wrote the shard, from the producer's clock. Informational: it decides which of two copies for the same member is newer and drives the 'stale member' indicator. It is never used to bucket data; days and buckets come from the producer, so clock skew between machines cannot move a session to another day."
+    },
+    "toolVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$",
+      "description": "Semantic version of the desktop app that produced the shard (e.g. '1.17.0'). Used for compatibility diagnostics and shown on the members list."
+    },
+    "pseudonymousDeveloperId": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^dev_[0-9a-f]{32}$",
+      "description": "Opaque, stable member identifier: literal 'dev_' prefix + 32 lowercase hex chars (first 16 bytes of HMAC-SHA256(per-install salt, normalized local identity)). The strict pattern structurally excludes emails, usernames, and any free text. The salt lives only on the producing machine and is never written into the shared folder, so the id cannot be reversed by anyone with folder access. The shard's file name MUST equal this id plus '.json', and the embedded batches MUST carry the same id; the importer skips a shard where any of the three disagree. One person using two installs appears as two ids — the view counts installs, not people."
+    },
+    "window": {
+      "type": "object",
+      "description": "The closed-open UTC time range [start, end) the shard covers; at most 90 days wide, and equal to the embedded aggregate batch's window. Each export rewrites the whole file over this window, which is what bounds retention in the shared folder.",
+      "required": ["start", "end"],
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Inclusive UTC start of the covered range (ISO 8601)."
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Exclusive UTC end of the covered range (ISO 8601). MUST be greater than start."
+        }
+      },
+      "additionalProperties": false
+    },
+    "aggregate": {
+      "$ref": "https://turbine.dev/schemas/aggregate-batch.schema.json",
+      "description": "The UNCHANGED aggregate-batch v1.0 contract, built by the same core builder the VS Code extension uploads with. Byte-for-byte POST-able to the dashboard's /api/ingest/aggregate if a hosted consumer is ever wanted. Its pseudonymousDeveloperId and window MUST equal the envelope's."
+    },
+    "contextInsights": {
+      "$ref": "https://turbine.dev/schemas/context-insights-batch.schema.json",
+      "description": "The UNCHANGED context-insights v1.0 contract: per-repository hotspot counts for CUSTOMIZATION files only, carrying the sanctioned repo-relative paths (instructions/skills/prompts/agents/hooks) and never contents. Its pseudonymousDeveloperId MUST equal the envelope's."
+    },
+    "outcomes": {
+      "type": "array",
+      "minItems": 0,
+      "description": "The one block that is NEW relative to the embedded contracts: per (UTC day, repository, source) session-outcome counts. Sessions are counted exactly here (the aggregate batch's distinctSessionCount is per-bucket and not additive), how they went comes from the local retrospective's verdict projection, and cost is the producer's own estimate. An empty array is valid (no sessions in the window).",
+      "items": { "$ref": "#/$defs/outcomeRow" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "outcomeRow": {
+      "type": "object",
+      "description": "One row at grain (day, repository, source) for the envelope's single pseudonymousDeveloperId. All counts are additive across rows and across members; costMicros is additive only within one costMode.",
+      "required": [
+        "rowKey",
+        "day",
+        "repository",
+        "source",
+        "sessionCount",
+        "verdictCounts",
+        "costMicros",
+        "pricedSessionCount",
+        "costMode"
+      ],
+      "properties": {
+        "rowKey": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Stable per-row idempotency key: SHA-256 hex of 'pseudonymousDeveloperId|day|repository|source'. The importer merges by (pseudonymousDeveloperId, rowKey), latest generatedAt wins, so a re-exported shard converges instead of double-counting."
+        },
+        "day": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "UTC calendar day (YYYY-MM-DD) of the sessions' END time, bucketed by the producer. Importers never re-bin, so shards from machines in different time zones agree on which day a session belongs to."
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(unknown|https?://[A-Za-z0-9.\\-]+(:[0-9]+)?/[^\\s@?#]+)$",
+          "description": "SANITIZED git remote in 'https://{host}/{owner}/{repo}' form, or the literal 'unknown' — the same rule and pattern as the embedded contracts, forbidding '@', whitespace, '?' and '#' so a credential-bearing URL cannot satisfy it."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["claude", "copilot"],
+          "description": "Which agent the sessions came from. Closed set; a producer drops rows from any other source rather than inventing a value."
+        },
+        "sessionCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sessions that ended on this day in this repository from this source (additive)."
+        },
+        "verdictCounts": {
+          "$ref": "#/$defs/verdictCounts",
+          "description": "How those sessions went, by the local retrospective's ordinal verdict. The five counts sum to sessionCount."
+        },
+        "costMicros": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Estimated cost in integer micro-USD, summed over the PRICED sessions only (additive within one costMode). Estimated by the producing app from token counts and its pricing table (Claude Code) or billed usage units (Copilot); never a bill."
+        },
+        "pricedSessionCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many of sessionCount carry a cost estimate — the honesty denominator ('covers N of M sessions'). At most sessionCount."
+        },
+        "costMode": {
+          "type": "string",
+          "enum": ["usd", "aiu", "credits"],
+          "description": "The source's billing basis behind costMicros, so a consumer can show a mixed-basis team split rather than silently summing unlike figures."
+        }
+      },
+      "additionalProperties": false
+    },
+    "verdictCounts": {
+      "type": "object",
+      "description": "Closed-set verdict tally. Property names are a fixed vocabulary; 'unjudged' counts sessions the local analysis has not (or could not) judge, so the tally always covers every session in the row.",
+      "required": ["smooth", "bumpy", "struggled", "abandoned", "unjudged"],
+      "properties": {
+        "smooth": { "type": "integer", "minimum": 0, "description": "Sessions judged to have gone smoothly." },
+        "bumpy": { "type": "integer", "minimum": 0, "description": "Sessions with some friction." },
+        "struggled": { "type": "integer", "minimum": 0, "description": "Sessions that struggled (repeated corrections, error streaks, churn)." },
+        "abandoned": { "type": "integer", "minimum": 0, "description": "Sessions left unfinished." },
+        "unjudged": { "type": "integer", "minimum": 0, "description": "Sessions not analyzed yet, or whose retrospective could not be built." }
+      },
+      "additionalProperties": false
+    }
+  }
+}

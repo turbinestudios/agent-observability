@@ -61,6 +61,11 @@ const api = {
     return ipcRenderer.invoke('app:get-version');
   },
 
+  /** Native folder picker for the Team folder; `undefined` when cancelled. */
+  pickFolder(): Promise<string | undefined> {
+    return ipcRenderer.invoke('app:pick-folder');
+  },
+
   /**
    * Subscribe to update progress. Returns an unsubscribe function — React
    * mounts effects twice under StrictMode, so a listener that could not be

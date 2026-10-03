@@ -927,6 +927,304 @@ export class IndexDb {
     };
   }
 
+  // -- workspace: repository hubs -------------------------------------------
+
+  /**
+   * One row per repository active in the window, with its verdict mix and
+   * cost folded in. `unknown` is reported separately rather than ranked: a
+   * card for "sessions whose repository could not be resolved" is a note, not
+   * a repository.
+   */
+  repositoryCards(
+    window: OverviewWindow,
+    hiddenKeys: readonly string[] = [],
+  ): { cards: RepositoryCardRow[]; unknownSessions: number } {
+    const cutoff = window === 'all' ? 0 : windowStartMs(window);
+    const { where, args } = repoScope(undefined, cutoff, undefined, hiddenKeys);
+
+    // Grouped by the raw verdict label and folded in JS: toVerdict is the one
+    // arbiter of what counts as a verdict, and SQL must not grow a second one.
+    const stored = this.db
+      .prepare(
+        `SELECT s.repository AS repository,
+                a.verdict AS verdict,
+                COUNT(*) AS sessions,
+                COALESCE(MAX(s.ended_at_ms), 0) AS lastActivityMs,
+                COALESCE(SUM(s.cost_micros), 0) AS costMicros,
+                COUNT(s.cost_micros) AS costSessions
+           FROM sessions s
+           LEFT JOIN session_analysis a ON a.source = s.source AND a.session_id = s.session_id
+           ${where}
+          GROUP BY s.repository, a.verdict`,
+      )
+      .all(...args) as {
+      repository: string;
+      verdict: string | null;
+      sessions: number;
+      lastActivityMs: number;
+      costMicros: number;
+      costSessions: number;
+    }[];
+
+    const bySource = this.db
+      .prepare(
+        `SELECT s.repository AS repository, s.source AS source, COUNT(*) AS sessions
+           FROM sessions s ${where}
+          GROUP BY s.repository, s.source
+          ORDER BY sessions DESC, s.source ASC`,
+      )
+      .all(...args) as { repository: string; source: string; sessions: number }[];
+
+    const cards = new Map<string, RepositoryCardRow>();
+    for (const row of stored) {
+      let card = cards.get(row.repository);
+      if (card === undefined) {
+        card = {
+          repository: row.repository,
+          sessions: 0,
+          lastActivityMs: 0,
+          bySource: [],
+          verdicts: emptyVerdicts(),
+          costMicros: 0,
+          costSessions: 0,
+        };
+        cards.set(row.repository, card);
+      }
+      card.sessions += row.sessions;
+      card.lastActivityMs = Math.max(card.lastActivityMs, row.lastActivityMs);
+      card.costMicros += row.costMicros;
+      card.costSessions += row.costSessions;
+      card.verdicts[toVerdict(row.verdict) ?? 'unjudged'] += row.sessions;
+    }
+    for (const row of bySource) {
+      cards.get(row.repository)?.bySource.push({ source: row.source, sessions: row.sessions });
+    }
+
+    const unknownSessions = cards.get('unknown')?.sessions ?? 0;
+    cards.delete('unknown');
+    return {
+      cards: [...cards.values()].sort(
+        (a, b) => b.sessions - a.sessions || b.lastActivityMs - a.lastActivityMs || a.repository.localeCompare(b.repository),
+      ),
+      unknownSessions,
+    };
+  }
+
+  /**
+   * The overview totals for ONE repository over `[cutoffMs, untilMs)`. The
+   * optional upper bound is what lets the hub compute the equal-length window
+   * before this one for its trend figures.
+   */
+  repoTotals(
+    repository: string,
+    cutoffMs: number,
+    untilMs: number | undefined,
+    hiddenKeys: readonly string[] = [],
+  ): OverviewData['totals'] {
+    const { where, args } = repoScope(repository, cutoffMs, untilMs, hiddenKeys);
+    return this.db
+      .prepare(
+        `SELECT COUNT(*) AS sessions,
+                COALESCE(SUM(s.interaction_count), 0) AS steps,
+                COALESCE(SUM(s.llm_calls), 0) AS llmCalls,
+                COALESCE(SUM(s.tool_calls), 0) AS toolCalls,
+                COALESCE(SUM(s.input_tokens), 0) AS inputTokens,
+                COALESCE(SUM(s.output_tokens), 0) AS outputTokens,
+                COALESCE(SUM(s.cached_tokens), 0) AS cachedTokens,
+                COALESCE(SUM(s.cost_micros), 0) AS costMicros,
+                COUNT(s.cost_micros) AS costSessions,
+                COUNT(DISTINCT CASE WHEN s.repository <> 'unknown' THEN s.repository END) AS repositories,
+                COUNT(DISTINCT CASE WHEN s.model <> 'unknown' THEN s.model END) AS models,
+                COALESCE(AVG(NULLIF(s.duration_ms, 0)), 0) AS avgSessionMs
+           FROM sessions s ${where}`,
+      )
+      .get(...args) as OverviewData['totals'];
+  }
+
+  /** Verdict mix for one repository over `[cutoffMs, untilMs)`; unanalyzed sessions count as unjudged. */
+  repoVerdicts(
+    repository: string,
+    cutoffMs: number,
+    untilMs: number | undefined,
+    hiddenKeys: readonly string[] = [],
+  ): Record<RetroVerdict | 'unjudged', number> {
+    const { where, args } = repoScope(repository, cutoffMs, untilMs, hiddenKeys);
+    const stored = this.db
+      .prepare(
+        `SELECT a.verdict AS verdict, COUNT(*) AS sessions
+           FROM sessions s
+           LEFT JOIN session_analysis a ON a.source = s.source AND a.session_id = s.session_id
+           ${where}
+          GROUP BY a.verdict`,
+      )
+      .all(...args) as { verdict: string | null; sessions: number }[];
+    const verdicts = emptyVerdicts();
+    for (const row of stored) {
+      verdicts[toVerdict(row.verdict) ?? 'unjudged'] += row.sessions;
+    }
+    return verdicts;
+  }
+
+  /** Recurring friction themes for one repository — the insight card's query, scoped. */
+  repoThemes(
+    repository: string,
+    cutoffMs: number,
+    untilMs: number | undefined,
+    hiddenKeys: readonly string[] = [],
+    limit: number = INSIGHT_THEME_LIMIT,
+  ): ThemeRow[] {
+    const { where, args } = repoScope(repository, cutoffMs, untilMs, hiddenKeys);
+    return this.db
+      .prepare(
+        `SELECT f.signal_id AS signalId,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(f.count), 0) AS occurrences
+           FROM session_findings f
+           JOIN sessions s ON s.source = f.source AND s.session_id = f.session_id
+           ${where} AND f.severity <> 'info'
+          GROUP BY f.signal_id
+          ORDER BY sessions DESC, occurrences DESC, f.signal_id ASC
+          LIMIT ?`,
+      )
+      .all(...args, limit) as ThemeRow[];
+  }
+
+  /** Cost by dominant model for one repository — the overview's table, scoped. */
+  repoModels(
+    repository: string,
+    cutoffMs: number,
+    hiddenKeys: readonly string[] = [],
+    limit: number = TOP_MODEL_LIMIT,
+  ): OverviewData['byModel'] {
+    const { where, args } = repoScope(repository, cutoffMs, undefined, hiddenKeys);
+    return this.db
+      .prepare(
+        `SELECT s.model AS model,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(s.llm_calls), 0) AS llmCalls,
+                COALESCE(SUM(s.input_tokens), 0) AS inputTokens,
+                COALESCE(SUM(s.output_tokens), 0) AS outputTokens,
+                SUM(s.cost_micros) AS costMicros
+           FROM sessions s ${where}
+          GROUP BY s.model
+          ORDER BY (costMicros IS NULL) ASC, costMicros DESC, sessions DESC, s.model ASC
+          LIMIT ?`,
+      )
+      .all(...args, limit) as OverviewData['byModel'];
+  }
+
+  /**
+   * The retrospective projection of one repository's judged sessions, with the
+   * finding ids each raised — the input core's advice table needs to say which
+   * tips fire most often here. Counts and enum labels only, like the table.
+   */
+  repoSessionFindings(
+    repository: string,
+    cutoffMs: number,
+    hiddenKeys: readonly string[] = [],
+    limit: number = ANALYSIS_SESSION_LIMIT,
+  ): RepoSessionFindingsRow[] {
+    const { where, args } = repoScope(repository, cutoffMs, undefined, hiddenKeys);
+    const stored = this.db
+      .prepare(
+        `SELECT a.source AS source, a.session_id AS sessionId,
+                a.verdict AS verdict, a.outcome AS outcome,
+                a.correction_turns AS correctionTurns,
+                a.repeated_prompt_turns AS repeatedPromptTurns,
+                a.interruptions AS interruptions,
+                a.error_streaks AS errorStreaks,
+                a.max_error_streak AS maxErrorStreak,
+                a.long_tail_turns AS longTailTurns,
+                a.compactions AS compactions,
+                a.churn_ratio_pct AS churnRatioPct,
+                a.plan_mode_used AS planModeUsed,
+                a.first_prompt_rating AS firstPromptRating,
+                a.tip_count AS tipCount,
+                GROUP_CONCAT(f.signal_id) AS signalIds
+           FROM session_analysis a
+           JOIN sessions s ON s.source = a.source AND s.session_id = a.session_id
+           LEFT JOIN session_findings f ON f.source = a.source AND f.session_id = a.session_id
+           ${where} AND a.verdict IS NOT NULL
+          GROUP BY a.source, a.session_id
+          ORDER BY s.ended_at_ms DESC
+          LIMIT ?`,
+      )
+      .all(...args, limit) as (Omit<RepoSessionFindingsRow, 'signalIds' | 'planModeUsed' | 'verdict' | 'firstPromptRating'> & {
+      signalIds: string | null;
+      planModeUsed: number;
+      verdict: string;
+      firstPromptRating: string | null;
+    })[];
+    const rows: RepoSessionFindingsRow[] = [];
+    for (const row of stored) {
+      const verdict = toVerdict(row.verdict);
+      if (verdict === undefined) {
+        continue;
+      }
+      rows.push({
+        ...row,
+        verdict,
+        planModeUsed: row.planModeUsed === 1,
+        firstPromptRating: row.firstPromptRating ?? undefined,
+        signalIds: row.signalIds === null ? [] : [...new Set(row.signalIds.split(','))],
+      });
+    }
+    return rows;
+  }
+
+  // -- team shard inputs ----------------------------------------------------
+
+  /**
+   * One row per hydrated session that ended inside `[sinceMs, untilMs)`, with
+   * its verdict (NULL = unjudged) and cost — the input to the team shard's
+   * outcome rows. Counts and labels only; the shard builder closes the sets.
+   */
+  outcomeInputs(
+    sinceMs: number,
+    untilMs: number,
+    hiddenKeys: readonly string[] = [],
+  ): { endedAtMs: number; repository: string; source: string; verdict: string | null; costMicros: number | null }[] {
+    const { where, args } = repoScope(undefined, sinceMs, untilMs, hiddenKeys);
+    return this.db
+      .prepare(
+        `SELECT s.ended_at_ms AS endedAtMs, s.repository AS repository, s.source AS source,
+                a.verdict AS verdict, s.cost_micros AS costMicros
+           FROM sessions s
+           LEFT JOIN session_analysis a ON a.source = s.source AND a.session_id = s.session_id
+           ${where} AND s.pending = 0
+          ORDER BY s.ended_at_ms ASC, s.source ASC, s.session_id ASC`,
+      )
+      .all(...args) as { endedAtMs: number; repository: string; source: string; verdict: string | null; costMicros: number | null }[];
+  }
+
+  /**
+   * Every (session, context file) row inside the window with the session's
+   * repository, start time and friction counts — the input to the team
+   * shard's context-insights part. `file` is ABSOLUTE here; the collector
+   * makes it repo-relative under a verified checkout root or drops it.
+   */
+  contextFileObservationRows(
+    sinceMs: number,
+    untilMs: number,
+    hiddenKeys: readonly string[] = [],
+  ): ContextFileObservationRow[] {
+    const { where, args } = repoScope(undefined, sinceMs, untilMs, hiddenKeys);
+    return this.db
+      .prepare(
+        `SELECT cf.source AS source, cf.session_id AS sessionId, s.repository AS repository,
+                s.started_at_ms AS startedAtMs, cf.file AS file, cf.category AS category,
+                cf.status AS status, cf.est_tokens AS estTokens,
+                COALESCE(a.error_count, 0) AS errorCount,
+                COALESCE(a.deviation_count, 0) AS deviationCount
+           FROM context_files cf
+           JOIN sessions s ON s.source = cf.source AND s.session_id = cf.session_id
+           LEFT JOIN session_analysis a ON a.source = cf.source AND a.session_id = cf.session_id
+           ${where}
+          ORDER BY s.ended_at_ms ASC, cf.file ASC`,
+      )
+      .all(...args) as ContextFileObservationRow[];
+  }
+
   // -- background analysis ---------------------------------------------------
 
   /**
@@ -938,12 +1236,21 @@ export class IndexDb {
    * displace a recent one. A session still awaiting hydration is skipped: its
    * counts are placeholders, so analyzing it would only have to be redone.
    */
-  staleAnalysis(batch: number, window: number = ANALYSIS_SESSION_LIMIT): AnalysisTarget[] {
+  staleAnalysis(
+    batch: number,
+    window: number = ANALYSIS_SESSION_LIMIT,
+    settledBeforeMs?: number,
+  ): AnalysisTarget[] {
+    // A live-triggered pass skips sessions still being written to: analyzing a
+    // transcript that will change again in ten seconds only redoes the work.
+    // Startup and Refresh passes leave the bound off and analyze everything.
+    const settled = settledBeforeMs === undefined ? '' : 'AND ended_at_ms <= ?';
+    const args: unknown[] = settledBeforeMs === undefined ? [window, batch] : [settledBeforeMs, window, batch];
     return this.db
       .prepare(
         `WITH recent AS (
            SELECT source, session_id, indexed_at_ms FROM sessions
-            WHERE pending = 0 ORDER BY ended_at_ms DESC LIMIT ?
+            WHERE pending = 0 ${settled} ORDER BY ended_at_ms DESC LIMIT ?
          )
          SELECT r.source AS source, r.session_id AS sessionId, r.indexed_at_ms AS indexedAtMs
            FROM recent r
@@ -951,7 +1258,7 @@ export class IndexDb {
           WHERE a.indexed_at_ms IS NULL OR a.indexed_at_ms <> r.indexed_at_ms
           LIMIT ?`,
       )
-      .all(window, batch) as AnalysisTarget[];
+      .all(...args) as AnalysisTarget[];
   }
 
   /** How much of the analysis window has current results, for the progress note. */
@@ -1350,6 +1657,88 @@ export class IndexDb {
       )
       .run(cwd, repository, nowMs);
   }
+}
+
+/** One repository's card before the live counts are folded in. */
+export interface RepositoryCardRow {
+  repository: string;
+  sessions: number;
+  lastActivityMs: number;
+  bySource: { source: string; sessions: number }[];
+  verdicts: Record<RetroVerdict | 'unjudged', number>;
+  costMicros: number;
+  costSessions: number;
+}
+
+/** One judged session's retrospective counts plus the finding ids it raised. */
+export interface RepoSessionFindingsRow {
+  source: string;
+  sessionId: string;
+  verdict: RetroVerdict;
+  outcome: string;
+  correctionTurns: number;
+  repeatedPromptTurns: number;
+  interruptions: number;
+  errorStreaks: number;
+  maxErrorStreak: number;
+  longTailTurns: number;
+  compactions: number;
+  churnRatioPct: number;
+  planModeUsed: boolean;
+  firstPromptRating?: string;
+  tipCount: number;
+  signalIds: string[];
+}
+
+/** One (session, context file) row as the team shard collector reads it. */
+export interface ContextFileObservationRow {
+  source: string;
+  sessionId: string;
+  repository: string;
+  startedAtMs: number;
+  /** Absolute path as the analyzer stored it. */
+  file: string;
+  category: string;
+  status: string;
+  estTokens: number;
+  errorCount: number;
+  deviationCount: number;
+}
+
+function emptyVerdicts(): Record<RetroVerdict | 'unjudged', number> {
+  return { smooth: 0, bumpy: 0, struggled: 0, abandoned: 0, unjudged: 0 };
+}
+
+/**
+ * The WHERE clause every repository-hub query shares, over the `s` sessions
+ * alias: one repository (or all), an end-time range, and the hidden set.
+ * Always yields a clause so callers can append `AND …` safely.
+ */
+function repoScope(
+  repository: string | undefined,
+  cutoffMs: number,
+  untilMs: number | undefined,
+  hiddenKeys: readonly string[],
+): { where: string; args: unknown[] } {
+  const clauses = ['s.ended_at_ms > 0'];
+  const args: unknown[] = [];
+  if (repository !== undefined) {
+    clauses.push('s.repository = ?');
+    args.push(repository);
+  }
+  if (cutoffMs > 0) {
+    clauses.push('s.ended_at_ms >= ?');
+    args.push(cutoffMs);
+  }
+  if (untilMs !== undefined) {
+    clauses.push('s.ended_at_ms < ?');
+    args.push(untilMs);
+  }
+  if (hiddenKeys.length > 0) {
+    clauses.push(`s.source || ':' || s.session_id NOT IN (${hiddenKeys.map(() => '?').join(', ')})`);
+    args.push(...hiddenKeys);
+  }
+  return { where: `WHERE ${clauses.join(' AND ')}`, args };
 }
 
 /** Hard ceiling so a bad `limit` cannot ask for the whole table. */

@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SessionsView } from './views/sessions/SessionsView';
 import { OverviewView } from './views/overview/OverviewView';
 import { SettingsView } from './views/settings/SettingsView';
@@ -10,6 +10,9 @@ import { ImproveView } from './views/improve/ImproveView';
 import type { ImproveIntent } from './views/improve/ImproveView';
 import { AssistantView } from './views/assistant/AssistantView';
 import type { AskAiIntent } from './views/assistant/AssistantView';
+import { WorkspaceView } from './views/workspace/WorkspaceView';
+import { TeamView } from './views/team/TeamView';
+import { useLiveNotifications } from './views/workspace/useLiveBoard';
 import type { OpenSessionIntent, SessionFilterIntent } from './views/sessions/SessionsView';
 import type { SessionFilters } from './views/sessions/filters';
 import { ActivityRail } from './components/ActivityRail';
@@ -65,6 +68,22 @@ export function App(): JSX.Element {
     setImproveIntent({ repository, at: Date.now() });
     setView('improve');
   };
+  const openSession = (source: string, sessionId: string): void => {
+    setOpenIntent({ source, sessionId, at: Date.now() });
+    setView('sessions');
+  };
+  // Live-session notifications live in the shell, not the Workspace view, so a
+  // toast still arrives while another view is open. The toggle is re-read each
+  // time the user leaves Settings.
+  const [settingsVersion, setSettingsVersion] = useState(0);
+  const lastView = useRef<ViewId>(view);
+  useEffect(() => {
+    if (lastView.current === 'settings' && view !== 'settings') {
+      setSettingsVersion((v) => v + 1);
+    }
+    lastView.current = view;
+  }, [view]);
+  useLiveNotifications(settingsVersion, openSession);
   // A dialog, not a view: it overlays whatever you were looking at and returns
   // you to it, so it must not disturb `view`.
   const [changelogOpen, setChangelogOpen] = useState(false);
@@ -142,6 +161,20 @@ export function App(): JSX.Element {
               <OverviewView onOpenSessions={openSessions} onOpenHotspot={openHotspot} />
             </div>
           )}
+          {view === 'workspace' && (
+            <div className="view-layer">
+              <WorkspaceView
+                onOpenSession={openSession}
+                onOpenSessions={openSessions}
+                onAskAi={(prefill) => {
+                  setAskIntent({ prefill, at: Date.now() });
+                  setView('assistant');
+                }}
+                onImprove={openImprove}
+                onOpenHotspot={openHotspot}
+              />
+            </div>
+          )}
           {view === 'hotspots' && (
             <div className="view-layer">
               <HotspotsView
@@ -168,6 +201,11 @@ export function App(): JSX.Element {
           {view === 'improve' && (
             <div className="view-layer">
               <ImproveView focusIntent={improveIntent} />
+            </div>
+          )}
+          {view === 'team' && (
+            <div className="view-layer">
+              <TeamView onOpenSettings={() => setView('settings')} />
             </div>
           )}
           {view === 'assistant' && (
