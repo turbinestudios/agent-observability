@@ -199,8 +199,9 @@ schemas are `additionalProperties: false` at every level.
 
   Nothing else may cite these exceptions as precedent.
 
-- **The app as agent host (Run).** When the user turns Run on in Settings
-  (off by default) and has acknowledged a one-time notice in the view, the
+- **The app as agent host (Run).** While Run is on in Settings (on by
+  default, so its view shows; the user can turn it off to hide it) and once
+  the user has acknowledged a one-time notice in the view, the
   desktop app can start and continue GitHub Copilot sessions through the
   Copilot SDK, driving the user's **own installed, unmodified `copilot`**
   under their **own Copilot login**; never a product API key, never a

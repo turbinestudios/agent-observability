@@ -520,7 +520,7 @@ export function OverviewView({ onOpenSessions, onOpenHotspot }: Props): JSX.Elem
           )}
         </section>
 
-        <section className="card">
+        <section className="card card-wide">
           <div className="card-head">
             <h2>Context hotspots to review</h2>
             {onOpenHotspot !== undefined && insights !== undefined && insights.hotspots.length > 0 && (
@@ -541,6 +541,7 @@ export function OverviewView({ onOpenSessions, onOpenHotspot }: Props): JSX.Elem
             </p>
           ) : (
             <>
+              <div className="card-table-scroll">
               <table className="source-table">
                 <thead>
                   <tr>
@@ -582,6 +583,7 @@ export function OverviewView({ onOpenSessions, onOpenHotspot }: Props): JSX.Elem
                   ))}
                 </tbody>
               </table>
+              </div>
               <p className="card-caption">
                 Scored 0–100 from skip rate, error and deviation co-occurrence, token weight, and
                 how often the file is applied. Higher means look first.

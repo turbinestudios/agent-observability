@@ -538,3 +538,21 @@
   position: static;
   margin-left: auto;
 }
+
+/*
+ * Work in progress behind an entry (Run while an agent works). Beside the
+ * label when there is one; in the icon strip it sits in the corner the badge
+ * does not use.
+ */
+.rail-spinner {
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  color: var(--accent);
+  pointer-events: none;
+}
+
+.rail-expanded .rail-spinner {
+  position: static;
+  flex: none;
+}

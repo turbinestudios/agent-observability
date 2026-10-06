@@ -4,6 +4,7 @@ import { useThemeValue } from '../theme/ThemeContext';
 import { useUpdateStatus } from '../updates/useUpdateStatus';
 import { useRailExpanded } from './useRailExpanded';
 import { UpdateIndicator } from './UpdateIndicator';
+import { Spinner } from './Spinner';
 import { railBadgeLabel, railBadgeText } from './railBadge';
 
 /**
@@ -72,6 +73,12 @@ const ENTRIES: RailEntry[] = [
     ),
   },
   {
+    id: 'run',
+    label: 'Run',
+    // A play mark: start or continue a session from here.
+    icon: <path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z" />,
+  },
+  {
     id: 'hotspots',
     label: 'Context Hotspots',
     icon: <path d="M12 2c2.5 3.5 6 5.5 6 10a6 6 0 1 1-12 0c0-4.5 3.5-6.5 6-10Zm0 16a4 4 0 0 0 4-4c0-2.2-1.6-3.6-4-6.6-2.4 3-4 4.4-4 6.6a4 4 0 0 0 4 4Z" />,
@@ -93,12 +100,6 @@ const ENTRIES: RailEntry[] = [
     ),
   },
   {
-    id: 'run',
-    label: 'Run',
-    // A play mark: start or continue a session from here.
-    icon: <path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z" />,
-  },
-  {
     id: 'improve',
     label: 'Improve',
     // A wrench over a spark: turning evidence into concrete fixes.
@@ -118,6 +119,16 @@ const ENTRIES: RailEntry[] = [
   },
 ];
 
+/** The entry's name, its badge count, and whether work is in progress there. */
+function railLabel(
+  entry: RailEntry,
+  badges: Partial<Record<ViewId, number>> | undefined,
+  busy: readonly ViewId[] | undefined,
+): string {
+  const label = railBadgeLabel(entry.label, badges?.[entry.id]);
+  return busy?.includes(entry.id) === true ? `${label} (an agent is working)` : label;
+}
+
 interface Props {
   active: ViewId;
   onSelect: (view: ViewId) => void;
@@ -125,11 +136,13 @@ interface Props {
   onShowChangelog: () => void;
   /** Counts shown on entries, e.g. new inbox items on Workspace. Zero shows nothing. */
   badges?: Partial<Record<ViewId, number>>;
-  /** Destinations that are turned off (Run, until enabled in Settings) and so not shown. */
+  /** Destinations that are turned off in Settings (Run, Team) and so not shown. */
   hidden?: readonly ViewId[];
+  /** Destinations with work in progress right now, e.g. Run while an agent works. */
+  busy?: readonly ViewId[];
 }
 
-export function ActivityRail({ active, onSelect, onShowChangelog, badges, hidden }: Props): JSX.Element {
+export function ActivityRail({ active, onSelect, onShowChangelog, badges, hidden, busy }: Props): JSX.Element {
   const { theme, toggle } = useThemeValue();
   const { expanded, toggle: toggleExpanded } = useRailExpanded();
   const update = useUpdateStatus();
@@ -152,14 +165,17 @@ export function ActivityRail({ active, onSelect, onShowChangelog, badges, hidden
           type="button"
           className="rail-button"
           aria-current={active === entry.id}
-          aria-label={railBadgeLabel(entry.label, badges?.[entry.id])}
-          title={railBadgeLabel(entry.label, badges?.[entry.id])}
+          aria-label={railLabel(entry, badges, busy)}
+          title={railLabel(entry, badges, busy)}
           onClick={() => onSelect(entry.id)}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             {entry.icon}
           </svg>
           {expanded && <span className="rail-label">{entry.label}</span>}
+          {busy?.includes(entry.id) === true && (
+            <Spinner size={12} stroke={2} className="rail-spinner" />
+          )}
           {railBadgeText(badges?.[entry.id]) !== undefined && (
             <span className="rail-badge" aria-hidden="true">
               {railBadgeText(badges?.[entry.id])}

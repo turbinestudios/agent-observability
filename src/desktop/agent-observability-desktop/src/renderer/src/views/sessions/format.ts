@@ -14,6 +14,24 @@ export function sourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source;
 }
 
+/** The local sources switched on in Settings, by source id. */
+export function enabledSources(snapshot: {
+  claudeEnabled: boolean;
+  copilotEnabled: boolean;
+  copilotCliEnabled: boolean;
+  copilotAppEnabled: boolean;
+  copilotJetbrainsEnabled: boolean;
+}): string[] {
+  const on: [string, boolean][] = [
+    ['claude', snapshot.claudeEnabled],
+    ['copilot', snapshot.copilotEnabled],
+    ['copilot-cli', snapshot.copilotCliEnabled],
+    ['copilot-app', snapshot.copilotAppEnabled],
+    ['copilot-jetbrains', snapshot.copilotJetbrainsEnabled],
+  ];
+  return on.filter(([, enabled]) => enabled).map(([id]) => id);
+}
+
 /** Compact token counts: 1.2k, 3.4M. Exact below 1,000. */
 export function formatTokens(total: number): string {
   if (!Number.isFinite(total) || total <= 0) {

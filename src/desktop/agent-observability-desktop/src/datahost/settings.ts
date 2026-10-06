@@ -42,6 +42,16 @@ import { pickCopilotDatabases, type CopilotDatabaseCandidate } from './indexer/c
 
 /** Settings key for hosting Copilot sessions (Run). OFF by default: a consent gate. */
 export const RUN_ENABLED_KEY = 'run.enabled';
+/**
+ * Run is on unless turned off in Settings. Nothing is sent before the user has
+ * acknowledged the one-time notice in the view and pressed Start or Send.
+ */
+export const RUN_ENABLED_DEFAULT = true;
+
+/** Whether Run is on: a stored boolean, else the default. */
+export function runEnabledSetting(settings: DesktopSettingsReader): boolean {
+  return storedBoolean(settings, RUN_ENABLED_KEY, RUN_ENABLED_DEFAULT);
+}
 /** Settings key for the model a new hosted session starts with; empty = the CLI's default. */
 export const RUN_DEFAULT_MODEL_KEY = 'run.defaultModel';
 /** Set only by the `run.acknowledge` RPC, never through a settings patch. */
@@ -121,7 +131,7 @@ export function buildSettingsSnapshot(
     aiBackend: config.getAiHelperBackend() === 'copilot-cli' ? 'copilot-cli' : 'claude-code',
     copilotCliPath: storedString(settings, ConfigKeys.aiHelperCopilotCliPath),
     liveNotifications: storedBoolean(settings, LIVE_NOTIFICATIONS_KEY, false),
-    runEnabled: storedBoolean(settings, RUN_ENABLED_KEY, false),
+    runEnabled: runEnabledSetting(settings),
     runDefaultModel: storedString(settings, RUN_DEFAULT_MODEL_KEY),
     packetIncludePrompts: storedBoolean(settings, PACKET_INCLUDE_PROMPTS_KEY, true),
     teamEnabled: teamEnabled(settings),
@@ -273,7 +283,7 @@ export function applySettingsPatch(
   // The Run gate: a consent surface, stored only on a real boolean. Rides the
   // `deepRetro` flag because nothing needs rebuilding. `run.disclosed` is NOT
   // settable from here: only the notice's acknowledge call records it.
-  if (typeof patch.runEnabled === 'boolean' && patch.runEnabled !== storedBoolean(settings, RUN_ENABLED_KEY, false)) {
+  if (typeof patch.runEnabled === 'boolean' && patch.runEnabled !== runEnabledSetting(settings)) {
     update[RUN_ENABLED_KEY] = patch.runEnabled;
     changed.deepRetro = true;
   }

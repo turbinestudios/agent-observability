@@ -16,6 +16,7 @@ import { useLiveNotifications } from './views/workspace/useLiveBoard';
 import { useInbox } from './views/workspace/useInbox';
 import type { OpenSessionIntent, SessionFilterIntent } from './views/sessions/SessionsView';
 import type { SessionFilters } from './views/sessions/filters';
+import { enabledSources } from './views/sessions/format';
 import { ActivityRail } from './components/ActivityRail';
 import { hiddenRailEntries } from './components/railHidden';
 import { ChangelogDialog } from './components/ChangelogDialog';
@@ -32,7 +33,7 @@ import './app.css';
 import { RunView } from './views/run/RunView';
 import type { RunIntent } from './views/run/runViewModel';
 import { RUN_DOOR_EVENT, setRunEnabled, type RunDoorRequest } from './views/run/doors';
-import { useRunActiveRelay } from './views/run/useRun';
+import { useRunActiveRelay, useRunBusy } from './views/run/useRun';
 
 /**
  * The app shell.
@@ -95,8 +96,10 @@ export function App(): JSX.Element {
   // door requests other views raise. A door only prefills the goal box; the
   // data host builds the text and nothing is sent until the user presses Start.
   const [runOn, setRunOn] = useState(false);
-  // Team is off until turned on in Settings, like Run: its rail entry follows.
+  // Team is off until turned on in Settings: its rail entry follows, as Run's does.
   const [teamOn, setTeamOn] = useState(false);
+  // The sources switched on in Settings: the Sessions filter offers only these.
+  const [sourcesOn, setSourcesOn] = useState<string[] | undefined>(undefined);
   // Run stays mounted once it has been opened, so a goal being written, the
   // session on screen and a half-typed follow-up survive a look elsewhere.
   const [runOpened, setRunOpened] = useState(false);
@@ -115,6 +118,7 @@ export function App(): JSX.Element {
         if (!cancelled) {
           setRunOn(snapshot.runEnabled);
           setTeamOn(snapshot.teamEnabled);
+          setSourcesOn(enabledSources(snapshot));
           setRunEnabled(snapshot.runEnabled);
         }
       })
@@ -143,6 +147,7 @@ export function App(): JSX.Element {
     return () => window.removeEventListener(RUN_DOOR_EVENT, onDoor);
   }, []);
   useRunActiveRelay();
+  const runBusy = useRunBusy(runOn);
   const inbox = useInbox();
   useLiveNotifications(settingsVersion, openSession, inbox.snapshot);
   // Leaving Workspace means the user has looked: nothing there stays "new".
@@ -213,10 +218,12 @@ export function App(): JSX.Element {
           onSelect={setView}
           onShowChangelog={() => setChangelogOpen(true)}
           badges={{ workspace: inbox.snapshot?.unread ?? 0 }}
+          busy={runBusy ? ['run'] : []}
         />
         <main className="app-main">
           <div className="view-layer" hidden={view !== 'sessions'}>
             <SessionsView
+              enabledSources={sourcesOn}
               openIntent={openIntent}
               filterIntent={filterIntent}
               onAskAi={(source, sessionId, prefill) => {

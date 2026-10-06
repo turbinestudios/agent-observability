@@ -263,10 +263,33 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 14px;
+  container-type: inline-size;
 }
 
 .overview-split .card {
   margin-bottom: 0;
+  /* A grid item may otherwise grow to its content and spill past its column. */
+  min-width: 0;
+}
+
+/*
+ * The hotspots table needs more room than one column: it takes two, lined up
+ * with the cards above. Below two columns' width (2 × 300px + the gap) the
+ * grid has a single column, and the card takes just that.
+ */
+.overview-split .card-wide {
+  grid-column: span 2;
+}
+
+@container (max-width: 613px) {
+  .overview-split .card-wide {
+    grid-column: auto;
+  }
+}
+
+/* If the table still does not fit, it scrolls inside the card, never out of it. */
+.card-table-scroll {
+  overflow-x: auto;
 }
 
 /* --- charts ---------------------------------------------------------------- */

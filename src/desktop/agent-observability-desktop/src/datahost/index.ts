@@ -68,7 +68,7 @@ import { RunService } from './run/runService';
 import { RunStore } from './run/runs';
 import { resolveRuntimeTarget } from './run/runtimePath';
 import { SdkRunDriver } from './run/sdkDriver';
-import { RUN_DEFAULT_MODEL_KEY, RUN_DISCLOSED_KEY, RUN_ENABLED_KEY } from './settings';
+import { RUN_DEFAULT_MODEL_KEY, RUN_DISCLOSED_KEY, runEnabledSetting } from './settings';
 import { buildHandoff, buildReviewPackets, resumeTarget, type HandoffBriefDeps } from './packet/sessionText';
 import { resolveRepoRoot } from './improve/repoRoot';
 import { reworkFileRows } from './analysis/reworkPaths';
@@ -298,10 +298,10 @@ const hubDeps = {
 };
 
 // Run: the app as agent host. Drives the installed `copilot` through the
-// Copilot SDK under the signed-in Copilot login; off until enabled in
-// Settings and acknowledged in the view. The SDK is loaded lazily inside the
+// Copilot SDK under the signed-in Copilot login; on unless turned off in
+// Settings, and inert until acknowledged in the view. The SDK is loaded lazily inside the
 // driver, so nothing is required until a session is actually started.
-const runEnabled = (): boolean => settings.get<unknown>(RUN_ENABLED_KEY, false) === true;
+const runEnabled = (): boolean => runEnabledSetting(settings);
 const runAcknowledged = (): boolean => settings.get<unknown>(RUN_DISCLOSED_KEY, false) === true;
 const runController = new RunController({
   driver: new SdkRunDriver({

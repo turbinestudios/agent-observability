@@ -401,12 +401,15 @@ describe('team settings', () => {
 });
 
 describe('Run settings', () => {
-  it('is off by default, turns on only from a real boolean, and cannot be acknowledged through a patch', () => {
+  it('is on by default, changes only from a real boolean, and cannot be acknowledged through a patch', () => {
     const settings = new DesktopSettingsReader(file);
-    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).runEnabled).toBe(false);
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).runEnabled).toBe(true);
 
-    applySettingsPatch(settings, { runEnabled: 'yes' as unknown as boolean });
-    expect(settings.get('run.enabled', false)).toBe(false);
+    applySettingsPatch(settings, { runEnabled: 'no' as unknown as boolean });
+    expect(settings.get('run.enabled', 'unset')).toBe('unset');
+
+    applySettingsPatch(settings, { runEnabled: false });
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).runEnabled).toBe(false);
 
     applySettingsPatch(settings, { runEnabled: true, ...({ runDisclosed: true, 'run.disclosed': true } as object) });
     expect(settings.get('run.enabled', false)).toBe(true);

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { RunAvailability, RunRepository, RunSessionInfo } from '../../../../shared/rpc';
 import { dataHost } from '../../api/client';
+import type { RunStatus } from '../../../../shared/runTypes';
 import { EMPTY_RUN_VIEW, applyRunEvent, fromTranscript, type RunViewState } from './runReducer';
+import { isBusy } from './run';
 
 /** Availability, the repository picker and the session list for the Run view. */
 export function useRunHost(): {
@@ -85,6 +87,42 @@ export function useRunSession(sessionId: string | undefined): RunViewState | und
     };
   }, [sessionId]);
   return state;
+}
+
+/**
+ * Whether any hosted session's agent is working right now, for the spinner
+ * beside Run in the sidebar. Seeded from the session list, then kept current
+ * from status events, so it is right from any view.
+ */
+export function useRunBusy(enabled: boolean): boolean {
+  const [statuses, setStatuses] = useState<ReadonlyMap<string, RunStatus>>(new Map());
+  useEffect(() => {
+    if (!enabled) {
+      setStatuses(new Map());
+      return undefined;
+    }
+    let cancelled = false;
+    dataHost
+      .call('run.list')
+      .then((list) => {
+        if (!cancelled) {
+          setStatuses(new Map(list.map((s) => [s.sessionId, s.status])));
+        }
+      })
+      .catch(() => undefined);
+    const off = dataHost.on('run.event', (event) => {
+      if (event.event === 'run.event' && event.change.type === 'status') {
+        const { sessionId } = event;
+        const { status } = event.change;
+        setStatuses((current) => new Map(current).set(sessionId, status));
+      }
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [enabled]);
+  return [...statuses.values()].some(isBusy);
 }
 
 /** Relays the count of running hosted sessions to main, so quitting can ask first. */

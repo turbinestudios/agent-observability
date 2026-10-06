@@ -10,10 +10,11 @@ import { sourceLabel } from './format';
  * as if "Flagged" were a source — and, when any are set, what the filter panel
  * is currently narrowing to on a third.
  *
- * The source choices are fixed rather than derived from what happens to be
- * indexed, so the filter does not appear and disappear between runs — a source
- * with no sessions yet shows a zero, which answers "is Copilot being picked
- * up?" that an absent chip would leave open. Any source found in the index but
+ * The source choices are the sources switched on in Settings rather than what
+ * happens to be indexed, so the filter does not appear and disappear between
+ * runs — an enabled source with no sessions yet shows a zero, which answers "is
+ * Copilot being picked up?" that an absent chip would leave open, and one the
+ * user turned off has no chip. Any source found in the index but
  * not listed here is appended, so a new one is never silently unreachable. The
  * state chips keep the opposite rule — offered only once they would select
  * something — so the second row vanishes entirely when there is nothing to
@@ -45,6 +46,8 @@ interface Props {
   frictionCount: number;
   showingFriction: boolean;
   onToggleFriction: () => void;
+  /** Source ids switched on in Settings; `undefined` until known, which shows them all. */
+  enabled?: readonly string[];
 }
 
 export function SourceFilter({
@@ -62,13 +65,19 @@ export function SourceFilter({
   frictionCount,
   showingFriction,
   onToggleFriction,
+  enabled,
 }: Props): JSX.Element {
   const counts = new Map<string, number>();
   for (const group of groups) {
     counts.set(group.source, (counts.get(group.source) ?? 0) + group.count);
   }
   const extras = [...counts.keys()].filter((s) => !KNOWN_SOURCES.includes(s)).sort();
-  const sources = [...KNOWN_SOURCES, ...extras];
+  // A source switched off in Settings has no chip, unless it is the one
+  // selected or still has rows (so a filter is never invisible).
+  const known = KNOWN_SOURCES.filter(
+    (s) => enabled === undefined || enabled.includes(s) || active === s || (counts.get(s) ?? 0) > 0,
+  );
+  const sources = [...known, ...extras];
   const total = [...counts.values()].reduce((sum, n) => sum + n, 0);
 
   const hasStateChips = deviationCount > 0 || frictionCount > 0 || hiddenCount > 0;

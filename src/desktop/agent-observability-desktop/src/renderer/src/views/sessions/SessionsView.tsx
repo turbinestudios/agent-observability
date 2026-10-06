@@ -58,7 +58,10 @@ export function SessionsView({
   openIntent,
   filterIntent,
   onAskAi,
+  enabledSources,
 }: {
+  /** Source ids switched on in Settings, for the source filter. */
+  enabledSources?: readonly string[];
   openIntent?: OpenSessionIntent;
   /** A pre-filtered list another view asked for. */
   filterIntent?: SessionFilterIntent;
@@ -278,6 +281,7 @@ export function SessionsView({
         )}
 
         <SourceFilter
+          enabled={enabledSources}
           groups={groups}
           active={filters.source}
           onSelect={(source) => setFilters((current) => ({ ...current, source }))}

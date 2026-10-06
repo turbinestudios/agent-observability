@@ -9,6 +9,25 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] - 2026-10-06
+
+### Added
+
+- A spinner beside **Run** in the sidebar shows while an agent is working in
+  one of your Run sessions, whichever view you are on.
+
+### Changed
+
+- **Run is on by default**, and sits right below Sessions in the sidebar.
+  Nothing is sent until you have read its notice and pressed Start; turn it off
+  in Settings to hide it.
+
+### Fixed
+
+- The Dashboard's **Context hotspots to review** card no longer spills out of
+  its frame: it now spans two cards' width, lined up with the cards above.
+- A source you turn off in Settings no longer keeps its filter in Sessions.
+
 ## [2.2.0] - 2026-10-06
 
 ### Added

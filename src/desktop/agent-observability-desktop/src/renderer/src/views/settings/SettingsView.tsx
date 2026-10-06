@@ -244,7 +244,7 @@ export function SettingsView(): JSX.Element {
           Run Copilot sessions from this app
         </label>
         <p className="settings-hint">
-          Off by default. When on, a Run view lets you start or continue a GitHub Copilot session here. It uses your
+          On by default; turn it off to hide the Run view. Run lets you start or continue a GitHub Copilot session here. It uses your
           own installed <code>copilot</code> and your own Copilot login, and sends your message and whatever the agent
           then reads to GitHub, exactly as running it in a terminal does. Every action asks you first, unless you pick
           Allow all for a session. Claude Code
