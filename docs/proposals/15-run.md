@@ -22,7 +22,8 @@ finding does not mean retyping it in a terminal.
 - The transcript streams, with tool rows showing name, target and result.
 - A permission request shows a card with the exact command or file and three
   answers: **Allow once**, **Allow for this session**, **Deny**. The session
-  waits until answered. No setting makes the app approve everything.
+  waits until answered. No setting makes the app approve everything (see
+  "What was settled differently" for the per-session Allow all).
 - Stop aborts the current turn; a follow-up continues the session. A hosted
   session can be resumed from the terminal with `copilot --resume`, and a CLI
   session can be continued in the app.
@@ -239,3 +240,47 @@ custom-agent session options, and the same launch path on macOS and Linux.
   started in the app asks before each write and shell command, shows Waiting
   for your approval on the live board, appears once in Sessions under Copilot
   CLI, and resumes from the terminal with `copilot --resume`.
+
+## What was settled differently
+
+Decided by the owner after manual testing on 2026-10-06.
+
+- **Allow all, per session, as the CLI's own mode.** The spec made asking
+  the only posture. The Run view now has a picker, **Default permissions /
+  Allow all**, on the goal box and on each hosted session. Picking Allow
+  all opens a warning and only **Turn on Allow all** applies it. It is the
+  Copilot CLI's own allow-all, the mode `copilot --allow-all` starts in:
+  the driver calls `session.rpc.permissions.setMode({ mode: 'allow-all' })`
+  and the runtime stops raising tool, path and URL requests for that
+  session (`manual` switches back). The command-line flag itself is not
+  passed, because one CLI process hosts every session and the flag would
+  put all of them in allow-all. The session's mode follows the runtime's
+  answer: if a policy refuses (`success: false`, or another mode comes
+  back) the session stays in the asking mode and says so. The switch is
+  recorded in the transcript, held in memory, never a setting or a
+  default, and ends when the session is closed, loses its CLI, or the app
+  quits. Requests that were already waiting when it is turned on are
+  approved one at a time (`approve-once`); a request the runtime still
+  raises and marks `managedApprovalRequired` or `requestSandboxBypass` is
+  shown. The SDK's `approveAll` handler, the process-wide flags and the
+  persistent result kinds stay forbidden under `datahost/run`, and the
+  source scan checks that the runtime mode is set in one driver method
+  called from one place. Rule 2 of the `AGENTS.md` clause was rewritten to
+  match. Verified against CLI 1.0.82 (2026-10-06): with the mode on, a
+  file write and a shell command raised no request.
+- **"Allow for this session" names its scope.** `approve-for-session` with no
+  `approval` is remembered by nothing, so the runtime asked again every time.
+  The scope is now derived from the request (`permissionScope.ts`): `read`,
+  `write`, `memory`, the request's command identifiers, the MCP or custom
+  tool, or the URL's domain. A request with no nameable scope offers only
+  once or deny. The controller applies the same scope to requests that were
+  already waiting.
+- **Requests queue.** The agent can ask for several things in one turn. The
+  first build kept one pending request per session, so a second request
+  replaced the first and the session waited for ever on a request nobody
+  could see. Requests now wait in order and are answered one at a time.
+- **The CLI can end; the launch target is checked.** A call that finds the
+  CLI gone starts a fresh one and is tried once more, and a session that lost
+  its CLI reconnects on the user's next message. On Windows only an `.exe`
+  counts as a native executable: in a VS Code terminal the Copilot Chat
+  extension puts its own `copilot` wrapper script first on PATH.

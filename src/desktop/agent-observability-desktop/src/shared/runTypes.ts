@@ -28,6 +28,18 @@ export interface RunPrefill {
   resumeSessionId?: string;
 }
 
+/**
+ * How a hosted session treats the agent's permission requests.
+ *
+ * `default` asks before each action. `allow-all` switches ONE hosted session
+ * to the Copilot CLI's own allow-all mode, the one `copilot --allow-all`
+ * turns on: tool, path and URL requests are approved by the runtime itself.
+ * It is chosen per session behind a confirmation, lives in memory only, and
+ * is gone when the session is closed, loses its CLI, or the app quits; it is
+ * never a setting and never the default.
+ */
+export type RunPermissionMode = 'default' | 'allow-all';
+
 export interface RunSessionInfo {
   sessionId: string;
   repository: string;
@@ -39,6 +51,7 @@ export interface RunSessionInfo {
   lastActivityMs: number;
   title?: string;
   door: RunDoor;
+  permissionMode: RunPermissionMode;
 }
 
 /** Longest command or intention text carried to the renderer. */
@@ -60,9 +73,13 @@ export interface RunPermissionRequest {
   diffStat?: { added: number; removed: number };
   /** False when the runtime will not accept a session-wide approval for this request. */
   canAllowSession: boolean;
+  /** What a session-wide approval would cover, in words: "reading files", "the command git". */
+  sessionScopeLabel?: string;
+  /** How many more requests are waiting behind this one. */
+  more?: number;
 }
 
-/** The only three answers the app can give. Nothing persists beyond the session. */
+/** The only three answers to one request. Nothing persists beyond the session. */
 export type RunPermissionDecision = 'allow-once' | 'allow-session' | 'deny';
 
 export type RunItem =

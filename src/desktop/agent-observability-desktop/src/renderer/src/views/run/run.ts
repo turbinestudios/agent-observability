@@ -1,4 +1,10 @@
-import type { RunItem, RunPermissionDecision, RunPermissionRequest, RunStatus } from '../../../../shared/runTypes';
+import type {
+  RunItem,
+  RunPermissionDecision,
+  RunPermissionMode,
+  RunPermissionRequest,
+  RunStatus,
+} from '../../../../shared/runTypes';
 
 /**
  * Presentation rules for the Run view, split from the components so they test
@@ -22,6 +28,20 @@ export function runStatusLabel(status: RunStatus): string {
     case 'error':
       return 'Error';
   }
+}
+
+/**
+ * Whether the agent is doing something right now, as opposed to waiting on
+ * the user. The view shows a moving spinner for exactly these, so a session
+ * that is busy never looks the same as one that has stopped.
+ */
+export function isBusy(status: RunStatus): boolean {
+  return status === 'working' || status === 'starting';
+}
+
+/** The line beside the spinner at the end of the transcript. */
+export function busyLabel(status: RunStatus): string {
+  return status === 'starting' ? 'Starting the session…' : 'The agent is working…';
 }
 
 /** Whether the goal box may send right now. */
@@ -82,17 +102,43 @@ export interface PermissionButton {
 
 /**
  * The only three answers there are. "Allow for this session" is offered only
- * when the runtime accepts it, and is never the highlighted choice: the
- * default action is the narrowest one.
+ * when the runtime accepts it, says what it covers, and is never the
+ * highlighted choice: the default action is the narrowest one.
  */
 export function permissionButtons(request: RunPermissionRequest): PermissionButton[] {
   const buttons: PermissionButton[] = [{ decision: 'allow-once', label: 'Allow once', primary: true }];
   if (request.canAllowSession) {
-    buttons.push({ decision: 'allow-session', label: 'Allow for this session', primary: false });
+    buttons.push({
+      decision: 'allow-session',
+      label:
+        request.sessionScopeLabel !== undefined && request.sessionScopeLabel.length > 0
+          ? `Allow ${request.sessionScopeLabel} for this session`
+          : 'Allow for this session',
+      primary: false,
+    });
   }
   buttons.push({ decision: 'deny', label: 'Deny', primary: false });
   return buttons;
 }
+
+/** "2 more requests are waiting" under the card, or nothing when this is the only one. */
+export function permissionQueueLabel(request: RunPermissionRequest): string | undefined {
+  const more = request.more ?? 0;
+  if (more <= 0) {
+    return undefined;
+  }
+  return more === 1 ? '1 more request is waiting behind this one.' : `${more} more requests are waiting behind this one.`;
+}
+
+/** The two permission modes, in the order the picker lists them. The first is the default. */
+export const PERMISSION_MODE_OPTIONS: readonly { mode: RunPermissionMode; label: string }[] = [
+  { mode: 'default', label: 'Default permissions' },
+  { mode: 'allow-all', label: 'Allow all' },
+];
+
+/** What the user reads before Allow all is turned on. */
+export const ALLOW_ALL_WARNING =
+  'Allow all is the same as starting copilot with --allow-all: the agent changes files, runs commands and opens web addresses without asking you first, also outside this repository\'s folder. It applies to this session only and is not remembered. If your Copilot settings or your organisation turn allow-all off, it cannot be turned on here.';
 
 /** One line for a tool row: its name, what it acted on, and how it went. */
 export function toolRowSummary(item: Extract<RunItem, { kind: 'tool' }>): string {

@@ -1,12 +1,15 @@
 import type { JSX } from 'react';
-import type { RunAvailability, RunRepository } from '../../../../shared/rpc';
+import type { RunAvailability, RunPermissionMode, RunRepository } from '../../../../shared/rpc';
 import { shortRepo } from '../sessions/format';
-import { RUN_START_REMINDER, canStart } from './runViewModel';
+import { PermissionModePicker } from './PermissionModePicker';
+import { canStart, startReminder } from './runViewModel';
 
 /**
  * Where a hosted session begins: an editable goal, a repository from the
- * verified list, a model. A door from another view only fills this box; the
- * text here is exactly what Start sends.
+ * verified list, a model, and how the session treats the agent's requests
+ * (asking before each action unless the user picks Allow all for it). A door
+ * from another view only fills this box; the text here is exactly what Start
+ * sends.
  */
 interface Props {
   goal: string;
@@ -15,6 +18,8 @@ interface Props {
   onRepository: (next: string) => void;
   model: string;
   onModel: (next: string) => void;
+  permissionMode: RunPermissionMode;
+  onPermissionMode: (next: RunPermissionMode) => void;
   repositories: RunRepository[];
   availability: RunAvailability;
   busy: boolean;
@@ -24,7 +29,7 @@ interface Props {
 }
 
 export function GoalBox(props: Props): JSX.Element {
-  const { goal, repository, model, repositories, availability, busy, origin } = props;
+  const { goal, repository, model, permissionMode, repositories, availability, busy, origin } = props;
   return (
     <section className="card run-goal" aria-label="Start a session">
       <div className="card-head">
@@ -62,6 +67,7 @@ export function GoalBox(props: Props): JSX.Element {
             ))}
           </select>
         </label>
+        <PermissionModePicker mode={permissionMode} onChange={props.onPermissionMode} disabled={busy} />
         <button
           type="button"
           className="modal-btn primary"
@@ -76,7 +82,7 @@ export function GoalBox(props: Props): JSX.Element {
           No checkout could be verified yet. Run an agent session in a repository once and it will appear here.
         </p>
       )}
-      <p className="card-caption">{RUN_START_REMINDER}</p>
+      <p className="card-caption">{startReminder(permissionMode)}</p>
     </section>
   );
 }

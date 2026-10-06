@@ -8,11 +8,13 @@ import {
   type RunItem,
   type RunLiveState,
   type RunPermissionDecision,
+  type RunPermissionMode,
   type RunPermissionRequest,
   type RunSessionInfo,
   type RunStatus,
   type RunTranscript,
 } from '../../shared/runTypes';
+import { scopeCovers, scopeLabel, type SessionScope } from './permissionScope';
 import type { DriverEvent, DriverPermission, RunDriver } from './runDriver';
 
 /**
@@ -26,9 +28,27 @@ import type { DriverEvent, DriverPermission, RunDriver } from './runDriver';
  * Copilot CLI session does, through its own files on disk, so it is counted
  * once.
  *
+ * Permissions. By default every request is put to the user. Two things can
+ * change that, and both are the user's own choice for this one hosted
+ * session, held in memory only:
+ * - an "Allow for this session" they gave earlier, for requests inside the
+ *   scope it named (`permissionScope.ts`);
+ * - the session's `allow-all` mode. That is the Copilot CLI's own allow-all,
+ *   switched on in the runtime through the driver, so the runtime stops
+ *   asking. It only counts once the runtime has taken it: if a policy
+ *   refuses, the session stays in the asking mode and says so. Requests that
+ *   were already waiting, or that the runtime still raises, are approved
+ *   here one at a time, except one the runtime marks as needing the user (an
+ *   organisation policy, leaving the sandbox), which is always shown.
+ * Allow all ends with the hosted session, and when the session loses its CLI.
+ *
+ * The agent can ask for several things at once, so requests wait in a queue:
+ * one is shown, the rest stay parked until it is answered.
+ *
  * Gates: nothing starts, resumes or is sent unless Run is enabled in Settings
- * AND the first-use notice was acknowledged; an approval is refused under the
- * same rule. Stopping, closing and denying are always allowed.
+ * AND the first-use notice was acknowledged; an approval, standing or not, is
+ * refused under the same rule. Stopping, closing and denying are always
+ * allowed.
  */
 
 export const RUN_FLUSH_MS = 120;
@@ -65,6 +85,13 @@ export interface RunControllerDeps {
   flushMs?: number;
 }
 
+/** One request waiting on the user, with what a session approval of it would cover. */
+interface Asked {
+  request: RunPermissionRequest;
+  scope?: SessionScope;
+  mustAsk: boolean;
+}
+
 interface Hosted {
   info: RunSessionInfo;
   items: RunItem[];
@@ -73,10 +100,23 @@ interface Hosted {
   dirty: Set<string>;
   flush: unknown;
   tools: Map<string, { name: string; startedAtMs: number }>;
-  permission?: RunPermissionRequest;
+  /** Requests waiting on the user, oldest first. Only the first is shown. */
+  pending: Asked[];
+  /** What the user has allowed for the rest of this session. */
+  granted: SessionScope[];
   input?: RunInputRequest;
   usage: { inputTokens: number; outputTokens: number; nanoAiu?: number };
 }
+
+export const RUN_MODE_ALLOW_ALL_NOTE =
+  'Allow all is on for this session, as with copilot --allow-all. The agent now changes files, runs commands and opens web addresses without asking. You can switch back to Default permissions at any time.';
+export const RUN_ALLOW_ALL_REFUSED =
+  'Allow all could not be turned on. GitHub Copilot CLI refused it, which usually means your Copilot settings or your organisation turn it off. The session asks before each action.';
+export const RUN_ALLOW_ALL_STUCK =
+  'GitHub Copilot CLI did not go back to asking. Stop or close the session to be sure nothing more runs unasked.';
+export const RUN_MODE_LOST_NOTE =
+  'Allow all ended when the session was disconnected. The session asks before each action again; turn Allow all on again if you want it.';
+export const RUN_MODE_DEFAULT_NOTE = 'Default permissions are back. The agent asks before each action.';
 
 const REFUSAL_OFF = 'Run is turned off in Settings.';
 const REFUSAL_NOTICE = 'Read and accept the Run notice first.';
@@ -109,7 +149,7 @@ export class RunController {
     let models: { id: string; label: string }[] = [];
     if (probe.ok) {
       try {
-        models = await this.deps.driver.listModels();
+        models = sortModels(await this.deps.driver.listModels());
       } catch {
         models = [];
       }
@@ -125,7 +165,14 @@ export class RunController {
     };
   }
 
-  async start(params: { goal: string; repository: string; cwd: string; model?: string; door: RunDoor }): Promise<RunSessionInfo> {
+  async start(params: {
+    goal: string;
+    repository: string;
+    cwd: string;
+    model?: string;
+    door: RunDoor;
+    permissionMode?: RunPermissionMode;
+  }): Promise<RunSessionInfo> {
     this.requireGate();
     const goal = params.goal.trim();
     if (goal.length === 0) {
@@ -143,6 +190,15 @@ export class RunController {
       door: params.door,
     });
     await this.connect(hosted, 'start', params.model);
+    if (params.permissionMode === 'allow-all') {
+      // Before the goal goes out. If the runtime refuses, the session runs in
+      // the asking mode, which is the safe direction, and says why.
+      try {
+        await this.setPermissionMode(hosted.info.sessionId, 'allow-all');
+      } catch (err) {
+        this.note(hosted, 'error', err instanceof Error ? err.message : String(err));
+      }
+    }
     await this.send(hosted.info.sessionId, goal);
     return { ...hosted.info };
   }
@@ -204,23 +260,55 @@ export class RunController {
   }
 
   respondPermission(requestId: string, decision: RunPermissionDecision, feedback?: string): void {
-    const hosted = [...this.sessions.values()].find((h) => h.permission?.requestId === requestId);
-    if (hosted === undefined || hosted.permission === undefined) {
+    const hosted = [...this.sessions.values()].find((h) => h.pending.some((a) => a.request.requestId === requestId));
+    const at = hosted?.pending.findIndex((a) => a.request.requestId === requestId) ?? -1;
+    if (hosted === undefined || at === -1) {
       return; // Already answered, or never asked: ignore.
     }
+    const [asked] = hosted.pending.splice(at, 1);
     let effective: RunPermissionDecision = decision;
-    if (decision !== 'deny' && !(this.deps.enabled() && this.deps.acknowledged())) {
+    if (decision !== 'deny' && !this.gateOpen()) {
       effective = 'deny';
-    } else if (decision === 'allow-session' && !hosted.permission.canAllowSession) {
+    } else if (decision === 'allow-session' && !asked.request.canAllowSession) {
       effective = 'allow-once';
     }
-    hosted.permission = undefined;
+    if (effective === 'allow-session' && asked.scope !== undefined) {
+      hosted.granted.push(asked.scope);
+    }
     this.deps.driver.respondPermission(hosted.info.sessionId, requestId, {
       decision: effective,
       ...(effective === 'deny' && feedback !== undefined ? { feedback: feedback.slice(0, RUN_PERMISSION_TEXT_MAX) } : {}),
     });
     this.deps.emit(hosted.info.sessionId, { type: 'permission-cleared', requestId });
-    this.setStatus(hosted, 'working');
+    this.settle(hosted);
+  }
+
+  /**
+   * Switch one hosted session between asking and `allow-all`. The choice is
+   * the user's, made in the view behind a confirmation. The runtime is
+   * switched first and the session's mode follows only if it took the change,
+   * so what the view shows is what the runtime does. Turning it on also
+   * answers what is already waiting.
+   */
+  async setPermissionMode(sessionId: string, mode: RunPermissionMode): Promise<RunSessionInfo> {
+    const hosted = this.require(sessionId);
+    const next: RunPermissionMode = mode === 'allow-all' ? 'allow-all' : 'default';
+    if (next === 'allow-all') {
+      this.requireGate();
+    }
+    if (hosted.info.permissionMode === next) {
+      return { ...hosted.info };
+    }
+    const taken = await this.deps.driver.setAllowAll(sessionId, next === 'allow-all');
+    if (!taken) {
+      throw new Error(next === 'allow-all' ? RUN_ALLOW_ALL_REFUSED : RUN_ALLOW_ALL_STUCK);
+    }
+    hosted.info.permissionMode = next;
+    this.note(hosted, 'info', next === 'allow-all' ? RUN_MODE_ALLOW_ALL_NOTE : RUN_MODE_DEFAULT_NOTE);
+    if (hosted.pending.length > 0) {
+      this.settle(hosted);
+    }
+    return { ...hosted.info };
   }
 
   respondInput(requestId: string, answer: string | undefined): void {
@@ -247,7 +335,7 @@ export class RunController {
     return {
       info: { ...hosted.info },
       items: [...hosted.items],
-      ...(hosted.permission !== undefined ? { pendingPermission: hosted.permission } : {}),
+      ...(hosted.pending.length > 0 ? { pendingPermission: shown(hosted.pending) } : {}),
       ...(hosted.input !== undefined ? { pendingInput: hosted.input } : {}),
     };
   }
@@ -301,7 +389,14 @@ export class RunController {
     return hosted;
   }
 
-  private open(sessionId: string, params: { repository: string; cwd: string; model?: string; door: RunDoor; goal: string }): Hosted {
+  private gateOpen(): boolean {
+    return this.deps.enabled() && this.deps.acknowledged();
+  }
+
+  private open(
+    sessionId: string,
+    params: { repository: string; cwd: string; model?: string; door: RunDoor; goal: string },
+  ): Hosted {
     const now = this.now();
     const hosted: Hosted = {
       info: {
@@ -313,6 +408,8 @@ export class RunController {
         startedAtMs: now,
         lastActivityMs: now,
         door: params.door,
+        // Always the asking mode at first; Allow all is applied through the runtime.
+        permissionMode: 'default',
       },
       items: [],
       index: new Map(),
@@ -320,6 +417,8 @@ export class RunController {
       dirty: new Set(),
       flush: undefined,
       tools: new Map(),
+      pending: [],
+      granted: [],
       usage: { inputTokens: 0, outputTokens: 0 },
     };
     this.sessions.set(sessionId, hosted);
@@ -399,12 +498,27 @@ export class RunController {
         break;
       case 'error':
         this.fail(hosted, new Error(event.message));
+        if (event.disconnected === true && hosted.info.permissionMode === 'allow-all') {
+          // The mode lived in the CLI that is gone; a reconnect starts asking.
+          hosted.info.permissionMode = 'default';
+          this.note(hosted, 'info', RUN_MODE_LOST_NOTE);
+        }
         break;
-      case 'permission':
-        hosted.permission = toRequest(hosted.info.sessionId, event.request);
-        this.deps.emit(hosted.info.sessionId, { type: 'permission', request: hosted.permission });
+      case 'permission': {
+        const asked: Asked = {
+          request: toRequest(hosted.info.sessionId, event.request),
+          ...(event.request.sessionScope !== undefined ? { scope: event.request.sessionScope } : {}),
+          mustAsk: event.request.mustAsk,
+        };
+        if (this.standingApproval(hosted, asked)) {
+          this.deps.driver.respondPermission(hosted.info.sessionId, asked.request.requestId, { decision: 'allow-once' });
+          break;
+        }
+        hosted.pending.push(asked);
+        this.deps.emit(hosted.info.sessionId, { type: 'permission', request: shown(hosted.pending) });
         this.setStatus(hosted, 'waiting-approval');
         break;
+      }
       case 'input':
         hosted.input = {
           requestId: event.requestId,
@@ -416,6 +530,52 @@ export class RunController {
         this.setStatus(hosted, 'waiting-input');
         break;
     }
+  }
+
+  /**
+   * Whether the user's own standing choice for this session already answers a
+   * request: `allow-all`, or an earlier "for this session" whose scope covers
+   * it. Never for a request the runtime says must be put to the user, and
+   * never while Run is off.
+   */
+  private standingApproval(hosted: Hosted, asked: Asked): boolean {
+    if (asked.mustAsk || !this.gateOpen()) {
+      return false;
+    }
+    if (hosted.info.permissionMode === 'allow-all') {
+      return true;
+    }
+    const scope = asked.scope;
+    return (
+      scope !== undefined && asked.request.canAllowSession && hosted.granted.some((granted) => scopeCovers(granted, scope))
+    );
+  }
+
+  /**
+   * After an answer or a change of mode: approve what the user's standing
+   * choices now cover, then show the next waiting request or go back to work.
+   */
+  private settle(hosted: Hosted): void {
+    const sessionId = hosted.info.sessionId;
+    hosted.pending = hosted.pending.filter((asked) => {
+      if (!this.standingApproval(hosted, asked)) {
+        return true;
+      }
+      this.deps.driver.respondPermission(sessionId, asked.request.requestId, { decision: 'allow-once' });
+      this.deps.emit(sessionId, { type: 'permission-cleared', requestId: asked.request.requestId });
+      return false;
+    });
+    if (hosted.pending.length === 0) {
+      this.setStatus(hosted, 'working');
+      return;
+    }
+    this.deps.emit(sessionId, { type: 'permission', request: shown(hosted.pending) });
+    this.setStatus(hosted, 'waiting-approval');
+  }
+
+  /** Put something on the record, where the user reads what happened. */
+  private note(hosted: Hosted, level: 'info' | 'error', text: string): void {
+    this.upsert(hosted, { kind: 'notice', id: `n:${this.newId()}`, level, text });
   }
 
   private accumulate(hosted: Hosted, id: string, text: string, append: boolean): void {
@@ -496,11 +656,9 @@ export class RunController {
   /** Release whatever is parked: the user is no longer going to answer it. */
   private clearPending(hosted: Hosted): void {
     const sessionId = hosted.info.sessionId;
-    if (hosted.permission !== undefined) {
-      const requestId = hosted.permission.requestId;
-      hosted.permission = undefined;
-      this.deps.driver.respondPermission(sessionId, requestId, { decision: 'unavailable' });
-      this.deps.emit(sessionId, { type: 'permission-cleared', requestId });
+    for (const asked of hosted.pending.splice(0)) {
+      this.deps.driver.respondPermission(sessionId, asked.request.requestId, { decision: 'unavailable' });
+      this.deps.emit(sessionId, { type: 'permission-cleared', requestId: asked.request.requestId });
     }
     if (hosted.input !== undefined) {
       const requestId = hosted.input.requestId;
@@ -511,11 +669,26 @@ export class RunController {
   }
 }
 
+/** The request on screen: the oldest one waiting, with how many wait behind it. */
+function shown(pending: readonly Asked[]): RunPermissionRequest {
+  const { more: _previous, ...head } = pending[0].request;
+  return pending.length > 1 ? { ...head, more: pending.length - 1 } : head;
+}
+
+/**
+ * Models in alphabetical order by the name shown. Compared in lower case, by
+ * code unit, so the order is the same on every machine.
+ */
+export function sortModels(models: readonly { id: string; label: string }[]): { id: string; label: string }[] {
+  const key = (model: { id: string; label: string }): string => model.label.toLowerCase();
+  return [...models].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 /** What the user is shown: the exact command or file, capped; the diff only as a line count. */
 export function toRequest(sessionId: string, request: DriverPermission): RunPermissionRequest {
   const cap = (value: string | undefined): string | undefined =>
     value === undefined ? undefined : value.slice(0, RUN_PERMISSION_TEXT_MAX);
-  const commandText = cap(request.commandText);
+  const commandText = cap(request.commandText ?? request.url);
   const intention = cap(request.intention);
   return {
     requestId: request.requestId,
@@ -527,6 +700,9 @@ export function toRequest(sessionId: string, request: DriverPermission): RunPerm
     ...(intention !== undefined ? { intention } : {}),
     ...(request.diff !== undefined ? { diffStat: diffStat(request.diff) } : {}),
     canAllowSession: request.canAllowSession,
+    ...(request.canAllowSession && request.sessionScope !== undefined
+      ? { sessionScopeLabel: scopeLabel(request.sessionScope).slice(0, 200) }
+      : {}),
   };
 }
 

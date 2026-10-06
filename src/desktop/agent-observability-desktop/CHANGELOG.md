@@ -9,6 +9,32 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-10-06
+
+### Added
+
+- **Allow all, when you choose it.** A Permissions picker in Run, on the start
+  box and on each session, switches between **Default permissions** and
+  **Allow all**, which is the same as starting `copilot --allow-all`. It asks
+  you to confirm, applies to that one session only, and every new session
+  starts on Default permissions.
+- A spinner shows while the agent is working: in the session list, beside the
+  status and at the end of the conversation.
+
+### Changed
+
+- **Allow for this session** now says what it covers, such as reading files or
+  a named command.
+- The model list in Run is in alphabetical order.
+
+### Fixed
+
+- A session in Run could wait for ever when the agent asked for two things at
+  once, because one of the questions was never shown. They are now asked one
+  at a time.
+- **Allow for this session** was not remembered, so the same kind of action
+  asked again every time.
+
 ## [2.0.0] - 2026-10-06
 
 ### Added

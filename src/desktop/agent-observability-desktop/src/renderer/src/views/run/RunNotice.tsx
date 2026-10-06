@@ -21,7 +21,8 @@ export function RunNotice({ onAccept, error }: { onAccept: () => void; error?: s
         <li>The repository&apos;s instruction files apply, as they do in the terminal.</li>
         <li>
           <strong>Every action asks first.</strong> Before the agent writes a file or runs a command you see exactly
-          what it wants to do and choose to allow or deny it. The app never answers for you.
+          what it wants to do and choose to allow or deny it. The only exception is one you make yourself: you can switch
+          a single session to Allow all, and it is never remembered.
         </li>
         <li>
           The session is saved with your other Copilot CLI sessions under <code>~/.copilot</code>, so you can continue

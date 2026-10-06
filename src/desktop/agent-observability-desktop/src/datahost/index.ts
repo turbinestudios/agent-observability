@@ -1018,6 +1018,8 @@ function handle(request: RpcRequest): unknown {
       return run.respondPermission(request.params[0], request.params[1], request.params[2]);
     case 'run.input.respond':
       return run.respondInput(request.params[0], request.params[1]);
+    case 'run.permissionMode':
+      return run.setPermissionMode(request.params[0], request.params[1]);
     case 'run.prefill':
       return run.prefill(request.params[0]);
     case 'settings.get':

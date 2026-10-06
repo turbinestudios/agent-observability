@@ -210,12 +210,26 @@ schemas are `additionalProperties: false` at every level.
   1. **User-initiated per message.** Nothing is sent until the user
      presses Start or Send. Doors from other views only prefill an
      editable goal box; the text in the box is exactly what is sent.
-  2. **Ask is the only permission posture.** Every permission request is
-     shown to the user and waits for their answer: allow once, allow for
-     this session, or deny. The app never answers on the user's behalf,
-     never passes `--allow-all` or an equivalent, never persists an
-     approval beyond the session, and strips permission-widening
-     environment variables.
+  2. **Asking is the default, and every approval is the user's and ends
+     with the session.** By default each permission request is shown and
+     waits for an answer: allow once, allow for this session (scoped to
+     what the request is about: reading files, changing files, the named
+     commands, the named tool, the web domain), or deny. The user may
+     switch **one hosted session** to **Allow all**, behind a
+     confirmation in the view. That is the Copilot CLI's own allow-all
+     mode, the one `copilot --allow-all` starts in, switched on for that
+     session through the SDK: the runtime then approves tool, path and
+     URL requests itself, and the switch is written into the transcript.
+     It counts only once the runtime has taken it; if a policy refuses,
+     the session stays in the asking mode and says so. Allow all is
+     never the default, never a setting, never remembered: it lives in
+     memory and ends when the session is closed, loses its CLI, or the
+     app quits. It is always per session: the app never passes the
+     process-wide `--allow-all` flag or its environment variable (they
+     would cover every session the CLI hosts) and strips such variables
+     from the CLI's environment, never installs the SDK's
+     approve-everything handler, never persists an approval beyond the
+     session, and never turns Allow all on while Run is off.
   3. **Never in the background.** No scheduled, automatic or hidden
      session; none starts at launch; closing the app stops hosting.
   4. **Separate from sharing.** Nothing from a hosted session enters the

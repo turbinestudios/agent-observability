@@ -1,13 +1,15 @@
 import type { JSX } from 'react';
 import { useEffect, useRef, useState } from 'react';
+import type { RunPermissionMode } from '../../../../shared/rpc';
 import { dataHost } from '../../api/client';
 import { Spinner } from '../../components/Spinner';
 import { formatRelative, shortRepo } from '../sessions/format';
 import { GoalBox } from './GoalBox';
 import { InputCard, PermissionCard } from './PermissionCard';
+import { PermissionModePicker } from './PermissionModePicker';
 import { RunNotice } from './RunNotice';
 import { Transcript } from './Transcript';
-import { canSend, canStop, runStatusLabel } from './run';
+import { canSend, canStop, isBusy, runStatusLabel } from './run';
 import { availabilityProblem, runGate, sortRunSessions, type RunIntent } from './runViewModel';
 import { useRunHost, useRunSession } from './useRun';
 import './run.css';
@@ -55,6 +57,8 @@ export function RunView({ active, intent, openSession, onOpenSettings }: Props):
   const [goal, setGoal] = useState('');
   const [repository, setRepository] = useState('');
   const [model, setModel] = useState('');
+  // Chosen per session and never remembered: every new session starts on the default.
+  const [permissionMode, setPermissionMode] = useState<RunPermissionMode>('default');
   const [door, setDoor] = useState<RunIntent['prefill']['door']>('blank');
   const [resumeId, setResumeId] = useState<string | undefined>(undefined);
   const [followUp, setFollowUp] = useState('');
@@ -90,18 +94,22 @@ export function RunView({ active, intent, openSession, onOpenSettings }: Props):
     const request =
       resumeId !== undefined
         ? dataHost.call('run.resume', resumeId).then(async (info) => {
+            if (permissionMode === 'allow-all') {
+              await dataHost.call('run.permissionMode', info.sessionId, 'allow-all');
+            }
             if (text.length > 0) {
               await dataHost.call('run.send', info.sessionId, text);
             }
             return info;
           })
-        : dataHost.call('run.start', { goal: text, repository, ...(model !== '' ? { model } : {}), door });
+        : dataHost.call('run.start', { goal: text, repository, ...(model !== '' ? { model } : {}), door, permissionMode });
     request
       .then((info) => {
         setSelected(info.sessionId);
         setGoal('');
         setResumeId(undefined);
         setDoor('blank');
+        setPermissionMode('default');
         host.reload();
       })
       .catch(fail)
@@ -163,7 +171,10 @@ export function RunView({ active, intent, openSession, onOpenSettings }: Props):
                 aria-current={s.sessionId === selected}
                 onClick={() => setSelected(s.sessionId)}
               >
-                <span className="run-session-title">{s.title ?? 'Untitled session'}</span>
+                <span className="run-session-title">
+                  {isBusy(s.status) && <Spinner size={11} stroke={2} className="run-session-spinner" />}
+                  {s.title ?? 'Untitled session'}
+                </span>
                 <span className="card-caption">
                   {runStatusLabel(s.status)} · {shortRepo(s.repository)} · {formatRelative(s.lastActivityMs)}
                 </span>
@@ -183,6 +194,8 @@ export function RunView({ active, intent, openSession, onOpenSettings }: Props):
             onRepository={setRepository}
             model={model}
             onModel={setModel}
+            permissionMode={permissionMode}
+            onPermissionMode={setPermissionMode}
             repositories={host.repositories}
             availability={host.availability}
             busy={busy || gate === 'problem'}
@@ -193,7 +206,19 @@ export function RunView({ active, intent, openSession, onOpenSettings }: Props):
           <>
             <header className="run-header">
               <h1>{current?.title ?? 'Session'}</h1>
-              <span className={`run-status run-status-${session.status}`}>{runStatusLabel(session.status)}</span>
+              <span className={`run-status run-status-${session.status}`}>
+                {isBusy(session.status) && <Spinner size={11} stroke={2} />}
+                {runStatusLabel(session.status)}
+              </span>
+              <PermissionModePicker
+                mode={current?.permissionMode ?? 'default'}
+                onChange={(mode) =>
+                  void dataHost
+                    .call('run.permissionMode', selected, mode)
+                    .then(() => host.refreshSessions())
+                    .catch(fail)
+                }
+              />
               {canStop(session.status) && (
                 <button type="button" className="modal-btn" onClick={() => void dataHost.call('run.abort', selected).catch(fail)}>
                   Stop
@@ -211,9 +236,10 @@ export function RunView({ active, intent, openSession, onOpenSettings }: Props):
                 Close
               </button>
             </header>
-            <Transcript items={session.items} />
+            <Transcript items={session.items} status={session.status} />
             {session.permission !== undefined && (
               <PermissionCard
+                key={session.permission.requestId}
                 request={session.permission}
                 onDecide={(decision, feedback) =>
                   void dataHost

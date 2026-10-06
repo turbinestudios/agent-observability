@@ -927,6 +927,7 @@ import type {
   RunDoor,
   RunEventChange,
   RunPermissionDecision,
+  RunPermissionMode,
   RunPrefill,
   RunSessionInfo,
   RunTranscript,
@@ -940,6 +941,7 @@ export type {
   RunItem,
   RunLiveState,
   RunPermissionDecision,
+  RunPermissionMode,
   RunPermissionRequest,
   RunPrefill,
   RunSessionInfo,
@@ -1745,7 +1747,13 @@ export interface RpcMethods {
   'run.acknowledge'(): RunAvailability;
   'run.repositories'(): RunRepository[];
   /** Start a hosted session. The datahost resolves and verifies the checkout itself. */
-  'run.start'(params: { goal: string; repository: string; model?: string; door: RunDoor }): RunSessionInfo;
+  'run.start'(params: {
+    goal: string;
+    repository: string;
+    model?: string;
+    door: RunDoor;
+    permissionMode?: RunPermissionMode;
+  }): RunSessionInfo;
   /** Continue a Copilot CLI session in the app; its directory is read from the session's own record. */
   'run.resume'(sessionId: string): RunSessionInfo;
   'run.send'(sessionId: string, text: string): void;
@@ -1755,6 +1763,8 @@ export interface RpcMethods {
   'run.transcript'(sessionId: string): RunTranscript | undefined;
   'run.permission.respond'(requestId: string, decision: RunPermissionDecision, feedback?: string): void;
   'run.input.respond'(requestId: string, answer?: string): void;
+  /** Switch one hosted session between asking before each action and Allow all. In memory only. */
+  'run.permissionMode'(sessionId: string, mode: RunPermissionMode): RunSessionInfo;
   /** Text for the goal box, built host-side from what the app already knows. Nothing is sent. */
   'run.prefill'(params: RunPrefillParams): RunPrefill;
   'settings.get'(): SettingsSnapshot;

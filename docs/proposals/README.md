@@ -105,7 +105,8 @@ and duplicate.
    two batch schemas by reference, never copy or extend them. See the privacy
    invariant in `AGENTS.md` and
    `docs/privacy-validation.md`. Proposal 15's Run is covered by its own
-   clause in `AGENTS.md`, "The app as agent host": off by default, ask-only,
+   clause in `AGENTS.md`, "The app as agent host": off by default, asking by
+   default (Allow all only as the user's per-session choice),
    never in the background, never on the sharing paths; it is not one of the
    exceptions below and none of them may be cited to widen it. There are three sanctioned, gated
    exceptions. All are desktop-only, all use strictly the user's **own AI CLI

@@ -1,4 +1,10 @@
-import type { RunAvailability, RunDoor, RunPrefill, RunSessionInfo } from '../../../../shared/runTypes';
+import type {
+  RunAvailability,
+  RunDoor,
+  RunPermissionMode,
+  RunPrefill,
+  RunSessionInfo,
+} from '../../../../shared/runTypes';
 
 /**
  * Pure rules for the Run view and its doors, split from the components so
@@ -64,3 +70,10 @@ export function sortRunSessions(sessions: readonly RunSessionInfo[]): RunSession
 
 /** The reminder under Start; fixed wording, shown on every start. */
 export const RUN_START_REMINDER = 'Sends to GitHub through your Copilot login. Every action asks first.';
+export const RUN_START_REMINDER_ALLOW_ALL =
+  'Sends to GitHub through your Copilot login. Allow all is on: the agent will act without asking.';
+
+/** The reminder for the permission mode the session is about to start in. */
+export function startReminder(mode: RunPermissionMode): string {
+  return mode === 'allow-all' ? RUN_START_REMINDER_ALLOW_ALL : RUN_START_REMINDER;
+}

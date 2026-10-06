@@ -1,19 +1,24 @@
 import type { JSX, MouseEvent } from 'react';
 import { useEffect, useRef } from 'react';
-import type { RunItem } from '../../../../shared/rpc';
+import type { RunItem, RunStatus } from '../../../../shared/rpc';
+import { Spinner } from '../../components/Spinner';
 import { ToolRow } from './ToolRow';
+import { busyLabel, isBusy } from './run';
 
 /**
  * The hosted session as it happens. Assistant text arrives host-rendered:
  * the renderer has no markdown parser by design, and the markup is inserted
  * behind the strict CSP exactly as the AI Helper inserts its answers. A link
  * opens in the OS browser, never in this window.
+ *
+ * While the agent is busy the log ends in a moving spinner, so a session that
+ * is working never looks like one that has stopped.
  */
-export function Transcript({ items }: { items: readonly RunItem[] }): JSX.Element {
+export function Transcript({ items, status }: { items: readonly RunItem[]; status: RunStatus }): JSX.Element {
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     ref.current?.scrollTo({ top: ref.current.scrollHeight });
-  }, [items]);
+  }, [items, status]);
 
   const onClick = (event: MouseEvent<HTMLDivElement>): void => {
     const anchor = (event.target as HTMLElement).closest('a');
@@ -62,6 +67,12 @@ export function Transcript({ items }: { items: readonly RunItem[] }): JSX.Elemen
             );
         }
       })}
+      {isBusy(status) && (
+        <div className="run-working" role="status" aria-live="polite">
+          <Spinner size={16} stroke={2} />
+          <span>{busyLabel(status)}</span>
+        </div>
+      )}
     </div>
   );
 }

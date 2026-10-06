@@ -1,7 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunEventChange } from '../../shared/runTypes';
-import { RUN_FLUSH_MS, RunController, diffStat, toRequest, type RunRecord } from './runController';
-import type { DriverEvent, DriverPermissionAnswer, DriverSessionOptions, RunDriver } from './runDriver';
+import {
+  RUN_ALLOW_ALL_REFUSED,
+  RUN_ALLOW_ALL_STUCK,
+  RUN_FLUSH_MS,
+  RUN_MODE_ALLOW_ALL_NOTE,
+  RUN_MODE_DEFAULT_NOTE,
+  RUN_MODE_LOST_NOTE,
+  RunController,
+  diffStat,
+  sortModels,
+  toRequest,
+  type RunRecord,
+} from './runController';
+import type { DriverEvent, DriverPermission, DriverPermissionAnswer, DriverSessionOptions, RunDriver } from './runDriver';
 
 /**
  * The run host against a fake driver: no SDK, no CLI, no process. The fake
@@ -19,7 +31,8 @@ class FakeDriver implements RunDriver {
     this.calls.push('probe');
     return this.probeResult;
   };
-  listModels = async () => [{ id: 'auto', label: 'Auto' }];
+  models = [{ id: 'auto', label: 'Auto' }];
+  listModels = async () => this.models;
   start = async (options: DriverSessionOptions) => {
     if (this.failStart) {
       throw new Error('could not start');
@@ -36,6 +49,12 @@ class FakeDriver implements RunDriver {
   close = async (sessionId: string) => void this.calls.push(`close:${sessionId}`);
   respondPermission = (_sessionId: string, requestId: string, answer: DriverPermissionAnswer) =>
     void this.answers.push({ requestId, answer });
+  /** Whether the runtime takes a change of its allow-all mode. */
+  allowAllTaken = true;
+  setAllowAll = async (sessionId: string, enabled: boolean) => {
+    this.calls.push(`allow-all:${sessionId}:${enabled}`);
+    return this.allowAllTaken;
+  };
   respondInput = (_sessionId: string, requestId: string, answer: string | undefined) => void this.inputs.push({ requestId, answer });
   dispose = async () => void this.calls.push('dispose');
 
@@ -166,7 +185,14 @@ describe('a session', () => {
 });
 
 describe('permission requests', () => {
-  const request = { requestId: 'p1', kind: 'shell', commandText: 'npm test', intention: 'Run tests', canAllowSession: true };
+  const request: DriverPermission = {
+    requestId: 'p1',
+    kind: 'shell',
+    commandText: 'npm test',
+    intention: 'Run tests',
+    canAllowSession: true,
+    mustAsk: false,
+  };
 
   it('parks the request, shows exactly what was asked, and releases it only on the answer', async () => {
     const run = controller();
@@ -239,6 +265,7 @@ describe('permission requests', () => {
       diff: '--- a\n+++ b\n+one\n+two\n-three\n context',
       commandText: 'x'.repeat(10_000),
       canAllowSession: true,
+      mustAsk: false,
     });
     expect(shown.diffStat).toEqual({ added: 2, removed: 1 });
     expect(JSON.stringify(shown)).not.toContain('three');
@@ -269,5 +296,285 @@ describe('closing', () => {
     const before = events.length;
     driver.play('id-1', { type: 'idle' });
     expect(events).toHaveLength(before);
+  });
+});
+
+describe('several requests at once', () => {
+  const read = (requestId: string): DriverPermission => ({
+    requestId,
+    kind: 'read',
+    fileName: `${requestId}.ts`,
+    canAllowSession: true,
+    sessionScope: { kind: 'read' },
+    mustAsk: false,
+  });
+  const write = (requestId: string): DriverPermission => ({
+    requestId,
+    kind: 'write',
+    fileName: `${requestId}.ts`,
+    canAllowSession: true,
+    sessionScope: { kind: 'write' },
+    mustAsk: false,
+  });
+
+  it('keeps every request: one is shown, the rest wait, and none is lost when the first is answered', async () => {
+    const run = controller();
+    await run.start(START);
+    // The agent asks to do two things in the same turn.
+    driver.play('id-1', { type: 'permission', request: read('p1') });
+    driver.play('id-1', { type: 'permission', request: write('p2') });
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ requestId: 'p1', more: 1 });
+
+    run.respondPermission('p1', 'allow-once');
+    // The second one is now on screen and the session is still waiting on the user.
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ requestId: 'p2' });
+    expect(run.transcript('id-1')?.pendingPermission?.more).toBeUndefined();
+    expect(run.liveStates()[0].status).toBe('waiting-approval');
+    expect(events.at(-1)?.change).toMatchObject({ type: 'permission', request: { requestId: 'p2' } });
+
+    run.respondPermission('p2', 'deny');
+    expect(driver.answers).toEqual([
+      { requestId: 'p1', answer: { decision: 'allow-once' } },
+      { requestId: 'p2', answer: { decision: 'deny' } },
+    ]);
+    expect(run.transcript('id-1')?.pendingPermission).toBeUndefined();
+    expect(run.liveStates()[0].status).toBe('working');
+  });
+
+  it('releases every waiting request as unavailable when the turn is stopped', async () => {
+    const run = controller();
+    await run.start(START);
+    driver.play('id-1', { type: 'permission', request: read('p1') });
+    driver.play('id-1', { type: 'permission', request: write('p2') });
+    await run.abort('id-1');
+    expect(driver.answers.map((a) => [a.requestId, a.answer.decision])).toEqual([
+      ['p1', 'unavailable'],
+      ['p2', 'unavailable'],
+    ]);
+  });
+
+  it('lets "for this session" answer what it covers: waiting requests and later ones, and nothing else', async () => {
+    const run = controller();
+    await run.start(START);
+    driver.play('id-1', { type: 'permission', request: read('p1') });
+    driver.play('id-1', { type: 'permission', request: read('p2') });
+    driver.play('id-1', { type: 'permission', request: write('p3') });
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ sessionScopeLabel: 'reading files', more: 2 });
+
+    run.respondPermission('p1', 'allow-session');
+    // The other read is covered; the write is not, and is asked.
+    expect(driver.answers).toEqual([
+      { requestId: 'p1', answer: { decision: 'allow-session' } },
+      { requestId: 'p2', answer: { decision: 'allow-once' } },
+    ]);
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ requestId: 'p3' });
+    run.respondPermission('p3', 'allow-once');
+
+    // A later read does not ask again; a later write does.
+    driver.play('id-1', { type: 'permission', request: read('p4') });
+    expect(driver.answers.at(-1)).toEqual({ requestId: 'p4', answer: { decision: 'allow-once' } });
+    expect(run.transcript('id-1')?.pendingPermission).toBeUndefined();
+    driver.play('id-1', { type: 'permission', request: write('p5') });
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ requestId: 'p5' });
+  });
+
+  it('still asks for a covered request the runtime will not take a session approval for, or says must be asked', async () => {
+    const run = controller();
+    await run.start(START);
+    driver.play('id-1', { type: 'permission', request: read('p1') });
+    run.respondPermission('p1', 'allow-session');
+    driver.play('id-1', { type: 'permission', request: { ...read('p2'), canAllowSession: false } });
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ requestId: 'p2' });
+    run.respondPermission('p2', 'allow-once');
+    driver.play('id-1', { type: 'permission', request: { ...read('p3'), mustAsk: true } });
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ requestId: 'p3' });
+  });
+
+  it('keeps a session approval inside the session that got it', async () => {
+    const run = controller();
+    await run.start(START);
+    const other = (await run.start(START)).sessionId;
+    expect(other).not.toBe('id-1');
+    driver.play('id-1', { type: 'permission', request: read('p1') });
+    run.respondPermission('p1', 'allow-session');
+    driver.play(other, { type: 'permission', request: read('p2') });
+    expect(run.transcript(other)?.pendingPermission).toMatchObject({ requestId: 'p2' });
+  });
+});
+
+describe('Allow all', () => {
+  const shell = (requestId: string, over: Partial<DriverPermission> = {}): DriverPermission => ({
+    requestId,
+    kind: 'shell',
+    commandText: 'npm test',
+    canAllowSession: false,
+    mustAsk: false,
+    ...over,
+  });
+  const notices = (run: RunController, sessionId: string): string[] =>
+    (run.transcript(sessionId)?.items ?? []).flatMap((item) => (item.kind === 'notice' ? [item.text] : []));
+  const switches = (): string[] => driver.calls.filter((call) => call.startsWith('allow-all:'));
+
+  it('is off unless chosen, per session, and the runtime is not touched', async () => {
+    const run = controller();
+    const info = await run.start(START);
+    expect(info.permissionMode).toBe('default');
+    expect((await run.resume({ sessionId: 'abc', repository: 'r', cwd: 'c' })).permissionMode).toBe('default');
+    driver.play('id-1', { type: 'permission', request: shell('p1') });
+    expect(driver.answers).toEqual([]);
+    expect(switches()).toEqual([]);
+  });
+
+  it("turns on the runtime's own allow-all, then answers what was already waiting, and says so", async () => {
+    const run = controller();
+    await run.start(START);
+    driver.play('id-1', { type: 'permission', request: shell('p1') });
+    driver.play('id-1', { type: 'permission', request: shell('p2') });
+
+    expect((await run.setPermissionMode('id-1', 'allow-all')).permissionMode).toBe('allow-all');
+    expect(switches()).toEqual(['allow-all:id-1:true']);
+    expect(driver.answers).toEqual([
+      { requestId: 'p1', answer: { decision: 'allow-once' } },
+      { requestId: 'p2', answer: { decision: 'allow-once' } },
+    ]);
+    expect(run.transcript('id-1')?.pendingPermission).toBeUndefined();
+    expect(run.liveStates()[0].status).toBe('working');
+    expect(notices(run, 'id-1')).toEqual([RUN_MODE_ALLOW_ALL_NOTE]);
+    expect(run.list()[0].permissionMode).toBe('allow-all');
+
+    // A request the runtime still raises is approved, one request at a time.
+    driver.play('id-1', { type: 'permission', request: shell('p3') });
+    expect(driver.answers.at(-1)).toEqual({ requestId: 'p3', answer: { decision: 'allow-once' } });
+    // Choosing the mode it already has does not switch the runtime again.
+    await run.setPermissionMode('id-1', 'allow-all');
+    expect(switches()).toHaveLength(1);
+  });
+
+  it('stays in the asking mode when the runtime refuses, and approves nothing', async () => {
+    const run = controller();
+    await run.start(START);
+    driver.play('id-1', { type: 'permission', request: shell('p1') });
+    driver.allowAllTaken = false;
+    await expect(run.setPermissionMode('id-1', 'allow-all')).rejects.toThrow(RUN_ALLOW_ALL_REFUSED);
+    expect(run.list()[0].permissionMode).toBe('default');
+    expect(driver.answers).toEqual([]);
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ requestId: 'p1' });
+    expect(notices(run, 'id-1')).toEqual([]);
+  });
+
+  it('applies it before the goal is sent when a session starts in Allow all', async () => {
+    const run = controller();
+    const info = await run.start({ ...START, permissionMode: 'allow-all' });
+    expect(info.permissionMode).toBe('allow-all');
+    expect(driver.calls).toEqual(['start:C:/repo', 'allow-all:id-1:true', 'send:id-1:Fix the build']);
+    expect(notices(run, 'id-1')).toEqual([RUN_MODE_ALLOW_ALL_NOTE]);
+  });
+
+  it('starts in the asking mode, and says why, when the runtime refuses at the start', async () => {
+    const run = controller();
+    driver.allowAllTaken = false;
+    const info = await run.start({ ...START, permissionMode: 'allow-all' });
+    expect(info.permissionMode).toBe('default');
+    expect(notices(run, 'id-1')).toEqual([RUN_ALLOW_ALL_REFUSED]);
+    // The goal still goes out: asking is the safe direction.
+    expect(driver.calls.at(-1)).toBe('send:id-1:Fix the build');
+    driver.play('id-1', { type: 'permission', request: shell('p1') });
+    expect(driver.answers).toEqual([]);
+  });
+
+  it('still shows a request the runtime says must be put to the user', async () => {
+    const run = controller();
+    await run.start({ ...START, permissionMode: 'allow-all' });
+    driver.play('id-1', { type: 'permission', request: shell('p1', { mustAsk: true }) });
+    expect(driver.answers).toEqual([]);
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ requestId: 'p1' });
+  });
+
+  it('goes back to asking in the runtime too, and does not leak into another session', async () => {
+    const run = controller();
+    await run.start(START);
+    const other = (await run.start(START)).sessionId;
+    await run.setPermissionMode('id-1', 'allow-all');
+    driver.play(other, { type: 'permission', request: shell('other') });
+    expect(driver.answers).toEqual([]);
+    expect(run.transcript(other)?.pendingPermission).toMatchObject({ requestId: 'other' });
+
+    await run.setPermissionMode('id-1', 'default');
+    expect(switches()).toEqual(['allow-all:id-1:true', 'allow-all:id-1:false']);
+    expect(notices(run, 'id-1')).toEqual([RUN_MODE_ALLOW_ALL_NOTE, RUN_MODE_DEFAULT_NOTE]);
+    driver.play('id-1', { type: 'permission', request: shell('p1') });
+    expect(driver.answers).toEqual([]);
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ requestId: 'p1' });
+  });
+
+  it('does not claim to be asking again when the runtime did not go back', async () => {
+    const run = controller();
+    await run.start(START);
+    await run.setPermissionMode('id-1', 'allow-all');
+    driver.allowAllTaken = false;
+    await expect(run.setPermissionMode('id-1', 'default')).rejects.toThrow(RUN_ALLOW_ALL_STUCK);
+    expect(run.list()[0].permissionMode).toBe('allow-all');
+  });
+
+  it('ends when the session loses its CLI, because the mode lived there', async () => {
+    const run = controller();
+    await run.start(START);
+    await run.setPermissionMode('id-1', 'allow-all');
+    driver.play('id-1', { type: 'error', message: 'the CLI stopped', disconnected: true });
+    expect(run.list()[0].permissionMode).toBe('default');
+    expect(notices(run, 'id-1')).toEqual([RUN_MODE_ALLOW_ALL_NOTE, 'the CLI stopped', RUN_MODE_LOST_NOTE]);
+    driver.play('id-1', { type: 'permission', request: shell('p1') });
+    expect(driver.answers).toEqual([]);
+
+    // An ordinary session error changes nothing about the mode.
+    const other = (await run.start(START)).sessionId;
+    await run.setPermissionMode(other, 'allow-all');
+    driver.play(other, { type: 'error', message: 'rate limited' });
+    expect(run.list().find((s) => s.sessionId === other)?.permissionMode).toBe('allow-all');
+  });
+
+  it('cannot be turned on, and approves nothing, while Run is off', async () => {
+    const run = controller();
+    await run.start(START);
+    await run.setPermissionMode('id-1', 'allow-all');
+    enabled = false;
+    driver.play('id-1', { type: 'permission', request: shell('p1') });
+    expect(driver.answers).toEqual([]);
+    expect(run.transcript('id-1')?.pendingPermission).toMatchObject({ requestId: 'p1' });
+
+    // Going back to asking still works with Run off; turning it on does not reach the runtime.
+    await run.setPermissionMode('id-1', 'default');
+    const before = switches().length;
+    await expect(run.setPermissionMode('id-1', 'allow-all')).rejects.toThrow('turned off');
+    expect(switches()).toHaveLength(before);
+    await expect(run.setPermissionMode('missing', 'default')).rejects.toThrow('not open');
+  });
+
+  it('treats anything but the exact word as the asking default', async () => {
+    const run = controller();
+    await run.start({ ...START, permissionMode: 'everything' as never });
+    expect(run.list()[0].permissionMode).toBe('default');
+    expect((await run.setPermissionMode('id-1', 'yes' as never)).permissionMode).toBe('default');
+    expect(switches()).toEqual([]);
+  });
+});
+
+describe('models', () => {
+  it('lists them in alphabetical order by name, whatever their case', async () => {
+    const models = [
+      { id: 'gpt', label: 'GPT-5' },
+      { id: 'auto', label: 'auto' },
+      { id: 'opus', label: 'Claude Opus 5.5' },
+      { id: 'sonnet', label: 'claude Sonnet 5.5' },
+      { id: 'b', label: 'Same' },
+      { id: 'a', label: 'Same' },
+    ];
+    const sorted = sortModels(models);
+    expect(sorted.map((m) => m.id)).toEqual(['auto', 'opus', 'sonnet', 'gpt', 'a', 'b']);
+    // The input is left as it was.
+    expect(models[0].id).toBe('gpt');
+
+    driver.models = models;
+    expect((await controller().availability()).models.map((m) => m.id)).toEqual(['auto', 'opus', 'sonnet', 'gpt', 'a', 'b']);
   });
 });

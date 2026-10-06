@@ -217,7 +217,8 @@ export function SettingsView(): JSX.Element {
         <p className="settings-hint">
           Off by default. When on, a Run view lets you start or continue a GitHub Copilot session here. It uses your
           own installed <code>copilot</code> and your own Copilot login, and sends your message and whatever the agent
-          then reads to GitHub, exactly as running it in a terminal does. Every action asks you first. Claude Code
+          then reads to GitHub, exactly as running it in a terminal does. Every action asks you first, unless you pick
+          Allow all for a session. Claude Code
           sessions are never run from here; they are resumed in your own terminal.
         </p>
         <div className="settings-row">

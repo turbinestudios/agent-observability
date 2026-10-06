@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { RunAvailability, RunSessionInfo } from '../../../../shared/runTypes';
-import { availabilityProblem, canStart, runGate, runVisible, sessionDoor, sortRunSessions } from './runViewModel';
+import {
+  RUN_START_REMINDER,
+  availabilityProblem,
+  canStart,
+  runGate,
+  runVisible,
+  sessionDoor,
+  sortRunSessions,
+  startReminder,
+} from './runViewModel';
 
 const ready: RunAvailability = { enabled: true, acknowledged: true, cliFound: true, signedIn: true, models: [] };
 
@@ -49,6 +58,7 @@ describe('canStart and ordering', () => {
       repository: 'r',
       cwd: 'c',
       status,
+      permissionMode: 'default',
       startedAtMs: 0,
       lastActivityMs,
       door: 'blank',
@@ -56,5 +66,14 @@ describe('canStart and ordering', () => {
     expect(
       sortRunSessions([s('old-stopped', 'stopped', 9), s('idle', 'idle', 1), s('working', 'working', 5)]).map((x) => x.sessionId),
     ).toEqual(['working', 'idle', 'old-stopped']);
+  });
+});
+
+describe('startReminder', () => {
+  it('says the truth for the mode the session starts in', () => {
+    expect(startReminder('default')).toBe(RUN_START_REMINDER);
+    expect(startReminder('default')).toContain('asks first');
+    expect(startReminder('allow-all')).toContain('Allow all is on');
+    expect(startReminder('allow-all')).not.toContain('asks first');
   });
 });

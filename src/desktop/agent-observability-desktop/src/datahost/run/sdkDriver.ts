@@ -8,6 +8,7 @@ import type {
   DriverSessionOptions,
   RunDriver,
 } from './runDriver';
+import { scopeOf, type SessionScope } from './permissionScope';
 import type { RuntimeResolution } from './runtimePath';
 
 /**
@@ -19,12 +20,18 @@ import type { RuntimeResolution } from './runtimePath';
  * with the app. The SDK is loaded lazily, on the first probe, so an app that
  * never opens Run never touches it.
  *
- * Permissions: every request is handed up and the session waits for the
- * user's answer. The only answers this file can produce are the two
- * approvals scoped to this request or this session, a rejection, and "the
- * user is not available". It has no code path that approves on the user's
- * behalf or that persists an approval; `runSafety.test.ts` scans this
- * directory to keep it that way.
+ * Permissions: every request the runtime raises is handed up and the session
+ * waits for an answer. The only answers this file can produce are an approval
+ * of this one request, an approval for the rest of the session scoped to
+ * what the request is about (see `permissionScope.ts`), a rejection, and
+ * "the user is not available". Nothing here outlives the session.
+ *
+ * Allow all is the runtime's own mode, not something this file imitates:
+ * `setAllowAll` switches one session's permission mode through the SDK, the
+ * same mode `copilot --allow-all` starts in, so the runtime stops raising
+ * tool, path and URL requests for that session. It is per session because the
+ * command-line flag would apply to every session this one CLI process hosts.
+ * `runSafety.test.ts` keeps that switch in this one method.
  *
  * The CLI is a separate process and can end at any time: a crash, the user
  * ending it, an update replacing it. A call that finds it gone starts a
@@ -46,7 +53,7 @@ interface SdkEvent {
 
 type SdkPermissionResult =
   | { kind: 'approve-once' }
-  | { kind: 'approve-for-session' }
+  | { kind: 'approve-for-session'; approval?: Exclude<SessionScope, { kind: 'url' }>; domain?: string }
   | { kind: 'reject'; feedback?: string }
   | { kind: 'user-not-available' };
 
@@ -55,6 +62,12 @@ interface SdkSession {
   send(options: { prompt: string }): Promise<string>;
   abort(): Promise<void>;
   disconnect(): Promise<void>;
+  /** The session's typed RPC surface; only the permission mode is used. */
+  rpc?: {
+    permissions?: {
+      setMode?(params: { mode: 'manual' | 'allow-all'; source: 'rpc' }): Promise<{ success?: boolean; mode?: string }>;
+    };
+  };
 }
 
 interface SdkSessionConfig {
@@ -91,7 +104,7 @@ interface Hosted {
   session: SdkSession;
   off: () => void;
   onEvent: (event: DriverEvent) => void;
-  permissions: Map<string, (result: SdkPermissionResult) => void>;
+  permissions: Map<string, { resolve: (result: SdkPermissionResult) => void; scope: SessionScope | undefined }>;
   inputs: Map<string, (answer: string | undefined) => void>;
 }
 
@@ -249,12 +262,27 @@ export class SdkRunDriver implements RunDriver {
 
   respondPermission(sessionId: string, requestId: string, answer: DriverPermissionAnswer): void {
     const hosted = this.sessions.get(sessionId);
-    const resolve = hosted?.permissions.get(requestId);
-    if (hosted === undefined || resolve === undefined) {
+    const parked = hosted?.permissions.get(requestId);
+    if (hosted === undefined || parked === undefined) {
       return;
     }
     hosted.permissions.delete(requestId);
-    resolve(toSdkResult(answer));
+    parked.resolve(toSdkResult(answer, parked.scope));
+  }
+
+  async setAllowAll(sessionId: string, enabled: boolean): Promise<boolean> {
+    if (!enabled && this.lost.has(sessionId)) {
+      // Nothing is running it; a reconnect starts in the asking mode anyway.
+      return true;
+    }
+    const permissions = this.require(sessionId).session.rpc?.permissions;
+    if (permissions?.setMode === undefined) {
+      throw new Error('This version of GitHub Copilot CLI cannot change the permission mode from here.');
+    }
+    const wanted = enabled ? 'allow-all' : 'manual';
+    const result = await permissions.setMode({ mode: wanted, source: 'rpc' });
+    // The runtime reports the mode it actually ended up in; a policy can refuse.
+    return result.success === true && result.mode === wanted;
   }
 
   respondInput(sessionId: string, requestId: string, answer: string | undefined): void {
@@ -331,7 +359,7 @@ export class SdkRunDriver implements RunDriver {
       hosted.off();
       this.lost.set(sessionId, hosted.options);
       if (sessionId !== quiet) {
-        hosted.onEvent({ type: 'error', message: RUNTIME_ENDED });
+        hosted.onEvent({ type: 'error', message: RUNTIME_ENDED, disconnected: true });
       }
     }
     try {
@@ -402,8 +430,9 @@ export class SdkRunDriver implements RunDriver {
       onPermissionRequest: (request) =>
         new Promise<SdkPermissionResult>((resolve) => {
           const requestId = randomUUID();
-          hosted.permissions.set(requestId, resolve);
-          hosted.onEvent({ type: 'permission', request: toDriverPermission(requestId, request) });
+          const permission = toDriverPermission(requestId, request);
+          hosted.permissions.set(requestId, { resolve, scope: permission.sessionScope });
+          hosted.onEvent({ type: 'permission', request: permission });
         }),
       onUserInputRequest: (request) =>
         new Promise<{ answer: string; wasFreeform: boolean }>((resolve, reject) => {
@@ -446,8 +475,8 @@ export class SdkRunDriver implements RunDriver {
 
   /** Nothing may stay parked when a turn is aborted or a session closes. */
   private releasePending(hosted: Hosted): void {
-    for (const resolve of hosted.permissions.values()) {
-      resolve({ kind: 'user-not-available' });
+    for (const parked of hosted.permissions.values()) {
+      parked.resolve({ kind: 'user-not-available' });
     }
     hosted.permissions.clear();
     for (const resolve of hosted.inputs.values()) {
@@ -457,13 +486,22 @@ export class SdkRunDriver implements RunDriver {
   }
 }
 
-/** The complete set of answers this app can give a permission request. */
-export function toSdkResult(answer: DriverPermissionAnswer): SdkPermissionResult {
+/**
+ * The complete set of answers this app can give a permission request. A
+ * session approval names its scope, because the runtime remembers nothing
+ * without one; a request with no scope is approved once.
+ */
+export function toSdkResult(answer: DriverPermissionAnswer, scope?: SessionScope): SdkPermissionResult {
   switch (answer.decision) {
     case 'allow-once':
       return { kind: 'approve-once' };
     case 'allow-session':
-      return { kind: 'approve-for-session' };
+      if (scope === undefined) {
+        return { kind: 'approve-once' };
+      }
+      return scope.kind === 'url'
+        ? { kind: 'approve-for-session', domain: scope.domain }
+        : { kind: 'approve-for-session', approval: scope };
     case 'deny':
       return answer.feedback !== undefined && answer.feedback.length > 0
         ? { kind: 'reject', feedback: answer.feedback }
@@ -474,16 +512,20 @@ export function toSdkResult(answer: DriverPermissionAnswer): SdkPermissionResult
 }
 
 export function toDriverPermission(requestId: string, request: Record<string, unknown>): DriverPermission {
+  const scope = scopeOf(request);
   return {
     requestId,
     kind: str(request.kind) ?? 'unknown',
     ...opt('toolCallId', str(request.toolCallId)),
     ...opt('toolName', str(request.toolName)),
-    ...opt('fileName', str(request.fileName)),
+    ...opt('fileName', str(request.fileName) ?? str(request.path)),
     ...opt('commandText', str(request.fullCommandText)),
     ...opt('intention', str(request.intention)),
     ...opt('diff', str(request.diff)),
-    canAllowSession: request.canOfferSessionApproval !== false,
+    ...opt('url', str(request.url)),
+    canAllowSession: request.canOfferSessionApproval !== false && scope !== undefined,
+    ...(scope !== undefined ? { sessionScope: scope } : {}),
+    mustAsk: request.managedApprovalRequired === true || request.requestSandboxBypass === true,
   };
 }
 

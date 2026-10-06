@@ -25,6 +25,10 @@ function fakeSdk() {
     forceStopped: 0,
     resumed: [] as string[],
     startError: undefined as Error | undefined,
+    /** Permission modes the app asked the runtime for, and the mode the runtime answers with. */
+    modes: [] as { mode: string; source: string }[],
+    modeRefused: false,
+    withoutRpc: false,
     /** What a call on the nth CLI (1-based) fails with, if anything. */
     callError: undefined as ((nth: number) => Error | undefined) | undefined,
     sendError: undefined as ((nth: number) => Error | undefined) | undefined,
@@ -47,6 +51,18 @@ function fakeSdk() {
     },
     abort: async () => undefined,
     disconnect: async () => undefined,
+    get rpc() {
+      return state.withoutRpc
+        ? undefined
+        : {
+            permissions: {
+              setMode: async (params: { mode: string; source: string }) => {
+                state.modes.push(params);
+                return state.modeRefused ? { success: false, mode: 'manual' } : { success: true, mode: params.mode };
+              },
+            },
+          };
+    },
   });
   class CopilotClient {
     readonly cliProcess = new EventEmitter();
@@ -101,7 +117,23 @@ function driverWith(sdk: ReturnType<typeof fakeSdk>, env: NodeJS.ProcessEnv = { 
 describe('toSdkResult', () => {
   it('can only produce the four scoped answers', () => {
     expect(toSdkResult({ decision: 'allow-once' })).toEqual({ kind: 'approve-once' });
-    expect(toSdkResult({ decision: 'allow-session' })).toEqual({ kind: 'approve-for-session' });
+    // A session approval names what it covers; without a scope it is an approval of this one request.
+    expect(toSdkResult({ decision: 'allow-session' })).toEqual({ kind: 'approve-once' });
+    expect(toSdkResult({ decision: 'allow-session' }, { kind: 'read' })).toEqual({
+      kind: 'approve-for-session',
+      approval: { kind: 'read' },
+    });
+    expect(toSdkResult({ decision: 'allow-session' }, { kind: 'commands', commandIdentifiers: ['git'] })).toEqual({
+      kind: 'approve-for-session',
+      approval: { kind: 'commands', commandIdentifiers: ['git'] },
+    });
+    expect(toSdkResult({ decision: 'allow-session' }, { kind: 'url', domain: 'example.com' })).toEqual({
+      kind: 'approve-for-session',
+      domain: 'example.com',
+    });
+    // The scope never widens a narrower answer.
+    expect(toSdkResult({ decision: 'allow-once' }, { kind: 'read' })).toEqual({ kind: 'approve-once' });
+    expect(toSdkResult({ decision: 'deny' }, { kind: 'read' })).toEqual({ kind: 'reject' });
     expect(toSdkResult({ decision: 'deny' })).toEqual({ kind: 'reject' });
     expect(toSdkResult({ decision: 'deny', feedback: 'no' })).toEqual({ kind: 'reject', feedback: 'no' });
     expect(toSdkResult({ decision: 'unavailable' })).toEqual({ kind: 'user-not-available' });
@@ -152,7 +184,24 @@ describe('event mapping', () => {
       intention: 'Create file',
       diff: '+x',
       canAllowSession: false,
+      sessionScope: { kind: 'write' },
+      mustAsk: false,
     });
+
+    expect(toDriverPermission('r', { kind: 'read', path: 'C:/repo/a.ts', intention: 'Read file' })).toEqual({
+      requestId: 'r',
+      kind: 'read',
+      fileName: 'C:/repo/a.ts',
+      intention: 'Read file',
+      canAllowSession: true,
+      sessionScope: { kind: 'read' },
+      mustAsk: false,
+    });
+    // Nothing to remember by name: once or deny only.
+    expect(toDriverPermission('r', { kind: 'hook' })).toMatchObject({ canAllowSession: false, mustAsk: false });
+    expect(toDriverPermission('r', { kind: 'hook' }).sessionScope).toBeUndefined();
+    expect(toDriverPermission('r', { kind: 'shell', managedApprovalRequired: true }).mustAsk).toBe(true);
+    expect(toDriverPermission('r', { kind: 'write', requestSandboxBypass: true }).mustAsk).toBe(true);
   });
 });
 
@@ -291,7 +340,7 @@ describe('SdkRunDriver when the CLI process goes away', () => {
     sdk.state.processes[0].emit('exit');
     // Nothing stays parked, and nothing was approved.
     expect(await parked).toEqual({ kind: 'user-not-available' });
-    expect(events.at(-1)).toEqual({ type: 'error', message: RUNTIME_ENDED });
+    expect(events.at(-1)).toEqual({ type: 'error', message: RUNTIME_ENDED, disconnected: true });
     // Nothing reconnects by itself.
     expect(sdk.state.processes).toHaveLength(1);
     expect(sdk.state.resumed).toEqual([]);
@@ -328,3 +377,49 @@ describe('SdkRunDriver when the CLI process goes away', () => {
     expect(sdk.state.resumed).toEqual([]);
   });
 });
+
+describe("SdkRunDriver and the runtime's own allow-all", () => {
+  it('switches the one session through the SDK, and back', async () => {
+    const sdk = fakeSdk();
+    const driver = driverWith(sdk);
+    await driver.start({ sessionId: 's', cwd: '/repo', onEvent: () => undefined });
+    expect(sdk.state.modes).toEqual([]);
+
+    expect(await driver.setAllowAll('s', true)).toBe(true);
+    expect(await driver.setAllowAll('s', false)).toBe(true);
+    expect(sdk.state.modes).toEqual([
+      { mode: 'allow-all', source: 'rpc' },
+      { mode: 'manual', source: 'rpc' },
+    ]);
+  });
+
+  it('reports a refusal instead of assuming the mode was taken', async () => {
+    const sdk = fakeSdk();
+    const driver = driverWith(sdk);
+    await driver.start({ sessionId: 's', cwd: '/repo', onEvent: () => undefined });
+    sdk.state.modeRefused = true;
+    expect(await driver.setAllowAll('s', true)).toBe(false);
+  });
+
+  it('says so when the CLI cannot switch modes, or the session is not open', async () => {
+    const sdk = fakeSdk();
+    const driver = driverWith(sdk);
+    await driver.start({ sessionId: 's', cwd: '/repo', onEvent: () => undefined });
+    sdk.state.withoutRpc = true;
+    await expect(driver.setAllowAll('s', true)).rejects.toThrow('cannot change the permission mode');
+    await expect(driver.setAllowAll('nope', true)).rejects.toThrow('not open');
+  });
+
+  it('has nothing to switch off for a session that lost its CLI, and does not switch on by itself after a reconnect', async () => {
+    const sdk = fakeSdk();
+    const driver = driverWith(sdk);
+    await driver.start({ sessionId: 's', cwd: '/repo', onEvent: () => undefined });
+    await driver.setAllowAll('s', true);
+    sdk.state.processes[0].emit('exit');
+    expect(await driver.setAllowAll('s', false)).toBe(true);
+    await driver.send('s', 'carry on');
+    // Only the one switch the user asked for ever reached a runtime.
+    expect(sdk.state.modes).toEqual([{ mode: 'allow-all', source: 'rpc' }]);
+  });
+});
+

@@ -10,6 +10,8 @@ export function useRunHost(): {
   sessions: RunSessionInfo[];
   error: string | undefined;
   reload: () => void;
+  /** Re-read only the session list (after a change that raises no status event). */
+  refreshSessions: () => void;
   acknowledge: () => void;
 } {
   const [availability, setAvailability] = useState<RunAvailability | undefined>(undefined);
@@ -31,6 +33,10 @@ export function useRunHost(): {
     dataHost.call('run.list').then(setSessions).catch(() => setSessions([]));
   }, []);
 
+  const refreshSessions = useCallback(() => {
+    dataHost.call('run.list').then(setSessions).catch(() => undefined);
+  }, []);
+
   const acknowledge = useCallback(() => {
     dataHost
       .call('run.acknowledge')
@@ -47,7 +53,7 @@ export function useRunHost(): {
     });
   }, [reload]);
 
-  return { availability, repositories, sessions, error, reload, acknowledge };
+  return { availability, repositories, sessions, error, reload, refreshSessions, acknowledge };
 }
 
 /** One hosted session's transcript, kept current by the datahost's events. */

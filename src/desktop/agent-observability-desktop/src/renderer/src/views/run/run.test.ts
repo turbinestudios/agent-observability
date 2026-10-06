@@ -4,7 +4,12 @@ import {
   canSend,
   canStop,
   diffStatLabel,
+  ALLOW_ALL_WARNING,
+  PERMISSION_MODE_OPTIONS,
+  busyLabel,
+  isBusy,
   permissionButtons,
+  permissionQueueLabel,
   permissionKindLabel,
   permissionSubject,
   runStatusLabel,
@@ -57,7 +62,16 @@ describe('applyRunEvent', () => {
 
   it('rebuilds from a transcript after a remount', () => {
     const transcript: RunTranscript = {
-      info: { sessionId: 's', repository: 'r', cwd: 'c', status: 'waiting-approval', startedAtMs: 1, lastActivityMs: 2, door: 'blank' },
+      info: {
+        sessionId: 's',
+        repository: 'r',
+        cwd: 'c',
+        status: 'waiting-approval',
+        startedAtMs: 1,
+        lastActivityMs: 2,
+        door: 'blank',
+        permissionMode: 'default',
+      },
       items: [{ kind: 'user', id: 'u', text: 'go', atMs: 1 }],
       pendingPermission: request(),
     };
@@ -97,5 +111,58 @@ describe('labels', () => {
     expect(toolRowSummary(tool({}))).toBe('Bash · running');
     expect(toolRowSummary(tool({ state: 'ok', durationMs: 250 }))).toBe('Bash · done in 250 ms');
     expect(toolRowSummary(tool({ state: 'failed', durationMs: 2500, summary: 'npm test' }))).toBe('Bash npm test · failed in 2.5 s');
+  });
+});
+
+describe('busy', () => {
+  it('shows the spinner only while the agent is doing something, never while it waits on the user', () => {
+    expect((['starting', 'working'] as const).map(isBusy)).toEqual([true, true]);
+    expect((['waiting-approval', 'waiting-input', 'idle', 'stopped', 'error'] as const).map(isBusy)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(busyLabel('starting')).toContain('Starting');
+    expect(busyLabel('working')).toContain('working');
+  });
+});
+
+describe('permission scope and queue', () => {
+  it('says what a session approval covers on its button', () => {
+    const label = (over: Partial<RunPermissionRequest>): string | undefined =>
+      permissionButtons(request(over)).find((b) => b.decision === 'allow-session')?.label;
+    expect(label({ sessionScopeLabel: 'reading files' })).toBe('Allow reading files for this session');
+    expect(label({ sessionScopeLabel: 'the command git' })).toBe('Allow the command git for this session');
+    expect(label({})).toBe('Allow for this session');
+    // Allow once stays the highlighted answer either way.
+    expect(permissionButtons(request({ sessionScopeLabel: 'reading files' })).filter((b) => b.primary)).toHaveLength(1);
+  });
+
+  it('says how many requests wait behind the one shown', () => {
+    expect(permissionQueueLabel(request())).toBeUndefined();
+    expect(permissionQueueLabel(request({ more: 0 }))).toBeUndefined();
+    expect(permissionQueueLabel(request({ more: 1 }))).toBe('1 more request is waiting behind this one.');
+    expect(permissionQueueLabel(request({ more: 3 }))).toBe('3 more requests are waiting behind this one.');
+  });
+
+  it('replaces the shown request when the next one in the queue arrives', () => {
+    const first = applyRunEvent(EMPTY_RUN_VIEW, { type: 'permission', request: request({ requestId: 'p1', more: 1 }) });
+    const cleared = applyRunEvent(first, { type: 'permission-cleared', requestId: 'p1' });
+    expect(cleared.permission).toBeUndefined();
+    const second = applyRunEvent(cleared, { type: 'permission', request: request({ requestId: 'p2' }) });
+    expect(second.permission?.requestId).toBe('p2');
+  });
+});
+
+describe('permission modes', () => {
+  it('lists the asking default first, then Allow all, and warns in plain words', () => {
+    expect(PERMISSION_MODE_OPTIONS).toEqual([
+      { mode: 'default', label: 'Default permissions' },
+      { mode: 'allow-all', label: 'Allow all' },
+    ]);
+    expect(ALLOW_ALL_WARNING).toContain('without asking');
+    expect(ALLOW_ALL_WARNING).toContain('this session only');
   });
 });

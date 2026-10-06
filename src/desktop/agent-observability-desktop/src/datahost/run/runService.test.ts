@@ -25,6 +25,7 @@ function info(over: Partial<RunSessionInfo> = {}): RunSessionInfo {
     startedAtMs: 1,
     lastActivityMs: 2,
     door: 'blank',
+    permissionMode: 'default',
     ...over,
   };
 }
@@ -49,6 +50,10 @@ function service(over: Partial<RunServiceDeps> = {}, state = { enabled: true, ac
       abort: async () => void calls.push('abort'),
       close: async () => void calls.push('close'),
       respondPermission: (_id, decision) => void calls.push(`permission:${decision}`),
+      setPermissionMode: async (_id, mode) => {
+        calls.push(`mode:${mode}`);
+        return info({ permissionMode: mode });
+      },
       respondInput: (_id, answer) => void calls.push(`input:${answer ?? 'skip'}`),
       list: () => [info()],
       transcript: () => undefined,
@@ -89,6 +94,7 @@ describe('RunService gates', () => {
       expect(() => run.send(CLI_ID, 'more')).toThrow(refusal);
       expect(() => run.respondPermission('r1', 'allow-once')).toThrow(refusal);
       expect(() => run.respondPermission('r1', 'allow-session')).toThrow(refusal);
+      expect(() => run.setPermissionMode(CLI_ID, 'allow-all')).toThrow(refusal);
       expect(() => run.respondInput('r1', 'yes')).toThrow(refusal);
       expect(() => run.prefill({ door: 'repo-digest', repository: REPO })).toThrow(refusal);
       expect(calls).toEqual([]);
@@ -101,7 +107,9 @@ describe('RunService gates', () => {
     await run.close(CLI_ID);
     run.respondPermission('r1', 'deny', 'no');
     run.respondInput('r1', undefined);
-    expect(calls).toEqual(['abort', 'close', 'permission:deny', 'input:skip']);
+    // Going back to asking is the safe direction, so it is never refused.
+    await run.setPermissionMode(CLI_ID, 'default');
+    expect(calls).toEqual(['abort', 'close', 'permission:deny', 'input:skip', 'mode:default']);
     expect(run.list()).toEqual([]);
   });
 
@@ -127,7 +135,19 @@ describe('RunService directories', () => {
   it('starts in the directory it resolved itself and rejects a repository it cannot verify', async () => {
     const { run, started } = service();
     await run.start({ goal: '  do it  ', repository: REPO, door: 'blank' });
-    expect(started[0]).toMatchObject({ goal: 'do it', repository: REPO, cwd: path.join('work', 'repo') });
+    expect(started[0]).toMatchObject({
+      goal: 'do it',
+      repository: REPO,
+      cwd: path.join('work', 'repo'),
+      permissionMode: 'default',
+    });
+    // Allow all is passed on only for the exact word.
+    await run.start({ goal: 'do it', repository: REPO, door: 'blank', permissionMode: 'allow-all' });
+    expect(started[1]).toMatchObject({ permissionMode: 'allow-all' });
+    await run.start({ goal: 'do it', repository: REPO, door: 'blank', permissionMode: 'ALL' as never });
+    expect(started[2]).toMatchObject({ permissionMode: 'default' });
+    expect((await run.setPermissionMode(CLI_ID, 'allow-all')).permissionMode).toBe('allow-all');
+    expect((await run.setPermissionMode(CLI_ID, 'whatever' as never)).permissionMode).toBe('default');
     expect(() => run.start({ goal: 'do it', repository: 'https://github.com/o/gone', door: 'blank' })).toThrow('could be verified');
     expect(() => run.start({ goal: 'do it', repository: 'unknown', door: 'blank' })).toThrow('could be verified');
     expect(() => run.start({ goal: '   ', repository: REPO, door: 'blank' })).toThrow('Write what');

@@ -2,6 +2,7 @@ import type {
   RunAvailability,
   RunDoor,
   RunPermissionDecision,
+  RunPermissionMode,
   RunPrefill,
   RunPrefillParams,
   RunRepository,
@@ -50,6 +51,7 @@ export interface RunServiceDeps {
     | 'abort'
     | 'close'
     | 'respondPermission'
+    | 'setPermissionMode'
     | 'respondInput'
     | 'list'
     | 'transcript'
@@ -116,7 +118,13 @@ export class RunService {
     return [...found.entries()].map(([repository, cwd]) => ({ repository, cwd }));
   }
 
-  start(params: { goal: string; repository: string; model?: string; door: RunDoor }): Promise<RunSessionInfo> {
+  start(params: {
+    goal: string;
+    repository: string;
+    model?: string;
+    door: RunDoor;
+    permissionMode?: RunPermissionMode;
+  }): Promise<RunSessionInfo> {
     this.gate();
     const repository = typeof params?.repository === 'string' ? params.repository : '';
     const goal = typeof params?.goal === 'string' ? params.goal.trim() : '';
@@ -136,6 +144,8 @@ export class RunService {
       cwd,
       ...(model !== undefined ? { model } : {}),
       door: params.door ?? 'blank',
+      // Only the exact word turns it on; anything else is the asking default.
+      permissionMode: params.permissionMode === 'allow-all' ? 'allow-all' : 'default',
     });
   }
 
@@ -177,6 +187,14 @@ export class RunService {
       this.gate();
     }
     this.deps.controller.respondPermission(requestId, decision, feedback);
+  }
+
+  /** Going back to asking is always allowed; turning Allow all on is an action. */
+  setPermissionMode(sessionId: string, mode: RunPermissionMode): Promise<RunSessionInfo> {
+    if (mode === 'allow-all') {
+      this.gate();
+    }
+    return this.deps.controller.setPermissionMode(sessionId, mode === 'allow-all' ? 'allow-all' : 'default');
   }
 
   respondInput(requestId: string, answer?: string): void {

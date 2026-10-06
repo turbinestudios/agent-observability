@@ -1,12 +1,13 @@
 import type { JSX } from 'react';
 import { useState } from 'react';
 import type { RunInputRequest, RunPermissionDecision, RunPermissionRequest } from '../../../../shared/rpc';
-import { diffStatLabel, permissionButtons, permissionKindLabel, permissionSubject } from './run';
+import { diffStatLabel, permissionButtons, permissionKindLabel, permissionQueueLabel, permissionSubject } from './run';
 
 /**
  * The agent wants to do something and is waiting. The card shows exactly
  * what, and offers the only three answers there are. There is no "always
- * allow": nothing here outlives the session.
+ * allow": nothing here outlives the session. When the agent asked for several
+ * things at once they are answered one at a time, oldest first.
  */
 export function PermissionCard({
   request,
@@ -17,6 +18,7 @@ export function PermissionCard({
 }): JSX.Element {
   const [feedback, setFeedback] = useState('');
   const stat = diffStatLabel(request);
+  const queue = permissionQueueLabel(request);
   return (
     <div className="run-permission" role="alertdialog" aria-label="The agent is asking for permission">
       <div className="run-permission-head">
@@ -46,6 +48,7 @@ export function PermissionCard({
           </button>
         ))}
       </div>
+      {queue !== undefined && <p className="card-caption">{queue}</p>}
     </div>
   );
 }

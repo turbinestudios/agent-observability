@@ -81,6 +81,7 @@
 .run-header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -95,6 +96,9 @@
 }
 
 .run-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 2px 8px;
   border-radius: 999px;
   font-size: 11px;
@@ -224,4 +228,56 @@
 .run-followup textarea {
   min-height: 56px;
   resize: vertical;
+}
+
+/* ── Busy: a moving spinner wherever a session is working ── */
+
+.run-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.run-session-spinner {
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+
+/* ── Permission mode: Default permissions / Allow all ── */
+
+.run-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.run-header .run-mode {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-mode-all {
+  border-color: var(--warning);
+  color: var(--warning);
+  font-weight: 600;
+}
+
+/* Wraps onto its own line under the row the picker sits in. */
+.run-mode-confirm {
+  flex-basis: 100%;
+  order: 99;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.run-mode-confirm p {
+  margin: 0 0 8px;
 }

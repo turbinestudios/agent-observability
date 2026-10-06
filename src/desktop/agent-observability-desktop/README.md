@@ -62,8 +62,13 @@ works.
   repository's instruction files apply in the same way.
 - Every action asks first. Before the agent writes a file or runs a command
   you see what it wants to do and choose **Allow once**, **Allow for this
-  session** or **Deny**. The app never answers for you and nothing is
-  remembered after the session.
+  session** (for that kind of action: reading files, changing files, a
+  named command) or **Deny**. Nothing is remembered after the session.
+- If you would rather not be asked, pick **Allow all** under Permissions for
+  that one session. It is the same as starting `copilot --allow-all`: the
+  agent changes files, runs commands and opens web addresses without
+  asking. It asks you to confirm, applies to that session only, and every
+  new session starts on **Default permissions** again.
 - Buttons elsewhere in the app, such as **Start a session with this digest**
   or **Apply this plan with an agent**, only fill in the goal box. Nothing is
   sent until you press **Start**.
