@@ -1,4 +1,12 @@
 import type { SessionDetail, SessionTurn } from '../telemetry/models';
+import {
+  completionCounts,
+  decideCompletion,
+  type CompletionCheck,
+  type CompletionCounts,
+  type CompletionEvidence,
+} from './completionCheck';
+import { REEDIT_MIN_TURNS, summarizeRework, type FileEditStat } from './rework';
 
 /**
  * Session Retrospective — a local, heuristic answer to the questions a
@@ -179,7 +187,11 @@ export type RetrospectiveSignalId =
   | 'plan-mode-skipped'
   | 'vague-first-prompt'
   | 'oversized-first-prompt'
-  | 'abandoned-ending';
+  | 'abandoned-ending'
+  | 'completion-unverified'
+  | 'completion-contradicted'
+  | 'incomplete-ending'
+  | 'file-rework';
 
 /** Specificity marker categories detected in the opening prompt. */
 export type PromptMarker =
@@ -269,6 +281,16 @@ export interface RetrospectiveCounts {
   /** Absent when the session had no genuine opening prompt to judge. */
   firstPromptRating?: PromptRating;
   tipCount: number;
+  /**
+   * The completion check's projection (enums, counts, booleans). Absent when
+   * the source cannot see commands and edits. LOCAL-ONLY like the rest.
+   */
+  completion?: CompletionCounts;
+  /**
+   * File-level rework counts. Absent when the source cannot see file edits.
+   * LOCAL-ONLY like the rest.
+   */
+  rework?: { filesEdited: number; filesReedited: number; reworkedLines: number; filesOutsideRepo: number };
 }
 
 /**
@@ -318,6 +340,19 @@ export interface SessionRetrospective {
   /** Whole-object marker mirroring `WorkflowDeviation.contentDerived`. */
   contentDerived: true;
   llmVerdict?: RetrospectiveLlmVerdict;
+  /**
+   * What was and was not observed about the session's completion: whether a
+   * check ran after the last code edit and how it ended. Fixed sentences and
+   * enums only; absent when the source has no command or edit evidence.
+   */
+  completion?: CompletionCheck;
+  /**
+   * Per-file edit and rework counts, most re-edited first. LOCAL-ONLY and
+   * stricter than the rest: `file` is an ABSOLUTE path, so this array must
+   * never be serialised into anything sent to an AI vendor or placed on the
+   * aggregate, sync or team paths. Payload builders pick fields explicitly.
+   */
+  fileEdits?: FileEditStat[];
 }
 
 /**
@@ -339,6 +374,14 @@ export interface RetrospectiveSignals {
   apiErrorCount: number;
   /** What the transcript's final substantive record was. */
   lastEvent: 'assistant-response' | 'user-request' | 'interruption' | 'tool-result' | 'unknown';
+  /**
+   * Completion evidence from the source's activity chokepoint: counts, enums,
+   * booleans and turn indices only. Absent for sources that cannot see
+   * commands and edits; the completion findings then simply do not fire.
+   */
+  completion?: CompletionEvidence;
+  /** Per-file edit counts from the same chokepoint; absent when the source cannot see edits. */
+  fileEdits?: FileEditStat[];
 }
 
 // ── Correction / acknowledgment phrase tables (static, lowercase) ───────────
@@ -470,6 +513,20 @@ export const ADVICE_RULES: readonly AdviceRule[] = [
         : 'plan mode (or asking for a plan first) tends to reduce rework.'),
   },
   {
+    id: 'narrow-the-change',
+    requires: ['file-rework'],
+    // The churn tip already says "plan first"; do not say it twice.
+    when: (c) => c.churnRatioPct < CHURN_RATIO_MIN * 100,
+    priority: 5,
+    text: (c) =>
+      `${c.rework?.filesReedited ?? 0} file(s) were edited in ${REEDIT_MIN_TURNS} or more separate turns` +
+      ((c.rework?.reworkedLines ?? 0) > 0 ? `, and ${c.rework?.reworkedLines} added lines were removed again later` : '') +
+      '. Returning to the same file repeatedly usually means the change was not pinned down first: ' +
+      (c.planModeUsed
+        ? 'a narrower task per session tends to settle it in one pass.'
+        : 'asking for a plan first, or giving the agent a narrower task, tends to settle it in one pass.'),
+  },
+  {
     id: 'split-multi-goal-session',
     requires: ['oversized-first-prompt'],
     priority: 6,
@@ -505,6 +562,24 @@ export const ADVICE_RULES: readonly AdviceRule[] = [
       "Most of this session's spend went to sub-agents, and rework or corrections followed — " +
       'worth checking whether the fan-out produced what you actually needed before scaling ' +
       'it further.',
+  },
+  {
+    id: 'fix-failing-check-first',
+    requires: ['completion-contradicted'],
+    priority: 1.5,
+    text: () =>
+      'The last check seen in this session failed and nothing ran after it. Getting that ' +
+      'check to pass, or asking the agent to explain why it cannot, is the first thing to ' +
+      'do before building on this work.',
+  },
+  {
+    id: 'ask-for-verification',
+    requires: ['completion-unverified'],
+    when: (c) => c.completion?.completionClaim === 'done',
+    priority: 3.5,
+    text: () =>
+      "Ask the agent to run the project's checks and report the result before it reports " +
+      'back, or name the check command in your instruction file.',
   },
 ];
 
@@ -604,6 +679,23 @@ export function buildSessionRetrospective(
     });
   }
 
+  // ── File rework (per-file re-edits and lines added then removed) ──
+  const fileEdits = signals?.fileEdits;
+  const rework = fileEdits !== undefined ? summarizeRework(fileEdits) : undefined;
+  if (rework?.fired === true) {
+    findings.push({
+      id: 'file-rework',
+      severity: 'friction',
+      description:
+        rework.filesReedited > 0
+          ? `${rework.filesReedited} file(s) were edited in ${REEDIT_MIN_TURNS} or more separate turns` +
+            (rework.reworkedLines > 0 ? `, and ${rework.reworkedLines} added lines were removed again in a later turn.` : '.')
+          : `${rework.reworkedLines} lines this session added were removed again in a later turn.`,
+      value: rework.filesReedited > 0 ? rework.filesReedited : rework.reworkedLines,
+      contentDerived: false,
+    });
+  }
+
   // ── Long-tail turns ──
   const longTailTurnIndices = detectLongTailTurns(turns, findings);
 
@@ -682,12 +774,22 @@ export function buildSessionRetrospective(
     findings,
   );
 
+  // ── Completion check ──
+  // Evidence arrives pre-reduced to counts and enums; the decision and the
+  // sentences below are fixed and never embed transcript text.
+  const completionEvidence = signals?.completion;
+  const completion = completionEvidence !== undefined ? decideCompletion(completionEvidence) : undefined;
+  if (completion !== undefined && completionEvidence !== undefined) {
+    pushCompletionFindings(completion, completionEvidence, findings);
+  }
+
   // ── Verdict ──
-  const { verdict, verdictReasons } = decideVerdict({
+  const decided = decideVerdict({
     abandoned,
     correctionCount: correctionTurnIndices.length,
     interruptions,
     churnFired,
+    fileReworkFired: rework?.fired === true,
     maxErrorStreak: streaks.maxStreak,
     streakInLongTailTurn: streaks.turnIndices.some((i) => longTailTurnIndices.includes(i)),
     repeatedPromptTurns,
@@ -695,8 +797,28 @@ export function buildSessionRetrospective(
     vagueConfirmed: firstPrompt?.rating === 'vague' && correctionTurnIndices.length >= 2,
   });
 
+  // A contradicted completion is friction, never more: the verdict mix is
+  // shared in team shards, so this rule may lift smooth to bumpy and nothing else.
+  let verdict = decided.verdict;
+  const verdictReasons = decided.verdictReasons;
+  if (completion?.status === 'contradicted') {
+    if (verdict === 'smooth') {
+      verdict = 'bumpy';
+    }
+    if (verdict === 'bumpy') {
+      verdictReasons.push('completion-contradicted');
+    }
+  }
+
   // ── Outcome ──
-  const outcome = decideOutcome(verdict, turns, prompts, correctionTurnIndices);
+  // A failed last check or an unfinished ending caps the outcome; an
+  // unverified one leaves it alone, since most sessions never run a check.
+  const decidedOutcome = decideOutcome(verdict, turns, prompts, correctionTurnIndices);
+  const outcome: SessionOutcome =
+    decidedOutcome === 'likely-fulfilled' &&
+    (completion?.status === 'contradicted' || completion?.status === 'incomplete')
+      ? 'partially'
+      : decidedOutcome;
 
   // ── Counts projection + tips ──
   const counts: RetrospectiveCounts = {
@@ -713,6 +835,19 @@ export function buildSessionRetrospective(
     planModeUsed: signals?.planModeUsed ?? false,
     ...(firstPrompt !== undefined ? { firstPromptRating: firstPrompt.rating } : {}),
     tipCount: 0,
+    ...(completion !== undefined && completionEvidence !== undefined
+      ? { completion: completionCounts(completion, completionEvidence) }
+      : {}),
+    ...(rework !== undefined
+      ? {
+          rework: {
+            filesEdited: rework.filesEdited,
+            filesReedited: rework.filesReedited,
+            reworkedLines: rework.reworkedLines,
+            filesOutsideRepo: rework.filesOutsideRepo,
+          },
+        }
+      : {}),
   };
   const tips = buildTips(findings, counts);
   counts.tipCount = tips.length;
@@ -736,7 +871,49 @@ export function buildSessionRetrospective(
     tips,
     counts,
     contentDerived: true,
+    ...(completion !== undefined ? { completion } : {}),
+    ...(fileEdits !== undefined && fileEdits.length > 0 ? { fileEdits } : {}),
   };
+}
+
+/**
+ * The completion check's findings. Sentences say what was and was not
+ * observed; they never claim intent and never embed transcript text.
+ */
+function pushCompletionFindings(
+  completion: CompletionCheck,
+  evidence: CompletionEvidence,
+  findings: RetrospectiveFinding[],
+): void {
+  if (completion.status === 'unverified') {
+    const claimedDone = completion.claim === 'done';
+    findings.push({
+      id: 'completion-unverified',
+      severity: claimedDone ? 'friction' : 'info',
+      description: claimedDone
+        ? 'The session reported being done, and no test, build, lint or type-check with an observed result was seen after the last code edit.'
+        : 'No test, build, lint or type-check with an observed result was seen after the last code edit.',
+      ...(evidence.lastEditTurnIndex !== undefined ? { turnIndex: evidence.lastEditTurnIndex } : {}),
+      contentDerived: true,
+    });
+  } else if (completion.status === 'contradicted') {
+    findings.push({
+      id: 'completion-contradicted',
+      severity: 'friction',
+      description:
+        'The session reported being done, and the last check seen after the final code edit failed with nothing run after it.',
+      ...(evidence.lastVerifyTurnIndex !== undefined ? { turnIndex: evidence.lastVerifyTurnIndex } : {}),
+      contentDerived: true,
+    });
+  } else if (completion.status === 'incomplete') {
+    findings.push({
+      id: 'incomplete-ending',
+      severity: 'info',
+      description:
+        'The session ended without finishing: its last reply said work remained, or it stopped on a failed step or a failed check.',
+      contentDerived: true,
+    });
+  }
 }
 
 // ── Detectors ───────────────────────────────────────────────────────────────
@@ -1014,6 +1191,8 @@ interface VerdictInputs {
   correctionCount: number;
   interruptions: number;
   churnFired: boolean;
+  /** Per-file rework fired. An alternative to churn in its rules, never stronger. */
+  fileReworkFired: boolean;
   maxErrorStreak: number;
   streakInLongTailTurn: boolean;
   repeatedPromptTurns: number;
@@ -1045,6 +1224,8 @@ function decideVerdict(v: VerdictInputs): {
   }
   if (v.churnFired && v.correctionCount >= 1) {
     struggled.push('rework-churn');
+  } else if (v.fileReworkFired && v.correctionCount >= 1) {
+    struggled.push('file-rework');
   }
   if (v.maxErrorStreak >= ERROR_STREAK_STRUGGLE) {
     struggled.push('tool-error-streak');
@@ -1075,6 +1256,9 @@ function decideVerdict(v: VerdictInputs): {
   }
   if (v.churnFired) {
     bumpy.push('rework-churn');
+  }
+  if (v.fileReworkFired) {
+    bumpy.push('file-rework');
   }
   if (v.repeatedPromptTurns > 0) {
     bumpy.push('repeated-prompt');

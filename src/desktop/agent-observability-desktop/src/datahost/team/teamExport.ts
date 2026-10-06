@@ -23,6 +23,12 @@ import type { TeamStateStore } from './teamState';
  * write a file a teammate's app would reject — or worse, accept.
  */
 
+/**
+ * `team.enabled`: the whole Team feature. OFF by default. While it is off the
+ * view is hidden, the folder is neither watched nor read, and nothing is
+ * written to it, whatever the other team keys say.
+ */
+export const TEAM_ENABLED_KEY = 'team.enabled';
 export const TEAM_FOLDER_KEY = 'team.folder';
 export const TEAM_SHARE_ENABLED_KEY = 'team.shareEnabled';
 export const TEAM_AUTO_EXPORT_KEY = 'team.autoExport';
@@ -53,8 +59,13 @@ export function teamFolder(settings: DesktopSettingsReader): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+export function teamEnabled(settings: DesktopSettingsReader): boolean {
+  return settings.get<unknown>(TEAM_ENABLED_KEY, false) === true;
+}
+
 export function teamSharingOn(settings: DesktopSettingsReader): boolean {
   return (
+    teamEnabled(settings) &&
     settings.get<unknown>(TEAM_SHARE_ENABLED_KEY, false) === true &&
     typeof settings.get<unknown>(TEAM_CONSENTED_AT_KEY, undefined) === 'number'
   );

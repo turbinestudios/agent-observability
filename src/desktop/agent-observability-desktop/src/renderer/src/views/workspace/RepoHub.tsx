@@ -16,6 +16,7 @@ import { LiveBoard } from './LiveBoard';
 import { VerdictBar } from './RepositoryCards';
 import { agentLabel, kindLabel, trend } from './workspace';
 import type { LiveBoardSnapshot } from '../../../../shared/rpc';
+import { openRunDoor, useRunEnabled } from '../run/doors';
 
 /**
  * One repository's hub: what is running in it now, what ran recently, how
@@ -50,6 +51,7 @@ export function RepoHub({
   onImprove,
   onOpenHotspot,
 }: Props): JSX.Element {
+  const runEnabled = useRunEnabled();
   const [hub, setHub] = useState<RepoHubData | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [digestOpen, setDigestOpen] = useState(false);
@@ -124,6 +126,16 @@ export function RepoHub({
           >
             Ask AI Helper about this repository
           </button>
+          {runEnabled && (
+            <button
+              type="button"
+              className="modal-btn"
+              title="Opens Run with this repository's digest as an editable goal. Nothing is sent until you press Start."
+              onClick={() => openRunDoor({ door: 'repo-digest', repository })}
+            >
+              Start a session with this digest
+            </button>
+          )}
         </div>
       </header>
 

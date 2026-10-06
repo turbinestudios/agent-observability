@@ -45,6 +45,15 @@ reference for a privacy audit.
 > repository's context-file contents (capped), only after the user enables
 > it in Settings (off by default) **and** confirms a per-generation dialog
 > naming the vendor and that payload, enforced again in the data host.
+> Separately from those exceptions, the desktop app can act as an **agent
+> host (Run)**: when the user turns it on in Settings (off by default) and has
+> acknowledged a one-time notice, it starts and continues GitHub Copilot
+> sessions through the Copilot SDK on the user's own installed `copilot` and
+> their own Copilot login. A hosted session sends the user's message, and what
+> the agent then reads, to GitHub exactly as running `copilot` does; every
+> action the agent wants to take is shown to the user and waits for their
+> answer; nothing runs in the background; and nothing about it enters the
+> aggregate, sync or team paths. Claude Code is never driven by the app.
 > Applying a plan is the product's one sanctioned **local write path**:
 > allowlisted context files under the plan's re-verified repository root
 > only, per-file approved after a diff preview, staleness-checked against the
@@ -82,6 +91,10 @@ and rejects raw/free-text fields even though it does not trust the client.
 | 22 | Imported shards are re-validated with the TypeScript ports of the server validators (unknown keys, repository/path/id patterns, enums, partition invariants); unknown `schemaVersion`, oversized, malformed or mis-named files are **skipped with a notice**, never merged | core `aggregate/batchValidators.ts`, `team/teamShardValidator.ts`, `team/teamMerge.ts`; desktop `datahost/team/teamFolder.ts` | `aggregate/batchValidators.test.ts` (parity with ajv), `team/teamShardValidator.test.ts`, `team/teamMerge.test.ts`, `datahost/team/teamFolder.test.ts` |
 | 23 | The desktop pseudonym salt lives in its own file (`~/.agent-observability/desktop/team-salt`, 0600 where honoured), never in `config.json`, never in a shard or the shared folder | desktop `datahost/team/teamSalt.ts` | `datahost/team/teamSalt.test.ts` |
 | 24 | Desktop context-insights rows pass the same `SAFE_CONTEXT_FILE_PATTERN` gate as the extension's: absolute `context_files` paths are made repo-relative under a re-verified checkout root or **dropped** (user-level `~/.claude/CLAUDE.md` never leaves) | desktop `datahost/team/teamShardSource.ts` + core `aggregate/customizationFilter.ts` | `datahost/team/teamExport.test.ts` ("drops files outside the checkout and off the allowlist") |
+| 25 | **Run is off by default** and double-gated (Settings toggle + a one-time notice recorded only by its own acknowledge call); the data host refuses every action that starts, continues or approves while off or unacknowledged, and never accepts a working directory from the renderer | desktop `datahost/run/runService.ts` (`gate`, verified checkout or the session's own record), `datahost/run/runController.ts`, `datahost/settings.ts` (`run.enabled`; `run.disclosed` not patchable) | `datahost/run/runService.test.ts` ("refuses every action while Run is off…", "starts in the directory it resolved itself…"), `datahost/settings.test.ts` ("Run settings") |
+| 26 | **Ask is the only permission posture** for hosted sessions: allow once, allow for this session, or deny; no persistent approval, no allow-all; pending requests are answered "user not available" on stop, close and quit | desktop `datahost/run/sdkDriver.ts`, `runController.ts` | `datahost/run/runSafety.test.ts` (source scan: no `approveAll`, `allow-all`, `approve-permanently`, `approve-for-location`), `runController.test.ts`; opt-in `runSmoke.test.ts` against the real CLI (a denied write creates no file) |
+| 27 | The app **ships no Copilot runtime**: it drives the user's installed CLI, and the installers exclude the SDK's bundled runtime packages | desktop `datahost/run/runtimePath.ts`, `electron-builder.yml` | `datahost/run/runtimePath.test.ts`, `runSafety.test.ts` (packaging assertions) |
+| 28 | The run host is **separate from sharing**: no import from `aggregate/*`, `sync/*` or `team/*`; a hosted session reaches the index only as an ordinary Copilot CLI session | desktop `datahost/run/*` | `datahost/run/runService.test.ts` ("imports nothing from aggregate, sync or team") |
 
 ## Client-side enforcement (VS Code extension)
 

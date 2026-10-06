@@ -7,6 +7,11 @@ import { formatRelative, sourceLabel } from '../sessions/format';
 import { verdictLabel } from '../sessions/retro';
 import { describeProgress } from '../hotspots/hotspots';
 import { VERDICT_FILTERS, describeRetroCoverage, frictionSummary, verdictChipClass } from './retro';
+import type { SessionFilters } from '../sessions/filters';
+import { ToolsTab } from './ToolsTab';
+import { CompletionTab } from './CompletionTab';
+import { ReworkTab } from './ReworkTab';
+import { EVIDENCE_TABS, neighbourTab, persistTab, readStoredTab, type EvidenceTabId } from './tabs';
 import './retro.css';
 
 /**
@@ -19,14 +24,74 @@ import './retro.css';
  * is a pointer at the story, never a substitute for it.
  */
 
-interface Props {
+interface RetrospectivesProps {
   /** Opens a session in the Sessions view. */
   onOpenSession: (source: string, sessionId: string) => void;
   /** Opens the Improve view scoped to the selected repository. */
   onImprove?: (repository: string) => void;
 }
 
-export function RetroView({ onOpenSession, onImprove }: Props): JSX.Element {
+interface Props extends RetrospectivesProps {
+  /** Opens the Sessions view narrowed by filters, for the Tools drill-down. */
+  onOpenSessions: (filters: SessionFilters) => void;
+}
+
+/**
+ * Evidence: what the local analysis found about how sessions went. One rail
+ * entry, several tabs, so new kinds of evidence do not each claim a place in
+ * the sidebar. The ViewId stays `retro`; only the label changed.
+ */
+export function RetroView({ onOpenSession, onImprove, onOpenSessions }: Props): JSX.Element {
+  const [tab, setTab] = useState<EvidenceTabId>(readStoredTab);
+  const choose = (next: EvidenceTabId): void => {
+    setTab(next);
+    persistTab(next);
+  };
+  return (
+    <div className="evidence">
+      <div
+        className="evidence-tabs"
+        role="tablist"
+        aria-label="Evidence"
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowRight') {
+            choose(neighbourTab(tab, 1));
+          } else if (e.key === 'ArrowLeft') {
+            choose(neighbourTab(tab, -1));
+          }
+        }}
+      >
+        {EVIDENCE_TABS.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            role="tab"
+            className="evidence-tab"
+            aria-selected={entry.id === tab}
+            tabIndex={entry.id === tab ? 0 : -1}
+            title={entry.hint}
+            onClick={() => choose(entry.id)}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+      <div className="evidence-body" role="tabpanel">
+        {tab === 'tools' ? (
+          <ToolsTab onOpenSessions={onOpenSessions} />
+        ) : tab === 'completion' ? (
+          <CompletionTab onOpenSessions={onOpenSessions} />
+        ) : tab === 'rework' ? (
+          <ReworkTab onOpenSessions={onOpenSessions} onOpenSession={onOpenSession} />
+        ) : (
+          <RetrospectivesTab onOpenSession={onOpenSession} {...(onImprove !== undefined ? { onImprove } : {})} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RetrospectivesTab({ onOpenSession, onImprove }: RetrospectivesProps): JSX.Element {
   const [data, setData] = useState<RetroResult | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [repository, setRepository] = useState<string>('');
@@ -83,7 +148,7 @@ export function RetroView({ onOpenSession, onImprove }: Props): JSX.Element {
   return (
     <div className="retro-view">
       <header className="retro-view-header">
-        <h1>Retro</h1>
+        <h1>Retrospectives</h1>
         <p>
           How your recent sessions actually went — what each one set out to do, where the friction
           was, and which ones deserve a second look. Read from your own sessions, on this machine.

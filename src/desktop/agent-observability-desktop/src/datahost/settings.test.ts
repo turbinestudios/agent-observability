@@ -309,9 +309,10 @@ describe('live notifications toggle', () => {
 });
 
 describe('team settings', () => {
-  it('defaults to no folder, sharing off, auto-export on, all repositories, and no id without the seam', () => {
+  it('defaults to Team off, no folder, sharing off, auto-export on, all repositories, and no id without the seam', () => {
     const settings = new DesktopSettingsReader(file);
     const snapshot = buildSettingsSnapshot(settings, new Configuration(settings), seams());
+    expect(snapshot.teamEnabled).toBe(false);
     expect(snapshot.teamFolder).toBe('');
     expect(snapshot.teamFolderExists).toBe(false);
     expect(snapshot.teamShareEnabled).toBe(false);
@@ -323,7 +324,11 @@ describe('team settings', () => {
 
   it('records consent time when sharing turns on and clears it when it turns off', () => {
     const settings = new DesktopSettingsReader(file);
-    const changed = applySettingsPatch(settings, { teamFolder: '  ' + dir + '  ', teamShareEnabled: true }, { now: () => 123 });
+    const changed = applySettingsPatch(
+      settings,
+      { teamEnabled: true, teamFolder: '  ' + dir + '  ', teamShareEnabled: true },
+      { now: () => 123 },
+    );
     expect(changed.team).toBe(true);
     expect(settings.get('team.folder', '')).toBe(dir);
     expect(settings.get('team.consentedAtMs', undefined)).toBe(123);
@@ -337,9 +342,49 @@ describe('team settings', () => {
     expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).teamShareEnabled).toBe(false);
   });
 
+  it('keeps Team off until a real boolean turns it on, and asks for no id while it is off', () => {
+    const settings = new DesktopSettingsReader(file);
+    let asked = 0;
+    const withId = seams({ teamDeveloperId: () => { asked += 1; return 'dev_x'; } });
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), withId).teamDeveloperId).toBe('');
+    expect(asked).toBe(0);
+
+    expect(applySettingsPatch(settings, { teamEnabled: 'yes' as unknown as boolean }).team).toBe(false);
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), withId).teamEnabled).toBe(false);
+
+    expect(applySettingsPatch(settings, { teamEnabled: true }).team).toBe(true);
+    const snapshot = buildSettingsSnapshot(settings, new Configuration(settings), withId);
+    expect(snapshot.teamEnabled).toBe(true);
+    expect(snapshot.teamDeveloperId).toBe('dev_x');
+  });
+
+  it('cannot turn sharing on while Team is off', () => {
+    const settings = new DesktopSettingsReader(file);
+    applySettingsPatch(settings, { teamFolder: dir, teamShareEnabled: true }, { now: () => 123 });
+    expect(settings.get('team.shareEnabled', false)).toBe(false);
+    expect(settings.get('team.consentedAtMs', undefined)).toBeUndefined();
+  });
+
+  it('withdraws sharing when Team turns off, and does not resume it when Team turns on again', () => {
+    const settings = new DesktopSettingsReader(file);
+    applySettingsPatch(settings, { teamEnabled: true, teamFolder: dir, teamShareEnabled: true }, { now: () => 123 });
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).teamShareEnabled).toBe(true);
+
+    applySettingsPatch(settings, { teamEnabled: false });
+    expect(settings.get('team.consentedAtMs', undefined)).toBeUndefined();
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).teamShareEnabled).toBe(false);
+
+    applySettingsPatch(settings, { teamEnabled: true });
+    const snapshot = buildSettingsSnapshot(settings, new Configuration(settings), seams());
+    expect(snapshot.teamEnabled).toBe(true);
+    expect(snapshot.teamShareEnabled).toBe(false);
+    // The folder choice is kept: only the consent is withdrawn.
+    expect(snapshot.teamFolder).toBe(dir);
+  });
+
   it('does not read a hand-edited true as consent', () => {
     const settings = new DesktopSettingsReader(file);
-    settings.update({ 'team.shareEnabled': true });
+    settings.update({ 'team.enabled': true, 'team.shareEnabled': true });
     expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).teamShareEnabled).toBe(false);
   });
 
@@ -351,5 +396,29 @@ describe('team settings', () => {
     applySettingsPatch(settings, { teamRepositoryMode: 'nonsense' as unknown as 'all', teamFolder: '' });
     expect(settings.get('team.repositoryMode', '')).toBe('exclude');
     expect(settings.get('team.folder', 'unset')).toBe('unset');
+  });
+});
+
+describe('Run settings', () => {
+  it('is off by default, turns on only from a real boolean, and cannot be acknowledged through a patch', () => {
+    const settings = new DesktopSettingsReader(file);
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).runEnabled).toBe(false);
+
+    applySettingsPatch(settings, { runEnabled: 'yes' as unknown as boolean });
+    expect(settings.get('run.enabled', false)).toBe(false);
+
+    applySettingsPatch(settings, { runEnabled: true, ...({ runDisclosed: true, 'run.disclosed': true } as object) });
+    expect(settings.get('run.enabled', false)).toBe(true);
+    expect(settings.get('run.disclosed', false)).toBe(false);
+  });
+
+  it('stores a plain model id and refuses anything else', () => {
+    const settings = new DesktopSettingsReader(file);
+    applySettingsPatch(settings, { runDefaultModel: ' claude-sonnet-4.5 ' });
+    expect(buildSettingsSnapshot(settings, new Configuration(settings), seams()).runDefaultModel).toBe('claude-sonnet-4.5');
+    applySettingsPatch(settings, { runDefaultModel: 'x; rm -rf' });
+    expect(settings.get('run.defaultModel', '')).toBe('claude-sonnet-4.5');
+    applySettingsPatch(settings, { runDefaultModel: '' });
+    expect(settings.get('run.defaultModel', 'unset')).toBe('unset');
   });
 });

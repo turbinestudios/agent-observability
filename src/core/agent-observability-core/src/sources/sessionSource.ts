@@ -1,3 +1,4 @@
+import type { SessionActivity } from '../analysis/sessionActivity';
 import type { Configuration } from '../config/configuration';
 import type { Result } from '../telemetry/telemetryService';
 import type { TelemetryService } from '../telemetry/telemetryService';
@@ -104,6 +105,16 @@ export interface SessionDataSource {
    * Content-derived: never syncs, like everything else marked LOCAL-ONLY.
    */
   getSessionRetrospective?(sessionKey: string, detail?: SessionDetail): Result<SessionRetrospective>;
+
+  /**
+   * Optional LOCAL-ONLY activity read: the commands a session ran (classified)
+   * and the files it edited, from the source's single raw-content chokepoint
+   * (see {@link ../analysis/sessionActivity.SessionActivity}). Command text and
+   * paths in it are raw content: consumers classify and count, and must never
+   * persist or emit them unredacted. A source that cannot see tool inputs omits
+   * the method.
+   */
+  getSessionActivity?(sessionKey: string, detail?: SessionDetail): Result<SessionActivity>;
 }
 
 /**

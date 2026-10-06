@@ -511,3 +511,30 @@
   color: var(--danger);
   word-break: break-word;
 }
+
+/*
+ * A count on a rail entry (new inbox items on Workspace). Collapsed, it sits
+ * over the icon's corner; expanded, it follows the label. Colours come from
+ * theme variables, so it reads in both themes.
+ */
+.rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--warning);
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.rail-expanded .rail-badge {
+  position: static;
+  margin-left: auto;
+}

@@ -2,6 +2,7 @@ import type { JSX } from 'react';
 import type { LiveBoardSnapshot, LiveSessionRow } from '../../../../shared/rpc';
 import { formatCost, formatRelative, formatTokens, shortRepo, sourceLabel } from '../sessions/format';
 import { liveSummary, pendingHint, sortLiveRows, statusHint, statusLabel } from './workspace';
+import { isRunEnabled, openRunSession } from '../run/doors';
 
 /**
  * The live board: one card per session active in the last half hour, across
@@ -58,10 +59,17 @@ function LiveCard({
   const hint = pendingHint(row, nowMs);
   return (
     <li className={`live-card live-${row.status}`}>
-      <button type="button" className="live-card-button" onClick={() => onOpen(row.source, row.sessionId)}>
+      <button
+        type="button"
+        className="live-card-button"
+        title={row.hosted === true ? 'Started here: opens in Run' : undefined}
+        onClick={() =>
+          row.hosted === true && isRunEnabled() ? openRunSession(row.sessionId) : onOpen(row.source, row.sessionId)
+        }
+      >
         <span className="live-card-top">
           <span className={`live-status live-status-${row.status}`} title={statusHint(row)}>
-            {statusLabel(row.status)}
+            {row.exactPermission === true && row.status === 'waiting' ? 'Waiting for your approval' : statusLabel(row.status)}
           </span>
           <span className="live-source">{sourceLabel(row.source)}</span>
         </span>

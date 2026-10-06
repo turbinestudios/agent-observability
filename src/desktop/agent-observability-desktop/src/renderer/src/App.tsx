@@ -13,9 +13,11 @@ import type { AskAiIntent } from './views/assistant/AssistantView';
 import { WorkspaceView } from './views/workspace/WorkspaceView';
 import { TeamView } from './views/team/TeamView';
 import { useLiveNotifications } from './views/workspace/useLiveBoard';
+import { useInbox } from './views/workspace/useInbox';
 import type { OpenSessionIntent, SessionFilterIntent } from './views/sessions/SessionsView';
 import type { SessionFilters } from './views/sessions/filters';
 import { ActivityRail } from './components/ActivityRail';
+import { hiddenRailEntries } from './components/railHidden';
 import { ChangelogDialog } from './components/ChangelogDialog';
 import { CopilotSetupDialog } from './components/CopilotSetupDialog';
 import { copilotSetupDialogState } from './components/copilotSetupState';
@@ -27,6 +29,10 @@ import { ThemeProvider } from './theme/ThemeContext';
 import { dataHost } from './api/client';
 import type { CopilotSetupStatus } from '../../shared/rpc';
 import './app.css';
+import { RunView } from './views/run/RunView';
+import type { RunIntent } from './views/run/runViewModel';
+import { RUN_DOOR_EVENT, setRunEnabled, type RunDoorRequest } from './views/run/doors';
+import { useRunActiveRelay } from './views/run/useRun';
 
 /**
  * The app shell.
@@ -83,7 +89,70 @@ export function App(): JSX.Element {
     }
     lastView.current = view;
   }, [view]);
-  useLiveNotifications(settingsVersion, openSession);
+  // The attention inbox is held here for the same reason: the rail badge has to
+  // count from any view, and the Workspace view reads the same snapshot.
+  // Run: whether it is on (the rail entry and every door follow it), and the
+  // door requests other views raise. A door only prefills the goal box; the
+  // data host builds the text and nothing is sent until the user presses Start.
+  const [runOn, setRunOn] = useState(false);
+  // Team is off until turned on in Settings, like Run: its rail entry follows.
+  const [teamOn, setTeamOn] = useState(false);
+  // Run stays mounted once it has been opened, so a goal being written, the
+  // session on screen and a half-typed follow-up survive a look elsewhere.
+  const [runOpened, setRunOpened] = useState(false);
+  useEffect(() => {
+    if (view === 'run') {
+      setRunOpened(true);
+    }
+  }, [view]);
+  const [runIntent, setRunIntent] = useState<RunIntent | undefined>(undefined);
+  const [runOpenSession, setRunOpenSession] = useState<{ sessionId: string; at: number } | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    dataHost
+      .call('settings.get')
+      .then((snapshot) => {
+        if (!cancelled) {
+          setRunOn(snapshot.runEnabled);
+          setTeamOn(snapshot.teamEnabled);
+          setRunEnabled(snapshot.runEnabled);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsVersion]);
+  useEffect(() => {
+    const onDoor = (event: Event): void => {
+      const request = (event as CustomEvent<RunDoorRequest>).detail;
+      if ('openSessionId' in request) {
+        setRunOpenSession({ sessionId: request.openSessionId, at: Date.now() });
+        setView('run');
+        return;
+      }
+      dataHost
+        .call('run.prefill', request.prefill)
+        .then((prefill) => {
+          setRunIntent({ prefill, at: Date.now() });
+          setView('run');
+        })
+        .catch(() => setView('run'));
+    };
+    window.addEventListener(RUN_DOOR_EVENT, onDoor);
+    return () => window.removeEventListener(RUN_DOOR_EVENT, onDoor);
+  }, []);
+  useRunActiveRelay();
+  const inbox = useInbox();
+  useLiveNotifications(settingsVersion, openSession, inbox.snapshot);
+  // Leaving Workspace means the user has looked: nothing there stays "new".
+  const markInbox = inbox.mark;
+  useEffect(() => {
+    if (view !== 'workspace') {
+      return undefined;
+    }
+    return () => markInbox('all', 'seen');
+  }, [view, markInbox]);
   // A dialog, not a view: it overlays whatever you were looking at and returns
   // you to it, so it must not disturb `view`.
   const [changelogOpen, setChangelogOpen] = useState(false);
@@ -138,14 +207,20 @@ export function App(): JSX.Element {
     <ThemeProvider>
       <div className={isMac ? 'app app-mac' : 'app'}>
         {isMac && <div className="titlebar-drag" aria-hidden="true" />}
-        <ActivityRail active={view} onSelect={setView} onShowChangelog={() => setChangelogOpen(true)} />
+        <ActivityRail
+          hidden={hiddenRailEntries({ run: runOn, team: teamOn })}
+          active={view}
+          onSelect={setView}
+          onShowChangelog={() => setChangelogOpen(true)}
+          badges={{ workspace: inbox.snapshot?.unread ?? 0 }}
+        />
         <main className="app-main">
           <div className="view-layer" hidden={view !== 'sessions'}>
             <SessionsView
               openIntent={openIntent}
               filterIntent={filterIntent}
-              onAskAi={(source, sessionId) => {
-                setAskIntent({ source, sessionId, at: Date.now() });
+              onAskAi={(source, sessionId, prefill) => {
+                setAskIntent({ source, sessionId, ...(prefill !== undefined ? { prefill } : {}), at: Date.now() });
                 setView('assistant');
               }}
             />
@@ -164,6 +239,7 @@ export function App(): JSX.Element {
           {view === 'workspace' && (
             <div className="view-layer">
               <WorkspaceView
+                inbox={inbox}
                 onOpenSession={openSession}
                 onOpenSessions={openSessions}
                 onAskAi={(prefill) => {
@@ -190,6 +266,7 @@ export function App(): JSX.Element {
           {view === 'retro' && (
             <div className="view-layer">
               <RetroView
+                onOpenSessions={openSessions}
                 onImprove={openImprove}
                 onOpenSession={(source, sessionId) => {
                   setOpenIntent({ source, sessionId, at: Date.now() });
@@ -201,6 +278,16 @@ export function App(): JSX.Element {
           {view === 'improve' && (
             <div className="view-layer">
               <ImproveView focusIntent={improveIntent} />
+            </div>
+          )}
+          {(runOpened || view === 'run') && (
+            <div className="view-layer" hidden={view !== 'run'}>
+              <RunView
+                active={view === 'run'}
+                intent={runIntent}
+                openSession={runOpenSession}
+                onOpenSettings={() => setView('settings')}
+              />
             </div>
           )}
           {view === 'team' && (

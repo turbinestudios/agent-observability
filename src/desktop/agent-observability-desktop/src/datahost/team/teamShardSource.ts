@@ -5,7 +5,7 @@ import type { ContextInsightCategory } from '@agent-observability/core/src/aggre
 import { isSafeContextFilePath } from '@agent-observability/core/src/aggregate/customizationFilter';
 import { isRepositoryIncluded, type RepoSyncPolicy } from '@agent-observability/core/src/aggregate/repoSyncPolicy';
 import type { OutcomeInput } from '@agent-observability/core/src/team/teamShardBuilder';
-import type { OutcomeCostMode, OutcomeVerdict } from '@agent-observability/core/src/team/teamShardModels';
+import { OUTCOME_SOURCES, type OutcomeCostMode, type OutcomeVerdict } from '@agent-observability/core/src/team/teamShardModels';
 import type { SessionDataSource } from '@agent-observability/core/src/sources/sessionSource';
 import type { IndexDb } from '../indexer/indexDb';
 import { resolveRepoRoot, type RepoRootSeams } from '../improve/repoRoot';
@@ -33,6 +33,13 @@ const CATEGORIES: ReadonlySet<string> = new Set<ContextInsightCategory>(['instru
 export function collectAggregationRows(deps: ShardSourceDeps, sinceMs: number, untilMs: number): AggregationRow[] {
   const rows: AggregationRow[] = [];
   for (const source of deps.sources.enabled()) {
+    // The shard's outcome rows only admit a closed set of sources (Claude
+    // Code, Copilot in the editor, Copilot CLI including Run-hosted
+    // sessions). A source outside it stays out of the aggregate part too, so
+    // the three parts of a shard always describe the same sessions.
+    if (!(OUTCOME_SOURCES as readonly string[]).includes(source.id)) {
+      continue;
+    }
     let result;
     try {
       result = source.getAggregationRows(sinceMs, untilMs);

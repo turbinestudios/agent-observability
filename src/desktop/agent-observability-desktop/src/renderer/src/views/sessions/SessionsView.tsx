@@ -8,6 +8,8 @@ import { useSessions } from './useSessions';
 import { SessionDetail } from './SessionDetail';
 import { CompareDetail } from './CompareDetail';
 import { CompareBar } from './CompareBar';
+import { ReviewPacketDialog } from './SessionTextDialog';
+import { refsFromKeys } from './selection';
 import { IndexStatusBar } from './IndexStatusBar';
 import { SourceFilter } from './SourceFilter';
 import { FilterPanel } from './FilterPanel';
@@ -15,10 +17,12 @@ import { Spinner } from '../../components/Spinner';
 import { DeleteDialog } from './DeleteDialog';
 import { toggleSelection } from './selection';
 import { showsVerdictChip, verdictLabel } from './retro';
+import { completionLabel, completionTone, completionTooltip, showsCompletionChip } from './completion';
 import type { SessionFilters } from './filters';
 import { applyIntent, clearFilter, describeFilters, filterChips, hasFilters } from './filters';
 import { formatCost, formatDuration, formatRelative, formatTokens, sourceLabel } from './format';
 import './sessions.css';
+import { reworkTooltip, showsReworkChip } from '../retro/rework';
 
 /**
  * A session another view asked to open. The timestamp is what makes a repeat
@@ -59,7 +63,7 @@ export function SessionsView({
   /** A pre-filtered list another view asked for. */
   filterIntent?: SessionFilterIntent;
   /** Attach a session to the AI Helper and switch to it. */
-  onAskAi?: (source: string, sessionId: string) => void;
+  onAskAi?: (source: string, sessionId: string, prefill?: string) => void;
 }): JSX.Element {
   const [query, setQuery] = useState('');
   const [filters, setFilters] = useState<SessionFilters>({});
@@ -68,6 +72,8 @@ export function SessionsView({
   // Ticked for comparison. Kept as keys rather than rows, so narrowing the list
   // with a search or a source filter hides rows without untickng them.
   const [checked, setChecked] = useState<readonly string[]>([]);
+  // The compare bar's review packet: one combined packet for the ticked sessions.
+  const [packetRefs, setPacketRefs] = useState<{ source: string; sessionId: string }[] | undefined>(undefined);
   // The comparison currently open, frozen at the moment Compare was pressed —
   // so ticking more sessions afterwards does not redraw it underneath the user.
   const [comparing, setComparing] = useState<readonly string[] | undefined>(undefined);
@@ -412,7 +418,11 @@ export function SessionsView({
             setChecked([]);
             setComparing(undefined);
           }}
+          onPacket={() => setPacketRefs(refsFromKeys(checked))}
         />
+        {packetRefs !== undefined && (
+          <ReviewPacketDialog refs={packetRefs} onClose={() => setPacketRefs(undefined)} onAskAi={onAskAi} />
+        )}
       </aside>
 
       <section className="detail-pane">
@@ -642,6 +652,19 @@ function SessionRowItem({
             title={`${verdictLabel(row.verdict)} — open the session for the retrospective`}
           >
             {verdictLabel(row.verdict)}
+          </span>
+        )}
+        {showsCompletionChip(row) && row.completion !== undefined && (
+          <span
+            className={`verdict-chip completion-chip completion-${completionTone(row.completion)}`}
+            title={completionTooltip(row.completion, row.claimedDone === true)}
+          >
+            {completionLabel(row.completion)}
+          </span>
+        )}
+        {showsReworkChip(row) && (
+          <span className="verdict-chip rework-chip" title={reworkTooltip(row)}>
+            Rework
           </span>
         )}
         <span

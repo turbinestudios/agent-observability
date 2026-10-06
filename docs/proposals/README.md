@@ -1,6 +1,6 @@
 # Desktop App: Research-Functionality Proposals
 
-Thirteen proposals for new functionality in the **Agent Observability desktop app**
+Nineteen proposals for new functionality in the **Agent Observability desktop app**
 (`src/desktop/agent-observability-desktop`), aimed at two goals: better
 **research into how agents behaved**, and better **feedback into the developer's own
 working practices** (prompts, instruction files, workflows, cost).
@@ -13,7 +13,8 @@ re-exploration is needed.
 
 Proposals 1–4 are mostly wiring capability that **already exists in core** but
 was never connected to the desktop app: high value, low risk. Proposals 5–13
-add genuinely new research capability.
+add genuinely new research capability. Proposals 14–19 take the app from
+observing sessions to judging them and starting the next one.
 
 | # | Proposal | User story in one line | Status | Effort | Builds on |
 | --- | --- | --- | --- | --- | --- |
@@ -23,18 +24,33 @@ add genuinely new research capability.
 | 4 | [Cost & efficiency analytics](04-cost-analytics.md) | See what sessions, models, and repos actually cost | Completed (1.6.0) | M | Dead `costMicros` plumbing + core pricing in three modes |
 | 5 | [Time ranges, filters & drill-down](05-time-ranges-filters-drilldown.md) | Slice any view by time and repository; click a chart to see the sessions behind it | Completed (1.12.0) | M | Repository filter already implemented in SQL, unused |
 | 6 | [Session tagging & research notes](06-tagging-notes.md) | Label runs ("experiment-A", "bad-run") and build corpora to compare | Completed (1.12.0) | M | The `RenameStore`/`HiddenStore` JSON-store pattern |
-| 7 | [Tool usage analytics](07-tool-analytics.md) | Per-tool call volume, failure rates, and durations, to find friction tools | Planned | M/L | Per-tool data all sources already parse and discard |
-| 8 | [Rework & churn quality signals](08-rework-churn.md) | Distinguish productive runs from thrashing (the first quality proxy) | Planned | L | Per-turn LoC data + Claude `structuredPatch`, unused today |
+| 7 | [Tool usage analytics](07-tool-analytics.md) | Per-tool call volume, failure rates, and durations, to find friction tools | Completed (1.19.0) | M/L | Per-tool data all sources already parse and discard |
+| 8 | [Rework & churn quality signals](08-rework-churn.md) | Distinguish productive runs from thrashing (the first quality proxy) | Completed (1.23.0) | L | Per-turn LoC data + Claude `structuredPatch`, unused today |
 | 9 | [Session retrospective](09-session-retrospective.md) | Each session tells me what it set out to do, how it went, and what to change | Completed (1.7.0) | M/L | Unread transcript markers + the turn data every source already parses |
 | 10 | [AI Helper](10-ai-helper.md) | Ask questions about my own sessions and get grounded, cited answers | Completed (1.8.0) | M/L | Core's chat stack + the Claude CLI backend the deep retrospective already spawns |
 | 11 | [Context Improvement Plans](11-context-improvement-plans.md) | Turn hotspot + retro evidence into reviewed, appliable edits to my context files | Completed (1.14.0) | L | The hotspot/retro rankings, the chat-backend registry (now two CLIs), and the deep-retro runner pattern |
 | 12 | [Workspace: live board & repository hubs](12-workspace-live-board.md) | See every agent session running right now, and what each repository has taught my agents | Completed (1.16.0) | L | Core's unwired `ClaudeWatcher`/`LiveUpdateController`, repo-scoped SQL over the existing index, the retro advice table |
 | 13 | [Team perspective](13-team-perspective.md) | See how my team uses agents, anonymously, through a shared folder and no server | Completed (1.17.0) | L | The aggregate and context-insights builders, the retro verdict projection, the repo-sync policy, the JSON-store pattern |
+| 14 | [Copilot CLI as a session source](14-copilot-cli-source.md) | See my terminal Copilot sessions beside Claude Code and VS Code Copilot | Completed (1.18.0) | M/L | The `SessionDataSource` seam, the Claude indexer's two-phase shape, the live board |
+| 15 | [Run: host Copilot sessions in the app](15-run.md) | Start or continue a Copilot session from a finding, approving each action as it comes | Completed (2.0.0) | L | Proposal 14's source, the AI Helper's streaming path, the Copilot SDK driving the installed CLI |
+| 16 | ["Did it really finish?"](16-done-claim-check.md) | See what was and was not observed about a session's completion before trusting "done" | Completed (1.20.0) | M/L | Transcript commands and edits (the new `SessionActivity` chokepoint), the retrospective |
+| 17 | [Attention inbox](17-attention-inbox.md) | One ranked list of what needs me now and what finished while I was away | Completed (1.21.0) | M | The live board, verdicts, completion checks, the JSON-store pattern |
+| 18 | [Review packet](18-review-packet.md) | Give a reviewer the story of a session before the diff, ready to paste into a pull request | Completed (1.22.0) | M | `SessionActivity`, the retrospective, the digest's builder/renderer split |
+| 19 | [Hand-off brief and Resume in terminal](19-handoff-brief.md) | Start the next session where this one stopped, with my constraints carried over | Completed (1.22.0) | M | `SessionActivity`, the redaction helper, the user's own `claude` / `copilot` |
 
-**Suggested order:** 1 → 4 → 5 → 2 → 3 → 6 → 7 → 8. Proposal 5's cross-view
-navigation ("open Sessions pre-filtered") is reused by 3, 7, and 8, so build it
-before or alongside them. Proposal 6 pairs naturally with 1 (tag a set, then
-compare it). 7 and 8 are independent of everything else.
+**Suggested order.** Proposals 1–6 and 9–13 are built. What remains runs on
+two tracks that touch mostly different files and can be built in parallel:
+
+- **Run track:** 14 → Resume in terminal (ships with 19) → 15.
+- **Evidence track:** 7 → 16 → 8 → 17 → 18 + 19.
+
+Proposal 7 carries the Evidence track's one index schema bump and the
+`analysis_version` key, so it goes first. Proposal 16 introduces
+`SessionActivity`, the single module that reads command and edit inputs,
+which 8, 18 and 19 reuse. Proposal 15 needs 14 (hosted sessions reach the
+index only through that source) and takes proposal 19's brief as a prefill.
+Proposal 5's cross-view navigation ("open Sessions pre-filtered") is the seam
+every new drill-down lands on.
 
 Mark a row **Completed**, with the desktop version it shipped in, as each
 proposal lands. Proposal 3 ships a minimal cross-view “open this session”
@@ -59,6 +75,9 @@ and duplicate.
   Markdown/JSON" on the session detail, comparison view, and overview would
   make findings shareable in retros. Local file writes only, user-initiated;
   any export path must exclude content-derived deviations by construction.
+  Proposal 18's review packet covers the single- and multi-session case as
+  copy-to-clipboard Markdown; saving to a file and exporting the overview are
+  what is left.
 - **Repository detail view.** Core's
   `src/core/agent-observability-core/src/views/sessionDetailHtml.ts` exports
   `renderRepositoryDetailHtml` (whole-repository rollups), still unwired in the
@@ -85,7 +104,10 @@ and duplicate.
    `…/src/team/*`) or to `schemas/*.json`; the team shard may only embed the
    two batch schemas by reference, never copy or extend them. See the privacy
    invariant in `AGENTS.md` and
-   `docs/privacy-validation.md`. There are three sanctioned, gated
+   `docs/privacy-validation.md`. Proposal 15's Run is covered by its own
+   clause in `AGENTS.md`, "The app as agent host": off by default, ask-only,
+   never in the background, never on the sharing paths; it is not one of the
+   exceptions below and none of them may be cited to widen it. There are three sanctioned, gated
    exceptions. All are desktop-only, all use strictly the user's **own AI CLI
    login** (Claude Code to Anthropic, or the GitHub Copilot CLI to GitHub,
    whichever Settings selects), and all are user-initiated, never run in the

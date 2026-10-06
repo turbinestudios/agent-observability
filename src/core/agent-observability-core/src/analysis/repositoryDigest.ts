@@ -50,7 +50,11 @@ export interface RepositoryDigestInput {
   }[];
   models: { model: string; sessions: number; costMicros: number | null }[];
   /** Optional: the section is omitted when absent. */
-  tools?: { name: string; calls: number; failures: number; sampledSessions: number }[];
+  /**
+   * `sampledSessions` is set only when the figures come from a sample of the
+   * most recent sessions; absent means they cover every session in the window.
+   */
+  tools?: { name: string; calls: number; failures: number; sampledSessions?: number }[];
   tokens: {
     inputTokens: number;
     outputTokens: number;
@@ -217,12 +221,13 @@ function modelAndToolLines(input: RepositoryDigestInput): string[] {
   }
   if (input.tools !== undefined) {
     const tools = [...input.tools].filter((t) => t.calls > 0).sort((a, b) => b.calls - a.calls).slice(0, MAX_TOOLS);
-    const sampled = input.tools.reduce((max, t) => Math.max(max, t.sampledSessions), 0);
+    const sampled = input.tools.reduce((max, t) => Math.max(max, t.sampledSessions ?? 0), 0);
+    const sampleNote =
+      sampled > 0 ? ` (sampled from the ${groupThousands(sampled)} most recent ${plural(sampled, 'session')})` : '';
     for (const tool of tools) {
       const failures = tool.failures > 0 ? `, ${groupThousands(tool.failures)} failed` : '';
       lines.push(
-        `Tool ${clean(tool.name)}: ${groupThousands(tool.calls)} ${plural(tool.calls, 'call')}${failures} ` +
-          `(sampled from the ${groupThousands(sampled)} most recent ${plural(sampled, 'session')})`,
+        `Tool ${clean(tool.name)}: ${groupThousands(tool.calls)} ${plural(tool.calls, 'call')}${failures}${sampleNote}`,
       );
     }
   }
@@ -292,6 +297,8 @@ function sourceLabel(source: string): string {
       return 'Claude Code';
     case 'copilot':
       return 'Copilot';
+    case 'copilot-cli':
+      return 'Copilot CLI';
     default:
       return clean(source);
   }

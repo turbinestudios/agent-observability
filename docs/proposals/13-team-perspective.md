@@ -25,8 +25,13 @@ already share.
   and lists every repository that would be included with a checkbox each,
   turn hourly automatic export on or off, and **Preview what will be shared**:
   the exact JSON, byte for byte.
-- Reading the folder is always on and read-only. Every file is validated
-  against the shard contract before it is merged; a file written by a newer
+- The whole feature sits behind **Show the Team view** (`team.enabled`, off by
+  default, added after manual testing on 2026-10-06): while it is off the
+  sidebar entry is hidden and the folder is neither read nor written. Turning
+  it off also withdraws sharing, so turning it on again never resumes writing
+  by itself.
+- Reading the folder is on while Team is on, and read-only. Every file is
+  validated against the shard contract before it is merged; a file written by a newer
   app version, an invalid file, a mis-named file, an oversized file or one
   still syncing is skipped with a visible notice, never merged in part.
 - The shard is one JSON file per member named after their anonymous id,

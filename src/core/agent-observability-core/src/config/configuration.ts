@@ -69,6 +69,7 @@ export const ConfigKeys = {
   copilotArchiveRetentionDays: 'copilotArchive.retentionDays',
   copilotArchiveSweepSeconds: 'copilotArchive.sweepIntervalSeconds',
   claudeEnabled: 'claudeCode.enabled',
+  copilotCliEnabled: 'copilotCli.enabled',
   claudeProjectsPath: 'claudeCode.projectsPath',
   claudeScanDepth: 'claudeCode.scanDepth',
   claudeMaxSessions: 'claudeCode.maxSessions',
@@ -125,6 +126,7 @@ export const ConfigDefaults = {
   copilotArchiveRetentionDays: 180,
   copilotArchiveSweepSeconds: 60,
   claudeEnabled: true,
+  copilotCliEnabled: true,
   claudeProjectsPath: '',
   claudeScanDepth: 8,
   claudeMaxSessions: 150,
@@ -479,6 +481,14 @@ export class Configuration {
    */
   isClaudeEnabled(): boolean {
     return this.config().get<boolean>(ConfigKeys.claudeEnabled, ConfigDefaults.claudeEnabled);
+  }
+
+  /**
+   * Whether Copilot CLI sessions (`~/.copilot/session-state`) are read. Local
+   * and read-only like the other sources; on by default.
+   */
+  isCopilotCliEnabled(): boolean {
+    return this.config().get<boolean>(ConfigKeys.copilotCliEnabled, ConfigDefaults.copilotCliEnabled);
   }
 
   /**

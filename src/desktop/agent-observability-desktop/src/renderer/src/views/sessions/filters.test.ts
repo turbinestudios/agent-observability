@@ -78,6 +78,12 @@ describe('chips', () => {
     // An unknown signal id still shows AS ITSELF — visible and clearable
     // beats hidden.
     expect(filterChips({ signal: 'future-signal' })[0].label).toBe('future-signal');
+    expect(filterChips({ tool: 'Bash' })[0]).toMatchObject({ key: 'tool', label: 'Tool: Bash' });
+    expect(filterChips({ tool: 'Bash', toolFailed: true })[0].label).toBe('Tool: Bash (failed)');
+    // Clearing the chip drops the failed flag with it, and a lone flag is no filter.
+    expect(clearFilter({ tool: 'Bash', toolFailed: true, source: 'claude' }, 'tool')).toEqual({ source: 'claude' });
+    expect(filterChips({ toolFailed: true })).toEqual([]);
+    expect(filterKey({ tool: 'Bash' })).not.toBe(filterKey({ tool: 'Bash', toolFailed: true }));
   });
 
   it('clears verdict and signal chips like any other dimension', () => {

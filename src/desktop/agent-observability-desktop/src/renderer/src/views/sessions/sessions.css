@@ -1365,3 +1365,19 @@
   margin: 0;
   font-size: 12px;
 }
+
+/* Completion-check chip: shares the verdict chip's shape; tone aliases the verdict ramp. */
+.completion-chip.completion-warn {
+  background: var(--danger);
+  color: var(--bg);
+}
+
+.completion-chip.completion-note {
+  background: var(--warning);
+  color: var(--bg);
+}
+
+.completion-chip.completion-muted {
+  background: var(--fg-subtle);
+  color: var(--bg);
+}

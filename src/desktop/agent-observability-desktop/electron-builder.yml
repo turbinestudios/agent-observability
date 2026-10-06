@@ -9,6 +9,14 @@ directories:
 files:
   - out/**
   - package.json
+  # Run drives the user's OWN installed Copilot CLI through the Copilot SDK.
+  # The SDK's optional per-platform packages are a bundled Copilot runtime,
+  # which this app must not ship (its licence restricts redistribution, and
+  # "your own copilot, your own login" has to stay true). koffi is a native
+  # module the SDK loads only for its experimental in-process connection,
+  # which the app never uses. src/datahost/packaging.test.ts guards both.
+  - "!node_modules/@github/copilot-sdk-*/**"
+  - "!node_modules/koffi/**"
 
 # better-sqlite3 ships Node-API prebuilds (prebuilds/<platform>-<arch>.node),
 # and Node-API is ABI-stable across both Node and Electron releases — the

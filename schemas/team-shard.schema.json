@@ -108,8 +108,8 @@
         },
         "source": {
           "type": "string",
-          "enum": ["claude", "copilot"],
-          "description": "Which agent the sessions came from. Closed set; a producer drops rows from any other source rather than inventing a value."
+          "enum": ["claude", "copilot", "copilot-cli"],
+          "description": "Which agent the sessions came from: Claude Code, GitHub Copilot in a VS Code-based editor, or the GitHub Copilot CLI (which includes sessions the desktop app hosts through Run, since those are stored as Copilot CLI sessions). Closed set; a producer drops rows from any other source rather than inventing a value."
         },
         "sessionCount": {
           "type": "integer",

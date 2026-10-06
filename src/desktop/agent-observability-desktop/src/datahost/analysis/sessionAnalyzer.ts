@@ -2,6 +2,7 @@ import type { LocalDeviationDetector } from '@agent-observability/core/src/devia
 import type { SessionDataSource } from '@agent-observability/core/src/sources/sessionSource';
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
 import type { SessionDetail } from '@agent-observability/core/src/telemetry/models';
+import { foldToolStats, type ToolStat } from '@agent-observability/core/src/analysis/toolStats';
 import type {
   ContextFileCategory,
   ContextFileEntry,
@@ -69,6 +70,28 @@ export interface SessionAnalysis {
    */
   findings: AnalyzedFinding[];
   contextFiles: AnalyzedContextFile[];
+  /**
+   * Per-tool call statistics folded from the interactions this pass already
+   * holds (no second parse). Optional so a fallback or fixture that found
+   * nothing need not spell out an empty list; absent reads as none.
+   */
+  tools?: AnalyzedTool[];
+  /** Per-file edit statistics; filled by the rework analysis (proposal 8). */
+  fileEdits?: AnalyzedFileEdit[];
+}
+
+/** One tool's calls within a session: a name, counts and durations only. */
+export type AnalyzedTool = ToolStat;
+
+/** One edited file within a session. LOCAL-ONLY: `file` is an absolute path. */
+export interface AnalyzedFileEdit {
+  file: string;
+  editCalls: number;
+  editTurns: number;
+  linesAdded: number;
+  linesRemoved: number;
+  reworkedLines: number;
+  outsideRepo: boolean;
 }
 
 export interface AnalyzerDeps {
@@ -107,18 +130,31 @@ export function analyzeSession(
   const errorCount = interactions.ok
     ? interactions.value.filter((i) => !i.success).length
     : 0;
+  const tools = interactions.ok ? foldToolStats(interactions.value) : [];
 
   // A retrospective failure must not cost the deviation badge: the two ride
   // the same analysis row but are independent results.
   let retro: RetrospectiveCounts | undefined;
   let findings: AnalyzedFinding[] = [];
+  let fileEdits: AnalyzedFileEdit[] = [];
   try {
     const retrospective = retrospectiveFor(source, sessionId, detail.value);
     retro = retrospective.counts;
     findings = projectFindings(retrospective.findings);
+    // Counts and the path as recorded; LOCAL-ONLY, like the context-file rows.
+    fileEdits = (retrospective.fileEdits ?? []).map((f) => ({
+      file: f.file,
+      editCalls: f.editCalls,
+      editTurns: f.editTurns,
+      linesAdded: f.linesAdded,
+      linesRemoved: f.linesRemoved,
+      reworkedLines: f.reworkedLines,
+      outsideRepo: f.outsideRepo,
+    }));
   } catch {
     retro = undefined;
     findings = [];
+    fileEdits = [];
   }
 
   return {
@@ -127,6 +163,8 @@ export function analyzeSession(
     ...(retro !== undefined ? { retro } : {}),
     findings,
     contextFiles: contextFilesOf(source, sessionId, deps, detail.value),
+    tools,
+    fileEdits,
   };
 }
 

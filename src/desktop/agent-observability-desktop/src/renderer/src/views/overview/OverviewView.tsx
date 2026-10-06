@@ -26,6 +26,9 @@ import type { SeriesStyle, StackedColumn } from './charts';
 import { VERDICT_SERIES, themeTitle, verdictColumns } from './insights';
 import { persistWindow, readStoredWindow, windowDescription, windowRange } from './window';
 import { WindowSelector } from './WindowSelector';
+import { reportedDoneFilter, reportedDoneLine } from '../retro/completionCounts';
+import { REWORK_EXPLANATION, reworkRateLine, reworkSessionLine, reworkedFilter } from '../retro/rework';
+import { TOOL_FAILURE_MIN_CALLS } from '../../../../shared/rpc';
 import './overview.css';
 
 /**
@@ -45,6 +48,7 @@ import './overview.css';
 const SOURCE_SERIES: SeriesStyle[] = [
   { key: 'claude', label: 'Claude Code', colorVar: '--series-1' },
   { key: 'copilot', label: 'Copilot', colorVar: '--series-2' },
+  { key: 'copilot-cli', label: 'Copilot CLI', colorVar: '--series-cli' },
 ];
 
 const TOKEN_SERIES: SeriesStyle[] = [
@@ -416,6 +420,101 @@ export function OverviewView({ onOpenSessions, onOpenHotspot }: Props): JSX.Elem
                 Retrospective findings ranked by how many sessions raised them in this window.
               </p>
             </>
+          )}
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2>Reported done, not verified</h2>
+            <span className="card-note">sessions that changed code</span>
+          </div>
+          {insights?.evidence?.completion === undefined ? (
+            <p className="chart-empty">Not analysed yet.</p>
+          ) : (
+            <>
+              <p className="completion-headline">
+                {onOpenSessions !== undefined && insights.evidence.completion.reportedDoneUnverified > 0 ? (
+                  <button
+                    type="button"
+                    className="table-link"
+                    onClick={() => onOpenSessions(reportedDoneFilter(baseFilters))}
+                  >
+                    {reportedDoneLine(insights.evidence.completion)}
+                  </button>
+                ) : (
+                  reportedDoneLine(insights.evidence.completion)
+                )}
+              </p>
+              <p className="card-caption">
+                The last reply reported the work as done, and no test, build, lint or type-check with an observed
+                result was seen after the last code edit. Checks run elsewhere are not visible.
+              </p>
+            </>
+          )}
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2>Rework</h2>
+            <span className="card-note">sessions that edited files</span>
+          </div>
+          {insights?.evidence?.rework === undefined ? (
+            <p className="chart-empty">Not analysed yet.</p>
+          ) : (
+            <>
+              <p className="completion-headline">
+                {onOpenSessions !== undefined && insights.evidence.rework.reworkedSessions > 0 ? (
+                  <button type="button" className="table-link" onClick={() => onOpenSessions(reworkedFilter(baseFilters))}>
+                    {reworkRateLine(insights.evidence.rework.reworkedSessions, insights.evidence.rework.editedSessions)}
+                  </button>
+                ) : (
+                  reworkRateLine(insights.evidence.rework.reworkedSessions, insights.evidence.rework.editedSessions)
+                )}
+              </p>
+              {insights.evidence.rework.sessions.length > 0 && (
+                <ul className="rework-top">
+                  {insights.evidence.rework.sessions.map((row) => (
+                    <li key={`${row.source}:${row.sessionId}`}>
+                      <span>{row.title ?? 'Untitled session'}</span>{' '}
+                      <span className="card-caption">{reworkSessionLine(row)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="card-caption">{REWORK_EXPLANATION}</p>
+            </>
+          )}
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2>Tools that fail most</h2>
+            <span className="card-note">
+              failure rate in percent, tools with at least {TOOL_FAILURE_MIN_CALLS} calls
+            </span>
+          </div>
+          {insights === undefined || (insights.evidence?.tools.length ?? 0) === 0 ? (
+            <p className="chart-empty">No tool failed often enough to rank in this window.</p>
+          ) : (
+            <HorizontalBars
+              rows={(insights.evidence?.tools ?? []).map((tool) => ({
+                label: tool.tool,
+                value: Math.round((tool.failures / tool.calls) * 100),
+                title: `${tool.failures} of ${tool.calls} calls failed`,
+              }))}
+              colorVar="--verdict-struggled"
+              emptyMessage="No tool failed often enough to rank in this window."
+              {...(onOpenSessions !== undefined
+                ? {
+                    onSelect: (index: number) => {
+                      const tool = insights.evidence?.tools[index];
+                      if (tool !== undefined) {
+                        onOpenSessions({ ...baseFilters, tool: tool.tool, toolFailed: true });
+                      }
+                    },
+                  }
+                : {})}
+            />
           )}
         </section>
 

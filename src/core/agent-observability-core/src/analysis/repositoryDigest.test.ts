@@ -135,6 +135,13 @@ describe('buildRepositoryDigest', () => {
     expect(lines[2]).toBe('Tool Read: 900 calls (sampled from the 8 most recent sessions)');
   });
 
+  it('drops the sample wording when the tool figures cover the whole window', () => {
+    const digest = buildRepositoryDigest(input({ tools: [{ name: 'Bash', calls: 12, failures: 1 }] }));
+    const lines = section(digest, 'Models and tools');
+    expect(lines).toContain('Tool Bash: 12 calls, 1 failed');
+    expect(lines.join(' ')).not.toContain('sampled');
+  });
+
   it('reports spend with hand-grouped tokens and cost coverage', () => {
     const digest = buildRepositoryDigest(
       input({

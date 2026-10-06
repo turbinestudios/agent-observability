@@ -31,8 +31,14 @@ declare global {
       openExternal(url: string): Promise<void>;
       openPath(path: string): Promise<string>;
       showItem(path: string): Promise<void>;
+      openTerminal(request: {
+        cwd: string;
+        cli: 'claude' | 'copilot';
+        sessionId: string;
+      }): Promise<{ ok: boolean; fallbackCommand?: string }>;
       getVersion(): Promise<string>;
       pickFolder(): Promise<string | undefined>;
+      setRunActive(count: number): void;
       setNativeTheme(theme: 'dark' | 'light'): void;
       onUpdateStatus(listener: (status: UpdateStatus) => void): () => void;
       stashDetail(html: string): Promise<string | undefined>;

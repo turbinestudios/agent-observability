@@ -48,10 +48,35 @@ sends no session data.
   VS Code-based editor on your computer. You can also do it under
   **Settings > Copilot**. Restart the editor afterwards.
 
+## Run a session
+
+Off by default. Turn it on under **Settings > Run** and a **Run** entry
+appears in the sidebar. There you can start a GitHub Copilot session in one of
+your repositories, or continue a Copilot CLI session, and follow it as it
+works.
+
+- It uses your own installed `copilot` and your own Copilot login. The app
+  ships no Copilot runtime and holds no key.
+- What goes to GitHub is your message and whatever the agent then reads in
+  that repository, exactly as when you run `copilot` in a terminal. The
+  repository's instruction files apply in the same way.
+- Every action asks first. Before the agent writes a file or runs a command
+  you see what it wants to do and choose **Allow once**, **Allow for this
+  session** or **Deny**. The app never answers for you and nothing is
+  remembered after the session.
+- Buttons elsewhere in the app, such as **Start a session with this digest**
+  or **Apply this plan with an agent**, only fill in the goal box. Nothing is
+  sent until you press **Start**.
+- The session is saved with your other Copilot CLI sessions, so you can
+  continue it in a terminal with `copilot --resume`.
+- Claude Code sessions are never run from the app. **Resume in terminal**
+  opens your own terminal on the session instead.
+
 ## Privacy
 
-Your sessions are read on your computer and stay there. Team sharing is off
-by default. If you turn it on under **Settings > Team** and choose a folder
+Your sessions are read on your computer and stay there. The Team view and
+team sharing are both off by default. If you turn them on under
+**Settings > Team** and choose a folder
 your team shares, the app writes one JSON file there, named after your
 anonymous id, with counts and totals only: sessions, tokens, estimated cost,
 how sessions went, repositories, and the repo-relative paths of context files

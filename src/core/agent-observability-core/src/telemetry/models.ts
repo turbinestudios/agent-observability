@@ -30,7 +30,7 @@ export type Operation = 'chat' | 'execute_tool' | 'execute_hook' | 'invoke_agent
  * priced by tokens — see {@link SessionTreeStats.costUsdMicros}; the cloud agent
  * bills in AI credits — see {@link SessionTreeStats.creditsNano}).
  */
-export type AgentSourceId = 'copilot' | 'claude' | 'copilot-cloud' | 'copilot-agent';
+export type AgentSourceId = 'copilot' | 'claude' | 'copilot-cloud' | 'copilot-agent' | 'copilot-cli';
 
 /**
  * Cost basis a source is priced in, used by the detail panel to render the right

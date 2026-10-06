@@ -7,6 +7,8 @@ import { Spinner } from '../../components/Spinner';
 import { rotatedNote } from '../../components/loadingNotes';
 import { useNoteTick } from '../../components/useNoteTick';
 import { ImprovePromptDialog } from './ImprovePromptDialog';
+import { HandoffDialog, ReviewPacketDialog } from './SessionTextDialog';
+import { openRunDoor, useRunEnabled } from '../run/doors';
 
 /**
  * Renders a session using the shared detail renderer, inside a sandboxed iframe.
@@ -22,7 +24,7 @@ import { ImprovePromptDialog } from './ImprovePromptDialog';
 interface Props {
   row: SessionRow;
   /** Attach this session to the AI Helper and switch to it. */
-  onAskAi?: (source: string, sessionId: string) => void;
+  onAskAi?: (source: string, sessionId: string, prefill?: string) => void;
 }
 
 /** What the embedded document posts out through the shimmed API. */
@@ -36,6 +38,7 @@ interface DetailMessage {
 }
 
 export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
+  const runEnabled = useRunEnabled();
   const { theme } = useThemeValue();
   const [docUrl, setDocUrl] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -54,6 +57,8 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
   // The "Improve context files" prompt. The document's button posts only a
   // section index; the facts come from the data host, never from the frame.
   const [promptFacts, setPromptFacts] = useState<ContextPromptFacts | undefined>(undefined);
+  // Local, copy-only dialogs: nothing leaves the app until the user presses Copy.
+  const [textDialog, setTextDialog] = useState<'packet' | 'handoff' | undefined>(undefined);
   const frameRef = useRef<HTMLIFrameElement>(null);
   // Bumped by the refresh button; the ref marks the next fetch as forced so
   // only a deliberate refresh re-parses (a theme change reuses the cache).
@@ -238,6 +243,42 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
             )}
             <button
               type="button"
+              className="detail-ask-ai"
+              title="A summary for whoever reviews these changes, built on this computer with no AI"
+              onClick={() => setTextDialog('packet')}
+            >
+              Review packet
+            </button>
+            <button
+              type="button"
+              className="detail-ask-ai"
+              title="A brief for continuing this work in a new session, built on this computer with no AI"
+              onClick={() => setTextDialog('handoff')}
+            >
+              Hand off
+            </button>
+            {runEnabled && row.source === 'copilot-cli' && (
+              <button
+                type="button"
+                className="detail-ask-ai"
+                title="Opens Run on this session. Nothing is sent until you press Start."
+                onClick={() => openRunDoor({ door: 'continue-session', source: row.source, sessionId: row.sessionId })}
+              >
+                Continue in Run
+              </button>
+            )}
+            {runEnabled && (
+              <button
+                type="button"
+                className="detail-ask-ai"
+                title="Opens Run with this session's retrospective advice as an editable goal. Nothing is sent until you press Start."
+                onClick={() => openRunDoor({ door: 'retro-advice', source: row.source, sessionId: row.sessionId })}
+              >
+                Retry with the retrospective&apos;s advice
+              </button>
+            )}
+            <button
+              type="button"
               className="icon-button"
               title="Refresh session"
               onClick={() => {
@@ -274,6 +315,16 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
           onCancel={() => setDeepConfirm(false)}
           onConfirm={runDeep}
         />
+      )}
+      {textDialog === 'packet' && (
+        <ReviewPacketDialog
+          refs={[{ source: row.source, sessionId: row.sessionId }]}
+          onClose={() => setTextDialog(undefined)}
+          onAskAi={onAskAi}
+        />
+      )}
+      {textDialog === 'handoff' && (
+        <HandoffDialog source={row.source} sessionId={row.sessionId} onClose={() => setTextDialog(undefined)} />
       )}
       {promptFacts !== undefined && (
         <ImprovePromptDialog facts={promptFacts} onClose={() => setPromptFacts(undefined)} />

@@ -151,7 +151,9 @@ describe('independent worker and broker connections', () => {
     db.upsertSessions([row]);
     const input: BackgroundInput = {
       indexPath, copilotNotes: [],
-      settings: { 'claudeCode.enabled': false, 'localTelemetry.enabled': false },
+      // Every source off: with any left on, the real worker would index the
+      // sessions of whichever machine runs this test.
+      settings: { 'claudeCode.enabled': false, 'localTelemetry.enabled': false, 'copilotCli.enabled': false },
     };
     const worker = start(backgroundCode, input);
     const messages: BackgroundMessage[] = [];

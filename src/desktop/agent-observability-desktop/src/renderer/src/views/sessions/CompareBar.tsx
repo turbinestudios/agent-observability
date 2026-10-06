@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { compareState } from './selection';
+import { compareState, packetState } from './selection';
 
 /**
  * The bulk action for a ticked selection, pinned below the list.
@@ -14,9 +14,11 @@ interface Props {
   keys: readonly string[];
   onCompare: () => void;
   onClear: () => void;
+  /** Build one review packet for the ticked sessions. */
+  onPacket?: () => void;
 }
 
-export function CompareBar({ keys, onCompare, onClear }: Props): JSX.Element | null {
+export function CompareBar({ keys, onCompare, onClear, onPacket }: Props): JSX.Element | null {
   const { count, canCompare, reason } = compareState(keys);
   if (count === 0) {
     return null;
@@ -37,6 +39,17 @@ export function CompareBar({ keys, onCompare, onClear }: Props): JSX.Element | n
       >
         Compare
       </button>
+      {onPacket !== undefined && (
+        <button
+          type="button"
+          className="compare-go"
+          disabled={!packetState(keys).canBuild}
+          title={packetState(keys).reason ?? 'Build one review packet for the selected sessions'}
+          onClick={onPacket}
+        >
+          Review packet
+        </button>
+      )}
       <button
         type="button"
         className="compare-clear"

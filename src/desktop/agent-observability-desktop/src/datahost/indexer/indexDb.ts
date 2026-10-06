@@ -15,10 +15,14 @@ import type {
   SessionGroup,
   SessionRow,
   ThemeRow,
+  ToolRankingRow,
   VerdictDayPoint,
 } from '../../shared/rpc';
-import { INSIGHT_THEME_LIMIT, MAX_DAILY_COLUMNS, windowStartMs } from '../../shared/rpc';
+import { COMPLETION_STATUSES, INSIGHT_THEME_LIMIT, MAX_DAILY_COLUMNS, windowStartMs } from '../../shared/rpc';
+import type { CompletionSummary } from '../../shared/rpc';
 import type { SessionAnalysis } from '../analysis/sessionAnalyzer';
+import { REWORKED_LINES_MIN, isReedited, summarizeRework } from '@agent-observability/core/src/analysis/rework';
+import { approxPercentile, percentileOverflows } from '@agent-observability/core/src/analysis/toolStats';
 
 /**
  * The persisted session index — the reason the desktop list paints instantly.
@@ -38,7 +42,16 @@ import type { SessionAnalysis } from '../analysis/sessionAnalyzer';
  */
 
 /** Bump to invalidate every existing index (drop-and-rebuild, no migration). */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
+
+/**
+ * Version of the ANALYSIS heuristics behind `session_analysis` and its child
+ * tables. Bump it when a detector, phrase table or check changes meaning: on a
+ * mismatch only the analysis rows are wiped, so the background pass re-judges
+ * every session without the indexers re-reading a single transcript. A schema
+ * change still needs {@link SCHEMA_VERSION}.
+ */
+export const ANALYSIS_VERSION = 4;
 
 /**
  * How many of the most recent sessions the background analysis reads.
@@ -168,6 +181,22 @@ CREATE TABLE IF NOT EXISTS session_analysis (
   plan_mode_used       INTEGER NOT NULL DEFAULT 0,
   first_prompt_rating  TEXT,
   tip_count            INTEGER NOT NULL DEFAULT 0,
+  -- Completion check (proposal 16) and rework (proposal 8) projections. Enums,
+  -- counts and booleans only. completion_status NULL means "not checked" and
+  -- must never render as 'verified'.
+  completion_status    TEXT,
+  completion_na_reason TEXT,
+  completion_claim     TEXT,
+  verify_runs          INTEGER NOT NULL DEFAULT 0,
+  verify_failures      INTEGER NOT NULL DEFAULT 0,
+  last_verify_class    TEXT,
+  verified_after_last_edit INTEGER NOT NULL DEFAULT 0,
+  last_verify_failed   INTEGER NOT NULL DEFAULT 0,
+  ended_on_failed_tool INTEGER NOT NULL DEFAULT 0,
+  files_edited         INTEGER NOT NULL DEFAULT 0,
+  files_reedited       INTEGER NOT NULL DEFAULT 0,
+  files_outside_repo   INTEGER NOT NULL DEFAULT 0,
+  reworked_lines       INTEGER NOT NULL DEFAULT 0,
   indexed_at_ms   INTEGER NOT NULL DEFAULT 0,
   analyzed_at_ms  INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (source, session_id)
@@ -204,6 +233,41 @@ CREATE TABLE IF NOT EXISTS session_findings (
 );
 CREATE INDEX IF NOT EXISTS idx_session_findings_signal ON session_findings (signal_id);
 
+-- One row per (session, tool) — the grain the Tools ranking folds over. A
+-- tool NAME, counts and durations only; d0..d8 are call counts per duration
+-- bucket (the shared latency bounds plus overflow). LOCAL-ONLY.
+CREATE TABLE IF NOT EXISTS session_tools (
+  source          TEXT NOT NULL,
+  session_id      TEXT NOT NULL,
+  tool_name       TEXT NOT NULL,
+  calls           INTEGER NOT NULL DEFAULT 0,
+  failures        INTEGER NOT NULL DEFAULT 0,
+  duration_ms_sum INTEGER NOT NULL DEFAULT 0,
+  duration_ms_max INTEGER NOT NULL DEFAULT 0,
+  d0 INTEGER NOT NULL DEFAULT 0, d1 INTEGER NOT NULL DEFAULT 0, d2 INTEGER NOT NULL DEFAULT 0,
+  d3 INTEGER NOT NULL DEFAULT 0, d4 INTEGER NOT NULL DEFAULT 0, d5 INTEGER NOT NULL DEFAULT 0,
+  d6 INTEGER NOT NULL DEFAULT 0, d7 INTEGER NOT NULL DEFAULT 0, d8 INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (source, session_id, tool_name)
+);
+CREATE INDEX IF NOT EXISTS idx_session_tools_tool ON session_tools (tool_name);
+
+-- One row per (session, edited file), for the rework view (proposal 8).
+-- LOCAL-ONLY: absolute paths, the same class as context_files.file.
+CREATE TABLE IF NOT EXISTS session_file_edits (
+  source         TEXT NOT NULL,
+  session_id     TEXT NOT NULL,
+  file           TEXT NOT NULL,
+  edit_calls     INTEGER NOT NULL DEFAULT 0,
+  edit_turns     INTEGER NOT NULL DEFAULT 0,
+  lines_added    INTEGER NOT NULL DEFAULT 0,
+  lines_removed  INTEGER NOT NULL DEFAULT 0,
+  reworked_lines INTEGER NOT NULL DEFAULT 0,
+  reedited       INTEGER NOT NULL DEFAULT 0,
+  outside_repo   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (source, session_id, file)
+);
+CREATE INDEX IF NOT EXISTS idx_session_file_edits_file ON session_file_edits (file);
+
 -- Resolving a git remote means walking up to a .git/config; cache it per cwd.
 CREATE TABLE IF NOT EXISTS repo_cache (
   cwd            TEXT PRIMARY KEY,
@@ -223,6 +287,8 @@ const SESSION_OWNED_TABLES = [
   'session_analysis',
   'session_findings',
   'context_files',
+  'session_tools',
+  'session_file_edits',
 ] as const;
 
 /**
@@ -230,7 +296,10 @@ const SESSION_OWNED_TABLES = [
  * so a row carries its deviation count without a second query and the Deviations
  * chip can filter in SQL. LEFT, not INNER: an unanalyzed session must still list.
  */
-const SESSION_SELECT = 's.*, a.deviation_count AS deviation_count, a.verdict AS verdict';
+const SESSION_SELECT =
+  's.*, a.deviation_count AS deviation_count, a.verdict AS verdict, ' +
+  'a.completion_status AS completion_status, a.completion_claim AS completion_claim, ' +
+  'a.files_reedited AS files_reedited, a.reworked_lines AS reworked_lines';
 const SESSION_FROM =
   'FROM sessions s LEFT JOIN session_analysis a' +
   ' ON a.source = s.source AND a.session_id = s.session_id';
@@ -263,6 +332,11 @@ export interface StoredSession {
   deviation_count?: number | null;
   /** Joined from `session_analysis`; null while unanalyzed or unjudgeable. */
   verdict?: string | null;
+  /** Joined from `session_analysis`; null while unchecked. */
+  completion_status?: string | null;
+  completion_claim?: string | null;
+  files_reedited?: number | null;
+  reworked_lines?: number | null;
 }
 
 /**
@@ -338,6 +412,7 @@ export class IndexDb {
     if (options.initialize !== false) {
       this.db.exec(SCHEMA);
       this.ensureVersion();
+      this.ensureAnalysisVersion();
     } else {
       try {
         const version = this.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
@@ -370,7 +445,8 @@ export class IndexDb {
         'DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS titles;' +
           ' DROP TABLE IF EXISTS repo_cache; DROP TABLE IF EXISTS session_analysis;' +
           ' DROP TABLE IF EXISTS session_fingerprints;' +
-          ' DROP TABLE IF EXISTS session_findings; DROP TABLE IF EXISTS context_files;',
+          ' DROP TABLE IF EXISTS session_findings; DROP TABLE IF EXISTS context_files;' +
+          ' DROP TABLE IF EXISTS session_tools; DROP TABLE IF EXISTS session_file_edits;',
       );
       this.db.exec(SCHEMA);
     }
@@ -385,7 +461,38 @@ export class IndexDb {
     this.db.exec(
       'DELETE FROM files; DELETE FROM sessions; DELETE FROM titles; DELETE FROM repo_cache;' +
         ' DELETE FROM session_fingerprints;' +
-        ' DELETE FROM session_analysis; DELETE FROM session_findings; DELETE FROM context_files;',
+        ' DELETE FROM session_analysis; DELETE FROM session_findings; DELETE FROM context_files;' +
+        ' DELETE FROM session_tools; DELETE FROM session_file_edits;',
+    );
+  }
+
+  /**
+   * Wipe ONLY what the analysis pass derives when its heuristics version moved.
+   * Session rows, fingerprints and titles stay, so nothing is re-indexed: every
+   * session simply reads as unanalyzed and the background pass works through
+   * them again, newest first.
+   */
+  private ensureAnalysisVersion(): void {
+    const row = this.db.prepare(`SELECT value FROM meta WHERE key = 'analysis_version'`).get() as
+      | { value: string }
+      | undefined;
+    if (row !== undefined && Number(row.value) === ANALYSIS_VERSION) {
+      return;
+    }
+    if (row !== undefined) {
+      this.clearAnalysis();
+    }
+    this.db
+      .prepare(`INSERT INTO meta (key, value) VALUES ('analysis_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+      .run(String(ANALYSIS_VERSION));
+  }
+
+  /** Every table the analysis pass writes, and nothing the indexers own. */
+  clearAnalysis(): void {
+    this.db.exec(
+      'DELETE FROM session_analysis; DELETE FROM session_findings; DELETE FROM context_files;' +
+        ' DELETE FROM session_tools; DELETE FROM session_file_edits;',
     );
   }
 
@@ -493,6 +600,19 @@ export class IndexDb {
       .prepare(`SELECT ${SESSION_SELECT} ${SESSION_FROM} WHERE s.source = ? AND s.session_id = ?`)
       .get(source, sessionId) as StoredSession | undefined;
     return row === undefined ? undefined : toSessionRow(row);
+  }
+
+  /**
+   * Where a session's main file lives on disk (the Claude transcript, the
+   * Copilot CLI `events.jsonl`). LOCAL-ONLY, like the column: used to re-read
+   * a session's working directory for "Resume in terminal", never returned
+   * to the renderer and never on any aggregate, sync or team path.
+   */
+  mainPath(source: string, sessionId: string): string | undefined {
+    const row = this.db
+      .prepare('SELECT main_path AS mainPath FROM sessions WHERE source = ? AND session_id = ?')
+      .get(source, sessionId) as { mainPath: string | null } | undefined;
+    return row?.mainPath ?? undefined;
   }
 
   /**
@@ -1225,6 +1345,176 @@ export class IndexDb {
       .all(...args) as ContextFileObservationRow[];
   }
 
+  // -- tool analytics -------------------------------------------------------
+
+  /**
+   * The Tools ranking: one row per tool name, folded over every analyzed
+   * session in scope, busiest first. Percentiles are read off the summed
+   * duration buckets, so they are approximate by construction.
+   */
+  toolRanking(
+    params: { source?: string; repository?: string; endedAfterMs?: number } = {},
+    hiddenKeys: readonly string[] = [],
+    limit = 200,
+  ): ToolRankingRow[] {
+    const { where, args } = repoScope(
+      params.repository !== undefined && params.repository.length > 0 ? params.repository : undefined,
+      params.endedAfterMs ?? 0,
+      undefined,
+      hiddenKeys,
+    );
+    const sourceClause = params.source !== undefined && params.source.length > 0 ? ' AND s.source = ?' : '';
+    const sourceArgs = sourceClause.length > 0 ? [params.source] : [];
+    const stored = this.db
+      .prepare(
+        `SELECT t.tool_name AS tool,
+                COALESCE(SUM(t.calls), 0) AS calls,
+                COALESCE(SUM(t.failures), 0) AS failures,
+                COUNT(*) AS sessions,
+                COALESCE(MAX(s.ended_at_ms), 0) AS lastUsedMs,
+                COALESCE(MAX(t.duration_ms_max), 0) AS maxMs,
+                COALESCE(SUM(t.d0), 0) AS d0, COALESCE(SUM(t.d1), 0) AS d1, COALESCE(SUM(t.d2), 0) AS d2, COALESCE(SUM(t.d3), 0) AS d3, COALESCE(SUM(t.d4), 0) AS d4, COALESCE(SUM(t.d5), 0) AS d5, COALESCE(SUM(t.d6), 0) AS d6, COALESCE(SUM(t.d7), 0) AS d7, COALESCE(SUM(t.d8), 0) AS d8
+           FROM session_tools t
+           JOIN sessions s ON s.source = t.source AND s.session_id = t.session_id
+           ${where}${sourceClause}
+          GROUP BY t.tool_name
+          ORDER BY calls DESC, t.tool_name ASC
+          LIMIT ?`,
+      )
+      .all(...args, ...sourceArgs, limit) as (Omit<ToolRankingRow, 'p50Ms' | 'p90Ms' | 'p90Overflow'> &
+      Record<string, number>)[];
+    return stored.map((row) => {
+      const buckets = Array.from({ length: 9 }, (_, i) => Number(row[`d${i}`] ?? 0));
+      const p50 = approxPercentile(buckets, 0.5);
+      const p90 = approxPercentile(buckets, 0.9);
+      return {
+        tool: row.tool,
+        calls: row.calls,
+        failures: row.failures,
+        sessions: row.sessions,
+        lastUsedMs: row.lastUsedMs,
+        maxMs: row.maxMs,
+        ...(p50 !== undefined ? { p50Ms: p50 } : {}),
+        ...(p90 !== undefined ? { p90Ms: p90 } : {}),
+        p90Overflow: percentileOverflows(buckets, 0.9),
+      };
+    });
+  }
+
+  /**
+   * Completion-check counts for a window: sessions that changed code, by what
+   * was observed after the last edit. The denominator travels with the counts
+   * so no caller can show a rate without it.
+   */
+  /**
+   * The Rework ranking: how many sessions that edited files went back over
+   * them, the sessions with the most rework, and the most re-edited files.
+   * `file` in the result is the path as recorded (ABSOLUTE, LOCAL-ONLY); the
+   * datahost turns it into a display path before anything reaches the renderer.
+   */
+  reworkRanking(
+    params: { source?: string; repository?: string; endedAfterMs?: number } = {},
+    hiddenKeys: readonly string[] = [],
+    limit = 20,
+  ): {
+    editedSessions: number;
+    reworkedSessions: number;
+    sessions: { source: string; sessionId: string; repository: string; title?: string; endedAtMs: number; filesReedited: number; reworkedLines: number; filesEdited: number }[];
+    files: { file: string; repository: string; sessions: number; editTurns: number; reworkedLines: number; outsideRepo: boolean }[];
+  } {
+    const scope = repoScope(
+      params.repository !== undefined && params.repository.length > 0 ? params.repository : undefined,
+      params.endedAfterMs ?? 0,
+      undefined,
+      hiddenKeys,
+    );
+    const bySource = params.source !== undefined && params.source.length > 0;
+    const where = `${scope.where}${bySource ? ' AND s.source = ?' : ''}`;
+    const args = [...scope.args, ...(bySource ? [params.source] : [])];
+    const fired = `(a.files_reedited > 0 OR a.reworked_lines >= ${REWORKED_LINES_MIN})`;
+    const totals = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(CASE WHEN a.files_edited > 0 THEN 1 ELSE 0 END), 0) AS editedSessions,
+                COALESCE(SUM(CASE WHEN a.files_edited > 0 AND ${fired} THEN 1 ELSE 0 END), 0) AS reworkedSessions
+           FROM sessions s
+           JOIN session_analysis a ON a.source = s.source AND a.session_id = s.session_id
+           ${where}`,
+      )
+      .get(...args) as { editedSessions: number; reworkedSessions: number };
+    const sessions = (
+      this.db
+        .prepare(
+          `SELECT s.source AS source, s.session_id AS sessionId, s.repository AS repository, s.title AS title,
+                  s.ended_at_ms AS endedAtMs, a.files_reedited AS filesReedited,
+                  a.reworked_lines AS reworkedLines, a.files_edited AS filesEdited
+             FROM sessions s
+             JOIN session_analysis a ON a.source = s.source AND a.session_id = s.session_id
+             ${where} AND ${fired}
+            ORDER BY a.reworked_lines DESC, a.files_reedited DESC, s.ended_at_ms DESC
+            LIMIT ?`,
+        )
+        .all(...args, limit) as { source: string; sessionId: string; repository: string; title: string | null; endedAtMs: number; filesReedited: number; reworkedLines: number; filesEdited: number }[]
+    ).map(({ title, ...row }) => ({ ...row, ...(title !== null ? { title } : {}) }));
+    const files = (
+      this.db
+        .prepare(
+          `SELECT e.file AS file, MIN(s.repository) AS repository, COUNT(*) AS sessions,
+                  COALESCE(SUM(e.edit_turns), 0) AS editTurns,
+                  COALESCE(SUM(e.reworked_lines), 0) AS reworkedLines,
+                  MAX(e.outside_repo) AS outsideRepo
+             FROM session_file_edits e
+             JOIN sessions s ON s.source = e.source AND s.session_id = e.session_id
+             ${where} AND (e.reedited = 1 OR e.reworked_lines > 0)
+            GROUP BY e.file
+            ORDER BY reworkedLines DESC, editTurns DESC, e.file ASC
+            LIMIT ?`,
+        )
+        .all(...args, limit) as { file: string; repository: string; sessions: number; editTurns: number; reworkedLines: number; outsideRepo: number }[]
+    ).map((row) => ({ ...row, outsideRepo: row.outsideRepo === 1 }));
+    return { editedSessions: totals.editedSessions, reworkedSessions: totals.reworkedSessions, sessions, files };
+  }
+
+  completionSummary(
+    params: { source?: string; repository?: string; endedAfterMs?: number } = {},
+    hiddenKeys: readonly string[] = [],
+  ): CompletionSummary {
+    const { where, args } = repoScope(
+      params.repository !== undefined && params.repository.length > 0 ? params.repository : undefined,
+      params.endedAfterMs ?? 0,
+      undefined,
+      hiddenKeys,
+    );
+    const bySource = params.source !== undefined && params.source.length > 0;
+    const rows = this.db
+      .prepare(
+        `SELECT a.completion_status AS status, a.completion_claim AS claim, COUNT(*) AS sessions
+           FROM sessions s
+           JOIN session_analysis a ON a.source = s.source AND a.session_id = s.session_id
+           ${where} AND a.completion_status IS NOT NULL${bySource ? ' AND s.source = ?' : ''}
+          GROUP BY a.completion_status, a.completion_claim`,
+      )
+      .all(...args, ...(bySource ? [params.source] : [])) as { status: string; claim: string | null; sessions: number }[];
+    const summary: CompletionSummary = {
+      verified: 0,
+      unverified: 0,
+      contradicted: 0,
+      incomplete: 0,
+      changedCode: 0,
+      reportedDoneUnverified: 0,
+    };
+    for (const row of rows) {
+      if (row.status !== 'verified' && row.status !== 'unverified' && row.status !== 'contradicted' && row.status !== 'incomplete') {
+        continue;
+      }
+      summary[row.status] += row.sessions;
+      summary.changedCode += row.sessions;
+      if (row.claim === 'done' && (row.status === 'unverified' || row.status === 'contradicted')) {
+        summary.reportedDoneUnverified += row.sessions;
+      }
+    }
+    return summary;
+  }
+
   // -- background analysis ---------------------------------------------------
 
   /**
@@ -1295,8 +1585,12 @@ export class IndexDb {
           verdict, outcome, correction_turns, repeated_prompt_turns, interruptions,
           error_streaks, max_error_streak, long_tail_turns, compactions,
           churn_ratio_pct, plan_mode_used, first_prompt_rating, tip_count,
+          completion_status, completion_na_reason, completion_claim,
+          verify_runs, verify_failures, last_verify_class,
+          verified_after_last_edit, last_verify_failed, ended_on_failed_tool,
+          files_edited, files_outside_repo,
           indexed_at_ms, analyzed_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(source, session_id) DO UPDATE SET
          deviation_count = excluded.deviation_count,
          error_count = excluded.error_count,
@@ -1313,6 +1607,17 @@ export class IndexDb {
          plan_mode_used = excluded.plan_mode_used,
          first_prompt_rating = excluded.first_prompt_rating,
          tip_count = excluded.tip_count,
+         completion_status = excluded.completion_status,
+         completion_na_reason = excluded.completion_na_reason,
+         completion_claim = excluded.completion_claim,
+         verify_runs = excluded.verify_runs,
+         verify_failures = excluded.verify_failures,
+         last_verify_class = excluded.last_verify_class,
+         verified_after_last_edit = excluded.verified_after_last_edit,
+         last_verify_failed = excluded.last_verify_failed,
+         ended_on_failed_tool = excluded.ended_on_failed_tool,
+         files_edited = excluded.files_edited,
+         files_outside_repo = excluded.files_outside_repo,
          indexed_at_ms = excluded.indexed_at_ms,
          analyzed_at_ms = excluded.analyzed_at_ms`,
     );
@@ -1336,10 +1641,47 @@ export class IndexDb {
          severity = excluded.severity, count = excluded.count`,
     );
 
+    const putRework = this.db.prepare(
+      `UPDATE session_analysis
+          SET files_reedited = ?, reworked_lines = ?,
+              files_edited = CASE WHEN ? > files_edited THEN ? ELSE files_edited END,
+              files_outside_repo = CASE WHEN ? > files_outside_repo THEN ? ELSE files_outside_repo END
+        WHERE source = ? AND session_id = ?`,
+    );
+    const clearEdits = this.db.prepare('DELETE FROM session_file_edits WHERE source = ? AND session_id = ?');
+    const putEdit = this.db.prepare(
+      `INSERT INTO session_file_edits
+         (source, session_id, file, edit_calls, edit_turns, lines_added, lines_removed, reworked_lines, reedited, outside_repo)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const clearTools = this.db.prepare('DELETE FROM session_tools WHERE source = ? AND session_id = ?');
+    const putTool = this.db.prepare(
+      `INSERT INTO session_tools
+         (source, session_id, tool_name, calls, failures, duration_ms_sum, duration_ms_max, d0, d1, d2, d3, d4, d5, d6, d7, d8)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
     this.db.transaction(() => {
+      // Rewritten wholesale, like the context files: a tool the re-analysis no
+      // longer sees must leave the ranking.
+      clearTools.run(source, sessionId);
+      for (const tool of analysis.tools ?? []) {
+        const buckets = Array.from({ length: 9 }, (_, i) => Math.max(0, Math.round(tool.buckets[i] ?? 0)));
+        putTool.run(
+          source,
+          sessionId,
+          tool.name,
+          tool.calls,
+          tool.failures,
+          Math.round(tool.durationMsSum),
+          Math.round(tool.durationMsMax),
+          ...buckets,
+        );
+      }
       // retro === undefined means the retrospective could not be built: store
       // NULLs, never zeros pretending to be a smooth verdict.
       const retro = analysis.retro;
+      const completion = retro?.completion;
       putSession.run(
         source,
         sessionId,
@@ -1358,9 +1700,51 @@ export class IndexDb {
         retro?.planModeUsed === true ? 1 : 0,
         retro?.firstPromptRating ?? null,
         retro?.tipCount ?? 0,
+        // The completion check's projection: enums, counts and booleans only.
+        // A NULL status means "not checked" and must never read as verified.
+        completion?.completionStatus ?? null,
+        completion?.completionNaReason ?? null,
+        completion?.completionClaim ?? null,
+        completion?.verifyRuns ?? 0,
+        completion?.verifyFailures ?? 0,
+        completion?.lastVerifyClass ?? null,
+        completion?.verifiedAfterLastEdit === true ? 1 : 0,
+        completion?.lastVerifyFailed === true ? 1 : 0,
+        completion?.endedOnFailedTool === true ? 1 : 0,
+        completion?.filesEdited ?? 0,
+        completion?.filesOutsideRepo ?? 0,
         indexedAtMs,
         nowMs,
       );
+      // Rework: per-file rows rewritten wholesale, and the session-level counts
+      // set beside the completion columns (which the statement above owns).
+      const edits = analysis.fileEdits ?? [];
+      const rework = summarizeRework(edits);
+      putRework.run(
+        retro?.rework?.filesReedited ?? rework.filesReedited,
+        retro?.rework?.reworkedLines ?? rework.reworkedLines,
+        rework.filesEdited,
+        rework.filesEdited,
+        rework.filesOutsideRepo,
+        rework.filesOutsideRepo,
+        source,
+        sessionId,
+      );
+      clearEdits.run(source, sessionId);
+      for (const edit of edits) {
+        putEdit.run(
+          source,
+          sessionId,
+          edit.file,
+          edit.editCalls,
+          edit.editTurns,
+          edit.linesAdded,
+          edit.linesRemoved,
+          edit.reworkedLines,
+          isReedited(edit) ? 1 : 0,
+          edit.outsideRepo ? 1 : 0,
+        );
+      }
       clearFiles.run(source, sessionId);
       for (const file of analysis.contextFiles) {
         putFile.run(
@@ -1394,7 +1778,7 @@ export class IndexDb {
   clearDeviations(): void {
     // Findings ride along: they were projected from the same retrospectives the
     // re-analysis is about to re-judge, so stale ones must not outlive the rows.
-    this.db.exec('DELETE FROM session_analysis; DELETE FROM session_findings;');
+    this.db.exec('DELETE FROM session_analysis; DELETE FROM session_findings; DELETE FROM session_tools;');
   }
 
   // -- session retrospectives ------------------------------------------------
@@ -1819,6 +2203,24 @@ function buildFilter(
     clauses.push('a.verdict = ?');
     args.push(params.verdict);
   }
+  // The completion check's drill-downs. Unchecked sessions (NULL) and ones the
+  // check does not apply to never match: absence of evidence is not a status.
+  const completionIn = [
+    ...(params.completion !== undefined ? [params.completion] : []),
+    ...(Array.isArray(params.completionIn) ? params.completionIn : []),
+  ].filter((status) => COMPLETION_STATUSES.includes(status));
+  if (completionIn.length > 0) {
+    clauses.push(`a.completion_status IN (${completionIn.map(() => '?').join(', ')})`);
+    args.push(...completionIn);
+  }
+  if (params.claimedDone === true) {
+    clauses.push(`a.completion_claim = 'done'`);
+  }
+  // The Rework chip's predicate: a file edited in several turns, or enough
+  // added lines removed again. Same thresholds as core's `summarizeRework`.
+  if (params.reworked === true) {
+    clauses.push(`(a.files_reedited > 0 OR a.reworked_lines >= ${REWORKED_LINES_MIN})`);
+  }
   // A theme drill-down: sessions whose retrospective raised this signal beyond
   // info severity — the same predicate the Dashboard's themes card counts by.
   if (params.signal !== undefined && params.signal.length > 0) {
@@ -1828,6 +2230,15 @@ function buildFilter(
                   AND f.signal_id = ? AND f.severity <> 'info')`,
     );
     args.push(params.signal);
+  }
+  // A Tools drill-down: sessions that called this tool (optionally: where it failed).
+  if (params.tool !== undefined && params.tool.length > 0) {
+    clauses.push(
+      `EXISTS (SELECT 1 FROM session_tools t
+                WHERE t.source = s.source AND t.session_id = s.session_id
+                  AND t.tool_name = ?${params.toolFailed === true ? ' AND t.failures > 0' : ''})`,
+    );
+    args.push(params.tool);
   }
   const query = params.query?.trim();
   if (query !== undefined && query.length > 0) {
@@ -1916,9 +2327,30 @@ function toSessionRow(row: StoredSession): SessionRow {
     costMicros: row.cost_micros ?? undefined,
     deviationCount: row.deviation_count ?? undefined,
     verdict: toVerdict(row.verdict),
+    ...completionOf(row),
+    ...reworkOf(row),
     indexedAtMs: row.indexed_at_ms,
     pending: row.pending === 1 ? true : undefined,
   };
+}
+
+/** The row's rework fields: present only when the analysis found any. */
+function reworkOf(row: StoredSession): Pick<SessionRow, 'filesReedited' | 'reworkedLines'> {
+  const filesReedited = row.files_reedited ?? 0;
+  const reworkedLines = row.reworked_lines ?? 0;
+  return {
+    ...(filesReedited > 0 ? { filesReedited } : {}),
+    ...(reworkedLines > 0 ? { reworkedLines } : {}),
+  };
+}
+
+/** The row's completion fields: present only for one of the four real statuses. */
+function completionOf(row: StoredSession): Pick<SessionRow, 'completion' | 'claimedDone'> {
+  const status = row.completion_status;
+  if (status !== 'verified' && status !== 'unverified' && status !== 'contradicted' && status !== 'incomplete') {
+    return {};
+  }
+  return { completion: status, ...(row.completion_claim === 'done' ? { claimedDone: true } : {}) };
 }
 
 /** Narrow a stored verdict to the typed union; anything else reads unjudged. */

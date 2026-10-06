@@ -17,6 +17,7 @@ import {
   exportTeamShard,
   previewTeamShard,
   teamAutoExportOn,
+  teamEnabled,
   teamFolder,
   teamSharingOn,
   type TeamExportDeps,
@@ -66,7 +67,7 @@ export class TeamController {
     this.now = deps.now ?? (() => Date.now());
     this.state = new TeamStateStore(deps.statePath);
     this.watcher = new TeamFolderWatcher({
-      folder: () => teamFolder(deps.settings),
+      folder: () => this.folder(),
       onChange: () => {
         this.read();
         this.deps.emit({ event: 'team.changed', status: this.status() });
@@ -108,7 +109,7 @@ export class TeamController {
   }
 
   status(): TeamStatus {
-    const folder = teamFolder(this.deps.settings);
+    const folder = this.folder();
     const read = folder.length === 0 ? undefined : this.ensureRead();
     const state = this.state.get();
     return {
@@ -182,8 +183,13 @@ export class TeamController {
     return this.lastRead as TeamFolderRead;
   }
 
+  /** The folder this controller may watch and read: none while Team is off. */
+  private folder(): string {
+    return teamEnabled(this.deps.settings) ? teamFolder(this.deps.settings) : '';
+  }
+
   private read(): void {
-    const folder = teamFolder(this.deps.settings);
+    const folder = this.folder();
     this.lastRead =
       folder.length === 0
         ? { merged: { members: new Map(), problems: [] }, files: [], problems: [], folderState: 'missing' }

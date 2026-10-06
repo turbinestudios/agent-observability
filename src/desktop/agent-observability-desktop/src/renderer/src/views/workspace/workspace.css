@@ -310,3 +310,111 @@
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* ── attention inbox ── */
+
+.inbox-group {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.inbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inbox-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.inbox-item-new {
+  border-color: var(--live-waiting);
+  box-shadow: inset 3px 0 0 var(--live-waiting);
+}
+
+.inbox-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.inbox-reason {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.inbox-reason-permission,
+.inbox-reason-permission-likely,
+.inbox-reason-waiting {
+  color: var(--live-waiting);
+}
+
+.inbox-reason-ended-error {
+  color: var(--danger);
+}
+
+.inbox-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.inbox-flag {
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+
+.inbox-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.inbox-snooze {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--fg-muted);
+}
+
+.inbox-undo {
+  margin: 0 0 6px;
+}

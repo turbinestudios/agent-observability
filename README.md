@@ -12,7 +12,7 @@ It runs on your machine and keeps your data there.
 ## What you can do with it
 
 - **Browse your sessions.** Search, filter, tag, rename and take notes on every
-  session from Copilot and Claude Code in one list.
+  session from Copilot, the Copilot CLI and Claude Code in one list.
 - **Follow a session turn by turn.** See tokens, tool calls and time for each
   turn, and spot the turn where the context got too big.
 - **Compare sessions** side by side.

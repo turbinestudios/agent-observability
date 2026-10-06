@@ -17,6 +17,7 @@ import { formatRelative } from '../sessions/format';
 import { verdictLabel } from '../sessions/retro';
 import { categoryLabel, shortPath } from '../hotspots/hotspots';
 import './improve.css';
+import { openRunDoor, useRunEnabled } from '../run/doors';
 
 /**
  * The Improve view: pick a repository, pick the context hotspots and rough
@@ -39,6 +40,7 @@ interface Props {
 }
 
 export function ImproveView({ focusIntent }: Props): JSX.Element {
+  const runEnabled = useRunEnabled();
   const [repository, setRepository] = useState('');
   const [repositories, setRepositories] = useState<string[]>([]);
   /** True until the first repository scan answers, so the wait shows as a spinner. */
@@ -376,6 +378,16 @@ export function ImproveView({ focusIntent }: Props): JSX.Element {
 
           {plan !== undefined && (
             <PlanCard plan={plan} onApply={setApplying} onRefresh={refreshPlan} />
+          )}
+          {plan !== undefined && runEnabled && (
+            <button
+              type="button"
+              className="modal-btn"
+              title="Opens Run with this plan as an editable goal. Nothing is sent until you press Start."
+              onClick={() => openRunDoor({ door: 'improve-plan', planId: plan.id, repository: plan.repository })}
+            >
+              Apply this plan with an agent
+            </button>
           )}
 
           {plans.length > 0 && (

@@ -21,6 +21,8 @@ import type { RetrospectiveView } from '@agent-observability/core/src/views/sess
 import type { CombinedDetailResult, ContextPromptFacts } from '../../shared/rpc';
 import { detectTurnDeviations } from '../analysis/turnDeviations';
 import { retrospectiveFor } from '../analysis/sessionRetrospective';
+import { activityFor } from '../analysis/sessionActivity';
+import type { SessionActivity } from '@agent-observability/core/src/analysis/sessionActivity';
 import { chooseCostBasis } from './costBasis';
 import { detailHeadHtml } from './theme';
 
@@ -78,6 +80,20 @@ interface CacheEntry {
   /** The accepted-missing lists the analysis was computed against. */
   acceptedKey: string;
   stamp: number;
+  /**
+   * Commands run and files edited, computed on first request by
+   * {@link DetailRenderer.sessionFacts} and kept with the parse so the review
+   * packet and the hand-off brief never read the transcript a second time.
+   */
+  activity?: SessionActivity;
+}
+
+/** Everything one memoized parse knows about a session, for local builders. */
+export interface SessionFacts {
+  detail: SessionDetail;
+  retro: SessionRetrospective | undefined;
+  context: SessionContextAnalysis | undefined;
+  activity: SessionActivity;
 }
 
 export class DetailRenderer {
@@ -123,6 +139,25 @@ export class DetailRenderer {
       retrospectiveView(entry, context),
       true,
     );
+  }
+
+  /**
+   * The memoized parse behind the document, for the builders that turn a
+   * session into text the user copies (review packet, hand-off brief). Served
+   * from the same cache entry as the detail view, so an open session costs no
+   * parse and a closed one costs the single parse the view then reuses.
+   * Activity is added to the entry on first request.
+   */
+  sessionFacts(source: string, sessionId: string, stamp: number, context: DetailContext): SessionFacts {
+    const entry = this.load(source, sessionId, stamp, context);
+    if (entry.activity === undefined) {
+      const dataSource = this.sources.get(source);
+      if (dataSource === undefined) {
+        throw new Error(`No source registered for "${source}"`);
+      }
+      entry.activity = activityFor(dataSource, sessionId, entry.detail);
+    }
+    return { detail: entry.detail, retro: entry.retro, context: entry.context, activity: entry.activity };
   }
 
   /**

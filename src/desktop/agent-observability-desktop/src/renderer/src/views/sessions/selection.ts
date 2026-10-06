@@ -35,3 +35,30 @@ export function compareState(keys: readonly string[]): CompareState {
   }
   return { count, canCompare: true };
 }
+
+/**
+ * Whether the compare bar's "Review packet" button is live. Unlike Compare,
+ * one ticked session is enough: a packet for a single session is the common
+ * case, and several make one combined packet.
+ */
+export function packetState(keys: readonly string[]): { canBuild: boolean; reason?: string } {
+  if (keys.length === 0) {
+    return { canBuild: false };
+  }
+  if (keys.length > MAX_COMPARE_SESSIONS) {
+    return { canBuild: false, reason: `A review packet covers at most ${MAX_COMPARE_SESSIONS} sessions.` };
+  }
+  return { canBuild: true };
+}
+
+/** `source:sessionId` keys back into refs. Source ids never contain a colon. */
+export function refsFromKeys(keys: readonly string[]): { source: string; sessionId: string }[] {
+  const refs: { source: string; sessionId: string }[] = [];
+  for (const key of keys) {
+    const at = key.indexOf(':');
+    if (at > 0 && at < key.length - 1) {
+      refs.push({ source: key.slice(0, at), sessionId: key.slice(at + 1) });
+    }
+  }
+  return refs;
+}

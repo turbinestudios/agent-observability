@@ -101,6 +101,15 @@ export function SettingsView(): JSX.Element {
           />
           GitHub Copilot
         </label>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.copilotCliEnabled}
+            disabled={saving}
+            onChange={(e) => save({ copilotCliEnabled: e.target.checked })}
+          />
+          GitHub Copilot CLI
+        </label>
         <p className="settings-hint">
           Turning a source off removes its sessions from the list; turning it back on re-reads them.
         </p>
@@ -194,6 +203,41 @@ export function SettingsView(): JSX.Element {
         </p>
       </section>
 
+      <section className="settings-card" aria-label="Run">
+        <h2>Run</h2>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.runEnabled}
+            disabled={saving}
+            onChange={(e) => save({ runEnabled: e.target.checked })}
+          />
+          Run Copilot sessions from this app
+        </label>
+        <p className="settings-hint">
+          Off by default. When on, a Run view lets you start or continue a GitHub Copilot session here. It uses your
+          own installed <code>copilot</code> and your own Copilot login, and sends your message and whatever the agent
+          then reads to GitHub, exactly as running it in a terminal does. Every action asks you first. Claude Code
+          sessions are never run from here; they are resumed in your own terminal.
+        </p>
+        <div className="settings-row">
+          <span className="settings-label">Default model</span>
+          <input
+            className="settings-input"
+            defaultValue={snapshot.runDefaultModel}
+            placeholder="The CLI's own default"
+            disabled={saving || !snapshot.runEnabled}
+            onBlur={(e) => save({ runDefaultModel: e.target.value })}
+          />
+        </div>
+        <p className="settings-hint">
+          Copilot CLI:{' '}
+          {backends?.find((b) => b.id === 'copilot-cli')?.available === true
+            ? 'found'
+            : 'not found yet. Set its path under AI below, or install it.'}
+        </p>
+      </section>
+
       <section className="settings-card" aria-label="Workspace">
         <h2>Workspace</h2>
         <label className="settings-toggle">
@@ -214,87 +258,101 @@ export function SettingsView(): JSX.Element {
 
       <section className="settings-card" aria-label="Team">
         <h2>Team</h2>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.teamEnabled}
+            disabled={saving}
+            onChange={(e) => save({ teamEnabled: e.target.checked })}
+          />
+          Show the Team view
+        </label>
         <p className="settings-hint">
-          See how your team uses agents through a folder you already share (OneDrive, SharePoint, a network
-          drive). Each member&apos;s app writes one file there with counts and totals under an anonymous id, and
-          reads everyone else&apos;s. No server, no account.
+          Off by default. When on, a Team view shows how your team uses agents through a folder you already share
+          (OneDrive, SharePoint, a network drive). Each member&apos;s app writes one file there with counts and
+          totals under an anonymous id, and reads everyone else&apos;s. No server, no account. Turning this off
+          also stops sharing.
         </p>
-        <div className="settings-row">
-          <span className="settings-label">Team folder</span>
-          <div className="team-folder-row">
-            <code>{snapshot.teamFolder.length > 0 ? snapshot.teamFolder : 'Not chosen'}</code>
-            <button
-              type="button"
-              className="settings-action settings-action-inline"
-              disabled={saving}
-              onClick={() =>
-                void window.desktop
-                  .pickFolder()
-                  .then((folder) => {
-                    if (folder !== undefined) {
-                      save({ teamFolder: folder });
-                    }
-                  })
-                  .catch(() => undefined)
-              }
-            >
-              Choose…
-            </button>
-            {snapshot.teamFolder.length > 0 && (
-              <button
-                type="button"
-                className="settings-action settings-action-inline"
-                disabled={saving}
-                onClick={() => save({ teamFolder: '' })}
-              >
-                Clear
-              </button>
+        {snapshot.teamEnabled && (
+          <>
+            <div className="settings-row">
+              <span className="settings-label">Team folder</span>
+              <div className="team-folder-row">
+                <code>{snapshot.teamFolder.length > 0 ? snapshot.teamFolder : 'Not chosen'}</code>
+                <button
+                  type="button"
+                  className="settings-action settings-action-inline"
+                  disabled={saving}
+                  onClick={() =>
+                    void window.desktop
+                      .pickFolder()
+                      .then((folder) => {
+                        if (folder !== undefined) {
+                          save({ teamFolder: folder });
+                        }
+                      })
+                      .catch(() => undefined)
+                  }
+                >
+                  Choose…
+                </button>
+                {snapshot.teamFolder.length > 0 && (
+                  <button
+                    type="button"
+                    className="settings-action settings-action-inline"
+                    disabled={saving}
+                    onClick={() => save({ teamFolder: '' })}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              {snapshot.teamFolder.length > 0 && !snapshot.teamFolderExists && (
+                <p className="settings-hint">This folder does not exist right now.</p>
+              )}
+            </div>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={snapshot.teamShareEnabled}
+                disabled={saving || snapshot.teamFolder.length === 0}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setTeamConsentOpen(true);
+                  } else {
+                    save({ teamShareEnabled: false });
+                  }
+                }}
+              />
+              Share my aggregates with the team folder
+            </label>
+            {snapshot.teamFolder.length === 0 && (
+              <p className="settings-hint">Choose a team folder first.</p>
             )}
-          </div>
-          {snapshot.teamFolder.length > 0 && !snapshot.teamFolderExists && (
-            <p className="settings-hint">This folder does not exist right now.</p>
-          )}
-        </div>
-        <label className="settings-toggle">
-          <input
-            type="checkbox"
-            checked={snapshot.teamShareEnabled}
-            disabled={saving || snapshot.teamFolder.length === 0}
-            onChange={(e) => {
-              if (e.target.checked) {
-                setTeamConsentOpen(true);
-              } else {
-                save({ teamShareEnabled: false });
-              }
-            }}
-          />
-          Share my aggregates with the team folder
-        </label>
-        {snapshot.teamFolder.length === 0 && (
-          <p className="settings-hint">Choose a team folder first.</p>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={snapshot.teamAutoExport}
+                disabled={saving || !snapshot.teamShareEnabled}
+                onChange={(e) => save({ teamAutoExport: e.target.checked })}
+              />
+              Export automatically every hour while the app runs
+            </label>
+            <button type="button" className="settings-action" onClick={() => setTeamPreviewOpen(true)}>
+              Preview what will be shared
+            </button>
+            <p className="settings-hint">
+              The folder is only read, never changed, apart from your own file; every file is checked against the
+              format before it is merged.
+            </p>
+            <p className="settings-hint">
+              Each install has its own anonymous id, so the same person on two computers counts twice.
+            </p>
+            <p className="settings-hint">
+              Your anonymous id: <code>{snapshot.teamDeveloperId}</code>
+            </p>
+          </>
         )}
-        <label className="settings-toggle">
-          <input
-            type="checkbox"
-            checked={snapshot.teamAutoExport}
-            disabled={saving || !snapshot.teamShareEnabled}
-            onChange={(e) => save({ teamAutoExport: e.target.checked })}
-          />
-          Export automatically every hour while the app runs
-        </label>
-        <button type="button" className="settings-action" onClick={() => setTeamPreviewOpen(true)}>
-          Preview what will be shared
-        </button>
-        <p className="settings-hint">
-          Reading the folder is always on and read-only; every file is checked against the format before it
-          is merged.
-        </p>
-        <p className="settings-hint">
-          Each install has its own anonymous id, so the same person on two computers counts twice.
-        </p>
-        <p className="settings-hint">
-          Your anonymous id: <code>{snapshot.teamDeveloperId}</code>
-        </p>
       </section>
 
       <section className="settings-card" aria-label="AI">

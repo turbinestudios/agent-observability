@@ -4,6 +4,7 @@ import { useThemeValue } from '../theme/ThemeContext';
 import { useUpdateStatus } from '../updates/useUpdateStatus';
 import { useRailExpanded } from './useRailExpanded';
 import { UpdateIndicator } from './UpdateIndicator';
+import { railBadgeLabel, railBadgeText } from './railBadge';
 
 /**
  * The view switcher. Dashboard sits first and is the app's default; everything
@@ -22,6 +23,7 @@ export type ViewId =
   | 'hotspots'
   | 'retro'
   | 'team'
+  | 'run'
   | 'improve'
   | 'assistant'
   | 'settings';
@@ -76,7 +78,7 @@ const ENTRIES: RailEntry[] = [
   },
   {
     id: 'retro',
-    label: 'Retro',
+    label: 'Evidence',
     // A backwards-looping arrow: looking back over what already ran.
     icon: (
       <path d="M12 4.5V1.6L6.8 6l5.2 4.4V7.5a6 6 0 1 1-5.9 7.1l-2.5.5A8.5 8.5 0 1 0 12 4.5Z" />
@@ -89,6 +91,12 @@ const ENTRIES: RailEntry[] = [
     icon: (
       <path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7 1a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-7 1c-3.3 0-7 1.7-7 4.2V20h14v-2.8C16 14.7 12.3 13 9 13Zm7 1c-.5 0-1 0-1.5.1 1.5 1 2.5 2.3 2.5 3.9V20h5v-2.2c0-2.1-3.1-3.8-6-3.8Z" />
     ),
+  },
+  {
+    id: 'run',
+    label: 'Run',
+    // A play mark: start or continue a session from here.
+    icon: <path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z" />,
   },
   {
     id: 'improve',
@@ -115,9 +123,13 @@ interface Props {
   onSelect: (view: ViewId) => void;
   /** Opens the What's new dialog. Not a destination, so not a ViewId. */
   onShowChangelog: () => void;
+  /** Counts shown on entries, e.g. new inbox items on Workspace. Zero shows nothing. */
+  badges?: Partial<Record<ViewId, number>>;
+  /** Destinations that are turned off (Run, until enabled in Settings) and so not shown. */
+  hidden?: readonly ViewId[];
 }
 
-export function ActivityRail({ active, onSelect, onShowChangelog }: Props): JSX.Element {
+export function ActivityRail({ active, onSelect, onShowChangelog, badges, hidden }: Props): JSX.Element {
   const { theme, toggle } = useThemeValue();
   const { expanded, toggle: toggleExpanded } = useRailExpanded();
   const update = useUpdateStatus();
@@ -134,20 +146,25 @@ export function ActivityRail({ active, onSelect, onShowChangelog }: Props): JSX.
   const themeHint = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
   return (
     <nav className={expanded ? 'rail rail-expanded' : 'rail'} aria-label="Views">
-      {ENTRIES.map((entry) => (
+      {ENTRIES.filter((entry) => hidden?.includes(entry.id) !== true).map((entry) => (
         <button
           key={entry.id}
           type="button"
           className="rail-button"
           aria-current={active === entry.id}
-          aria-label={entry.label}
-          title={entry.label}
+          aria-label={railBadgeLabel(entry.label, badges?.[entry.id])}
+          title={railBadgeLabel(entry.label, badges?.[entry.id])}
           onClick={() => onSelect(entry.id)}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             {entry.icon}
           </svg>
           {expanded && <span className="rail-label">{entry.label}</span>}
+          {railBadgeText(badges?.[entry.id]) !== undefined && (
+            <span className="rail-badge" aria-hidden="true">
+              {railBadgeText(badges?.[entry.id])}
+            </span>
+          )}
         </button>
       ))}
 

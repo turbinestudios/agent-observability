@@ -13,6 +13,7 @@ import {
 import { DeviationType, WorkflowDeviation } from '../deviation/models';
 import { SessionContextAnalysis, AgentContextAnalysis, ContextFileEntry } from '../context/models';
 import type { RetrospectiveFinding, SessionRetrospective } from '../analysis/retrospective';
+import type { CompletionCheck, CompletionStatus } from '../analysis/completionCheck';
 import {
   computeSessionComparison,
   ComparisonCell,
@@ -35,6 +36,7 @@ export const TIMELINE_PAGE_SIZE = 100;
 // working.
 export type { CostMode } from '../telemetry/models';
 import type { CostMode } from '../telemetry/models';
+import { isReedited } from '../analysis/rework';
 
 /** Format integer micro-USD (1 USD = 1e6) as `$X.XX`. Safe to inject (digits/$.). */
 function formatUsdMicros(micros: number | undefined): string {
@@ -207,6 +209,7 @@ export function renderSessionDetailContent(
   </nav>` : ''}
   <div class="tab-panel${hasContext ? '' : ' tab-panel-only'}" id="tab-overview">
   ${renderHeader(detail, turnDeviations)}
+  ${renderCompletionCard(retrospective?.retro.completion)}
   ${renderRetrospective(retrospective)}
   ${renderTreeSummary(detail.treeStats, detail.treeModelTurns, undefined, costMode)}
   ${renderMainAgentUsage(detail.agentUsage, costMode)}
@@ -877,9 +880,100 @@ function renderRetrospective(view?: RetrospectiveView): string {
     )}</span><span class="retro-outcome">${escapeHtml(outcomeLabel)}</span></p>
     ${goal}
     ${findings}
+    ${renderFileRework(retro)}
     ${tips}
     ${renderLlmVerdict(retro)}
     ${renderDeepRetroFooter(view)}
+  </section>`;
+}
+
+/** Labels for the completion card and chip; `not-applicable` renders nothing. */
+export const COMPLETION_STATUS_LABEL: Readonly<Record<Exclude<CompletionStatus, 'not-applicable'>, string>> = {
+  verified: 'Verified',
+  unverified: 'Not verified',
+  contradicted: 'Check failed',
+  incomplete: 'Left unfinished',
+};
+
+/** What the completion card can and cannot know, stated on every card. */
+export const COMPLETION_CARD_FOOTER =
+  'Based only on what this session recorded. Checks run elsewhere (another terminal, CI, a hook) are not visible here.';
+
+/**
+ * The "Did it really finish?" card, shown above the retrospective. Every line
+ * is a fixed sentence about what was or was not observed (see
+ * `analysis/completionCheck.ts`); each links to the turn holding the evidence
+ * instead of quoting a command or a path. Renders nothing when the check does
+ * not apply or the source has no evidence, so other documents are untouched.
+ */
+/** Rows the rework list shows before folding the rest into a count. */
+const REWORK_FILE_LIMIT = 8;
+
+/**
+ * "Files edited repeatedly": the files a session returned to in several turns,
+ * or added lines to that it later removed. Shown by display path only (never
+ * absolute), and labelled as a proxy.
+ */
+export function renderFileRework(retro: SessionRetrospective): string {
+  const files = (retro.fileEdits ?? []).filter((f) => isReedited(f) || f.reworkedLines > 0);
+  if (files.length === 0) {
+    return '';
+  }
+  const rows = files
+    .slice(0, REWORK_FILE_LIMIT)
+    .map((f) => {
+      const name = f.displayPath ?? baseNameOf(f.file);
+      const outside = f.outsideRepo ? ' <span class="muted">(outside the repository)</span>' : '';
+      const reworked = f.reworkedLines > 0 ? `, ${num(f.reworkedLines)} added lines removed again later` : '';
+      return `<li><code>${escapeHtml(name)}</code>${outside} <span class="muted">edited in ${num(
+        f.editTurns,
+      )} turn${f.editTurns === 1 ? '' : 's'} (+${num(f.linesAdded)} / -${num(f.linesRemoved)} lines${reworked})</span></li>`;
+    })
+    .join('\n');
+  const more =
+    files.length > REWORK_FILE_LIMIT
+      ? `<li class="muted">and ${num(files.length - REWORK_FILE_LIMIT)} more</li>`
+      : '';
+  return `<details class="retro-tips retro-rework" data-k="retro-rework"><summary>Files edited repeatedly (${num(
+    files.length,
+  )})</summary><ul>${rows}${more}</ul><p class="muted">Signals of rework, not a quality score.</p></details>`;
+}
+
+function baseNameOf(file: string): string {
+  const parts = file.split(/[\\/]/).filter((s) => s.length > 0);
+  return parts.length === 0 ? file : parts[parts.length - 1];
+}
+
+export function renderCompletionCard(completion?: CompletionCheck): string {
+  if (completion === undefined || completion.status === 'not-applicable') {
+    return '';
+  }
+  const label = COMPLETION_STATUS_LABEL[completion.status];
+  const claim =
+    completion.claim === 'done'
+      ? 'The last reply reported the work as done.'
+      : completion.claim === 'partial'
+        ? 'The last reply said work remained.'
+        : 'The last reply made no completion claim.';
+  const items = completion.checks
+    .map((check) => {
+      const turnLink =
+        check.evidenceTurnIndex !== undefined
+          ? `<button type="button" class="retro-turn-link" data-turn="t${num(check.evidenceTurnIndex)}r">Turn ${num(
+              check.evidenceTurnIndex + 1,
+            )}</button> · `
+          : '';
+      return `<li class="completion-check completion-check-${check.passed ? 'pass' : 'miss'}">${turnLink}${escapeHtml(
+        check.detail,
+      )}</li>`;
+    })
+    .join('');
+  return `<section class="retro completion completion-${escapeHtml(completion.status)}" role="note">
+    <p class="retro-head"><span class="retro-chip completion-chip-${escapeHtml(completion.status)}">${escapeHtml(
+      label,
+    )}</span><span class="retro-outcome">Did it really finish? ${escapeHtml(claim)}</span></p>
+    ${items.length > 0 ? `<ul class="retro-findings">${items}</ul>` : ''}
+    <p class="completion-foot muted">${escapeHtml(COMPLETION_CARD_FOOTER)}</p>
   </section>`;
 }
 
@@ -2360,6 +2454,15 @@ const STYLE = `
   .retro-bumpy { border-left-color: var(--vscode-editorWarning-foreground, #c90); }
   .retro-struggled { border-left-color: var(--vscode-errorForeground, #c33); }
   .retro-abandoned { border-left-color: var(--vscode-descriptionForeground, #888); }
+  .completion-verified { border-left-color: var(--vscode-testing-iconPassed, #2da44e); }
+  .completion-unverified { border-left-color: var(--vscode-editorWarning-foreground, #c90); }
+  .completion-contradicted { border-left-color: var(--vscode-errorForeground, #c33); }
+  .completion-incomplete { border-left-color: var(--vscode-descriptionForeground, #888); }
+  .completion-chip-verified { background: var(--vscode-testing-iconPassed, #2da44e); }
+  .completion-chip-unverified { background: var(--vscode-editorWarning-foreground, #c90); }
+  .completion-chip-contradicted { background: var(--vscode-errorForeground, #c33); }
+  .completion-chip-incomplete { background: var(--vscode-descriptionForeground, #888); }
+  .completion-foot { margin: .45rem 0 0; font-size: .8rem; }
   .retro-head { display: flex; align-items: center; gap: .55rem; margin: 0; font-weight: 600; }
   .retro-chip { padding: .1rem .55rem; border-radius: 999px; font-size: .78rem; font-weight: 600; color: var(--vscode-editor-background, #fff); }
   .retro-chip-smooth { background: var(--vscode-testing-iconPassed, #2da44e); }

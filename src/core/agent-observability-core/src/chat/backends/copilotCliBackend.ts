@@ -1,3 +1,4 @@
+import { copilotHelperCwd } from '../../copilotCli/paths';
 import { exec, execFile, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -227,7 +228,7 @@ export class CopilotCliBackend implements ChatBackend {
 function spawnCli(command: string, args: string[]): ChildProcess {
   const options: SpawnOptions = {
     windowsHide: true,
-    cwd: os.homedir(),
+    cwd: helperWorkingDirectory(),
     stdio: ['ignore', 'pipe', 'pipe'],
     env: sanitizeCopilotEnv(process.env),
   };
@@ -252,4 +253,20 @@ function probeVersion(command: string): Promise<boolean> {
       resolve(false);
     }
   });
+}
+
+/**
+ * The directory helper runs start in: dedicated and empty, so the session the
+ * CLI leaves behind is recognisable by its working directory alone and no
+ * repository's instruction files can apply. Falls back to the home directory
+ * when it cannot be created; the session source's legacy rule covers that.
+ */
+export function helperWorkingDirectory(): string {
+  const dir = copilotHelperCwd();
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch {
+    return os.homedir();
+  }
 }

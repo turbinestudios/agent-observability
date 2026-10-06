@@ -3,6 +3,7 @@ import { Configuration } from '@agent-observability/core/src/config/configuratio
 import { ClaudeCodeService } from '@agent-observability/core/src/claude/claudeCodeService';
 import { TelemetryService } from '@agent-observability/core/src/telemetry/telemetryService';
 import { CopilotSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
+import { CopilotCliSource } from '@agent-observability/core/src/copilotCli/copilotCliSource';
 import { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
 import * as path from 'node:path';
@@ -11,6 +12,7 @@ import type {
   ContextAction,
   AnalysisStatus,
   IndexStatus,
+  ReworkSessionRow,
   ListSessionsParams,
   RpcEvent,
   RpcRequest,
@@ -22,6 +24,8 @@ import {
   DEFAULT_OVERVIEW_WINDOW,
   DEFAULT_TEAM_WINDOW,
   INSIGHT_HOTSPOT_LIMIT,
+  INSIGHT_TOOL_LIMIT,
+  TOOL_FAILURE_MIN_CALLS,
   MAX_COMPARE_SESSIONS,
   sessionKey,
   toOverviewWindow,
@@ -55,6 +59,20 @@ import {
 } from './improve/contextPlan';
 import { applyContextPlan, diffForEdit, undoContextPlan } from './improve/contextPlanApply';
 import { LiveBoardService } from './live/liveBoard';
+import { markdownToHtml } from '@agent-observability/core/src/chat/webview/markdownToHtml';
+import { buildRepositoryDigest, renderRepositoryDigestMarkdown } from '@agent-observability/core/src/analysis/repositoryDigest';
+import { renderHandoffBriefMarkdown } from '@agent-observability/core/src/analysis/handoffBrief';
+import { RunController } from './run/runController';
+import { RunService } from './run/runService';
+import { RunStore } from './run/runs';
+import { resolveRuntimeTarget } from './run/runtimePath';
+import { SdkRunDriver } from './run/sdkDriver';
+import { RUN_DEFAULT_MODEL_KEY, RUN_DISCLOSED_KEY, RUN_ENABLED_KEY } from './settings';
+import { buildHandoff, buildReviewPackets, resumeTarget, type HandoffBriefDeps } from './packet/sessionText';
+import { resolveRepoRoot } from './improve/repoRoot';
+import { reworkFileRows } from './analysis/reworkPaths';
+import { InboxService } from './inbox/inboxService';
+import { InboxStore } from './inbox/inboxStore';
 import { TeamController } from './team/teamController';
 import { buildRepoDigestInput, buildRepoHub, buildRepositoryCards } from './workspace/repoHub';
 import { AiBackendHolder, backendVendor } from './aiBackends';
@@ -101,7 +119,7 @@ telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
 // be dropped on every index pass, or a session created while the app is open
 // shows in the list but fails to open with "not found" until a restart.
 const claude = new ClaudeCodeService(config);
-const sources = new SourceRegistry([claude, new CopilotSource(telemetry, config)]);
+const sources = new SourceRegistry([claude, new CopilotSource(telemetry, config), new CopilotCliSource(config)]);
 
 // One detector for the whole process: it is stateless and reads the live config
 // on every call, so the detail view and the background pass always agree about
@@ -196,17 +214,38 @@ function analysisStatus(): AnalysisStatus {
 // index pass settles, so a cold start paints the list before any watch is
 // armed; its own re-index requests are marked so the analysis pass leaves
 // still-moving transcripts alone.
+// The attention inbox rides the live board's own change events, so "needs
+// you" can never lag the card it is derived from. Bound late because each
+// needs the other: the board feeds the inbox, the inbox reads the board.
+const inboxRef: { current?: InboxService } = {};
+// Bound late for the same reason: the run host is built after the board it reports to.
+const runRef: { current?: RunController } = {};
 const live = new LiveBoardService({
   db,
   config,
   hidden,
   renames,
-  emit,
+  emit: (event) => {
+    emit(event);
+    if (event.event === 'workspace.live') {
+      inboxRef.current?.onLive(event.snapshot);
+    }
+  },
   requestIndex: () => {
     liveTriggered = true;
     background.request();
   },
+  hosted: () => runRef.current?.liveStates() ?? [],
 });
+const attention = new InboxService({
+  db,
+  hidden,
+  renames,
+  store: new InboxStore(),
+  live: () => live.snapshot(),
+  emit,
+});
+inboxRef.current = attention;
 
 /**
  * The app version, for the team shard's `toolVersion`. Only main knows it, so
@@ -240,6 +279,111 @@ const hubDeps = {
   sources,
 };
 
+// Run: the app as agent host. Drives the installed `copilot` through the
+// Copilot SDK under the signed-in Copilot login; off until enabled in
+// Settings and acknowledged in the view. The SDK is loaded lazily inside the
+// driver, so nothing is required until a session is actually started.
+const runEnabled = (): boolean => settings.get<unknown>(RUN_ENABLED_KEY, false) === true;
+const runAcknowledged = (): boolean => settings.get<unknown>(RUN_DISCLOSED_KEY, false) === true;
+const runController = new RunController({
+  driver: new SdkRunDriver({
+    resolveRuntime: () => resolveRuntimeTarget(config.getAiHelperCopilotCliPath() ?? ''),
+  }),
+  records: new RunStore(),
+  emit: (sessionId, change) => {
+    emit({ event: 'run.event', sessionId, change });
+    if (change.type === 'status' || change.type === 'permission' || change.type === 'permission-cleared') {
+      live.onHostedChanged();
+      emit({ event: 'run.active', count: runController.activeCount() });
+    }
+  },
+  enabled: runEnabled,
+  acknowledged: runAcknowledged,
+  renderMarkdown: markdownToHtml,
+  onTurnEnded: () => background.request(),
+});
+runRef.current = runController;
+const run = new RunService({
+  controller: runController,
+  enabled: runEnabled,
+  acknowledged: runAcknowledged,
+  acknowledge: () => settings.update({ [RUN_DISCLOSED_KEY]: true }),
+  defaultModel: () => {
+    const value = settings.get<unknown>(RUN_DEFAULT_MODEL_KEY, '');
+    return typeof value === 'string' ? value : '';
+  },
+  repositories: () => [...new Set(db.listGroups(hidden.all()).map((group) => group.repository))],
+  resolveRoot: (repository) => {
+    const resolved = resolveRepoRoot(repository, db);
+    return 'root' in resolved ? resolved.root : undefined;
+  },
+  cliSessions: () =>
+    db
+      .listSessions({ source: 'copilot-cli', limit: 30 }, hidden.all())
+      .map((row) => ({ sessionId: row.sessionId, repository: row.repository })),
+  cliCwd: (sessionId) =>
+    resumeTarget('copilot-cli', sessionId, { mainPath: (src, id) => db.mainPath(src, id) }).cwd,
+  isHidden: (source, sessionId) => hidden.isHidden(source, sessionId),
+  repositoryOf: (source, sessionId) => db.getRow(source, sessionId)?.repository,
+  digestMarkdown: (repository) =>
+    renderRepositoryDigestMarkdown(
+      buildRepositoryDigest(buildRepoDigestInput(repository, DEFAULT_OVERVIEW_WINDOW, hubDeps)),
+    ),
+  plan: (planId) => {
+    const plan = contextPlans.get(planId);
+    return plan === undefined
+      ? undefined
+      : {
+          repository: plan.repository,
+          ...(plan.summary !== undefined ? { summary: plan.summary } : {}),
+          edits: plan.edits.map((edit) => ({
+            path: edit.path,
+            action: edit.action,
+            ...(edit.rationale !== undefined ? { rationale: edit.rationale } : {}),
+          })),
+        };
+  },
+  retro: (source, sessionId) => {
+    const facts = detail.sessionFacts(source, sessionId, stampOf(source, sessionId), detailContext(source, sessionId));
+    const retro = facts.retro;
+    return retro === undefined
+      ? undefined
+      : {
+          ...(retro.goal !== undefined ? { goal: retro.goal } : {}),
+          tips: retro.tips.map((tip) => tip.text),
+          findings: retro.findings.filter((f) => f.severity !== 'info').map((f) => f.description),
+        };
+  },
+  handoffMarkdown: (source, sessionId) => {
+    try {
+      return renderHandoffBriefMarkdown(buildHandoff(source, sessionId, sessionTextDeps()).brief);
+    } catch {
+      return undefined;
+    }
+  },
+});
+
+/** Renamed titles onto the rework ranking, like every other session list. */
+function decorateReworkSessions<T extends { source: string; sessionId: string; title?: string }>(rows: T[]): T[] {
+  return rows.map((row) => {
+    const renamed = renames.get(row.source, row.sessionId);
+    return renamed === undefined ? row : { ...row, title: renamed };
+  });
+}
+
+/** The Dashboard's rework card: the rate's two numbers and the top five sessions. */
+function reworkInsight(
+  endedAfterMs: number | undefined,
+  hiddenKeys: readonly string[],
+): { editedSessions: number; reworkedSessions: number; sessions: ReworkSessionRow[] } {
+  const ranking = db.reworkRanking(endedAfterMs === undefined ? {} : { endedAfterMs }, hiddenKeys, 5);
+  return {
+    editedSessions: ranking.editedSessions,
+    reworkedSessions: ranking.reworkedSessions,
+    sessions: decorateReworkSessions(ranking.sessions),
+  };
+}
+
 function onBackgroundMessage(message: BackgroundMessage): void {
   switch (message.type) {
     case 'index':
@@ -248,6 +392,7 @@ function onBackgroundMessage(message: BackgroundMessage): void {
       if (message.status.phase === 'idle') {
         live.ensureStarted();
         live.onIndexSettled();
+        attention.onIndexSettled();
       }
       break;
     case 'analysis':
@@ -394,6 +539,42 @@ function pushRow(source: string, sessionId: string): SessionRow | undefined {
   return patched;
 }
 
+/**
+ * What the review packet and the hand-off brief read: the detail view's own
+ * memoized parse, the decorated index row, and the repository's verified
+ * checkout. Local and user-initiated; nothing here calls a vendor or writes.
+ */
+function sessionTextDeps(): HandoffBriefDeps {
+  return {
+    facts: (source, sessionId) =>
+      detail.sessionFacts(source, sessionId, stampOf(source, sessionId), detailContext(source, sessionId)),
+    row: (source, sessionId) => {
+      const row = db.getRow(source, sessionId);
+      if (row === undefined) {
+        return undefined;
+      }
+      const [shown] = renames.apply([row]);
+      return { repository: shown.repository, ...(shown.title !== undefined ? { title: shown.title } : {}) };
+    },
+    resolveRoot: (repository) => {
+      if (repository.length === 0 || repository === 'unknown') {
+        return undefined;
+      }
+      const resolved = resolveRepoRoot(repository, db);
+      return 'root' in resolved ? resolved.root : undefined;
+    },
+    costMode: (source) => sources.get(source)?.costMode ?? 'usd',
+    live: (source, sessionId) => {
+      const row = live.snapshot().rows.find((r) => r.source === source && r.sessionId === sessionId);
+      if (row === undefined) {
+        return undefined;
+      }
+      const failed = (row as { lastToolFailed?: boolean }).lastToolFailed;
+      return { lastEvent: row.lastEvent, ...(failed !== undefined ? { lastToolFailed: failed } : {}) };
+    },
+  };
+}
+
 function handle(request: RpcRequest): unknown {
   switch (request.method) {
     case 'ping':
@@ -411,6 +592,8 @@ function handle(request: RpcRequest): unknown {
       hidden.set(source, sessionId, isHidden);
       // The list filters on this, so it has to re-query rather than patch.
       emit({ event: 'sessions.removed', keys: [sessionKey(source, sessionId)] });
+      // A hidden session must leave the inbox at once, not at the next index pass.
+      attention.onIndexSettled();
       return undefined;
     }
     case 'sessions.hiddenCount':
@@ -496,6 +679,24 @@ function handle(request: RpcRequest): unknown {
         );
       });
     }
+    case 'sessions.reviewPacket': {
+      const refs = request.params[0];
+      if (!Array.isArray(refs) || refs.length === 0) {
+        throw new Error('Pick at least one session.');
+      }
+      if (refs.length > MAX_COMPARE_SESSIONS) {
+        throw new Error(`A review packet covers at most ${MAX_COMPARE_SESSIONS} sessions.`);
+      }
+      return buildReviewPackets(refs, sessionTextDeps());
+    }
+    case 'sessions.handoffBrief': {
+      const [source, sessionId] = request.params;
+      return buildHandoff(source, sessionId, sessionTextDeps());
+    }
+    case 'sessions.handoff': {
+      const [source, sessionId] = request.params;
+      return resumeTarget(source, sessionId, { mainPath: (src, id) => db.mainPath(src, id) });
+    }
     case 'sessions.contextPrompt': {
       const [source, sessionId, section] = request.params;
       return detail.contextPromptFacts(
@@ -561,6 +762,73 @@ function handle(request: RpcRequest): unknown {
         return renamed === undefined ? row : { ...row, title: renamed };
       });
       return { rows: named, repositories, status: analysisStatus() };
+    }
+    case 'evidence.rework': {
+      const params = request.params[0] ?? {};
+      const window = toOverviewWindow(params.window ?? DEFAULT_OVERVIEW_WINDOW);
+      const hiddenKeys = hidden.all();
+      const endedAfterMs = window === 'all' ? undefined : windowStartMs(window);
+      const ranking = db.reworkRanking(
+        {
+          ...(params.source !== undefined ? { source: params.source } : {}),
+          ...(params.repository !== undefined ? { repository: params.repository } : {}),
+          ...(endedAfterMs !== undefined ? { endedAfterMs } : {}),
+        },
+        hiddenKeys,
+      );
+      return {
+        editedSessions: ranking.editedSessions,
+        reworkedSessions: ranking.reworkedSessions,
+        sessions: decorateReworkSessions(ranking.sessions),
+        files: reworkFileRows(ranking.files, db),
+        repositories: [...new Set(db.listGroups(hiddenKeys).map((g) => g.repository))]
+          .filter((r) => r !== 'unknown')
+          .sort(),
+        status: analysisStatus(),
+        window,
+      };
+    }
+    case 'evidence.completion': {
+      const params = request.params[0] ?? {};
+      const window = toOverviewWindow(params.window ?? DEFAULT_OVERVIEW_WINDOW);
+      const hiddenKeys = hidden.all();
+      const endedAfterMs = window === 'all' ? undefined : windowStartMs(window);
+      return {
+        summary: db.completionSummary(
+          {
+            ...(params.source !== undefined ? { source: params.source } : {}),
+            ...(params.repository !== undefined ? { repository: params.repository } : {}),
+            ...(endedAfterMs !== undefined ? { endedAfterMs } : {}),
+          },
+          hiddenKeys,
+        ),
+        repositories: [...new Set(db.listGroups(hiddenKeys).map((g) => g.repository))]
+          .filter((r) => r !== 'unknown')
+          .sort(),
+        status: analysisStatus(),
+        window,
+      };
+    }
+    case 'evidence.tools': {
+      const params = request.params[0] ?? {};
+      const window = toOverviewWindow(params.window ?? DEFAULT_OVERVIEW_WINDOW);
+      const hiddenKeys = hidden.all();
+      const endedAfterMs = window === 'all' ? undefined : windowStartMs(window);
+      return {
+        rows: db.toolRanking(
+          {
+            ...(params.source !== undefined ? { source: params.source } : {}),
+            ...(params.repository !== undefined ? { repository: params.repository } : {}),
+            ...(endedAfterMs !== undefined ? { endedAfterMs } : {}),
+          },
+          hiddenKeys,
+        ),
+        repositories: [...new Set(db.listGroups(hiddenKeys).map((g) => g.repository))]
+          .filter((r) => r !== 'unknown')
+          .sort(),
+        status: analysisStatus(),
+        window,
+      };
     }
     case 'retro.deep': {
       const [source, sessionId] = request.params;
@@ -671,12 +939,28 @@ function handle(request: RpcRequest): unknown {
         verdictDaily,
         themes,
         hotspots,
+        evidence: {
+          completion: db.completionSummary(endedAfterMs === undefined ? {} : { endedAfterMs }, hiddenKeys),
+          rework: reworkInsight(endedAfterMs, hiddenKeys),
+          // Ranked by failure RATE among tools called often enough to judge;
+          // a tool that failed once in two calls is noise, not a finding.
+          tools: db
+            .toolRanking(endedAfterMs === undefined ? {} : { endedAfterMs }, hiddenKeys)
+            .filter((row) => row.calls >= TOOL_FAILURE_MIN_CALLS && row.failures > 0)
+            .sort((a, b) => b.failures / b.calls - a.failures / a.calls || b.failures - a.failures)
+            .slice(0, INSIGHT_TOOL_LIMIT)
+            .map((row) => ({ tool: row.tool, calls: row.calls, failures: row.failures })),
+        },
         status: analysisStatus(),
         window,
         windowDays,
         ...(dailyCapped === true ? { dailyCapped: true as const } : {}),
       };
     }
+    case 'inbox.list':
+      return attention.snapshot(request.params[0]?.includeDismissed === true);
+    case 'inbox.mark':
+      return attention.mark(request.params[0], request.params[1], request.params[2]);
     case 'workspace.live':
       return live.snapshot();
     case 'workspace.repositories':
@@ -710,6 +994,32 @@ function handle(request: RpcRequest): unknown {
       return team.view(toTeamWindow(request.params[0]?.window ?? DEFAULT_TEAM_WINDOW));
     case 'team.members':
       return team.members();
+    case 'run.availability':
+      return run.availability();
+    case 'run.acknowledge':
+      return run.acknowledge();
+    case 'run.repositories':
+      return run.repositories();
+    case 'run.start':
+      return run.start(request.params[0]);
+    case 'run.resume':
+      return run.resume(request.params[0]);
+    case 'run.send':
+      return run.send(request.params[0], request.params[1]);
+    case 'run.abort':
+      return run.abort(request.params[0]);
+    case 'run.close':
+      return run.close(request.params[0]);
+    case 'run.list':
+      return run.list();
+    case 'run.transcript':
+      return run.transcript(request.params[0]);
+    case 'run.permission.respond':
+      return run.respondPermission(request.params[0], request.params[1], request.params[2]);
+    case 'run.input.respond':
+      return run.respondInput(request.params[0], request.params[1]);
+    case 'run.prefill':
+      return run.prefill(request.params[0]);
     case 'settings.get':
       return buildSettingsSnapshot(settings, config, settingsSeams);
     case 'settings.update': {
@@ -839,5 +1149,16 @@ process.parentPort?.on('message', (event) => {
     copilotSetupNotes = startupCopilotSetup(settings, config).notes;
     // A worker runs the pass; even a cold index no longer queues RPC behind it.
     setTimeout(() => runIndex(), 0);
+  }
+});
+
+// A hosted session must not be left with an unanswered request when the app
+// goes away: main asks for a shutdown before quitting, every parked request
+// is answered "user not available" and each session is disconnected. The
+// sessions stay on disk and can be resumed.
+process.parentPort?.on('message', (event) => {
+  const data = event.data as { type?: string } | undefined;
+  if (data?.type === 'shutdown') {
+    void runController.shutdown().finally(() => process.exit(0));
   }
 });

@@ -3,6 +3,7 @@
 const SOURCE_LABELS: Record<string, string> = {
   claude: 'Claude Code',
   copilot: 'Copilot',
+  'copilot-cli': 'Copilot CLI',
   'copilot-cloud': 'Copilot Cloud',
   'copilot-agent': 'Copilot Agent',
 };

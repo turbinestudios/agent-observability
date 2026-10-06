@@ -15,6 +15,7 @@
 :root {
   --series-1: #3987e5; /* blue   — Claude Code */
   --series-2: #d95926; /* orange — Copilot */
+  --series-cli: #8a5cd6; /* violet — Copilot CLI */
   --series-3: #199e70; /* aqua   — input tokens */
   --series-4: #c98500; /* yellow — output tokens */
   --chart-grid: #2c2c2a;
@@ -24,6 +25,7 @@
 :root[data-theme='light'] {
   --series-1: #2a78d6;
   --series-2: #eb6834;
+  --series-cli: #8a5cd6; /* violet — Copilot CLI */
   --series-3: #1baf7a;
   --series-4: #eda100;
   --chart-grid: #e1e0d9;
@@ -523,4 +525,10 @@
 .source-table tbody tr:last-child th,
 .source-table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.completion-headline {
+  margin: 4px 0 6px;
+  font-size: 18px;
+  font-weight: 600;
 }

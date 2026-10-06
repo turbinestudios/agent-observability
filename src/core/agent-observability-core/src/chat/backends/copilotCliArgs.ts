@@ -21,10 +21,12 @@
  *   available — `--disable-builtin-mcps` keeps helper runs from touching it.
  * - `--no-remote` / `--no-remote-export` keep the session off GitHub web and
  *   mobile; `--no-custom-instructions` keeps AGENTS.md files out of the
- *   prompt (the backend also spawns in the home directory).
- * - The CLI persists its sessions under `~/.copilot` with no opt-out flag;
- *   nothing in this product ingests that store today, but if a Copilot CLI
- *   session source is ever added, helper runs must be excluded from it.
+ *   prompt (the backend also spawns in its own empty directory).
+ * - The CLI persists its sessions under `~/.copilot` with no opt-out flag,
+ *   and the Copilot CLI session source reads that store. Helper runs are
+ *   therefore started in a dedicated working directory (`copilotHelperCwd`)
+ *   and dropped by `copilotCli/helperRuns.ts`; the payload pointer's opening
+ *   words are exported below so the rule for older runs cannot drift.
  */
 
 /** Model used when the setting is blank — the CLI picks one itself. */
@@ -85,9 +87,12 @@ export function buildCopilotArgs(model: string, prompt: string): string[] {
  * The pointer prompt for payload-file transport. The payload file holds the
  * real serialized prompt verbatim; this only tells the model where it is.
  */
+/** How every payload-pointer prompt begins; `helperRuns.ts` matches on it. */
+export const COPILOT_PAYLOAD_POINTER_PREFIX = 'Read the file at ';
+
 export function copilotPayloadPointer(payloadPath: string): string {
   return (
-    `Read the file at ${payloadPath} with your view tool and treat its entire ` +
+    `${COPILOT_PAYLOAD_POINTER_PREFIX}${payloadPath} with your view tool and treat its entire ` +
     'contents as your instructions and input. Do not mention the file or the tool in your answer.'
   );
 }

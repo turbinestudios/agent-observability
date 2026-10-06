@@ -1,3 +1,4 @@
+import type { CompletionEvidence } from './completionCheck';
 import { describe, expect, it } from 'vitest';
 import type {
   SessionAgentUsage,
@@ -681,5 +682,111 @@ describe('buildSessionRetrospective — tips and counts', () => {
     // Finding descriptions and tips are generic sentences by contract.
     expect(JSON.stringify(retro.findings)).not.toContain(marker);
     expect(JSON.stringify(retro.tips)).not.toContain(marker);
+  });
+});
+
+// ── Completion check integration ────────────────────────────────────────────
+
+function completionEvidence(over: Partial<CompletionEvidence> = {}): CompletionEvidence {
+  return {
+    sourceComplete: true,
+    codeEditCalls: 2,
+    docEditCalls: 0,
+    filesEdited: 1,
+    lastEditTurnIndex: 0,
+    verifyRuns: 0,
+    verifyFailures: 0,
+    verifyUnknownResult: 0,
+    verifiedAfterLastEdit: false,
+    lastVerifyFailed: false,
+    lastVerifyResultKnown: false,
+    endedOnFailedTool: false,
+    trailingFailedTools: 0,
+    claim: 'done',
+    admitsSkippedChecks: false,
+    filesOutsideRepo: 0,
+    filesNeverReadBack: 0,
+    ...over,
+  };
+}
+
+const FAILED_CHECK: Partial<CompletionEvidence> = {
+  verifyRuns: 1,
+  verifyFailures: 1,
+  verifiedAfterLastEdit: true,
+  lastVerifyFailed: true,
+  lastVerifyResultKnown: true,
+  lastVerifyClass: 'test',
+  lastVerifyTurnIndex: 0,
+};
+
+describe('buildSessionRetrospective — completion check integration', () => {
+  const smooth = (): SessionDetail => detailOf([turn({ userRequest: 'Add the endpoint and its tests', finalResponse: 'Done.' })]);
+
+  it('is absent, and changes nothing, when the source supplies no completion evidence', () => {
+    const without = buildSessionRetrospective(smooth(), sig());
+    expect(without.completion).toBeUndefined();
+    expect(without.counts.completion).toBeUndefined();
+    expect(without.findings.map((f) => f.id)).not.toContain('completion-unverified');
+  });
+
+  it('raises a friction finding and the verification tip when done was reported without a check', () => {
+    const retro = buildSessionRetrospective(smooth(), sig({ completion: completionEvidence() }));
+    expect(retro.completion?.status).toBe('unverified');
+    const finding = retro.findings.find((f) => f.id === 'completion-unverified');
+    expect(finding?.severity).toBe('friction');
+    expect(finding?.turnIndex).toBe(0);
+    expect(retro.tips.map((t) => t.id)).toContain('ask-for-verification');
+    // Unverified alone never moves the verdict or the outcome.
+    expect(retro.verdict).toBe(buildSessionRetrospective(smooth(), sig()).verdict);
+    expect(retro.outcome).toBe(buildSessionRetrospective(smooth(), sig()).outcome);
+    expect(retro.counts.completion?.completionStatus).toBe('unverified');
+    expect(retro.counts.completion?.completionClaim).toBe('done');
+  });
+
+  it('keeps an unverified session without a done claim as information only, with no tip', () => {
+    const retro = buildSessionRetrospective(smooth(), sig({ completion: completionEvidence({ claim: 'none' }) }));
+    expect(retro.findings.find((f) => f.id === 'completion-unverified')?.severity).toBe('info');
+    expect(retro.tips.map((t) => t.id)).not.toContain('ask-for-verification');
+  });
+
+  it('lifts a smooth session to bumpy at most when the last check failed, and caps the outcome', () => {
+    const baseline = buildSessionRetrospective(smooth(), sig());
+    const retro = buildSessionRetrospective(smooth(), sig({ completion: completionEvidence(FAILED_CHECK) }));
+    expect(retro.completion?.status).toBe('contradicted');
+    expect(baseline.verdict).toBe('smooth');
+    expect(retro.verdict).toBe('bumpy');
+    expect(retro.verdictReasons).toContain('completion-contradicted');
+    expect(retro.outcome).not.toBe('likely-fulfilled');
+    expect(retro.tips.map((t) => t.id)).toContain('fix-failing-check-first');
+  });
+
+  it('never turns a struggled session into anything else', () => {
+    const struggling = detailOf([
+      turn({ userRequest: 'Fix the parser' }),
+      turn({ userRequest: 'no, that is wrong' }),
+      turn({ userRequest: 'no, still wrong' }),
+      turn({ userRequest: 'no, not that either' }),
+    ]);
+    const before = buildSessionRetrospective(struggling, sig()).verdict;
+    const after = buildSessionRetrospective(struggling, sig({ completion: completionEvidence(FAILED_CHECK) })).verdict;
+    expect(after).toBe(before);
+  });
+
+  it('marks an unfinished ending as information and caps a fulfilled outcome at partially', () => {
+    const retro = buildSessionRetrospective(smooth(), sig({ completion: completionEvidence({ claim: 'partial' }) }));
+    expect(retro.completion?.status).toBe('incomplete');
+    expect(retro.findings.find((f) => f.id === 'incomplete-ending')?.severity).toBe('info');
+    expect(retro.outcome).not.toBe('likely-fulfilled');
+    expect(retro.verdict).toBe(buildSessionRetrospective(smooth(), sig()).verdict);
+  });
+
+  it('raises nothing for a session the check does not apply to', () => {
+    const retro = buildSessionRetrospective(
+      smooth(),
+      sig({ completion: completionEvidence({ codeEditCalls: 0, filesEdited: 0 }) }),
+    );
+    expect(retro.completion?.status).toBe('not-applicable');
+    expect(retro.findings.map((f) => f.id).filter((id) => id.startsWith('completion') || id === 'incomplete-ending')).toEqual([]);
   });
 });

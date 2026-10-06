@@ -53,6 +53,11 @@ export interface LiveTailFacts {
   sessionId?: string;
   model?: string;
   aiTitle?: string;
+  /**
+   * The newest main-thread tool result failed and nothing followed it. Lets
+   * the inbox tell "ended on an error" from an ordinary finish.
+   */
+  lastToolFailed?: boolean;
 }
 
 export interface LiveThresholds {
@@ -151,6 +156,9 @@ export function deriveTailFacts(records: readonly TranscriptRecord[], fileMtimeM
           }
         }
         facts.lastEvent = 'tool-result';
+        if (results.some((b) => b.is_error === true)) {
+          facts.lastToolFailed = true;
+        }
         return facts;
       }
       facts.lastEvent = 'unknown';

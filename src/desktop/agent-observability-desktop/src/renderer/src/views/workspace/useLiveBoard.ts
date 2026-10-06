@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import type { LiveBoardSnapshot, LiveStatus } from '../../../../shared/rpc';
+import type { InboxSnapshot, LiveBoardSnapshot, LiveStatus } from '../../../../shared/rpc';
 import { dataHost } from '../../api/client';
+import { inboxNotifications } from './inbox';
 import { notificationsFor } from './liveNotifications';
 
 /** The live board, kept current by the datahost's push events. */
@@ -43,7 +44,11 @@ export function useLiveBoard(): { snapshot: LiveBoardSnapshot | undefined; error
  * `settingsVersion` bumps whenever Settings may have changed, so the toggle
  * is re-read without a restart.
  */
-export function useLiveNotifications(settingsVersion: number, onOpen: (source: string, sessionId: string) => void): void {
+export function useLiveNotifications(
+  settingsVersion: number,
+  onOpen: (source: string, sessionId: string) => void,
+  inbox?: InboxSnapshot,
+): void {
   const [enabled, setEnabled] = useState(false);
   const previous = useRef<Map<string, LiveStatus> | undefined>(undefined);
   const open = useRef(onOpen);
@@ -93,4 +98,30 @@ export function useLiveNotifications(settingsVersion: number, onOpen: (source: s
       }
     });
   }, [enabled]);
+
+  // Inbox-only reasons (a probable approval prompt, an error ending) ride the
+  // same toggle. The live notifier above already covers "waiting" and
+  // "finished", so the two never fire for the same moment.
+  const inboxKeys = useRef<Set<string> | undefined>(undefined);
+  useEffect(() => {
+    if (inbox === undefined) {
+      return;
+    }
+    const { decisions, keys } = inboxNotifications(inboxKeys.current, inbox);
+    inboxKeys.current = keys;
+    if (!enabled || typeof Notification === 'undefined' || Notification.permission !== 'granted') {
+      return;
+    }
+    for (const decision of decisions) {
+      try {
+        const toast = new Notification(decision.title, { body: decision.body, tag: decision.key });
+        toast.onclick = () => {
+          window.focus();
+          open.current(decision.source, decision.sessionId);
+        };
+      } catch {
+        // No notification support on this platform.
+      }
+    }
+  }, [inbox, enabled]);
 }

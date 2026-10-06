@@ -17,10 +17,12 @@ import { LIVE_NOTIFICATIONS_KEY } from './live/liveBoard';
 import {
   TEAM_AUTO_EXPORT_KEY,
   TEAM_CONSENTED_AT_KEY,
+  TEAM_ENABLED_KEY,
   TEAM_FOLDER_KEY,
   TEAM_REPOSITORIES_KEY,
   TEAM_REPOSITORY_MODE_KEY,
   TEAM_SHARE_ENABLED_KEY,
+  teamEnabled,
   teamSharingOn,
 } from './team/teamExport';
 import { pickCopilotDatabases, type CopilotDatabaseCandidate } from './indexer/copilotIndexer';
@@ -31,6 +33,16 @@ import { pickCopilotDatabases, type CopilotDatabaseCandidate } from './indexer/c
  * writing goes through the same {@link DesktopSettingsReader} the rest of the
  * datahost uses, so a change here is immediately visible to the indexers.
  */
+
+/** Settings key for hosting Copilot sessions (Run). OFF by default: a consent gate. */
+export const RUN_ENABLED_KEY = 'run.enabled';
+/** Settings key for the model a new hosted session starts with; empty = the CLI's default. */
+export const RUN_DEFAULT_MODEL_KEY = 'run.defaultModel';
+/** Set only by the `run.acknowledge` RPC, never through a settings patch. */
+export const RUN_DISCLOSED_KEY = 'run.disclosed';
+
+/** Settings key for the review packet's "Include what I asked" toggle (default on). */
+export const PACKET_INCLUDE_PROMPTS_KEY = 'packet.includePrompts';
 
 /** Injectable environment so tests never scan the developer's real machine. */
 export interface SettingsSeams {
@@ -66,6 +78,7 @@ export function buildSettingsSnapshot(
     claudeProjectsPath,
     copilotEnabled: config.isLocalTelemetryEnabled(),
     sqlitePath,
+    copilotCliEnabled: config.isCopilotCliEnabled(),
     resolvedClaudeDirs: resolveClaudeProjectsDirs(config, seams.claudeFs ?? defaultFs),
     claudeOverrideMissing: claudeProjectsPath !== '' && !exists(claudeProjectsPath),
     resolvedCopilotDbs: pick(config).map((db) => ({
@@ -91,6 +104,10 @@ export function buildSettingsSnapshot(
     aiBackend: config.getAiHelperBackend() === 'copilot-cli' ? 'copilot-cli' : 'claude-code',
     copilotCliPath: storedString(settings, ConfigKeys.aiHelperCopilotCliPath),
     liveNotifications: storedBoolean(settings, LIVE_NOTIFICATIONS_KEY, false),
+    runEnabled: storedBoolean(settings, RUN_ENABLED_KEY, false),
+    runDefaultModel: storedString(settings, RUN_DEFAULT_MODEL_KEY),
+    packetIncludePrompts: storedBoolean(settings, PACKET_INCLUDE_PROMPTS_KEY, true),
+    teamEnabled: teamEnabled(settings),
     teamFolder,
     teamFolderExists: teamFolder !== '' && exists(teamFolder),
     // Sharing reads as ON only when the toggle is on AND consent was recorded —
@@ -99,7 +116,9 @@ export function buildSettingsSnapshot(
     teamAutoExport: storedBoolean(settings, TEAM_AUTO_EXPORT_KEY, true),
     teamRepositoryMode: teamMode,
     teamRepositories: storedStringList(settings, TEAM_REPOSITORIES_KEY),
-    teamDeveloperId: seams.teamDeveloperId?.() ?? '',
+    // Asking for the id creates this install's salt file, so it is not asked
+    // for while Team is off.
+    teamDeveloperId: teamEnabled(settings) ? (seams.teamDeveloperId?.() ?? '') : '',
     configPath,
     configDir: path.dirname(configPath),
   };
@@ -132,6 +151,12 @@ export function applySettingsPatch(
   }
   if (typeof patch.copilotEnabled === 'boolean' && patch.copilotEnabled !== storedBoolean(settings, ConfigKeys.localTelemetryEnabled, ConfigDefaults.localTelemetryEnabled)) {
     update[ConfigKeys.localTelemetryEnabled] = patch.copilotEnabled;
+    changed.copilot = true;
+  }
+  // Copilot CLI sessions are a third local source; it rides the `copilot`
+  // flag because the same refresh (sources, detail cache, live board) applies.
+  if (typeof patch.copilotCliEnabled === 'boolean' && patch.copilotCliEnabled !== storedBoolean(settings, ConfigKeys.copilotCliEnabled, ConfigDefaults.copilotCliEnabled)) {
+    update[ConfigKeys.copilotCliEnabled] = patch.copilotCliEnabled;
     changed.copilot = true;
   }
   if (typeof patch.sqlitePath === 'string') {
@@ -213,6 +238,31 @@ export function applySettingsPatch(
     }
   }
 
+  // The Run gate: a consent surface, stored only on a real boolean. Rides the
+  // `deepRetro` flag because nothing needs rebuilding. `run.disclosed` is NOT
+  // settable from here: only the notice's acknowledge call records it.
+  if (typeof patch.runEnabled === 'boolean' && patch.runEnabled !== storedBoolean(settings, RUN_ENABLED_KEY, false)) {
+    update[RUN_ENABLED_KEY] = patch.runEnabled;
+    changed.deepRetro = true;
+  }
+  if (typeof patch.runDefaultModel === 'string') {
+    const next = patch.runDefaultModel.trim();
+    if (next !== storedString(settings, RUN_DEFAULT_MODEL_KEY) && /^[A-Za-z0-9._:-]*$/.test(next)) {
+      update[RUN_DEFAULT_MODEL_KEY] = next.length > 0 ? next : undefined;
+      changed.deepRetro = true;
+    }
+  }
+
+  // Whether a review packet quotes the user's own request lines: a plain
+  // preference remembered between dialogs, stored only on a real boolean.
+  if (
+    typeof patch.packetIncludePrompts === 'boolean' &&
+    patch.packetIncludePrompts !== storedBoolean(settings, PACKET_INCLUDE_PROMPTS_KEY, true)
+  ) {
+    update[PACKET_INCLUDE_PROMPTS_KEY] = patch.packetIncludePrompts;
+    changed.deepRetro = true;
+  }
+
   // The live-board notification toggle: a plain preference, stored only on a
   // real boolean like the consent gates (RPC payloads are untyped on the wire).
   // Rides the `deepRetro` flag because nothing needs rebuilding either.
@@ -227,6 +277,20 @@ export function applySettingsPatch(
   // The team keys. The folder is a plain path; sharing is a consent surface
   // and records WHEN it was granted, which the export gate requires alongside
   // the boolean — a hand-edited `true` in config.json alone does not share.
+  //
+  // `team.enabled` is the switch for the whole feature. Turning it off also
+  // withdraws sharing, so turning Team on again never resumes writing to the
+  // folder by itself; and sharing cannot be turned on while Team is off.
+  const teamWasOn = storedBoolean(settings, TEAM_ENABLED_KEY, false);
+  const teamOn = typeof patch.teamEnabled === 'boolean' ? patch.teamEnabled : teamWasOn;
+  if (teamOn !== teamWasOn) {
+    update[TEAM_ENABLED_KEY] = teamOn;
+    if (!teamOn) {
+      update[TEAM_SHARE_ENABLED_KEY] = false;
+      update[TEAM_CONSENTED_AT_KEY] = undefined;
+    }
+    changed.team = true;
+  }
   if (typeof patch.teamFolder === 'string') {
     const next = patch.teamFolder.trim();
     if (next !== storedString(settings, TEAM_FOLDER_KEY)) {
@@ -236,6 +300,7 @@ export function applySettingsPatch(
   }
   if (
     typeof patch.teamShareEnabled === 'boolean' &&
+    teamOn &&
     patch.teamShareEnabled !== storedBoolean(settings, TEAM_SHARE_ENABLED_KEY, false)
   ) {
     update[TEAM_SHARE_ENABLED_KEY] = patch.teamShareEnabled;

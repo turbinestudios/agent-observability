@@ -16,6 +16,7 @@ import {
   TEAM_FOLDER_KEY,
   TEAM_REPOSITORIES_KEY,
   TEAM_REPOSITORY_MODE_KEY,
+  TEAM_ENABLED_KEY,
   TEAM_SHARE_ENABLED_KEY,
   exportTeamShard,
   previewTeamShard,
@@ -175,12 +176,17 @@ afterEach(() => {
 });
 
 function consent(): void {
-  settings.update({ [TEAM_FOLDER_KEY]: folder, [TEAM_SHARE_ENABLED_KEY]: true, [TEAM_CONSENTED_AT_KEY]: now });
+  settings.update({
+    [TEAM_ENABLED_KEY]: true,
+    [TEAM_FOLDER_KEY]: folder,
+    [TEAM_SHARE_ENABLED_KEY]: true,
+    [TEAM_CONSENTED_AT_KEY]: now,
+  });
 }
 
 describe('exportTeamShard', () => {
   it('refuses before gathering anything when sharing is off, and when consent was never recorded', () => {
-    settings.update({ [TEAM_FOLDER_KEY]: folder });
+    settings.update({ [TEAM_ENABLED_KEY]: true, [TEAM_FOLDER_KEY]: folder });
     expect(exportTeamShard(deps())).toMatchObject({ ok: false, error: expect.stringContaining('turned off') });
     settings.update({ [TEAM_SHARE_ENABLED_KEY]: true });
     expect(exportTeamShard(deps()).ok).toBe(false);
@@ -188,8 +194,16 @@ describe('exportTeamShard', () => {
     expect(fs.readdirSync(folder)).toEqual([]);
   });
 
+  it('refuses while Team is off, even with sharing on and consent recorded', () => {
+    consent();
+    settings.update({ [TEAM_ENABLED_KEY]: false });
+    expect(exportTeamShard(deps())).toMatchObject({ ok: false, error: expect.stringContaining('turned off') });
+    expect(rowRequests).toBe(0);
+    expect(fs.readdirSync(folder)).toEqual([]);
+  });
+
   it('refuses without a folder, or with a missing one, as an error value', () => {
-    settings.update({ [TEAM_SHARE_ENABLED_KEY]: true, [TEAM_CONSENTED_AT_KEY]: now });
+    settings.update({ [TEAM_ENABLED_KEY]: true, [TEAM_SHARE_ENABLED_KEY]: true, [TEAM_CONSENTED_AT_KEY]: now });
     expect(exportTeamShard(deps()).error).toContain('No team folder');
     settings.update({ [TEAM_FOLDER_KEY]: path.join(dir, 'gone') });
     const result = exportTeamShard(deps());

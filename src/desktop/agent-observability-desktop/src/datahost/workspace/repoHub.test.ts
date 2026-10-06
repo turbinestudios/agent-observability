@@ -3,7 +3,6 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { RetrospectiveCounts } from '@agent-observability/core/src/analysis/retrospective';
-import type { SessionDataSource } from '@agent-observability/core/src/sources/sessionSource';
 import type { LiveSessionRow, SessionRow } from '../../shared/rpc';
 import { IndexDb } from '../indexer/indexDb';
 import type { SessionAnalysis } from '../analysis/sessionAnalyzer';
@@ -93,7 +92,6 @@ function deps(over: Partial<RepoHubDeps> = {}): RepoHubDeps {
     liveRows: () => [],
     plans: () => [],
     analysisStatus: () => ({ analyzed: 0, total: 0, running: false }),
-    sources: { get: () => undefined },
     now: () => now,
     inventorySeams: { resolveRepository: () => REPO },
     ...over,
@@ -216,7 +214,7 @@ describe('buildRepoHub', () => {
 });
 
 describe('buildRepoDigestInput', () => {
-  it('ranks tips by how many sessions fire them, relativizes paths and samples tools', () => {
+  it('ranks tips by how many sessions fire them, relativizes paths and reads persisted tool rows', () => {
     const agentsFile = path.join(checkout, 'AGENTS.md');
     db.upsertSessions([row({ sessionId: 'a' }), row({ sessionId: 'b' })]);
     for (const id of ['a', 'b']) {
@@ -227,37 +225,29 @@ describe('buildRepoDigestInput', () => {
           retro: counts({ verdict: 'bumpy', maxErrorStreak: 4, errorStreaks: 1 }),
           findings: [{ id: 'tool-error-streak', severity: 'friction', count: 1 }],
           contextFiles: [{ name: 'AGENTS.md', filePath: agentsFile, category: 'instruction', status: 'applied', estTokens: 40 }],
+          tools: [
+            { name: 'Bash', calls: 2, failures: 1, durationMsSum: 300, durationMsMax: 200, buckets: [1, 1, 0, 0, 0, 0, 0, 0, 0] },
+            { name: 'Read', calls: 1, failures: 0, durationMsSum: 10, durationMsMax: 10, buckets: [1, 0, 0, 0, 0, 0, 0, 0, 0] },
+          ],
         }),
         5_000,
         now,
       );
     }
-    const source = {
-      getSessionInteractions: () => ({
-        ok: true as const,
-        value: [
-          { operation: 'execute_tool', toolName: 'Bash', success: false },
-          { operation: 'execute_tool', toolName: 'Bash', success: true },
-          { operation: 'execute_tool', toolName: 'Read', success: true },
-          { operation: 'chat', success: true },
-        ],
-      }),
-    } as unknown as SessionDataSource;
-
-    const input = buildRepoDigestInput(REPO, 30, deps({ sources: { get: () => source } }));
+    const input = buildRepoDigestInput(REPO, 30, deps());
     expect(input.sessions.total).toBe(2);
     expect(input.tips[0]).toMatchObject({ id: 'capture-environment-context', sessions: 2 });
     expect(input.hotspots[0].path).toBe('AGENTS.md');
     expect(input.hotspots.every((h) => !path.isAbsolute(h.path))).toBe(true);
     expect(input.tools).toEqual([
-      { name: 'Bash', calls: 4, failures: 2, sampledSessions: 2 },
-      { name: 'Read', calls: 2, failures: 0, sampledSessions: 2 },
+      { name: 'Bash', calls: 4, failures: 2 },
+      { name: 'Read', calls: 2, failures: 0 },
     ]);
     expect(input.contextFiles.find((f) => f.relPath === 'AGENTS.md')?.seenInSessions).toBe(2);
     expect(input.themes[0]).toMatchObject({ signalId: 'tool-error-streak', label: 'tool-error-streak', sessions: 2 });
   });
 
-  it('omits the tools section when no session could be read', () => {
+  it('omits the tools section when no tool rows were recorded', () => {
     db.upsertSessions([row({ sessionId: 'a' })]);
     const input = buildRepoDigestInput(REPO, 30, deps());
     expect(input.tools).toBeUndefined();

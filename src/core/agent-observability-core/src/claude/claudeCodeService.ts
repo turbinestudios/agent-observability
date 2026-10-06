@@ -1,3 +1,8 @@
+import * as path from 'node:path';
+import { extractSessionActivity } from './activitySignals';
+import { evidenceFromActivity } from '../analysis/completionCheck';
+import type { SessionActivity } from '../analysis/sessionActivity';
+import { findRepoRoot } from '../chat/tasks/projectContext';
 import * as fs from 'node:fs';
 import type { Result } from '../telemetry/telemetryService';
 import { AggregationRow } from '../aggregate/aggregator';
@@ -34,6 +39,7 @@ import {
   buildSessionSummary,
   buildUserRequestContent,
 } from './mapper';
+import { fileEditStats } from '../analysis/rework';
 
 /**
  * {@link SessionDataSource} over Claude Code's JSONL transcripts.
@@ -86,6 +92,8 @@ interface CachedSummary {
 }
 
 export class ClaudeCodeService implements SessionDataSource {
+  /** Session working directory → checkout root, for the inside-repository test. */
+  private readonly repoRootCache = new Map<string, string>();
   readonly id = 'claude' as const;
   readonly label = 'Claude Code';
   readonly costMode: CostMode = 'usd';
@@ -270,15 +278,69 @@ export class ClaudeCodeService implements SessionDataSource {
   getSessionRetrospective(sessionKey: string, detail?: SessionDetail): Result<SessionRetrospective> {
     return this.guard(() => {
       const reused = detail?.summary.sessionId === sessionKey ? detail : undefined;
-      const input = this.loadSessionInput(sessionKey, reused === undefined);
+      // Sub-agent transcripts are always loaded: a check a sub-agent ran counts
+      // as a check. The files are memoized by path and mtime, so this re-reads
+      // nothing the detail load already parsed.
+      const input = this.loadSessionInput(sessionKey, true);
       if (input === undefined) {
         throw new Error(`Claude Code session ${sessionKey} not found.`);
       }
-      return buildSessionRetrospective(
-        reused ?? buildSessionDetail(input),
-        extractRetrospectiveSignals(input.mainRecords),
-      );
+      const activity = activityOf(input);
+      const insideRepo = this.insideRepoTest(input.cwd);
+      return buildSessionRetrospective(reused ?? buildSessionDetail(input), {
+        ...extractRetrospectiveSignals(input.mainRecords),
+        fileEdits: fileEditStats(activity.edits, {
+          isInsideRepo: insideRepo,
+          ...(input.cwd !== undefined && this.repoRootCache.get(input.cwd) !== undefined
+            ? { repoRoot: this.repoRootCache.get(input.cwd) as string }
+            : {}),
+          ...(activity.reworkedLinesByFile !== undefined ? { reworkedLinesByFile: activity.reworkedLinesByFile } : {}),
+        }),
+        completion: evidenceFromActivity(activity, {
+          codeExtensions: input.codeExts,
+          docExtensions: input.docExts,
+          isInsideRepo: insideRepo,
+        }),
+      });
     });
+  }
+
+  /**
+   * LOCAL-ONLY activity read (commands by class, file edits) for one session,
+   * from the same memoized transcript parse the detail and retrospective use.
+   * Command text and paths in the result are raw content.
+   */
+  getSessionActivity(sessionKey: string): Result<SessionActivity> {
+    return this.guard(() => {
+      const input = this.loadSessionInput(sessionKey, true);
+      if (input === undefined) {
+        throw new Error(`Claude Code session ${sessionKey} not found.`);
+      }
+      return activityOf(input);
+    });
+  }
+
+  /**
+   * Whether a recorded path lies inside the session's checkout. The root is
+   * found by climbing from the session's working directory to a `.git` entry
+   * (a directory listing, no git call), cached per directory; without one the
+   * working directory itself is the boundary.
+   */
+  private insideRepoTest(cwd: string | undefined): ((file: string) => boolean) | undefined {
+    if (cwd === undefined || cwd.length === 0) {
+      return undefined;
+    }
+    let root = this.repoRootCache.get(cwd);
+    if (root === undefined) {
+      root = findRepoRoot(cwd) ?? cwd;
+      this.repoRootCache.set(cwd, root);
+    }
+    const fold = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
+    const base = fold(path.resolve(root));
+    return (file: string): boolean => {
+      const resolved = fold(path.resolve(root as string, file));
+      return resolved === base || resolved.startsWith(base + path.sep);
+    };
   }
 
   /**
@@ -575,3 +637,11 @@ function messageOf(err: unknown): string {
 
 /** Re-export so callers don't import the deep module path. */
 export { UNKNOWN_REPOSITORY };
+
+/** The session's commands and edits, main thread plus sub-agent side-chains. */
+function activityOf(input: ClaudeSessionInput): SessionActivity {
+  return extractSessionActivity(
+    input.mainRecords,
+    input.subagents.flatMap((subagent) => subagent.records),
+  );
+}

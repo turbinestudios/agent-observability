@@ -13,6 +13,8 @@ import { sessionKey } from '../../shared/rpc';
 import { IndexDb } from '../indexer/indexDb';
 import { ClaudeIndexer } from '../indexer/claudeIndexer';
 import { CopilotIndexer } from '../indexer/copilotIndexer';
+import { CopilotCliIndexer, dropCopilotDuplicates } from '../indexer/copilotCliIndexer';
+import { CopilotCliSource } from '@agent-observability/core/src/copilotCli/copilotCliSource';
 import { NativeTelemetryBackend } from '../drivers/nativeTelemetryBackend';
 import { AnalysisQueue } from '../analysis/analysisQueue';
 import { ensureArchiveIndexes } from '../archiveIndexes';
@@ -33,7 +35,11 @@ const settings = {
 const config = new Configuration(settings);
 const telemetry = new TelemetryService(config, undefined, new NativeTelemetryBackend(db));
 telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
-const sources = new SourceRegistry([new ClaudeCodeService(config), new CopilotSource(telemetry, config)]);
+const sources = new SourceRegistry([
+  new ClaudeCodeService(config),
+  new CopilotSource(telemetry, config),
+  new CopilotCliSource(config),
+]);
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'discovering' };
 const progress = (): void => {
   status = { ...status, ...db.counts() };
@@ -72,6 +78,15 @@ try {
     db.removeMissing('claude', new Set());
     notes.push('Claude Code is turned off in Settings');
   }
+  if (config.isCopilotCliEnabled()) {
+    try {
+      const result = new CopilotCliIndexer({ db, config, onRows, onDiscovered }).run();
+      if (result.helperRuns > 0) { notes.push(`Copilot CLI: left out ${result.helperRuns} of this app's own helper runs`); }
+    } catch (error) { notes.push(`Copilot CLI: ${String(error)}`); }
+  } else {
+    db.removeMissing('copilot-cli', new Set());
+    notes.push('Copilot CLI is turned off in Settings');
+  }
   if (config.isLocalTelemetryEnabled()) {
     try {
       const result = new CopilotIndexer({ db, config, onRows, onDiscovered }).run();
@@ -81,6 +96,8 @@ try {
     db.removeMissing('copilot', new Set());
     notes.push('Copilot is turned off in Settings');
   }
+  // A session the CLI stored and VS Code also traced is one session: the CLI row wins.
+  dropCopilotDuplicates(db);
   const present = new Set(db.sessionKeys());
   const removed = before.filter((key) => !present.has(key));
   if (removed.length > 0) { send({ type: 'removed', keys: removed }); }

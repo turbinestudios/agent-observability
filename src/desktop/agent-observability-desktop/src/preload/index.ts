@@ -52,6 +52,15 @@ const api = {
     return ipcRenderer.invoke('app:open-path', path);
   },
 
+  /**
+   * Open the user's own terminal in a session's folder running their own
+   * `claude --resume` / `copilot --resume`. Main validates the three values
+   * and builds the command; no command string crosses this bridge.
+   */
+  openTerminal(request: { cwd: string; cli: 'claude' | 'copilot'; sessionId: string }): Promise<{ ok: boolean; fallbackCommand?: string }> {
+    return ipcRenderer.invoke('app:open-terminal', request);
+  },
+
   /** Reveal a local file in Finder/Explorer. */
   showItem(path: string): Promise<void> {
     return ipcRenderer.invoke('app:show-item', path);
@@ -80,6 +89,11 @@ const api = {
   },
 
   /** Mirror the app's theme into the native window chrome (title bar, menus). */
+  /** Tell main how many hosted sessions are running, so quitting can ask first. */
+  setRunActive(count: number): void {
+    ipcRenderer.send('run:active', count);
+  },
+
   setNativeTheme(theme: 'dark' | 'light'): void {
     ipcRenderer.send('theme:set', theme);
   },

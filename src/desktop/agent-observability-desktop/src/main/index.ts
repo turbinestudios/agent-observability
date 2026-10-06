@@ -14,6 +14,8 @@ import {
 import type { UtilityProcess } from 'electron';
 import { initAutoUpdater } from './updater';
 import { installApplicationMenu } from './menu';
+import { openTerminal } from './terminalLaunch';
+import { quitMessage, shouldConfirmQuit } from './quitGuard';
 
 /**
  * Scheme the session-detail document is served over.
@@ -56,6 +58,10 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow: BrowserWindow | undefined;
 let dataHost: UtilityProcess | undefined;
+/** Hosted (Run) sessions currently running, as last reported by the renderer. */
+let activeRuns = 0;
+/** Set once the user has confirmed quitting over running sessions. */
+let quitConfirmed = false;
 
 /** Window backgrounds matching the renderer's `--bg` token per theme. */
 const BACKGROUND: Record<'dark' | 'light', string> = {
@@ -157,6 +163,12 @@ app.whenReady().then(() => {
 
   // The renderer owns the theme choice (persisted on its side); main mirrors
   // it into the window chrome. Values are constrained to the two we ship.
+  // The renderer relays how many hosted (Run) sessions are running, so quitting
+  // can ask first. A count only: main never sees a session or its content.
+  ipcMain.on('run:active', (_event, count: unknown) => {
+    activeRuns = typeof count === 'number' && Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+  });
+
   ipcMain.on('theme:set', (_event, theme: unknown) => {
     if (theme !== 'dark' && theme !== 'light') {
       return;
@@ -210,6 +222,9 @@ app.whenReady().then(() => {
   }
 
   ipcMain.handle('app:open-path', async (_event, path: string) => shell.openPath(path));
+  // "Resume in terminal": three plain values in, validated and turned into an
+  // argv here. The renderer never supplies a command string.
+  ipcMain.handle('app:open-terminal', async (_event, request: unknown) => openTerminal(request));
   ipcMain.handle('app:show-item', (_event, path: string) => shell.showItemInFolder(path));
   ipcMain.handle('app:get-version', () => app.getVersion());
   // The Team folder picker. A native dialog, parented to the window when there
@@ -277,6 +292,28 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (!quitConfirmed && shouldConfirmQuit(activeRuns)) {
+    const choice = dialog.showMessageBoxSync({
+      type: 'question',
+      buttons: ['Quit', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      message: quitMessage(activeRuns),
+      detail: 'They stop now. Each one is saved and can be continued later, here or with copilot --resume.',
+    });
+    if (choice !== 0) {
+      event.preventDefault();
+      return;
+    }
+    quitConfirmed = true;
+  }
+  // Let the data host answer any pending approval as "not available" and
+  // disconnect its sessions before it goes away.
+  try {
+    dataHost?.postMessage({ type: 'shutdown' });
+  } catch {
+    // The host may already be gone.
+  }
   dataHost?.kill();
 });

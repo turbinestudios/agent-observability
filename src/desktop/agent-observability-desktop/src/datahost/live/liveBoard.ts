@@ -20,10 +20,18 @@ import {
 import { ClaudeWatcher, type FileWatchFactory, type WatchHandle } from '@agent-observability/core/src/live/claudeWatcher';
 import { LiveUpdateController } from '@agent-observability/core/src/live/liveUpdateController';
 import type { LiveSource } from '@agent-observability/core/src/live/liveSource';
-import type { LiveBoardSnapshot, LiveSessionRow, LiveStatus, RpcEvent, SessionRow } from '../../shared/rpc';
+import type { LiveBoardSnapshot, LiveSessionRow, LiveStatus, RpcEvent, RunLiveState, SessionRow } from '../../shared/rpc';
 import { sessionKey } from '../../shared/rpc';
 import type { IndexDb } from '../indexer/indexDb';
 import { pickCopilotDatabases } from '../indexer/copilotIndexer';
+import { readCliEventsTail, readWorkspaceYaml, type CliEventsTail } from '@agent-observability/core/src/copilotCli/events';
+import { deriveCliLive, resolveCliRepository } from '@agent-observability/core/src/copilotCli/mapper';
+import {
+  copilotHelperCwd,
+  copilotSessionStateDir,
+  discoverCopilotCliSessions,
+  type CopilotCliSessionFiles,
+} from '@agent-observability/core/src/copilotCli/paths';
 import { fsWatchFactory } from './fsWatchFactory';
 
 /**
@@ -97,6 +105,18 @@ export interface LiveBoardDeps {
   timers?: LiveTimers;
   /** Copilot database files to watch; defaults to the indexer's own picks. */
   copilotDatabases?: () => string[];
+  /**
+   * Sessions the app itself is hosting (Run). Their status comes from the
+   * session's own events rather than from the tail of a file, so it replaces
+   * the disk-inferred row for the same session id and is exact.
+   */
+  hosted?: () => RunLiveState[];
+  /** Copilot CLI seams: session discovery, events tail, workspace reader, watch root. */
+  copilotCliSessions?: () => CopilotCliSessionFiles[];
+  readCliTail?: (file: string) => CliEventsTail | undefined;
+  readCliWorkspace?: (file: string) => Record<string, string>;
+  copilotCliRoot?: () => string;
+  copilotCliHelperCwd?: () => string;
 }
 
 const defaultTimers: LiveTimers = {
@@ -194,6 +214,9 @@ export class LiveBoardService {
     if (this.deps.config.isLocalTelemetryEnabled()) {
       controller.register(this.copilotSource(controller));
     }
+    if (this.deps.config.isCopilotCliEnabled()) {
+      controller.register(this.copilotCliSource(controller));
+    }
 
     void controller.start();
     this.tick = this.timers.setInterval(() => this.recompute(), LIVE_TICK_MS);
@@ -218,6 +241,13 @@ export class LiveBoardService {
   restart(): void {
     this.stop();
     this.start();
+  }
+
+  /** A hosted session changed status: reflect it now rather than at the next tick. */
+  onHostedChanged(): void {
+    if (this.started) {
+      this.recompute();
+    }
   }
 
   /** The index just settled: token and cost figures may have moved. */
@@ -315,9 +345,88 @@ export class LiveBoardService {
     };
   }
 
+  /** Watches the Copilot CLI's session store; its events files end in `.jsonl` too. */
+  private copilotCliSource(controller: LiveUpdateController): LiveSource {
+    let handle: WatchHandle | undefined;
+    return {
+      label: 'Copilot CLI session watcher',
+      start: () => {
+        try {
+          handle = this.factories.transcripts.watch(this.deps.copilotCliRoot?.() ?? copilotSessionStateDir(), () => {
+            this.armReindex();
+            controller.signal();
+          });
+        } catch {
+          // No store yet, or it cannot be watched: the tick still covers it.
+        }
+      },
+      stop: () => {
+        try {
+          handle?.dispose();
+        } catch {
+          // best-effort
+        }
+        handle = undefined;
+      },
+    };
+  }
+
+  /** Copilot CLI sessions written to recently, with status from the events tail. */
+  private copilotCliRows(now: number): LiveSessionRow[] {
+    let sessions: CopilotCliSessionFiles[];
+    try {
+      sessions = this.deps.copilotCliSessions?.() ?? discoverCopilotCliSessions();
+    } catch {
+      return [];
+    }
+    const helperCwd = normalizeDir(this.deps.copilotCliHelperCwd?.() ?? copilotHelperCwd());
+    const rows: LiveSessionRow[] = [];
+    for (const files of sessions) {
+      if (now - files.mtimeMs >= LIVE_DROP_MS || this.deps.hidden.isHidden('copilot-cli', files.sessionId)) {
+        continue;
+      }
+      const workspace = (this.deps.readCliWorkspace ?? readWorkspaceYaml)(files.workspaceFile);
+      // The app's own helper runs share this store; they are not sessions.
+      if (workspace.cwd !== undefined && normalizeDir(workspace.cwd) === helperCwd) {
+        continue;
+      }
+      const tail = (this.deps.readCliTail ?? ((file: string) => readCliEventsTail(file)))(files.eventsFile);
+      if (tail === undefined) {
+        continue;
+      }
+      const { facts, status, awaitingApproval } = deriveCliLive(tail.events, files.mtimeMs, now);
+      const indexed = this.deps.db.getRow('copilot-cli', files.sessionId);
+      const [row] = indexed === undefined ? [undefined] : this.deps.renames.apply([indexed]);
+      const title = row?.title ?? workspace.name ?? workspace.summary;
+      rows.push({
+        source: 'copilot-cli',
+        sessionId: files.sessionId,
+        repository: row?.repository ?? resolveCliRepository(workspace, []),
+        ...(title !== undefined ? { title } : {}),
+        status,
+        lastEvent: facts.lastEvent,
+        startedAtMs: row?.startedAtMs ?? facts.lastActivityMs,
+        lastActivityMs: facts.lastActivityMs,
+        ...(workspace.branch !== undefined ? { branch: workspace.branch } : {}),
+        pendingTools: facts.pendingTools,
+        ...(facts.model !== undefined ? { model: facts.model } : {}),
+        inputTokens: row?.inputTokens ?? 0,
+        outputTokens: row?.outputTokens ?? 0,
+        ...(row?.costMicros !== undefined ? { costMicros: row.costMicros } : {}),
+        countsIndexedAtMs: row?.indexedAtMs ?? 0,
+        ...(facts.lastToolFailed === true ? { lastToolFailed: true } : {}),
+        ...(awaitingApproval ? { exactPermission: true } : {}),
+      });
+    }
+    return rows;
+  }
+
   private recompute(): LiveBoardSnapshot {
     const now = this.now();
     const rows: LiveSessionRow[] = [];
+    if (this.deps.config.isCopilotCliEnabled()) {
+      rows.push(...this.copilotCliRows(now));
+    }
 
     for (const [key, candidate] of [...this.candidates]) {
       if (this.deps.hidden.isHidden('claude', candidate.sessionId)) {
@@ -378,6 +487,8 @@ export class LiveBoardService {
       }
     }
 
+    applyHosted(rows, this.deps.hosted?.() ?? []);
+
     rows.sort((a, b) => {
       const order = LIVE_STATUS_ORDER.indexOf(a.status) - LIVE_STATUS_ORDER.indexOf(b.status);
       return order !== 0 ? order : b.lastActivityMs - a.lastActivityMs;
@@ -431,6 +542,46 @@ export class LiveBoardService {
       outputTokens: row?.outputTokens ?? 0,
       ...(row?.costMicros !== undefined ? { costMicros: row.costMicros } : {}),
       countsIndexedAtMs: row?.indexedAtMs ?? 0,
+      ...(facts.lastToolFailed === true ? { lastToolFailed: true } : {}),
     };
+  }
+}
+
+function normalizeDir(dir: string): string {
+  const normalized = path.normalize(dir).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+/**
+ * Overlay hosted (Run) sessions onto the board's rows, in place.
+ *
+ * A hosted session is also a Copilot CLI session on disk, so the disk-derived
+ * row usually exists already: it keeps its title, repository and token
+ * figures and takes the exact status. A session too new to be on disk yet is
+ * left for the next index pass rather than invented here.
+ */
+export function applyHosted(rows: LiveSessionRow[], hosted: readonly RunLiveState[]): void {
+  for (const state of hosted) {
+    const row = rows.find((r) => r.source === 'copilot-cli' && r.sessionId === state.sessionId);
+    if (row === undefined) {
+      continue;
+    }
+    row.hosted = true;
+    if (state.status === 'stopped' || state.status === 'error') {
+      continue;
+    }
+    row.lastActivityMs = Math.max(row.lastActivityMs, state.lastActivityMs);
+    row.pendingTools = state.pendingTools;
+    delete row.exactPermission;
+    if (state.status === 'waiting-approval') {
+      row.status = 'waiting';
+      row.lastEvent = 'tool-pending';
+      row.exactPermission = true;
+    } else if (state.status === 'waiting-input' || state.status === 'idle') {
+      row.status = 'waiting';
+      row.lastEvent = 'turn-ended';
+    } else {
+      row.status = 'working';
+    }
   }
 }

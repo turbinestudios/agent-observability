@@ -120,3 +120,53 @@ borderline; leave it untouched), test-result parsing, any claim of measuring
 - Manual: find a real session you know thrashed: it should be flagged and
   its flagged turns should match your memory of where it went sideways; the
   Dashboard list links to it.
+
+## What was settled differently (2026-10-06, before building)
+
+Re-validated against the tree at desktop 1.17.0. The spec above stands except
+where this section says otherwise; it ships as desktop 1.21.0, after
+proposals 7 and 16.
+
+- **Stage 1 already shipped inside proposal 9 (1.7.0)**: `sessionCodeChurn`,
+  `CHURN_RATIO_MIN`, `CHURN_MIN_LINES_ADDED`, the `rework-churn` finding, the
+  `churn_ratio_pct` column and its verdict rule. What remains is per-file
+  attribution, the line-level match, persistence and the UI.
+- **`ExtractedTool` has no file or patch fields.** `filePath`, `oldString`,
+  `newString` and `structuredPatch` are on `ToolUseResult`
+  (`core/claude/transcript.ts`). Per-file edits come from `SessionActivity`
+  (`core/analysis/sessionActivity.ts` and `core/claude/activitySignals.ts`,
+  introduced by proposal 16), the one module that reads edit inputs.
+- **Persistence is in the analysis pass**, not new `sessions` columns written
+  during hydration: a `session_file_edits` table (absolute paths, LOCAL-ONLY
+  like `context_files`) and `session_analysis` counts, both created by
+  proposal 7's schema v6. This release bumps `analysis_version` only.
+- **Thresholds are exported constants** (`REEDIT_MIN_TURNS = 3`,
+  `REWORKED_LINES_MIN`), like the retrospective's. The desktop has no
+  `agentObservability.analysis.*` settings.
+- **New finding id `file-rework`**, appended; `rework-churn` is untouched. It
+  moves the verdict at most to `bumpy` (the verdict mix reaches team shards)
+  and joins the existing "churn plus a correction" rule as an alternative
+  trigger, nothing stronger.
+- **Claude Code first.** Copilot's line counting reads file paths for
+  classification only; per-file attribution works only when tool arguments
+  were recorded, so Copilot shows nothing rather than zero.
+- **UI home** is the Rework tab of Evidence plus a chip, a detail section and
+  a Dashboard card; the line reference to the detail renderer in the spec is
+  dead (the retrospective card moved).
+- **As built (1.21.0).** The line-level match runs inside the activity
+  chokepoint and returns integers only: a line counts when an earlier turn
+  added it and a later turn removed it, compared whitespace-normalised, from
+  the structured patch when the result carries one and otherwise from the
+  edit's own strings compared as multisets (so unchanged context lines do not
+  count). Lines with fewer than 3 non-space characters are ignored, at most
+  5,000 added lines are remembered per file, and a failed edit counts for
+  nothing. The signal fires on a file edited in 3 or more turns, or on 30 or
+  more reworked lines across the session.
+- **Display paths, never absolute ones.** A file is shown relative to its
+  repository when it lies inside the checkout and by its bare name otherwise;
+  the Rework ranking resolves the root per repository in the datahost before
+  anything reaches the renderer. The per-file rows themselves stay absolute
+  and LOCAL-ONLY; a test pins that no team, aggregate or sync module reads
+  them and that no AI payload builder serialises them.
+- **One advice rule, `narrow-the-change`**, which stays silent when the churn
+  tip already fired so the same advice is not given twice.

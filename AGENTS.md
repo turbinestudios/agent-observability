@@ -2,7 +2,9 @@
 
 A local tool for looking back at GitHub Copilot and Claude Code sessions. A
 desktop app and a VS Code extension read the sessions the agents record on disk
-and keep all raw content on the machine. An optional team dashboard receives
+and keep all raw content on the machine. The desktop app also reads GitHub
+Copilot CLI sessions from `~/.copilot/session-state`, read-only: nothing in
+this product writes or deletes under the Copilot CLI's own store. An optional team dashboard receives
 only the totals a user chooses to share. See [README.md](README.md) for the
 overview.
 
@@ -154,10 +156,13 @@ schemas are `additionalProperties: false` at every level.
   shard may only embed the two batch schemas by `$ref`, never copy or extend
   them; update the TypeScript validators in `aggregate/batchValidators.ts` in
   the same change as the C# ones.
-- Team sharing in the desktop app is **off by default**, gated on a disclosure
+- The Team view in the desktop app is **off by default** (`team.enabled`);
+  while it is off the team folder is neither read nor written. Team sharing
+  is a second switch, also **off by default**, gated on a disclosure
   dialog that lists the repositories involved and records when consent was
   given, writes only to the folder the user picked, and offers a byte-exact
-  preview of the file first. Reading the folder is always on and read-only:
+  preview of the file first. Reading the folder is on while Team is, and is
+  read-only:
   every shard is validated against the schema before merging, and anything
   that fails is skipped with a visible notice. The per-install salt behind the
   anonymous id lives in its own file, never in `config.json`, never in a shard.
@@ -194,14 +199,46 @@ schemas are `additionalProperties: false` at every level.
 
   Nothing else may cite these exceptions as precedent.
 
+- **The app as agent host (Run).** When the user turns Run on in Settings
+  (off by default) and has acknowledged a one-time notice in the view, the
+  desktop app can start and continue GitHub Copilot sessions through the
+  Copilot SDK, driving the user's **own installed, unmodified `copilot`**
+  under their **own Copilot login**; never a product API key, never a
+  bundled runtime. A hosted session sends the user's message, and whatever
+  repository content the agent then reads, to GitHub, exactly as running
+  `copilot` in that directory does. The rules:
+  1. **User-initiated per message.** Nothing is sent until the user
+     presses Start or Send. Doors from other views only prefill an
+     editable goal box; the text in the box is exactly what is sent.
+  2. **Ask is the only permission posture.** Every permission request is
+     shown to the user and waits for their answer: allow once, allow for
+     this session, or deny. The app never answers on the user's behalf,
+     never passes `--allow-all` or an equivalent, never persists an
+     approval beyond the session, and strips permission-widening
+     environment variables.
+  3. **Never in the background.** No scheduled, automatic or hidden
+     session; none starts at launch; closing the app stops hosting.
+  4. **Separate from sharing.** Nothing from a hosted session enters the
+     aggregate, sync or team paths other than the counts every indexed
+     session contributes. The run host has no import from `aggregate/*`,
+     `sync/*` or `team/*`.
+  5. **Claude Code is never driven.** The app only opens the user's own
+     terminal with their own `claude --resume <id>`; it does not use the
+     Claude Agent SDK and does not spawn `claude` to run a session.
+
+  This clause is not one of the sanctioned exceptions and none of them may
+  be cited to widen it.
+
 - **One sanctioned local write path.** Applying a Context Improvement Plan may
   write **only** allowlisted context files (`CLAUDE.md`, `AGENTS.md`,
   `copilot-instructions.md`, `SKILL.md`, `*.instructions.md`, `*.prompt.md`,
   `*.agent.md`, `*.skill.md`) inside the plan's re-verified repository root,
   with each file approved individually after a diff preview, refused when the file
   changed since the plan was generated, backed up before the first byte is
-  written, and never deleting anything. No other code may write into a user's
-  repository.
+  written, and never deleting anything. No other **app** code may write into a
+  user's repository. An agent the user hosts through Run writes only through
+  the Copilot CLI's own tools, each write approved by the user under the
+  clause above.
 
 Before changing anything on the producer→consumer path, read
 [docs/privacy-validation.md](docs/privacy-validation.md) and

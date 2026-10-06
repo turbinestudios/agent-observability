@@ -57,6 +57,14 @@ export function themeLabel(signalId: string): string {
       return 'Oversized opening prompts';
     case 'abandoned-ending':
       return 'Sessions left unfinished';
+    case 'completion-unverified':
+      return 'Reported done, no check seen';
+    case 'completion-contradicted':
+      return 'Reported done, last check failed';
+    case 'incomplete-ending':
+      return 'Ended with work remaining';
+    case 'file-rework':
+      return 'Files edited repeatedly';
     case 'long-tail-turn':
       return 'Long-running turns';
     case 'subagent-heavy':

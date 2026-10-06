@@ -65,6 +65,19 @@ export interface SessionRow {
    */
   verdict?: RetroVerdict;
   /**
+   * What the completion check observed for a session that changed code:
+   * whether a test, build, lint or type-check was seen after the last edit and
+   * how it ended. Absent while unanalyzed, when the session changed no code,
+   * or when the source records no commands. LOCAL-ONLY.
+   */
+  completion?: CompletionStatus;
+  /** The session's last reply reported the work as done. Only set with `completion`. */
+  claimedDone?: boolean;
+  /** Files this session edited in several separate turns. Absent when none. A proxy, not a score. */
+  filesReedited?: number;
+  /** Lines the session added and removed again in a later turn. Absent when none. */
+  reworkedLines?: number;
+  /**
    * Index revision, based on epoch ms. Unchanged Copilot refreshes preserve it;
    * changed rows advance it even when the clock has not. Keys analysis/detail
    * caches, not a user-facing "last checked" timestamp.
@@ -116,6 +129,18 @@ export interface ListSessionsParams {
   endedBeforeMs?: number;
   /** Only sessions carrying this user tag. Matched case-insensitively. */
   tag?: string;
+  /** Only sessions that called this tool — the Tools ranking's drill-down. */
+  tool?: string;
+  /** With `tool`: only sessions where that tool failed at least once. */
+  toolFailed?: boolean;
+  /** Only sessions whose completion check ended in this status. */
+  completion?: CompletionStatus;
+  /** Only sessions whose completion check ended in one of these statuses. */
+  completionIn?: CompletionStatus[];
+  /** Only sessions whose last reply reported the work as done. */
+  claimedDone?: boolean;
+  /** Only sessions the rework signal fired for. */
+  reworked?: boolean;
 }
 
 /** One user tag and how many sessions carry it, for the filter and the picker. */
@@ -465,6 +490,12 @@ export interface LiveSessionRow {
   costMicros?: number;
   /** When the token/cost figures were indexed; they can lag the transcript. */
   countsIndexedAtMs: number;
+  /** The app itself is hosting this session (Run), so its status is exact. */
+  hosted?: boolean;
+  /** The newest tool result failed and nothing followed it. Not part of the board's change fingerprint. */
+  lastToolFailed?: boolean;
+  /** The session is known (not guessed) to be waiting on a permission request. */
+  exactPermission?: boolean;
 }
 
 export interface LiveBoardSnapshot {
@@ -477,6 +508,44 @@ export interface LiveBoardSnapshot {
   finishedMs: number;
   /** A human-readable reason the board is degraded, when it is. */
   note?: string;
+}
+
+// ── Attention inbox ─────────────────────────────────────────────────────────
+
+/** Why a session is in the inbox. Mirrors core's `inbox/attention.ts`. */
+export type InboxReason = 'permission' | 'permission-likely' | 'waiting' | 'finished' | 'ended-error' | 'ended-interrupted';
+export type InboxState = 'new' | 'seen' | 'dismissed' | 'snoozed';
+export type InboxFlag = 'contradicted' | 'unverified' | 'incomplete' | 'struggled' | 'abandoned' | 'cost-outlier';
+
+/** One thing that needs the developer, or finished since they last looked. */
+export interface InboxItem {
+  /** `source:sessionId|reason` — the identity `inbox.mark` takes. */
+  key: string;
+  source: string;
+  sessionId: string;
+  reason: InboxReason;
+  state: InboxState;
+  /** Lower sorts first. */
+  tier: number;
+  flags: InboxFlag[];
+  /** True when the reason is known rather than inferred from a quiet transcript. */
+  exact: boolean;
+  repository: string;
+  title?: string;
+  /** When this episode began: the wait started, or the session ended. */
+  sinceMs: number;
+  pendingTools: string[];
+  verdict?: RetroVerdict;
+  costMicros?: number;
+  snoozedUntilMs?: number;
+}
+
+export interface InboxSnapshot {
+  items: InboxItem[];
+  /** Items in state `new`. */
+  unread: number;
+  generatedAtMs: number;
+  lastVisitMs: number;
 }
 
 /** One repository card below the live board. */
@@ -578,7 +647,7 @@ export interface RepositoryDigestInput {
     estTokensMax: number;
   }[];
   models: { model: string; sessions: number; costMicros: number | null }[];
-  tools?: { name: string; calls: number; failures: number; sampledSessions: number }[];
+  tools?: { name: string; calls: number; failures: number; sampledSessions?: number }[];
   tokens: {
     inputTokens: number;
     outputTokens: number;
@@ -594,6 +663,110 @@ export interface RepositoryDigestInput {
     seenInSessions: number;
     skippedCount: number;
   }[];
+}
+
+// ── Review packet and hand-off brief ────────────────────────────────────────
+//
+// Field-for-field mirrors of core's `analysis/reviewPacket.ts` and
+// `analysis/handoffBrief.ts` (this file stays import-free; the datahost's
+// assignment and the renderer's call into core's pure renderers make drift a
+// compile error). Both are LOCAL, built on the user's request and shown in a
+// dialog; they leave the app only through the clipboard. Paths are
+// repo-relative or bare names, quoted text is redacted in core, and neither
+// carries a branch name, an absolute path or any tool output.
+
+export type PacketCommandClass =
+  | 'test' | 'build' | 'lint' | 'typecheck' | 'install' | 'git' | 'run' | 'network' | 'filesystem' | 'other';
+export type PacketRiskId =
+  | 'rm-rf' | 'force-push' | 'no-verify' | 'hard-reset' | 'credential-in-command' | 'write-outside-repo'
+  | 'package-install' | 'network-call' | 'ci-change' | 'env-file-write' | 'permission-bypass' | 'sudo' | 'pipe-to-shell';
+export type PacketCompletionStatus = 'verified' | 'unverified' | 'contradicted' | 'incomplete' | 'not-applicable';
+
+export interface PacketFileRollup {
+  path: string;
+  insideRepo: boolean;
+  linesAdded: number;
+  linesRemoved: number;
+  edits: number;
+  reEdits: number;
+  turns: number;
+  firstTurn: number;
+  lastTurn: number;
+}
+
+export interface ReviewPacket {
+  source: string;
+  sessionId: string;
+  repository: string;
+  title?: string;
+  goal?: { text: string; fromPrompt: boolean };
+  turns: { index: number; line?: string; outcome: 'ok' | 'failed' | 'corrected' | 'interrupted' }[];
+  turnsOmitted: number;
+  files: PacketFileRollup[];
+  filesOmitted: number;
+  filesAvailable: boolean;
+  commands: { class: PacketCommandClass; runs: number; failures: number }[];
+  verification: {
+    status: PacketCompletionStatus | 'not-checked';
+    testRuns: number;
+    testFailures: number;
+    lastTestFailed?: boolean;
+    checks: { label: string; passed: boolean }[];
+  };
+  deadEnds: { turnIndex: number; kind: 'correction' | 'interruption' | 'error-streak' | 'repeated-prompt'; note: string }[];
+  risks: { id: PacketRiskId; label: string; turnIndex?: number; count: number; quote?: string }[];
+  risksOmitted: number;
+  subAgents: { name: string; calls: number; tokenSharePct?: number }[];
+  models: { model: string; inputTokens: number; outputTokens: number }[];
+  totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costMicros?: number; durationMs: number; turns: number };
+  costMode: 'aiu' | 'usd' | 'credits';
+  verdict: RetroVerdict;
+  outcome: 'likely-fulfilled' | 'partially' | 'unclear' | 'likely-unfulfilled';
+  findings: { severity: string; text: string }[];
+  tips: string[];
+  redactions: number;
+}
+
+export interface ReviewPacketResult {
+  packets: ReviewPacket[];
+  /** Sessions that could not be read; listed in the dialog, never silently dropped. */
+  skipped: { source: string; sessionId: string; message: string }[];
+  note?: string;
+}
+
+export interface HandoffBrief {
+  source: string;
+  sessionId: string;
+  repository: string;
+  goal?: string;
+  state: {
+    turns: number;
+    ending: 'turn-complete' | 'waiting' | 'interrupted' | 'error' | 'tool-pending' | 'unknown';
+    lastRequest?: string;
+    lastTurnFailed: boolean;
+    filesChanged: number;
+  };
+  constraints: { turnIndex: number; text: string; kind: 'constraint' | 'correction' }[];
+  files: { path: string; insideRepo: boolean; edits: number; lastTurn: number }[];
+  verified: string[];
+  notVerified: string[];
+  openItems: { text: string; origin: 'last-reply' | 'failed-command' | 'interrupted' }[];
+  contextFiles: string[];
+  suggestedPrompt: string;
+  redactions: number;
+}
+
+/**
+ * What "Resume in terminal" needs. Three plain values; the main process
+ * builds and validates the command itself and never takes one from here.
+ */
+export interface ResumeTarget {
+  /** LOCAL-ONLY working directory, re-read from the session's own files. */
+  cwd?: string;
+  sessionId: string;
+  cli: 'claude' | 'copilot';
+  /** Why the session cannot be resumed in a terminal, when it cannot. */
+  problem?: string;
 }
 
 // ── Team: anonymous aggregates through a shared folder ──────────────────────
@@ -747,6 +920,49 @@ export interface TeamViewData {
   status: TeamStatus;
 }
 
+// ── Run: host Copilot sessions in the app ───────────────────────────────────
+
+import type {
+  RunAvailability,
+  RunDoor,
+  RunEventChange,
+  RunPermissionDecision,
+  RunPrefill,
+  RunSessionInfo,
+  RunTranscript,
+} from './runTypes';
+
+export type {
+  RunAvailability,
+  RunDoor,
+  RunEventChange,
+  RunInputRequest,
+  RunItem,
+  RunLiveState,
+  RunPermissionDecision,
+  RunPermissionRequest,
+  RunPrefill,
+  RunSessionInfo,
+  RunStatus,
+  RunTranscript,
+} from './runTypes';
+
+/** A checkout the user may start a hosted session in: verified on disk by the datahost. */
+export interface RunRepository {
+  repository: string;
+  /** LOCAL-ONLY display. The datahost re-resolves it; the renderer never sends a path back. */
+  cwd: string;
+}
+
+/** What a door asks the datahost to prefill. Only ids travel; the text is built host-side. */
+export interface RunPrefillParams {
+  door: RunDoor;
+  source?: string;
+  sessionId?: string;
+  repository?: string;
+  planId?: string;
+}
+
 /** How many friction themes the Dashboard's insight card ranks. */
 export const INSIGHT_THEME_LIMIT = 8;
 
@@ -806,6 +1022,117 @@ export interface OverviewInsights {
   windowDays: number;
   /** Same meaning as {@link OverviewData.dailyCapped}. */
   dailyCapped?: true;
+  /**
+   * Evidence summaries for the Dashboard's compact cards. Optional so an older
+   * datahost answer still type-checks in a newer renderer during development.
+   */
+  evidence?: {
+    /** Tools with the highest failure rate among those called often enough to judge. */
+    tools: { tool: string; calls: number; failures: number }[];
+    /** The completion check's counts for the window. */
+    completion?: CompletionSummary;
+    /** Rework over the window: the rate's two numbers and the top sessions. */
+    rework?: { editedSessions: number; reworkedSessions: number; sessions: ReworkSessionRow[] };
+  };
+}
+
+/** A tool needs at least this many calls in the window before its failure rate is ranked. */
+export const TOOL_FAILURE_MIN_CALLS = 10;
+
+/** How many failing tools the Dashboard card lists. */
+export const INSIGHT_TOOL_LIMIT = 3;
+
+/** One tool in the Evidence > Tools ranking. A name, counts and durations only. */
+export interface ToolRankingRow {
+  tool: string;
+  calls: number;
+  failures: number;
+  /** Sessions that called it at least once. */
+  sessions: number;
+  lastUsedMs: number;
+  /** Approximate typical time to result (bucket upper bound); absent with no calls. */
+  p50Ms?: number;
+  /** Approximate slow time to result. */
+  p90Ms?: number;
+  /** The slow figure fell past the last bucket: show it as "over N". */
+  p90Overflow: boolean;
+  /** Longest single call. */
+  maxMs: number;
+}
+
+/**
+ * What the completion check observed about a session that changed code.
+ * Mirrors core's `analysis/completionCheck.ts` without `not-applicable`, which
+ * never reaches the renderer as a status. Kept local so this file stays
+ * import-free.
+ */
+export type CompletionStatus = 'verified' | 'unverified' | 'contradicted' | 'incomplete';
+
+export const COMPLETION_STATUSES: readonly CompletionStatus[] = ['verified', 'unverified', 'contradicted', 'incomplete'];
+
+/** Thresholds behind the Rework chip, mirrored from core's `analysis/rework.ts` for tooltips. */
+export const REWORK_REEDIT_MIN_TURNS = 3;
+export const REWORK_LINES_MIN = 30;
+
+/** One session in the Rework ranking. */
+export interface ReworkSessionRow {
+  source: string;
+  sessionId: string;
+  repository: string;
+  title?: string;
+  endedAtMs: number;
+  filesReedited: number;
+  reworkedLines: number;
+  filesEdited: number;
+}
+
+/** One file in the Rework ranking. `path` is repository-relative or a bare name, never absolute. */
+export interface ReworkFileRow {
+  path: string;
+  repository: string;
+  sessions: number;
+  editTurns: number;
+  reworkedLines: number;
+  outsideRepo: boolean;
+}
+
+export interface EvidenceReworkResult {
+  /** Sessions in the window that edited any file: the rate's denominator. */
+  editedSessions: number;
+  reworkedSessions: number;
+  sessions: ReworkSessionRow[];
+  files: ReworkFileRow[];
+  repositories: string[];
+  status: AnalysisStatus;
+  window: OverviewWindow;
+}
+
+/** Completion counts over a window. Every rate uses `changedCode` as its denominator. */
+export interface CompletionSummary {
+  verified: number;
+  unverified: number;
+  contradicted: number;
+  incomplete: number;
+  /** Sessions that changed code and were checked: the sum of the four above. */
+  changedCode: number;
+  /** Reported done while unverified or with a failed last check. */
+  reportedDoneUnverified: number;
+}
+
+export interface EvidenceCompletionResult {
+  summary: CompletionSummary;
+  repositories: string[];
+  status: AnalysisStatus;
+  window: OverviewWindow;
+}
+
+/** The Tools ranking plus how complete the analysis behind it is. */
+export interface EvidenceToolsResult {
+  rows: ToolRankingRow[];
+  /** Repositories the ranking can be narrowed to. */
+  repositories: string[];
+  status: AnalysisStatus;
+  window: OverviewWindow;
 }
 
 /**
@@ -901,6 +1228,8 @@ export interface SettingsSnapshot {
   copilotEnabled: boolean;
   /** `sqlitePath`; empty string means auto-detect. */
   sqlitePath: string;
+  /** `copilotCli.enabled` — read Copilot CLI sessions from `~/.copilot/session-state`. */
+  copilotCliEnabled: boolean;
   /** Directories the Claude scan will actually read (override first; only existing dirs). */
   resolvedClaudeDirs: string[];
   /** True when a non-empty projects-path override does not exist on disk. */
@@ -948,14 +1277,32 @@ export interface SettingsSnapshot {
    * computer only; nothing is sent anywhere.
    */
   liveNotifications: boolean;
+  /**
+   * `run.enabled` — whether the app may host GitHub Copilot sessions (Run).
+   * OFF by default: turning it on is the first gate; a one-time notice in the
+   * view is the second. A hosted session sends the user's message, and what
+   * the agent then reads, to GitHub through their own Copilot login.
+   */
+  runEnabled: boolean;
+  /** `run.defaultModel`; empty string means the CLI's own default. */
+  runDefaultModel: string;
+  /** `packet.includePrompts` — whether a review packet includes the user's own request lines. */
+  packetIncludePrompts: boolean;
   /** `team.folder` — the shared folder the Team view reads; '' when unset. */
   teamFolder: string;
   teamFolderExists: boolean;
   /**
+   * `team.enabled` — whether the Team view exists at all. OFF by default: the
+   * rail entry is hidden, and the team folder is neither read nor written.
+   * Turning it off also turns sharing off.
+   */
+  teamEnabled: boolean;
+  /**
    * `team.shareEnabled` — whether this app writes its own shard into the team
    * folder. OFF by default: turning it on is the consent gate for the team
    * shard, which carries the same aggregates as cloud sharing plus per-day
-   * session-outcome counts, and nothing else. Reading the folder is always on.
+   * session-outcome counts, and nothing else. Reading the folder is on while
+   * Team is.
    */
   teamShareEnabled: boolean;
   /** `team.autoExport` — rewrite the shard hourly while the app runs (only when sharing is on). */
@@ -1080,6 +1427,7 @@ export interface SettingsPatch {
   claudeEnabled?: boolean;
   claudeProjectsPath?: string;
   copilotEnabled?: boolean;
+  copilotCliEnabled?: boolean;
   sqlitePath?: string;
   maxSessionMinutes?: number;
   deepRetroEnabled?: boolean;
@@ -1091,6 +1439,10 @@ export interface SettingsPatch {
   aiBackend?: 'claude-code' | 'copilot-cli';
   copilotCliPath?: string;
   liveNotifications?: boolean;
+  runEnabled?: boolean;
+  runDefaultModel?: string;
+  packetIncludePrompts?: boolean;
+  teamEnabled?: boolean;
   /** '' clears the folder. */
   teamFolder?: string;
   teamShareEnabled?: boolean;
@@ -1264,6 +1616,15 @@ export interface RpcMethods {
    */
   'retro.get'(params?: { repository?: string }): RetroResult;
   /**
+   * Per-tool call volume, failures and time to result over the analyzed
+   * sessions in scope. Local-only; a tool name is the only string involved.
+   */
+  'evidence.tools'(params?: { window?: OverviewWindow; source?: string; repository?: string }): EvidenceToolsResult;
+  /** Completion-check counts for the window: what was and was not observed after the last edit. */
+  'evidence.completion'(params?: { window?: OverviewWindow; source?: string; repository?: string }): EvidenceCompletionResult;
+  /** The Rework ranking: a proxy for thrashing, never a quality score. Paths are display paths. */
+  'evidence.rework'(params?: { window?: OverviewWindow; source?: string; repository?: string }): EvidenceReworkResult;
+  /**
    * Run the opt-in Deep retrospective for one session: build a transcript
    * digest, ask the user's own `claude` CLI to judge it, store the verdict in
    * the local JSON store, and return it. Gated twice — the settings toggle and
@@ -1360,6 +1721,42 @@ export interface RpcMethods {
   /** Everything the Team view draws, over the merged shards. */
   'team.view'(params?: { window?: TeamWindow }): TeamViewData;
   'team.members'(): TeamMemberInfo[];
+  /** What needs the developer now, and what finished since they last looked. */
+  'inbox.list'(params?: { includeDismissed?: boolean }): InboxSnapshot;
+  /** Change the state of some items, or all visible ones. `'new'` undoes a dismiss. */
+  'inbox.mark'(
+    keys: string[] | 'all',
+    state: 'seen' | 'dismissed' | 'snoozed' | 'new',
+    params?: { untilMs?: number },
+  ): InboxSnapshot;
+  /**
+   * The structured review packet for one or more sessions (at most
+   * {@link MAX_COMPARE_SESSIONS}). Built locally with no AI; the renderer
+   * turns it into Markdown and the user copies it.
+   */
+  'sessions.reviewPacket'(refs: SessionRef[]): ReviewPacketResult;
+  /** A continuation brief for starting the next session where this one stopped. */
+  'sessions.handoffBrief'(source: string, sessionId: string): { brief: HandoffBrief; note?: string };
+  /** Where and with which CLI this session can be resumed in the user's terminal. */
+  'sessions.handoff'(source: string, sessionId: string): ResumeTarget;
+  /** Whether Run can be used on this machine, and the models it may pick. */
+  'run.availability'(): RunAvailability;
+  /** Record that the user read the Run notice. The only way `run.disclosed` is set. */
+  'run.acknowledge'(): RunAvailability;
+  'run.repositories'(): RunRepository[];
+  /** Start a hosted session. The datahost resolves and verifies the checkout itself. */
+  'run.start'(params: { goal: string; repository: string; model?: string; door: RunDoor }): RunSessionInfo;
+  /** Continue a Copilot CLI session in the app; its directory is read from the session's own record. */
+  'run.resume'(sessionId: string): RunSessionInfo;
+  'run.send'(sessionId: string, text: string): void;
+  'run.abort'(sessionId: string): void;
+  'run.close'(sessionId: string): void;
+  'run.list'(): RunSessionInfo[];
+  'run.transcript'(sessionId: string): RunTranscript | undefined;
+  'run.permission.respond'(requestId: string, decision: RunPermissionDecision, feedback?: string): void;
+  'run.input.respond'(requestId: string, answer?: string): void;
+  /** Text for the goal box, built host-side from what the app already knows. Nothing is sent. */
+  'run.prefill'(params: RunPrefillParams): RunPrefill;
   'settings.get'(): SettingsSnapshot;
   /**
    * Persist a partial settings update. Sources whose settings changed are
@@ -1414,6 +1811,12 @@ export type RpcEvent =
   | { event: 'ai.assistantDelta'; runId: number; html: string }
   /** The live board changed: a session appeared, changed status, or finished. */
   | { event: 'workspace.live'; snapshot: LiveBoardSnapshot }
+  /** The inbox changed: an item appeared, cleared, or changed state. */
+  | { event: 'inbox.changed'; snapshot: InboxSnapshot }
+  /** A hosted session changed: status, a transcript item, a permission request. */
+  | { event: 'run.event'; sessionId: string; change: RunEventChange }
+  /** How many hosted sessions are running, so main can confirm before quitting. */
+  | { event: 'run.active'; count: number }
   /** The team folder was re-read or this member's shard was written. */
   | { event: 'team.changed'; status: TeamStatus };
 

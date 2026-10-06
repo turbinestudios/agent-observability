@@ -51,6 +51,15 @@ export function describeDeletion(
   sessionId: string,
   deps: DeletionDeps,
 ): DeletionPlan {
+  if (source === 'copilot-cli') {
+    // The app only ever reads the Copilot CLI's own store; it never deletes there.
+    return {
+      supported: false,
+      target: 'Stored by the Copilot CLI',
+      consequence:
+        "This app does not delete from the Copilot CLI's session store. You can hide the session here, or remove it with the Copilot CLI.",
+    };
+  }
   if (source === 'claude') {
     const files = claudeFilesFor(sessionId, deps);
     if (files.length === 0) {

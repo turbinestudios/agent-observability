@@ -105,3 +105,38 @@ cross-machine comparison.
   tools near the top), a known-flaky tool shows a non-zero failure rate, and
   drill-down opens the right sessions. Rebuild happens automatically on
   first launch after the schema bump (watch the index status bar).
+
+## What was settled differently (2026-10-06, before building)
+
+Re-validated against the tree at desktop 1.17.0. The spec above stands except
+where this section says otherwise; it ships as desktop 1.19.0.
+
+- **No emission in the hydration pass.** The Copilot indexer only sums
+  `tool_calls`, and the background analysis pass now exists and already holds
+  every session's interactions
+  (`datahost/analysis/sessionAnalyzer.ts` calls `getSessionInteractions`).
+  Per-tool rows are a fold over that array
+  (`core/analysis/toolStats.ts` `foldToolStats`) written by `putAnalysis`
+  into a new `session_tools` table. No second parse.
+- **`ExtractedTool` stays private.** It is module-private in
+  `core/claude/mapper.ts`; `Interaction` is the cross-source grain.
+- **Windows are `ended_at_ms`**, per proposal 5, not `startedAfterMs` /
+  `startedBeforeMs`.
+- **No own sidebar view.** The Retro rail entry becomes **Evidence** with
+  tabs Retrospectives / Completion / Tools / Rework; this proposal adds the
+  Tools tab and a Dashboard card.
+- **Drill-down is the Sessions filter.** A `tool` / `toolFailed` filter in
+  `buildFilter` through the existing `SessionFilterIntent` replaces both the
+  "minimal open-session callback" and the per-tool top-failing-sessions list.
+- **Durations are "time to result".** Claude's figure is result timestamp
+  minus assistant-record timestamp, so it includes permission waits, and
+  parallel calls share a start. Copilot's unset span status counts as
+  success, so its failure rate is a lower bound; say so in a column tooltip.
+- **This release carries the Evidence track's shared foundation**: one
+  `SCHEMA_VERSION` bump to 6 (tables `session_tools` and
+  `session_file_edits`, and the `session_analysis` columns proposals 16 and 8
+  fill later), plus a new `analysis_version` meta key so a later heuristics
+  change re-runs only the analysis pass instead of a full re-index.
+- The Workspace digest's tool sample
+  (`datahost/workspace/repoHub.ts` `sampleTools`) is replaced by the
+  persisted table and no longer says "sampled".

@@ -5,7 +5,9 @@ import { dataHost } from '../../api/client';
 import type { SessionFilters } from '../sessions/filters';
 import { WindowSelector } from '../overview/WindowSelector';
 import { persistWindow, readStoredWindow, windowDescription } from '../overview/window';
+import { InboxSection } from './InboxSection';
 import { LiveBoard } from './LiveBoard';
+import type { InboxApi } from './useInbox';
 import { RepoHub } from './RepoHub';
 import { RepositoryCards } from './RepositoryCards';
 import { useLiveBoard } from './useLiveBoard';
@@ -21,6 +23,8 @@ import './workspace.css';
  * transcripts the agents already write; the hubs read the local index.
  */
 interface Props {
+  /** The attention inbox, owned by the app shell so the rail badge shares it. */
+  inbox?: InboxApi;
   onOpenSession: (source: string, sessionId: string) => void;
   onOpenSessions: (filters: SessionFilters) => void;
   /** Opens the AI Helper with a question filled in; nothing is sent until the user presses Send. */
@@ -29,7 +33,7 @@ interface Props {
   onOpenHotspot: (file?: string) => void;
 }
 
-export function WorkspaceView({ onOpenSession, onOpenSessions, onAskAi, onImprove, onOpenHotspot }: Props): JSX.Element {
+export function WorkspaceView({ inbox, onOpenSession, onOpenSessions, onAskAi, onImprove, onOpenHotspot }: Props): JSX.Element {
   const { snapshot, error: liveError } = useLiveBoard();
   const [chosen, setChosen] = useState<OverviewWindow>(readStoredWindow);
   const [repository, setRepository] = useState<string | undefined>(undefined);
@@ -130,6 +134,9 @@ export function WorkspaceView({ onOpenSession, onOpenSessions, onAskAi, onImprov
         </p>
       </header>
       {error !== undefined && <div className="settings-error">{error}</div>}
+      {inbox !== undefined && (
+        <InboxSection snapshot={inbox.snapshot} mark={inbox.mark} onOpenSession={onOpenSession} />
+      )}
       <LiveBoard snapshot={snapshot} error={liveError} onOpenSession={onOpenSession} />
       <RepositoryCards data={cards} onOpen={setRepository} />
     </div>

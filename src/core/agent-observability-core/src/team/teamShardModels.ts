@@ -32,7 +32,14 @@ export const TEAM_SHARD_FILE_PATTERN = /^dev_[0-9a-f]{32}\.json$/;
 /** The producer rewrites its shard through a sibling temp file; readers ignore it. */
 export const TEAM_SHARD_TEMP_SUFFIX = '.tmp';
 
-export const OUTCOME_SOURCES = ['claude', 'copilot'] as const;
+/**
+ * The sources a shard may name. `copilot-cli` covers terminal Copilot sessions
+ * AND the ones the app hosts through Run, which are stored as Copilot CLI
+ * sessions. Widened before the first release that reads shards, so the
+ * contract version did not need to change; from the first tagged release on,
+ * adding a value here is a schema version bump.
+ */
+export const OUTCOME_SOURCES = ['claude', 'copilot', 'copilot-cli'] as const;
 export type OutcomeSource = (typeof OUTCOME_SOURCES)[number];
 
 export const OUTCOME_COST_MODES = ['usd', 'aiu', 'credits'] as const;

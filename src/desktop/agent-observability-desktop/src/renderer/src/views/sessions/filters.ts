@@ -1,6 +1,8 @@
-import type { ListSessionsParams, RetroVerdict, SessionRow } from '../../../../shared/rpc';
+import type { CompletionStatus, ListSessionsParams, RetroVerdict, SessionRow } from '../../../../shared/rpc';
+import { completionLabel } from './completion';
 import { formatDay, shortRepo, sourceLabel } from './format';
 import { themeLabel, verdictLabel } from './retro';
+import { REWORK_EXPLANATION, showsReworkChip } from '../retro/rework';
 
 /**
  * What the session list is currently narrowed to, and how that reads on screen.
@@ -25,10 +27,21 @@ export interface SessionFilters {
   verdict?: RetroVerdict;
   /** One retrospective finding signal — a Dashboard theme drill-down. */
   signal?: string;
+  /** Sessions that called this tool — the Tools ranking's drill-down. */
+  tool?: string;
+  /** With `tool`: only sessions where it failed. Cleared together with it. */
+  toolFailed?: boolean;
+  /** One completion-check status, or several — the Completion drill-downs. */
+  completion?: CompletionStatus;
+  completionIn?: CompletionStatus[];
+  /** Only sessions whose last reply reported the work as done. */
+  claimedDone?: boolean;
+  /** Only sessions the rework signal fired for. */
+  reworked?: boolean;
 }
 
 /** Which dimension a chip clears. */
-export type FilterKey = 'source' | 'repository' | 'date' | 'tag' | 'verdict' | 'signal';
+export type FilterKey = 'source' | 'repository' | 'date' | 'tag' | 'verdict' | 'signal' | 'tool' | 'completion' | 'reworked';
 
 export interface FilterChip {
   key: FilterKey;
@@ -73,7 +86,42 @@ export function filterChips(filters: SessionFilters, nowMs: number = Date.now())
       title: 'Sessions whose retrospective raised this friction theme',
     });
   }
+  if (filters.tool !== undefined && filters.tool.length > 0) {
+    chips.push({
+      key: 'tool',
+      label: filters.toolFailed === true ? `Tool: ${filters.tool} (failed)` : `Tool: ${filters.tool}`,
+      title:
+        filters.toolFailed === true
+          ? 'Sessions where this tool failed at least once'
+          : 'Sessions that called this tool',
+    });
+  }
+  const completion = completionStatuses(filters);
+  if (completion.length > 0 || filters.claimedDone === true) {
+    const statuses = completion.map(completionLabel).join(' or ');
+    chips.push({
+      key: 'completion',
+      label:
+        filters.claimedDone === true
+          ? statuses.length > 0
+            ? `Reported done: ${statuses}`
+            : 'Reported done'
+          : statuses,
+      title: 'What was observed after the last code edit, from each session\u2019s own log',
+    });
+  }
+  if (filters.reworked === true) {
+    chips.push({ key: 'reworked', label: 'Rework', title: REWORK_EXPLANATION });
+  }
   return chips;
+}
+
+/** The completion statuses a filter selects, single and list forms merged. */
+export function completionStatuses(filters: SessionFilters): CompletionStatus[] {
+  return [
+    ...(filters.completion !== undefined ? [filters.completion] : []),
+    ...(filters.completionIn ?? []),
+  ].filter((status, index, all) => all.indexOf(status) === index);
 }
 
 /**
@@ -104,6 +152,13 @@ export function clearFilter(filters: SessionFilters, key: FilterKey): SessionFil
   if (key === 'date') {
     delete next.endedAfterMs;
     delete next.endedBeforeMs;
+  } else if (key === 'tool') {
+    delete next.tool;
+    delete next.toolFailed;
+  } else if (key === 'completion') {
+    delete next.completion;
+    delete next.completionIn;
+    delete next.claimedDone;
   } else {
     delete next[key];
   }
@@ -143,6 +198,11 @@ export function filterKey(filters: SessionFilters): string {
     filters.tag ?? '',
     filters.verdict ?? '',
     filters.signal ?? '',
+    filters.tool ?? '',
+    filters.toolFailed === true ? 'failed' : '',
+    completionStatuses(filters).join(','),
+    filters.claimedDone === true ? 'done' : '',
+    filters.reworked === true ? 'reworked' : '',
   ].join('|');
 }
 
@@ -187,6 +247,24 @@ export function applyIntent(intent: SessionFilters): SessionFilters {
   }
   if (intent.signal !== undefined) {
     next.signal = intent.signal;
+  }
+  if (intent.completion !== undefined) {
+    next.completion = intent.completion;
+  }
+  if (intent.completionIn !== undefined && intent.completionIn.length > 0) {
+    next.completionIn = [...intent.completionIn];
+  }
+  if (intent.claimedDone === true) {
+    next.claimedDone = true;
+  }
+  if (intent.reworked === true) {
+    next.reworked = true;
+  }
+  if (intent.tool !== undefined) {
+    next.tool = intent.tool;
+    if (intent.toolFailed === true) {
+      next.toolFailed = true;
+    }
   }
   return next;
 }
@@ -234,6 +312,21 @@ export function matchesFilters(row: SessionRow, filters: SessionFilters): boolea
   // pushed row cannot prove it qualifies — fail closed, exactly like the search
   // text, and let the re-query bring it in if it belongs.
   if (filters.signal !== undefined && filters.signal.length > 0) {
+    return false;
+  }
+  // The completion check rides on the row, so a pushed row can be judged here.
+  const wanted = completionStatuses(filters);
+  if (wanted.length > 0 && (row.completion === undefined || !wanted.includes(row.completion))) {
+    return false;
+  }
+  if (filters.claimedDone === true && row.claimedDone !== true) {
+    return false;
+  }
+  if (filters.reworked === true && !showsReworkChip(row)) {
+    return false;
+  }
+  // Same for a tool filter: which tools a session called lives in the index.
+  if (filters.tool !== undefined && filters.tool.length > 0) {
     return false;
   }
   if (filters.tag !== undefined && filters.tag.length > 0) {

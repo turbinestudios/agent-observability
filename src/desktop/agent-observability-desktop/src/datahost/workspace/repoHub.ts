@@ -1,5 +1,4 @@
 import { evaluateAdvice, type RetrospectiveCounts, type RetrospectiveSignalId, type SessionVerdict } from '@agent-observability/core/src/analysis/retrospective';
-import type { SessionDataSource } from '@agent-observability/core/src/sources/sessionSource';
 import type {
   AnalysisStatus,
   ContextPlanSummary,
@@ -19,17 +18,15 @@ import { inventoryForRepository, type InventorySeams } from './contextInventory'
  * The repository hub: everything the app knows about one repository, in one
  * call, plus the input for its locally built digest.
  *
- * Reads only the index and the JSON stores — with ONE exception, the digest's
- * tool sample, which parses the few most recent sessions' interactions. It is
- * capped at {@link DIGEST_TOOL_SAMPLE} and labelled as a sample in the digest,
- * because the per-tool data is otherwise discarded by every indexer (proposal
- * 7 will persist it; the sample goes away then).
+ * Reads only the index and the JSON stores: nothing here parses a transcript.
+ * The digest's tool section comes from the per-tool rows the analysis pass
+ * persists (proposal 7), so it covers every analyzed session in the window.
  */
 
 /** Recent sessions listed on the hub. */
 export const HUB_RECENT_LIMIT = 8;
-/** Sessions whose interactions the digest's tool section samples. */
-export const DIGEST_TOOL_SAMPLE = 8;
+/** Tools the digest lists. */
+export const DIGEST_TOOL_LIMIT = 10;
 /** Themes the hub and the digest rank. */
 export const HUB_THEME_LIMIT = 8;
 
@@ -41,7 +38,6 @@ export interface RepoHubDeps {
   liveRows: () => LiveSessionRow[];
   plans: (repository: string) => ContextPlanSummary[];
   analysisStatus: () => AnalysisStatus;
-  sources: { get(id: string): SessionDataSource | undefined };
   now?: () => number;
   inventorySeams?: InventorySeams;
 }
@@ -192,7 +188,7 @@ export function buildRepoDigestInput(
       sessions: m.sessions,
       costMicros: m.costMicros,
     })),
-    ...sampleTools(repository, cutoff, deps, hidden),
+    ...digestTools(deps.db, repository, cutoff, hidden),
     tokens: {
       inputTokens: totals.inputTokens,
       outputTokens: totals.outputTokens,
@@ -257,55 +253,18 @@ function rankTips(
     .sort((a, b) => b.sessions - a.sessions || a.id.localeCompare(b.id));
 }
 
-/** Per-tool call and failure counts over the most recent sessions. */
-function sampleTools(
+/** Per-tool call and failure counts over every analyzed session in the window. */
+function digestTools(
+  db: IndexDb,
   repository: string,
   cutoff: number,
-  deps: RepoHubDeps,
   hidden: readonly string[],
 ): Pick<RepositoryDigestInput, 'tools'> {
-  const recent = deps.db.listSessions(
-    { repository, limit: DIGEST_TOOL_SAMPLE, ...(cutoff > 0 ? { endedAfterMs: cutoff } : {}) },
-    hidden,
-  );
-  const byTool = new Map<string, { calls: number; failures: number }>();
-  let sampled = 0;
-  for (const row of recent) {
-    const source = deps.sources.get(row.source);
-    if (source === undefined) {
-      continue;
-    }
-    let result;
-    try {
-      result = source.getSessionInteractions(row.sessionId);
-    } catch {
-      continue;
-    }
-    if (!result.ok) {
-      continue;
-    }
-    sampled += 1;
-    for (const interaction of result.value) {
-      if (interaction.operation !== 'execute_tool' || interaction.toolName === undefined) {
-        continue;
-      }
-      const entry = byTool.get(interaction.toolName) ?? { calls: 0, failures: 0 };
-      entry.calls += 1;
-      if (!interaction.success) {
-        entry.failures += 1;
-      }
-      byTool.set(interaction.toolName, entry);
-    }
-  }
-  if (sampled === 0) {
+  const rows = db.toolRanking({ repository, ...(cutoff > 0 ? { endedAfterMs: cutoff } : {}) }, hidden, DIGEST_TOOL_LIMIT);
+  if (rows.length === 0) {
     return {};
   }
-  return {
-    tools: [...byTool.entries()]
-      .map(([name, entry]) => ({ name, calls: entry.calls, failures: entry.failures, sampledSessions: sampled }))
-      .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name))
-      .slice(0, 10),
-  };
+  return { tools: rows.map((row) => ({ name: row.tool, calls: row.calls, failures: row.failures })) };
 }
 
 /** The file name alone — for a hotspot whose checkout root is unknown. */

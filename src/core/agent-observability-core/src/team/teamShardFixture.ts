@@ -115,7 +115,7 @@ export function outcomes(): OutcomeInput[] {
     { endedAtMs: T0 + 10_000, repository: 'C:\\Users\\jdoe\\repos\\widgets', source: 'claude', verdict: 'smooth', costMicros: 1, costMode: 'usd' },
     { endedAtMs: T0 + 10_000, repository: 'jdoe@example.com', source: 'claude', verdict: 'smooth', costMicros: 1, costMode: 'usd' },
     { endedAtMs: T0 + 10_000, repository: PLANTED_TITLE, source: 'claude', verdict: 'smooth', costMicros: 1, costMode: 'usd' },
-    { endedAtMs: T0 + 10_000, repository: REPO, source: 'copilot-cli', verdict: 'smooth', costMicros: 1, costMode: 'usd' },
+    { endedAtMs: T0 + 10_000, repository: REPO, source: 'copilot-cloud', verdict: 'smooth', costMicros: 1, costMode: 'usd' },
     { endedAtMs: WINDOW_END, repository: REPO, source: 'claude', verdict: 'smooth', costMicros: 1, costMode: 'usd' },
     { endedAtMs: WINDOW_START - 1, repository: REPO, source: 'claude', verdict: 'smooth', costMicros: 1, costMode: 'usd' },
   ];

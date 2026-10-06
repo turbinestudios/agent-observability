@@ -9,12 +9,183 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-10-06
+
+### Added
+
+- **Run: start and follow Copilot sessions from the app.** Off by default.
+  Turn on **Run** in Settings to get a new Run view, where you can start a
+  GitHub Copilot session in one of your repositories, or continue an earlier
+  Copilot CLI session, and follow it as it works.
+- **Every action asks first.** Before the agent writes a file or runs a
+  command you see what it wants to do and choose **Allow once**, **Allow for
+  this session** or **Deny**. Nothing is remembered after the session, and
+  nothing runs in the background.
+- Run uses your own installed `copilot` and your own Copilot login. What is
+  sent to GitHub is the same as when you run `copilot` in a terminal, and a
+  one-time notice explains this before your first session.
+- New shortcuts fill in the goal for you: continue a Copilot CLI session,
+  retry a session with its retrospective's advice, start from a repository
+  digest, apply an improvement plan, or start from a hand-off brief. They only
+  fill in the box; nothing is sent until you press **Start**.
+- The live board shows **Waiting for your approval** for sessions you run
+  from the app, and opens them in Run.
+- Quitting while a session is running asks first, then stops the session
+  cleanly.
+- If the Copilot CLI stops while a session is open, the session says so and
+  reconnects when you send your next message.
+- A goal or follow-up you are writing in Run is kept while you look at
+  another view.
+
+### Changed
+
+- Sessions you run are saved with your other Copilot CLI sessions, so you can
+  continue them in a terminal, and they count in the Team view like any other
+  Copilot CLI session. Claude Code sessions are never run from the
+  app; **Resume in terminal** opens them with your own `claude` instead.
+
+## [1.23.0] - 2026-10-06
+
+### Added
+
+- **Rework**, a new tab under **Evidence**: see which sessions kept going back
+  over the same files, and which files they went back to. A session is flagged
+  when it edited a file in three or more separate turns, or removed at least
+  30 lines it had added earlier.
+- A **Rework** chip on those sessions in the list, a filter for them, and a
+  **Rework** card on the Dashboard showing how many of the sessions that
+  edited files were affected.
+- A session's retrospective now lists the **files edited repeatedly**, with
+  the number of turns and the lines added, removed and reworked.
+
+### Changed
+
+- The retrospective takes rework into account: a session that kept rewriting
+  the same files is no longer rated as having gone smoothly, and it suggests
+  narrowing the task or asking for a plan first.
+- Rework is a signal of where to look, not a quality score, and it covers
+  Claude Code sessions for now.
+- Sessions are re-analysed once the first time this version starts. The index
+  is not rebuilt.
+
+## [1.22.0] - 2026-10-06
+
+### Added
+
+- **Review packet** on a session, and on the selection bar for several
+  sessions: a Markdown summary of what was asked, which files changed and how
+  often they were re-edited, the commands that ran and failed, dead ends,
+  risky actions, cost, and the retrospective's findings. It is built on your
+  computer with no AI and is ready to paste into a pull request.
+- Secret-looking strings are replaced before anything is quoted, and
+  **Include what I asked** lets you copy a version without your own prompt
+  text.
+- **Hand off** on a session: a brief for starting the next session where this
+  one stopped, with the goal, where things stand, the constraints you stated,
+  the files in play, what was and was not verified, open items, and a first
+  prompt to paste.
+- **Resume in terminal**, in the Hand off dialog for Claude Code and Copilot
+  CLI sessions: copies the brief and opens your own terminal in the session's
+  folder, resuming it with your own command-line tool. If no terminal can be
+  opened, the command is shown for you to paste.
+
+## [1.21.0] - 2026-10-06
+
+### Added
+
+- **Needs you**, at the top of Workspace: one list of the sessions waiting
+  for you, the ones that may be stuck on an approval prompt, and everything
+  that finished since you last looked, with the ones most worth checking
+  first. Sessions that ended on a failed tool call or an interruption are
+  called out, and so are unusually expensive ones.
+- Dismiss an item, or snooze it for 15 minutes, 1 hour or 4 hours. A
+  dismissed item comes back only if that session needs you again. The
+  Workspace entry in the sidebar shows how many are new.
+- For Copilot CLI sessions the list knows when a session is waiting for your
+  approval. For Claude Code it is a best guess from a tool call that has gone
+  quiet, and it says "may be".
+
+### Changed
+
+- With Workspace notifications on, you are also told when a session may be
+  waiting for approval or ended on an error.
+
+## [1.20.0] - 2026-10-06
+
+### Added
+
+- **Did it really finish?** Each Claude Code session that changed code now
+  shows whether a test, build, lint or type-check was seen after the last
+  edit, and whether it passed. A card at the top of the session lists what was
+  and was not observed, with links to the turns involved.
+- Sessions that reported being done without such a check are marked **Not
+  verified** in the list, and ones whose last check failed are marked **Check
+  failed**. Filter for them in Sessions, from the new **Completion** tab under
+  Evidence, or from the **Reported done, not verified** card on the Dashboard.
+- The check reads only what the session itself recorded. Checks run in CI,
+  another terminal or a hook are not visible to it, and it says so.
+
+### Changed
+
+- The retrospective now takes these checks into account: a session whose last
+  check failed is no longer rated as having gone smoothly, and new advice
+  appears when a session reports done without verifying.
+- Sessions are re-analysed once the first time this version starts. The index
+  is not rebuilt.
+
+## [1.19.0] - 2026-10-06
+
+### Added
+
+- **Tools**, a new tab under **Evidence**: see which tools your agents call,
+  how often each one fails and how long it takes, for any time range, source
+  and repository. Click a tool to open the sessions that used it, or turn on
+  **Failed only** to open the ones where it failed.
+- A **Tools that fail most** card on the Dashboard, and a tool filter in
+  Sessions.
+
+### Changed
+
+- **Retro is now Evidence.** Retrospectives are its first tab, exactly as
+  before.
+- The repository digest's tool section now covers every session in the
+  window instead of a sample of the most recent ones.
+- The app rebuilds its index once the first time this version starts. Your
+  tags, notes, renamed titles and plans are kept.
+
+## [1.18.0] - 2026-10-06
+
+### Added
+
+- **Copilot CLI sessions.** Sessions you run with GitHub Copilot in the
+  terminal now appear next to your Claude Code and VS Code Copilot sessions,
+  under the source **Copilot CLI**: turns, tool calls and failures, tokens,
+  billed cost, the retrospective with its verdict, and a card on the Workspace
+  live board while the session runs. When the Copilot CLI records that it asked
+  for your approval, the card says **waiting for you** right away. The app only
+  reads the Copilot CLI's own session store and never changes it. Turn the
+  source off under **Settings > Sources**.
+
+### Changed
+
+- Copilot CLI sessions count in the Team view and in the file you share with
+  the team folder, as their own source beside Claude Code and Copilot in the
+  editor.
+
+### Fixed
+
+- The AI Helper, Deep Retrospective and Improvement Plans, when they run
+  through the Copilot CLI, left their own one-off runs in your Copilot session
+  history, started from your home folder. They now start from a folder of
+  their own and are never listed or counted as your sessions.
+
 ## [1.17.0] - 2026-10-03
 
 ### Added
 
-- **Team view.** A new sidebar entry shows how your team uses agents: members
-  active per day, sessions, tokens and estimated cost, how sessions went, the
+- **Team view.** Off by default: turn on **Show the Team view** under
+  **Settings > Team** to get a new sidebar entry. It shows how your team uses
+  agents: members active per day, sessions, tokens and estimated cost, how sessions went, the
   busiest repositories, shared context hotspots, adoption over time, and how
   your own numbers compare with the team's. It works through a folder your
   team already shares (OneDrive, SharePoint, a network drive): each member's
@@ -24,7 +195,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
   what the file contains: counts and totals under an anonymous id, never
   prompts, responses, names or session titles. **Preview what will be shared**
   shows the exact file before you decide, and an hourly automatic export can
-  be switched on once you have.
+  be switched on once you have. Turning the Team view off also stops sharing,
+  and the team folder is not read while it is off.
 
 ### Changed
 
