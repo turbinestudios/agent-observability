@@ -15,6 +15,8 @@ import { ClaudeIndexer } from '../indexer/claudeIndexer';
 import { CopilotIndexer } from '../indexer/copilotIndexer';
 import { CopilotCliIndexer, dropCopilotDuplicates } from '../indexer/copilotCliIndexer';
 import { CopilotCliSource } from '@agent-observability/core/src/copilotCli/copilotCliSource';
+import { CopilotJetbrainsSource } from '@agent-observability/core/src/copilotJetbrains/copilotJetbrainsSource';
+import { CopilotJetbrainsIndexer } from '../indexer/copilotJetbrainsIndexer';
 import { NativeTelemetryBackend } from '../drivers/nativeTelemetryBackend';
 import { AnalysisQueue } from '../analysis/analysisQueue';
 import { ensureArchiveIndexes } from '../archiveIndexes';
@@ -39,6 +41,8 @@ const sources = new SourceRegistry([
   new ClaudeCodeService(config),
   new CopilotSource(telemetry, config),
   new CopilotCliSource(config),
+  new CopilotCliSource(config, undefined, 'app'),
+  new CopilotJetbrainsSource(config),
 ]);
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'discovering' };
 const progress = (): void => {
@@ -86,6 +90,24 @@ try {
   } else {
     db.removeMissing('copilot-cli', new Set());
     notes.push('Copilot CLI is turned off in Settings');
+  }
+  if (config.isCopilotAppEnabled()) {
+    try { new CopilotCliIndexer({ db, config, onRows, onDiscovered, client: 'app' }).run(); }
+    catch (error) { notes.push(`Copilot app: ${String(error)}`); }
+  } else {
+    db.removeMissing('copilot-app', new Set());
+    notes.push('Copilot app is turned off in Settings');
+  }
+  if (config.isCopilotJetbrainsEnabled()) {
+    try {
+      const result = new CopilotJetbrainsIndexer({ db, config, onRows, onDiscovered }).run();
+      if (result.unreadable > 0) {
+        notes.push(`Copilot (JetBrains): could not read ${result.unreadable} of ${result.stores} chat stores`);
+      }
+    } catch (error) { notes.push(`Copilot (JetBrains): ${String(error)}`); }
+  } else {
+    db.removeMissing('copilot-jetbrains', new Set());
+    notes.push('Copilot (JetBrains) is turned off in Settings');
   }
   if (config.isLocalTelemetryEnabled()) {
     try {

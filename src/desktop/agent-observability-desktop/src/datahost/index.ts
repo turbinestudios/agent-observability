@@ -4,6 +4,7 @@ import { ClaudeCodeService } from '@agent-observability/core/src/claude/claudeCo
 import { TelemetryService } from '@agent-observability/core/src/telemetry/telemetryService';
 import { CopilotSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
 import { CopilotCliSource } from '@agent-observability/core/src/copilotCli/copilotCliSource';
+import { CopilotJetbrainsSource } from '@agent-observability/core/src/copilotJetbrains/copilotJetbrainsSource';
 import { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
 import * as path from 'node:path';
@@ -118,8 +119,25 @@ telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
 // Held directly as well as via the registry: its directory-listing cache must
 // be dropped on every index pass, or a session created while the app is open
 // shows in the list but fails to open with "not found" until a restart.
+// The runtime-store sources and the JetBrains reader cache their discovery the
+// same way, so they are dropped with it.
 const claude = new ClaudeCodeService(config);
-const sources = new SourceRegistry([claude, new CopilotSource(telemetry, config), new CopilotCliSource(config)]);
+const copilotCli = new CopilotCliSource(config);
+const copilotApp = new CopilotCliSource(config, undefined, 'app');
+const copilotJetbrains = new CopilotJetbrainsSource(config);
+const sources = new SourceRegistry([
+  claude,
+  new CopilotSource(telemetry, config),
+  copilotCli,
+  copilotApp,
+  copilotJetbrains,
+]);
+const invalidateDiscovery = (): void => {
+  claude.invalidateDiscovery();
+  copilotCli.refresh();
+  copilotApp.refresh();
+  copilotJetbrains.refresh();
+};
 
 // One detector for the whole process: it is stateless and reads the live config
 // on every call, so the detail view and the background pass always agree about
@@ -187,7 +205,7 @@ const background = new BackgroundController({
     return worker;
   },
   onStart: () => {
-    claude.invalidateDiscovery();
+    invalidateDiscovery();
     status = { ...status, phase: 'discovering', message: undefined };
     emit({ event: 'index.progress', status });
   },
@@ -402,7 +420,7 @@ function onBackgroundMessage(message: BackgroundMessage): void {
     case 'rows':
       // Discovery can push thousands at once. Bound each SQL IN list and
       // message, and decorate CURRENT rows rather than worker-cached overlays.
-      claude.invalidateDiscovery();
+      invalidateDiscovery();
       for (let i = 0; i < message.keys.length; i += 300) {
         const rows = db.getRowsByKey(message.keys.slice(i, i + 300))
           .filter((row) => !hidden.isHidden(row.source, row.sessionId));
@@ -413,7 +431,7 @@ function onBackgroundMessage(message: BackgroundMessage): void {
       break;
     case 'removed':
       detail.invalidateAll();
-      claude.invalidateDiscovery();
+      invalidateDiscovery();
       emit({ event: 'sessions.removed', keys: message.keys });
       break;
     case 'ready':
@@ -626,9 +644,7 @@ function handle(request: RpcRequest): unknown {
         // dropping it (and the Claude directory listing) is what forces the
         // fresh read for an actively running session.
         detail.invalidate(source, sessionId);
-        if (source === 'claude') {
-          claude.invalidateDiscovery();
-        }
+        invalidateDiscovery();
       }
       return detail.renderDocument(
         source,

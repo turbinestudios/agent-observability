@@ -29,15 +29,25 @@ export interface ShardSourceDeps {
 
 const CATEGORIES: ReadonlySet<string> = new Set<ContextInsightCategory>(['instruction', 'skill', 'agent', 'hook', 'prompt']);
 
+/**
+ * The source a session is counted under in a shard. The Copilot app runs the
+ * Copilot CLI's runtime, so its sessions are shared as Copilot CLI sessions:
+ * the shard's source set stays closed and readers on older releases still
+ * accept the file. Every other source is shared as itself or not at all.
+ */
+export function shardSource(source: string): string {
+  return source === 'copilot-app' ? 'copilot-cli' : source;
+}
+
 /** Aggregation rows from every enabled source, hidden sessions and excluded repositories removed. */
 export function collectAggregationRows(deps: ShardSourceDeps, sinceMs: number, untilMs: number): AggregationRow[] {
   const rows: AggregationRow[] = [];
   for (const source of deps.sources.enabled()) {
     // The shard's outcome rows only admit a closed set of sources (Claude
-    // Code, Copilot in the editor, Copilot CLI including Run-hosted
-    // sessions). A source outside it stays out of the aggregate part too, so
-    // the three parts of a shard always describe the same sessions.
-    if (!(OUTCOME_SOURCES as readonly string[]).includes(source.id)) {
+    // Code, Copilot in the editor, Copilot CLI including Run-hosted and
+    // Copilot app sessions). A source outside it stays out of the aggregate
+    // part too, so the three parts of a shard always describe the same sessions.
+    if (!(OUTCOME_SOURCES as readonly string[]).includes(shardSource(source.id))) {
       continue;
     }
     let result;
@@ -125,7 +135,7 @@ export function collectOutcomes(deps: ShardSourceDeps, sinceMs: number, untilMs:
     outcomes.push({
       endedAtMs: row.endedAtMs,
       repository: row.repository,
-      source: row.source,
+      source: shardSource(row.source),
       verdict: toOutcomeVerdict(row.verdict),
       costMicros: row.costMicros ?? undefined,
       costMode,

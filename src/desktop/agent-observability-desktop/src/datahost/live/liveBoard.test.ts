@@ -38,7 +38,13 @@ let tails: Map<string, TranscriptRecord[]>;
 
 function config(overrides: Record<string, unknown> = {}): Configuration {
   // Copilot CLI is off here so no test reads this machine's real ~/.copilot; its provider has its own test file.
-  const values: Record<string, unknown> = { 'claudeCode.projectsPath': PROJECTS, 'copilotCli.enabled': false, ...overrides };
+  const values: Record<string, unknown> = {
+    'claudeCode.projectsPath': PROJECTS,
+    'copilotCli.enabled': false,
+    'copilotApp.enabled': false,
+    'copilotJetbrains.enabled': false,
+    ...overrides,
+  };
   return new Configuration({
     get: <T,>(key: string, fallback: T): T => (values[key] === undefined ? fallback : (values[key] as T)),
     onDidChange: () => ({ dispose: () => undefined }),

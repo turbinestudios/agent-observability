@@ -1232,6 +1232,16 @@ export interface SettingsSnapshot {
   sqlitePath: string;
   /** `copilotCli.enabled` — read Copilot CLI sessions from `~/.copilot/session-state`. */
   copilotCliEnabled: boolean;
+  /** `copilotApp.enabled`: read the GitHub Copilot app's sessions (same store as the CLI). */
+  copilotAppEnabled: boolean;
+  /** `copilotJetbrains.enabled`: read Copilot chats from JetBrains IDEs. */
+  copilotJetbrainsEnabled: boolean;
+  /** `copilotJetbrains.storePath`; empty string means the platform default. */
+  copilotJetbrainsStorePath: string;
+  /** The folder the JetBrains reader looks in (override or default). */
+  copilotJetbrainsRoot: string;
+  /** The JetBrains chat store files found there, with a readable IDE name. */
+  resolvedJetbrainsStores: { path: string; ide: string }[];
   /** Directories the Claude scan will actually read (override first; only existing dirs). */
   resolvedClaudeDirs: string[];
   /** True when a non-empty projects-path override does not exist on disk. */
@@ -1430,6 +1440,9 @@ export interface SettingsPatch {
   claudeProjectsPath?: string;
   copilotEnabled?: boolean;
   copilotCliEnabled?: boolean;
+  copilotAppEnabled?: boolean;
+  copilotJetbrainsEnabled?: boolean;
+  copilotJetbrainsStorePath?: string;
   sqlitePath?: string;
   maxSessionMinutes?: number;
   deepRetroEnabled?: boolean;

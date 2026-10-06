@@ -49,6 +49,8 @@ const SOURCE_SERIES: SeriesStyle[] = [
   { key: 'claude', label: 'Claude Code', colorVar: '--series-1' },
   { key: 'copilot', label: 'Copilot', colorVar: '--series-2' },
   { key: 'copilot-cli', label: 'Copilot CLI', colorVar: '--series-cli' },
+  { key: 'copilot-app', label: 'Copilot app', colorVar: '--series-app' },
+  { key: 'copilot-jetbrains', label: 'Copilot (JetBrains)', colorVar: '--series-jetbrains' },
 ];
 
 const TOKEN_SERIES: SeriesStyle[] = [

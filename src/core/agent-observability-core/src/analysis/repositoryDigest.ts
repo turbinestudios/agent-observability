@@ -299,6 +299,10 @@ function sourceLabel(source: string): string {
       return 'Copilot';
     case 'copilot-cli':
       return 'Copilot CLI';
+    case 'copilot-app':
+      return 'Copilot app';
+    case 'copilot-jetbrains':
+      return 'Copilot (JetBrains)';
     default:
       return clean(source);
   }

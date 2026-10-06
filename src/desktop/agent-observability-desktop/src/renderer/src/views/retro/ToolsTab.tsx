@@ -39,6 +39,7 @@ const SOURCES: readonly { id: string; label: string }[] = [
   { id: 'claude', label: 'Claude Code' },
   { id: 'copilot', label: 'Copilot' },
   { id: 'copilot-cli', label: 'Copilot CLI' },
+  { id: 'copilot-app', label: 'Copilot app' },
 ];
 
 export function ToolsTab({ onOpenSessions }: Props): JSX.Element {

@@ -1,9 +1,11 @@
 # Agent Observability desktop app
 
 A desktop app for macOS and Windows that lets you look back at your
-**GitHub Copilot** and **Claude Code** sessions. It reads the same data as the
-VS Code extension, opens much faster, and works without VS Code running. You
-can use both at the same time.
+**GitHub Copilot** and **Claude Code** sessions: Copilot in VS Code, the
+Copilot CLI, the GitHub Copilot app and Copilot in JetBrains IDEs such as
+Rider, plus Claude Code. It reads the same data as the VS Code extension, opens
+much faster, and works without VS Code running. You can use both at the same
+time.
 
 ## Features
 

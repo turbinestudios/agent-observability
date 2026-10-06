@@ -153,7 +153,13 @@ describe('independent worker and broker connections', () => {
       indexPath, copilotNotes: [],
       // Every source off: with any left on, the real worker would index the
       // sessions of whichever machine runs this test.
-      settings: { 'claudeCode.enabled': false, 'localTelemetry.enabled': false, 'copilotCli.enabled': false },
+      settings: {
+        'claudeCode.enabled': false,
+        'localTelemetry.enabled': false,
+        'copilotCli.enabled': false,
+        'copilotApp.enabled': false,
+        'copilotJetbrains.enabled': false,
+      },
     };
     const worker = start(backgroundCode, input);
     const messages: BackgroundMessage[] = [];

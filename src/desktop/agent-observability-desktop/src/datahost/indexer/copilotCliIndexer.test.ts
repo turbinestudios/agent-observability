@@ -168,7 +168,13 @@ describe('Copilot CLI on the live board', () => {
 describe('settings and sharing', () => {
   it('toggles the source through Settings and reports the copilot domain', () => {
     const settings = new DesktopSettingsReader(path.join(home, 'config.json'));
-    const seams = { pickCopilots: () => [], copilotCandidates: () => [], exists: () => false, configPath: path.join(home, 'config.json') };
+    const seams = {
+      pickCopilots: () => [],
+      copilotCandidates: () => [],
+      exists: () => false,
+      configPath: path.join(home, 'config.json'),
+      jetbrainsStores: () => [],
+    };
     expect(buildSettingsSnapshot(settings, new Configuration(settings), seams).copilotCliEnabled).toBe(true);
     expect(applySettingsPatch(settings, { copilotCliEnabled: false }).copilot).toBe(true);
     expect(buildSettingsSnapshot(settings, new Configuration(settings), seams).copilotCliEnabled).toBe(false);

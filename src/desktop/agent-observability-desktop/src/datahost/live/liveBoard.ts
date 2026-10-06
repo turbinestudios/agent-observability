@@ -24,7 +24,8 @@ import type { LiveBoardSnapshot, LiveSessionRow, LiveStatus, RpcEvent, RunLiveSt
 import { sessionKey } from '../../shared/rpc';
 import type { IndexDb } from '../indexer/indexDb';
 import { pickCopilotDatabases } from '../indexer/copilotIndexer';
-import { readCliEventsTail, readWorkspaceYaml, type CliEventsTail } from '@agent-observability/core/src/copilotCli/events';
+import { cliClientOf, readCliEventsTail, readWorkspaceYaml, type CliEventsTail } from '@agent-observability/core/src/copilotCli/events';
+import { discoverJetbrainsStores } from '@agent-observability/core/src/copilotJetbrains/paths';
 import { deriveCliLive, resolveCliRepository } from '@agent-observability/core/src/copilotCli/mapper';
 import {
   copilotHelperCwd,
@@ -117,6 +118,8 @@ export interface LiveBoardDeps {
   readCliWorkspace?: (file: string) => Record<string, string>;
   copilotCliRoot?: () => string;
   copilotCliHelperCwd?: () => string;
+  /** Copilot JetBrains seam: the chat store files to watch. */
+  jetbrainsStores?: () => { path: string }[];
 }
 
 const defaultTimers: LiveTimers = {
@@ -214,8 +217,11 @@ export class LiveBoardService {
     if (this.deps.config.isLocalTelemetryEnabled()) {
       controller.register(this.copilotSource(controller));
     }
-    if (this.deps.config.isCopilotCliEnabled()) {
+    if (this.runtimeStoreWatched()) {
       controller.register(this.copilotCliSource(controller));
+    }
+    if (this.deps.config.isCopilotJetbrainsEnabled()) {
+      controller.register(this.copilotJetbrainsSource(controller));
     }
 
     void controller.start();
@@ -371,7 +377,54 @@ export class LiveBoardService {
     };
   }
 
-  /** Copilot CLI sessions written to recently, with status from the events tail. */
+  /** The CLI and the Copilot app share one store; it is watched while either is on. */
+  private runtimeStoreWatched(): boolean {
+    return this.deps.config.isCopilotCliEnabled() || this.deps.config.isCopilotAppEnabled();
+  }
+
+  /**
+   * The Copilot JetBrains plugin's chat stores. They are databases the IDE
+   * rewrites in place, so each is watched as a file and any change asks for
+   * an index pass. They have no tail to read, so they never add live rows.
+   */
+  private copilotJetbrainsSource(controller: LiveUpdateController): LiveSource {
+    const handles: WatchHandle[] = [];
+    return {
+      label: 'Copilot (JetBrains) store watcher',
+      start: () => {
+        let stores: { path: string }[];
+        try {
+          stores = this.deps.jetbrainsStores?.() ?? discoverJetbrainsStores(this.deps.config.getCopilotJetbrainsStorePath());
+        } catch {
+          return;
+        }
+        for (const store of stores) {
+          try {
+            handles.push(
+              this.factories.databases.watch(store.path, () => {
+                this.armReindex();
+                controller.signal();
+              }),
+            );
+          } catch {
+            // A store that cannot be watched still updates on the next pass.
+          }
+        }
+      },
+      stop: () => {
+        for (const handle of handles) {
+          try {
+            handle.dispose();
+          } catch {
+            // best-effort
+          }
+        }
+        handles.length = 0;
+      },
+    };
+  }
+
+  /** Copilot CLI and Copilot app sessions written to recently, with status from the events tail. */
   private copilotCliRows(now: number): LiveSessionRow[] {
     let sessions: CopilotCliSessionFiles[];
     try {
@@ -381,11 +434,17 @@ export class LiveBoardService {
     }
     const helperCwd = normalizeDir(this.deps.copilotCliHelperCwd?.() ?? copilotHelperCwd());
     const rows: LiveSessionRow[] = [];
+    const cliOn = this.deps.config.isCopilotCliEnabled();
+    const appOn = this.deps.config.isCopilotAppEnabled();
     for (const files of sessions) {
-      if (now - files.mtimeMs >= LIVE_DROP_MS || this.deps.hidden.isHidden('copilot-cli', files.sessionId)) {
+      if (now - files.mtimeMs >= LIVE_DROP_MS) {
         continue;
       }
       const workspace = (this.deps.readCliWorkspace ?? readWorkspaceYaml)(files.workspaceFile);
+      const source = cliClientOf(workspace) === 'app' ? 'copilot-app' : 'copilot-cli';
+      if (!(source === 'copilot-app' ? appOn : cliOn) || this.deps.hidden.isHidden(source, files.sessionId)) {
+        continue;
+      }
       // The app's own helper runs share this store; they are not sessions.
       if (workspace.cwd !== undefined && normalizeDir(workspace.cwd) === helperCwd) {
         continue;
@@ -395,11 +454,11 @@ export class LiveBoardService {
         continue;
       }
       const { facts, status, awaitingApproval } = deriveCliLive(tail.events, files.mtimeMs, now);
-      const indexed = this.deps.db.getRow('copilot-cli', files.sessionId);
+      const indexed = this.deps.db.getRow(source, files.sessionId);
       const [row] = indexed === undefined ? [undefined] : this.deps.renames.apply([indexed]);
       const title = row?.title ?? workspace.name ?? workspace.summary;
       rows.push({
-        source: 'copilot-cli',
+        source,
         sessionId: files.sessionId,
         repository: row?.repository ?? resolveCliRepository(workspace, []),
         ...(title !== undefined ? { title } : {}),
@@ -424,7 +483,7 @@ export class LiveBoardService {
   private recompute(): LiveBoardSnapshot {
     const now = this.now();
     const rows: LiveSessionRow[] = [];
-    if (this.deps.config.isCopilotCliEnabled()) {
+    if (this.runtimeStoreWatched()) {
       rows.push(...this.copilotCliRows(now));
     }
 

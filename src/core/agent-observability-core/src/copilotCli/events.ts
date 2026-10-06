@@ -135,3 +135,18 @@ export function readWorkspaceYaml(file: string): Record<string, string> {
     return {};
   }
 }
+
+/**
+ * Which client wrote a session into the shared store. The GitHub Copilot app
+ * runs the same runtime as the CLI and leaves the same files; only
+ * `client_name` in `workspace.yaml` tells it apart (`github/autopilot`, seen
+ * with app 1.1.24). Everything else (the CLI, the SDK, VS Code's wrapper) is
+ * the CLI source.
+ */
+export type CliClient = 'cli' | 'app';
+
+export const COPILOT_APP_CLIENT_NAME = 'github/autopilot';
+
+export function cliClientOf(workspace: Readonly<Record<string, string>>): CliClient {
+  return workspace.client_name === COPILOT_APP_CLIENT_NAME ? 'app' : 'cli';
+}

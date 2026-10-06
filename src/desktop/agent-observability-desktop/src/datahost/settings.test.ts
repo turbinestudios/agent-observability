@@ -43,6 +43,7 @@ function seams(over: Partial<SettingsSeams> = {}): SettingsSeams {
     copilotCandidates: () => [],
     exists: () => false,
     configPath: file,
+    jetbrainsStores: () => [],
     ...over,
   };
 }

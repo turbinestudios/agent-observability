@@ -13,6 +13,7 @@ import type {
 import { aiuToUsd } from '../telemetry/pricing';
 import { UNKNOWN_REPOSITORY, sanitizeRepositorySlug } from '../telemetry/repositoryUrl';
 import { eventTimeMs, type CliEvent } from './events';
+import type { StoreModelUsage } from './sessionStoreUsage';
 
 /**
  * Maps a Copilot CLI session's events onto the shared session models.
@@ -30,12 +31,22 @@ import { eventTimeMs, type CliEvent } from './events';
  *   tokens come from its messages, AIU from its last `usage_checkpoint`.
  */
 
+/** The two sources that read the runtime's shared session store. */
+export type CliSourceId = 'copilot-cli' | 'copilot-app';
+
 export interface CliSessionInput {
   sessionId: string;
   events: readonly CliEvent[];
   workspace: Readonly<Record<string, string>>;
   /** Already resolved and sanitized; see {@link resolveCliRepository}. */
   repository: string;
+  /** Which client wrote the session; `copilot-cli` when absent. */
+  source?: CliSourceId;
+  /**
+   * The runtime's own per-model usage for this session, from
+   * `session-store.db`. Used only when the events carry no token totals.
+   */
+  storeUsage?: ReadonlyMap<string, StoreModelUsage>;
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined);
@@ -84,7 +95,39 @@ export function resolveCliRepository(
     }
   }
   const cwd = cliSessionCwd(workspace, events);
-  return (cwd !== undefined ? resolveCwd?.(cwd) : undefined) ?? UNKNOWN_REPOSITORY;
+  const known = (repo: string | undefined): repo is string => repo !== undefined && repo !== UNKNOWN_REPOSITORY;
+  const fromCwd = cwd !== undefined ? resolveCwd?.(cwd) : undefined;
+  if (known(fromCwd)) {
+    return fromCwd;
+  }
+  // The Copilot app runs each chat in its own scratch folder and names the
+  // project only as an attached directory. Only the remote is kept, never
+  // the path.
+  for (const dir of attachedDirectories(events)) {
+    const repo = resolveCwd?.(dir);
+    if (known(repo)) {
+      return repo;
+    }
+  }
+  return UNKNOWN_REPOSITORY;
+}
+
+/** Directories the user attached to a prompt, in order, without duplicates. */
+function attachedDirectories(events: readonly CliEvent[]): string[] {
+  const dirs: string[] = [];
+  for (const event of events) {
+    if (event.type !== 'user.message' || !Array.isArray(event.data.attachments)) {
+      continue;
+    }
+    for (const attachment of event.data.attachments) {
+      const a = obj(attachment);
+      const dir = str(a.path);
+      if (a.type === 'directory' && dir !== undefined && !dirs.includes(dir)) {
+        dirs.push(dir);
+      }
+    }
+  }
+  return dirs;
 }
 
 export interface CliUsage {
@@ -95,6 +138,39 @@ export interface CliUsage {
   /** Absent when no segment reported billed usage: the session is unpriced. */
   aiuNano?: number;
   byModel: Map<string, { llmCalls: number; inputTokens: number; outputTokens: number; cachedTokens: number; reasoningTokens: number }>;
+}
+
+/**
+ * Event usage, or the runtime store's when the events carry no token totals
+ * at all (the Copilot app never writes `session.shutdown`; a killed CLI
+ * process skips it). Billed AIU stays the events' figure when they have one.
+ */
+export function resolveCliUsage(events: readonly CliEvent[], store?: ReadonlyMap<string, StoreModelUsage>): CliUsage {
+  const fromEvents = summarizeCliUsage(events);
+  if (store === undefined || store.size === 0 || fromEvents.inputTokens + fromEvents.cachedTokens > 0) {
+    return fromEvents;
+  }
+  const usage: CliUsage = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, byModel: new Map() };
+  let storeAiu = 0;
+  for (const [model, u] of store) {
+    usage.byModel.set(model, {
+      llmCalls: u.llmCalls,
+      inputTokens: u.inputTokens,
+      outputTokens: u.outputTokens,
+      cachedTokens: u.cachedTokens,
+      reasoningTokens: u.reasoningTokens,
+    });
+    usage.inputTokens += u.inputTokens;
+    usage.outputTokens += u.outputTokens;
+    usage.cachedTokens += u.cachedTokens;
+    usage.reasoningTokens += u.reasoningTokens;
+    storeAiu += u.aiuNano;
+  }
+  const aiuNano = fromEvents.aiuNano ?? (storeAiu > 0 ? storeAiu : undefined);
+  if (aiuNano !== undefined) {
+    usage.aiuNano = aiuNano;
+  }
+  return usage;
 }
 
 export function summarizeCliUsage(events: readonly CliEvent[]): CliUsage {
@@ -232,7 +308,7 @@ function walk(input: CliSessionInput): Walk {
       traceId: input.sessionId,
       ...(spanId !== undefined ? { spanId } : {}),
       operation: entry.operation,
-      agentName: 'copilot-cli',
+      agentName: input.source ?? 'copilot-cli',
       agentMode: entry.agentMode,
       model: entry.model,
       ...(entry.toolName !== undefined ? { toolName: entry.toolName } : {}),
@@ -351,7 +427,8 @@ const TITLE_MAX_CHARS = 80;
 
 export function buildCliSessionDetail(input: CliSessionInput): SessionDetail {
   const w = walk(input);
-  const usage = summarizeCliUsage(input.events);
+  const usage = resolveCliUsage(input.events, input.storeUsage);
+  const source = input.source ?? 'copilot-cli';
   const named = str(input.workspace.name) ?? str(input.workspace.summary);
   const derived = w.firstPrompt?.replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX_CHARS);
   const title = named ?? (derived !== undefined && derived.length > 0 ? derived : undefined);
@@ -372,7 +449,7 @@ export function buildCliSessionDetail(input: CliSessionInput): SessionDetail {
     model: w.dominantModel,
     agentModes: w.turns.length > 0 ? ['agent'] : [],
     ...(title !== undefined ? { title, titleDerived: named === undefined } : {}),
-    source: 'copilot-cli',
+    source,
   };
   const models = [...usage.byModel.entries()];
   const modelUsage: SessionModelUsage[] = models.map(([model, u], index) => ({
@@ -404,7 +481,7 @@ export function buildCliSessionDetail(input: CliSessionInput): SessionDetail {
     turns: w.turns,
     modelUsage,
     agentUsage: modelUsage.map((u) => ({
-      agentName: 'copilot-cli',
+      agentName: source,
       kind: 'main' as const,
       ...u,
       linesOfCode: 0,

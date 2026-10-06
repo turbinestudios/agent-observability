@@ -110,6 +110,24 @@ export function SettingsView(): JSX.Element {
           />
           GitHub Copilot CLI
         </label>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.copilotAppEnabled}
+            disabled={saving}
+            onChange={(e) => save({ copilotAppEnabled: e.target.checked })}
+          />
+          GitHub Copilot app
+        </label>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.copilotJetbrainsEnabled}
+            disabled={saving}
+            onChange={(e) => save({ copilotJetbrainsEnabled: e.target.checked })}
+          />
+          GitHub Copilot in JetBrains IDEs (Rider, IntelliJ IDEA, …)
+        </label>
         <p className="settings-hint">
           Turning a source off removes its sessions from the list; turning it back on re-reads them.
         </p>
@@ -152,6 +170,17 @@ export function SettingsView(): JSX.Element {
             </span>
           )}
           <CopilotResolution snapshot={snapshot} onRecheck={() => save({})} />
+        </div>
+
+        <div className="settings-row">
+          <span className="settings-label">Copilot for JetBrains chat folder</span>
+          <PathInput
+            value={snapshot.copilotJetbrainsStorePath}
+            disabled={saving}
+            ariaLabel="Copilot for JetBrains chat folder"
+            onCommit={(value) => save({ copilotJetbrainsStorePath: value })}
+          />
+          <span className="settings-resolved">{describeJetbrainsResolution(snapshot)}</span>
         </div>
       </section>
 
@@ -506,6 +535,19 @@ function describeClaudeResolution(snapshot: SettingsSnapshot): string {
     return 'No Claude Code projects folder found on this machine yet.';
   }
   return `Reading from: ${snapshot.resolvedClaudeDirs.join(' · ')}`;
+}
+
+/** Where the JetBrains reader looks, and which IDEs it found chat stores for. */
+function describeJetbrainsResolution(snapshot: SettingsSnapshot): string {
+  if (!snapshot.copilotJetbrainsEnabled) {
+    return 'Copilot in JetBrains IDEs is turned off.';
+  }
+  const stores = snapshot.resolvedJetbrainsStores;
+  if (stores.length === 0) {
+    return `No Copilot chat stores found in ${snapshot.copilotJetbrainsRoot}.`;
+  }
+  const ides = [...new Set(stores.map((s) => s.ide))].sort().join(', ');
+  return `Found ${stores.length} chat ${stores.length === 1 ? 'store' : 'stores'} (${ides}) in ${snapshot.copilotJetbrainsRoot}.`;
 }
 
 /**

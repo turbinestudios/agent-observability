@@ -70,6 +70,9 @@ export const ConfigKeys = {
   copilotArchiveSweepSeconds: 'copilotArchive.sweepIntervalSeconds',
   claudeEnabled: 'claudeCode.enabled',
   copilotCliEnabled: 'copilotCli.enabled',
+  copilotAppEnabled: 'copilotApp.enabled',
+  copilotJetbrainsEnabled: 'copilotJetbrains.enabled',
+  copilotJetbrainsStorePath: 'copilotJetbrains.storePath',
   claudeProjectsPath: 'claudeCode.projectsPath',
   claudeScanDepth: 'claudeCode.scanDepth',
   claudeMaxSessions: 'claudeCode.maxSessions',
@@ -127,6 +130,9 @@ export const ConfigDefaults = {
   copilotArchiveSweepSeconds: 60,
   claudeEnabled: true,
   copilotCliEnabled: true,
+  copilotAppEnabled: true,
+  copilotJetbrainsEnabled: true,
+  copilotJetbrainsStorePath: '',
   claudeProjectsPath: '',
   claudeScanDepth: 8,
   claudeMaxSessions: 150,
@@ -489,6 +495,32 @@ export class Configuration {
    */
   isCopilotCliEnabled(): boolean {
     return this.config().get<boolean>(ConfigKeys.copilotCliEnabled, ConfigDefaults.copilotCliEnabled);
+  }
+
+  /**
+   * Whether sessions from the GitHub Copilot app are read. The app runs the
+   * same runtime and writes the same store as the CLI; its sessions are told
+   * apart by `client_name` and listed as their own source. On by default.
+   */
+  isCopilotAppEnabled(): boolean {
+    return this.config().get<boolean>(ConfigKeys.copilotAppEnabled, ConfigDefaults.copilotAppEnabled);
+  }
+
+  /** Whether Copilot chats from JetBrains IDEs (Rider, IntelliJ, …) are read. On by default. */
+  isCopilotJetbrainsEnabled(): boolean {
+    return this.config().get<boolean>(ConfigKeys.copilotJetbrainsEnabled, ConfigDefaults.copilotJetbrainsEnabled);
+  }
+
+  /**
+   * Explicit override of the Copilot JetBrains plugin's store root (the
+   * folder holding `<ide>/chat-*-sessions/`). `undefined` when unset, so the
+   * platform default is used.
+   */
+  getCopilotJetbrainsStorePath(): string | undefined {
+    const value = this.config()
+      .get<string>(ConfigKeys.copilotJetbrainsStorePath, ConfigDefaults.copilotJetbrainsStorePath)
+      .trim();
+    return value.length > 0 ? value : undefined;
   }
 
   /**

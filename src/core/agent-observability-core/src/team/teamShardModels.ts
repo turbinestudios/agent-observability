@@ -39,6 +39,9 @@ export const TEAM_SHARD_TEMP_SUFFIX = '.tmp';
  * contract version did not need to change; from the first tagged release on,
  * adding a value here is a schema version bump.
  */
+// The Copilot app is shared as `copilot-cli` (the desktop folds it before
+// building), and Copilot in JetBrains IDEs is not shared, so neither widens
+// this set or the schema.
 export const OUTCOME_SOURCES = ['claude', 'copilot', 'copilot-cli'] as const;
 export type OutcomeSource = (typeof OUTCOME_SOURCES)[number];
 

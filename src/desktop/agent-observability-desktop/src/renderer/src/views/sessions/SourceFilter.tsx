@@ -24,7 +24,7 @@ import { sourceLabel } from './format';
  * indistinguishable from an empty index.
  */
 
-const KNOWN_SOURCES = ['claude', 'copilot', 'copilot-cli'];
+const KNOWN_SOURCES = ['claude', 'copilot', 'copilot-cli', 'copilot-app', 'copilot-jetbrains'];
 
 interface Props {
   groups: SessionGroup[];

@@ -1,5 +1,6 @@
 import type { Configuration } from '@agent-observability/core/src/config/configuration';
 import { CopilotCliSource } from '@agent-observability/core/src/copilotCli/copilotCliSource';
+import type { CliClient } from '@agent-observability/core/src/copilotCli/events';
 import { buildCliSessionDetail } from '@agent-observability/core/src/copilotCli/mapper';
 import {
   defaultCopilotCliFs,
@@ -10,16 +11,19 @@ import type { SessionRow } from '../../shared/rpc';
 import type { FileState, IndexDb } from './indexDb';
 
 /**
- * Indexes GitHub Copilot CLI sessions from `~/.copilot/session-state`.
+ * Indexes the Copilot runtime's sessions from `~/.copilot/session-state`,
+ * once per client: the CLI (with the SDK and VS Code's wrapper) as
+ * `copilot-cli`, and the GitHub Copilot app as `copilot-app`.
  *
  * Same shape as the Claude indexer: discovery is a directory listing, a
  * session is re-parsed only when its events file's size or mtime moved, and
- * rows are pushed in batches. Two things differ. Directories without an
- * events file are not sessions and never produce a row. And the app's own
- * Copilot helper runs live in the same store: the source drops them, and any
- * row an earlier pass wrote for one is removed here.
+ * rows are pushed in batches. Three things differ. Directories without an
+ * events file are not sessions and never produce a row. A session another
+ * client wrote is skipped before anything else, so a row an older release
+ * filed under the CLI moves to the app source on the next pass. And the
+ * app's own Copilot helper runs live in the same store: the source drops
+ * them, and any row an earlier pass wrote for one is removed here.
  */
-const SOURCE = 'copilot-cli';
 const HYDRATE_BATCH = 20;
 /** `files.kind` for an events file known to be one of the app's own helper runs. */
 const HELPER_KIND = 'helper';
@@ -31,6 +35,8 @@ export interface CopilotCliIndexerDeps {
   onDiscovered?: (total: number) => void;
   fs?: CopilotCliFs;
   now?: () => number;
+  /** Which client's sessions this pass indexes; the CLI when absent. */
+  client?: CliClient;
 }
 
 export class CopilotCliIndexer {
@@ -41,13 +47,14 @@ export class CopilotCliIndexer {
   constructor(private readonly deps: CopilotCliIndexerDeps) {
     this.now = deps.now ?? (() => Date.now());
     this.fs = deps.fs ?? defaultCopilotCliFs;
-    this.source = new CopilotCliSource(deps.config, this.fs);
+    this.source = new CopilotCliSource(deps.config, this.fs, deps.client ?? 'cli');
   }
 
   run(): { discovered: number; hydrated: number; helperRuns: number } {
-    if (!this.deps.config.isCopilotCliEnabled()) {
+    if (!this.source.isEnabled()) {
       return { discovered: 0, hydrated: 0, helperRuns: 0 };
     }
+    const SOURCE = this.source.id;
     const excluded = this.deps.config.getExcludedRepositories();
     const discovered = discoverCopilotCliSessions(this.fs);
     const present = new Set<string>();
@@ -63,6 +70,9 @@ export class CopilotCliIndexer {
     };
 
     for (const files of discovered) {
+      if (!this.source.owns(files)) {
+        continue;
+      }
       const state = this.deps.db.getFileState(files.eventsFile);
       const unchanged = state !== undefined && state.size === files.size && state.mtimeMs === files.mtimeMs;
       if (unchanged && state.kind === HELPER_KIND) {
@@ -70,7 +80,7 @@ export class CopilotCliIndexer {
         helperRuns += 1;
         continue;
       }
-      if (unchanged && this.deps.db.getRow(SOURCE, files.sessionId) !== undefined) {
+      if (unchanged && state.source === SOURCE && this.deps.db.getRow(SOURCE, files.sessionId) !== undefined) {
         present.add(files.sessionId);
         continue;
       }
@@ -145,18 +155,21 @@ export class CopilotCliIndexer {
 
 }
 
+const RUNTIME_SOURCES = ['copilot-cli', 'copilot-app'] as const;
+
 /**
  * A CLI session started from an editor can also reach the VS Code Copilot
- * source under the same id. It is one session; the CLI row carries the fuller
- * record, so the other is dropped. Runs after both indexers.
+ * source under the same id. It is one session; the runtime's row carries the
+ * fuller record, so the other is dropped. Runs after all indexers.
  */
 export function dropCopilotDuplicates(db: Pick<IndexDb, 'sessionKeys' | 'getRow' | 'removeSession'>): number {
   let dropped = 0;
   for (const key of db.sessionKeys()) {
-    if (!key.startsWith(`${SOURCE}:`)) {
+    const source = RUNTIME_SOURCES.find((s) => key.startsWith(`${s}:`));
+    if (source === undefined) {
       continue;
     }
-    const sessionId = key.slice(SOURCE.length + 1);
+    const sessionId = key.slice(source.length + 1);
     if (db.getRow('copilot', sessionId) !== undefined) {
       db.removeSession('copilot', sessionId);
       dropped += 1;

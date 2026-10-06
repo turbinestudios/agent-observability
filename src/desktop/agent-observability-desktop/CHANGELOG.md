@@ -9,6 +9,28 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-10-06
+
+### Added
+
+- **GitHub Copilot app sessions are their own source.** Sessions from the
+  Copilot desktop app used to appear as Copilot CLI sessions with no project
+  and no token counts. They now have their own **Copilot app** filter, chart
+  colour and Settings switch, and show their tokens and, when the chat had a
+  project folder attached, its repository.
+- **Copilot in JetBrains IDEs.** Copilot chats from Rider, IntelliJ IDEA and
+  the other JetBrains IDEs are read too, under **Copilot (JetBrains)**. The
+  plugin does not record token counts or cost, so these sessions show neither.
+  Settings shows where the app looks and how many chat stores it found, and
+  lets you point it at another folder. This is new and has not yet been tried
+  against every plugin version; if your chats do not appear, the folder line in
+  Settings is the place to start.
+
+### Fixed
+
+- Copilot CLI sessions that ended without a clean shutdown now show their token
+  counts instead of zero.
+
 ## [2.1.1] - 2026-10-06
 
 ### Added

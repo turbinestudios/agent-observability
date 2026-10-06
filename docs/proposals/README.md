@@ -37,6 +37,8 @@ observing sessions to judging them and starting the next one.
 | 17 | [Attention inbox](17-attention-inbox.md) | One ranked list of what needs me now and what finished while I was away | Completed (1.21.0) | M | The live board, verdicts, completion checks, the JSON-store pattern |
 | 18 | [Review packet](18-review-packet.md) | Give a reviewer the story of a session before the diff, ready to paste into a pull request | Completed (1.22.0) | M | `SessionActivity`, the retrospective, the digest's builder/renderer split |
 | 19 | [Hand-off brief and Resume in terminal](19-handoff-brief.md) | Start the next session where this one stopped, with my constraints carried over | Completed (1.22.0) | M | `SessionActivity`, the redaction helper, the user's own `claude` / `copilot` |
+| 20 | [The Copilot app as a session source](20-copilot-app-source.md) | See my Copilot app sessions as their own source, with project and tokens | Completed (2.2.0) | S/M | Proposal 14's source and indexer, the runtime's `session-store.db` |
+| 21 | [Copilot in JetBrains IDEs](21-copilot-jetbrains-source.md) | See my Copilot chats from Rider and other JetBrains IDEs beside everything else | Built (2.2.0), not verified on a real store | M/L | The `SessionDataSource` seam, codeburn's description of the plugin's store |
 
 **Suggested order.** Proposals 1–6 and 9–13 are built. What remains runs on
 two tracks that touch mostly different files and can be built in parallel:

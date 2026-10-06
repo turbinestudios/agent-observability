@@ -111,7 +111,7 @@ describe('packet.includePrompts setting', () => {
   it('defaults on, round-trips a real boolean and ignores anything else', () => {
     const file = path.join(dir, 'config.json');
     const settings = new DesktopSettingsReader(file);
-    const seams = { pickCopilots: () => [], copilotCandidates: () => [], exists: () => false, configPath: file };
+    const seams = { pickCopilots: () => [], copilotCandidates: () => [], exists: () => false, configPath: file, jetbrainsStores: () => [] };
     const snapshot = (): boolean => buildSettingsSnapshot(settings, new Configuration(settings), seams).packetIncludePrompts;
     expect(snapshot()).toBe(true);
     applySettingsPatch(settings, { packetIncludePrompts: false });

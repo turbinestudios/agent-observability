@@ -60,6 +60,22 @@ export function describeDeletion(
         "This app does not delete from the Copilot CLI's session store. You can hide the session here, or remove it with the Copilot CLI.",
     };
   }
+  if (source === 'copilot-app') {
+    return {
+      supported: false,
+      target: 'Stored by the GitHub Copilot app',
+      consequence:
+        "This app does not delete from the Copilot app's session store. You can hide the session here, or delete it in the Copilot app.",
+    };
+  }
+  if (source === 'copilot-jetbrains') {
+    return {
+      supported: false,
+      target: 'Stored by the Copilot plugin in your JetBrains IDE',
+      consequence:
+        "This app does not change the plugin's chat history. You can hide the session here, or delete the chat in the IDE.",
+    };
+  }
   if (source === 'claude') {
     const files = claudeFilesFor(sessionId, deps);
     if (files.length === 0) {

@@ -13,7 +13,7 @@ import type {
   SessionSummary,
 } from '../telemetry/models';
 import type { Result } from '../telemetry/telemetryService';
-import { parseCliEvents, readWorkspaceYaml } from './events';
+import { cliClientOf, parseCliEvents, readWorkspaceYaml, type CliClient } from './events';
 import { isHelperRun } from './helperRuns';
 import {
   buildCliAggregationRows,
@@ -21,10 +21,14 @@ import {
   buildCliSessionDetail,
   extractCliRetrospectiveSignals,
   resolveCliRepository,
+  summarizeCliUsage,
   type CliSessionInput,
+  type CliSourceId,
 } from './mapper';
+import { SessionStoreUsageCache, sessionStorePath } from './sessionStoreUsage';
 import {
   copilotHelperCwd,
+  copilotHome,
   defaultCopilotCliFs,
   discoverCopilotCliSessions,
   type CopilotCliFs,
@@ -34,6 +38,7 @@ import {
 /** Minimal config surface (satisfied by `Configuration`). */
 export interface CopilotCliSourceConfig {
   isCopilotCliEnabled(): boolean;
+  isCopilotAppEnabled?(): boolean;
   getExcludedRepositories(): ReadonlySet<string>;
 }
 
@@ -43,32 +48,56 @@ interface Loaded {
   input: CliSessionInput | undefined;
 }
 
+interface ClientProfile {
+  id: CliSourceId;
+  label: string;
+  iconId: string;
+}
+
+const PROFILES: Record<CliClient, ClientProfile> = {
+  cli: { id: 'copilot-cli', label: 'Copilot CLI', iconId: 'terminal' },
+  app: { id: 'copilot-app', label: 'Copilot app', iconId: 'device-desktop' },
+};
+
 /**
  * GitHub Copilot CLI sessions (and sessions hosted through the Copilot SDK,
  * which writes the same store) as a {@link SessionDataSource}. Read-only.
  *
+ * The GitHub Copilot app writes the same store through the same runtime, so
+ * one class serves both: constructed for `client: 'app'` it lists only the
+ * app's sessions (`client_name: github/autopilot`) as "Copilot app", and the
+ * default CLI instance lists everything else.
+ *
  * No context analysis: the events carry no "instruction file loaded" record,
  * so the Context tab is hidden for this source rather than guessed at.
- * `getAggregationRows` is complete for the contract's sake; the team shard's
- * outcome rows still exclude this source, because its `source` set is closed.
  */
 export class CopilotCliSource implements SessionDataSource {
-  readonly id: AgentSourceId = 'copilot-cli';
-  readonly label = 'Copilot CLI';
+  readonly id: AgentSourceId;
+  readonly label: string;
   readonly costMode: CostMode = 'aiu';
-  readonly iconId = 'terminal';
+  readonly iconId: string;
 
   private readonly git = new GitRemoteResolver();
   private readonly cache = new Map<string, Loaded>();
+  private readonly storeUsage: SessionStoreUsageCache;
   private discovered: CopilotCliSessionFiles[] | undefined;
 
   constructor(
     private readonly config: CopilotCliSourceConfig,
     private readonly env: CopilotCliFs = defaultCopilotCliFs,
-  ) {}
+    readonly client: CliClient = 'cli',
+  ) {
+    const profile = PROFILES[client];
+    this.id = profile.id;
+    this.label = profile.label;
+    this.iconId = profile.iconId;
+    this.storeUsage = new SessionStoreUsageCache(() => sessionStorePath(copilotHome(this.env)));
+  }
 
   isEnabled(): boolean {
-    return this.config.isCopilotCliEnabled();
+    return this.client === 'app'
+      ? this.config.isCopilotAppEnabled?.() ?? true
+      : this.config.isCopilotCliEnabled();
   }
 
   refresh(): void {
@@ -80,29 +109,52 @@ export class CopilotCliSource implements SessionDataSource {
     this.discovered = undefined;
   }
 
-  /** One session's parsed input, or `undefined` for a helper run or an unreadable file. */
+  /** Whether a session directory belongs to this instance's client. Reads only `workspace.yaml`. */
+  owns(files: CopilotCliSessionFiles): boolean {
+    return cliClientOf(readWorkspaceYaml(files.workspaceFile)) === this.client;
+  }
+
+  /**
+   * One session's parsed input, or `undefined` for a helper run, an
+   * unreadable file, or a session another client wrote.
+   */
   load(files: CopilotCliSessionFiles): CliSessionInput | undefined {
     const cached = this.cache.get(files.eventsFile);
     if (cached !== undefined && cached.mtimeMs === files.mtimeMs && cached.size === files.size) {
-      return cached.input;
+      return cached.input === undefined ? undefined : this.withStoreUsage(cached.input);
     }
     let input: CliSessionInput | undefined;
     try {
-      const { events } = parseCliEvents(fs.readFileSync(files.eventsFile, 'utf8'));
       const workspace = readWorkspaceYaml(files.workspaceFile);
-      const helper = isHelperRun(events, workspace, {
-        helperCwd: copilotHelperCwd(this.env),
-        homeDir: this.env.homedir(),
-      });
-      if (!helper && events.length > 0) {
-        const repository = resolveCliRepository(workspace, events, (cwd) => this.git.resolve(cwd));
-        input = { sessionId: files.sessionId, events, workspace, repository };
+      if (cliClientOf(workspace) === this.client) {
+        const { events } = parseCliEvents(fs.readFileSync(files.eventsFile, 'utf8'));
+        const helper = isHelperRun(events, workspace, {
+          helperCwd: copilotHelperCwd(this.env),
+          homeDir: this.env.homedir(),
+        });
+        if (!helper && events.length > 0) {
+          const repository = resolveCliRepository(workspace, events, (cwd) => this.git.resolve(cwd));
+          input = { sessionId: files.sessionId, events, workspace, repository, source: this.id as CliSourceId };
+        }
       }
     } catch {
       input = undefined;
     }
     this.cache.set(files.eventsFile, { mtimeMs: files.mtimeMs, size: files.size, input });
-    return input;
+    return input === undefined ? undefined : this.withStoreUsage(input);
+  }
+
+  /**
+   * Attaches the runtime store's usage when the events have no token totals.
+   * The store is opened only then, and re-read only when it changed.
+   */
+  private withStoreUsage(input: CliSessionInput): CliSessionInput {
+    const fromEvents = summarizeCliUsage(input.events);
+    if (fromEvents.inputTokens + fromEvents.cachedTokens > 0) {
+      return input;
+    }
+    const storeUsage = this.storeUsage.get().get(input.sessionId);
+    return storeUsage === undefined ? input : { ...input, storeUsage };
   }
 
   private sessions(): CliSessionInput[] {
@@ -120,7 +172,7 @@ export class CopilotCliSource implements SessionDataSource {
 
   private guard<T>(work: () => T): Result<T> {
     if (!this.isEnabled()) {
-      return { ok: false, reason: 'disabled', message: 'Copilot CLI is turned off in Settings.' };
+      return { ok: false, reason: 'disabled', message: `${this.label} is turned off in Settings.` };
     }
     try {
       return { ok: true, value: work() };
@@ -132,7 +184,7 @@ export class CopilotCliSource implements SessionDataSource {
   private find(sessionKey: string): CliSessionInput {
     const input = this.sessions().find((s) => s.sessionId === sessionKey);
     if (input === undefined) {
-      throw new Error('Copilot CLI session not found.');
+      throw new Error(`${this.label} session not found.`);
     }
     return input;
   }

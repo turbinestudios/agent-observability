@@ -8,6 +8,12 @@ import {
 } from '@agent-observability/core/src/config/configuration';
 import { defaultFs, resolveClaudeProjectsDirs, type ClaudeFs } from '@agent-observability/core/src/claude/paths';
 import { candidateDatabasePaths } from '@agent-observability/core/src/telemetry/paths';
+import {
+  copilotJetbrainsRoot,
+  discoverJetbrainsStores,
+  jetbrainsIdeName,
+  type JetbrainsStoreFile,
+} from '@agent-observability/core/src/copilotJetbrains/paths';
 import type { SettingsPatch, SettingsSnapshot } from '../shared/rpc';
 import type { DesktopSettingsReader } from './drivers/desktopConfig';
 import { resolveConfigPath } from './drivers/desktopConfig';
@@ -54,6 +60,8 @@ export interface SettingsSeams {
   /** This install's anonymous team id; absent in tests so no salt file is minted. */
   teamDeveloperId?: () => string;
   now?: () => number;
+  /** The Copilot JetBrains chat stores; absent in tests so the real root is never listed. */
+  jetbrainsStores?: () => JetbrainsStoreFile[];
 }
 
 /** The current settings plus their resolved effect, for `settings.get`. */
@@ -79,6 +87,15 @@ export function buildSettingsSnapshot(
     copilotEnabled: config.isLocalTelemetryEnabled(),
     sqlitePath,
     copilotCliEnabled: config.isCopilotCliEnabled(),
+    copilotAppEnabled: config.isCopilotAppEnabled(),
+    copilotJetbrainsEnabled: config.isCopilotJetbrainsEnabled(),
+    copilotJetbrainsStorePath: storedString(settings, ConfigKeys.copilotJetbrainsStorePath),
+    // Where the JetBrains reader looks and what it found there, so a miss on a
+    // machine with Rider installed is visible rather than an empty list.
+    copilotJetbrainsRoot: copilotJetbrainsRoot(config.getCopilotJetbrainsStorePath()),
+    resolvedJetbrainsStores: (seams.jetbrainsStores ?? (() => discoverJetbrainsStores(config.getCopilotJetbrainsStorePath())))().map(
+      (store) => ({ path: store.path, ide: jetbrainsIdeName(store.ide) }),
+    ),
     resolvedClaudeDirs: resolveClaudeProjectsDirs(config, seams.claudeFs ?? defaultFs),
     claudeOverrideMissing: claudeProjectsPath !== '' && !exists(claudeProjectsPath),
     resolvedCopilotDbs: pick(config).map((db) => ({
@@ -158,6 +175,21 @@ export function applySettingsPatch(
   if (typeof patch.copilotCliEnabled === 'boolean' && patch.copilotCliEnabled !== storedBoolean(settings, ConfigKeys.copilotCliEnabled, ConfigDefaults.copilotCliEnabled)) {
     update[ConfigKeys.copilotCliEnabled] = patch.copilotCliEnabled;
     changed.copilot = true;
+  }
+  if (typeof patch.copilotAppEnabled === 'boolean' && patch.copilotAppEnabled !== storedBoolean(settings, ConfigKeys.copilotAppEnabled, ConfigDefaults.copilotAppEnabled)) {
+    update[ConfigKeys.copilotAppEnabled] = patch.copilotAppEnabled;
+    changed.copilot = true;
+  }
+  if (typeof patch.copilotJetbrainsEnabled === 'boolean' && patch.copilotJetbrainsEnabled !== storedBoolean(settings, ConfigKeys.copilotJetbrainsEnabled, ConfigDefaults.copilotJetbrainsEnabled)) {
+    update[ConfigKeys.copilotJetbrainsEnabled] = patch.copilotJetbrainsEnabled;
+    changed.copilot = true;
+  }
+  if (typeof patch.copilotJetbrainsStorePath === 'string') {
+    const next = patch.copilotJetbrainsStorePath.trim();
+    if (next !== storedString(settings, ConfigKeys.copilotJetbrainsStorePath)) {
+      update[ConfigKeys.copilotJetbrainsStorePath] = next.length > 0 ? next : undefined;
+      changed.copilot = true;
+    }
   }
   if (typeof patch.sqlitePath === 'string') {
     const next = patch.sqlitePath.trim();
