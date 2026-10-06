@@ -10,5 +10,12 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     globals: false,
+    // Index and telemetry tests write real SQLite files to temp: honest disk
+    // I/O that takes milliseconds on a laptop and seconds on a loaded CI
+    // runner. The release workflow runs these AFTER the version is tagged, so
+    // a timeout there strands a release. Nothing asserts on timing, so the
+    // ceiling is generous, the same as core's.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });

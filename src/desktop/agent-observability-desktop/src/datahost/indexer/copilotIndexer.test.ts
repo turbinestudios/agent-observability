@@ -92,6 +92,10 @@ function writeSourceDb(
     VALUES (@span_id, @conversation_id, @chat_session_id, @operation_name, @response_model,
             @agent_name, @start_time_ms, @end_time_ms, @input_tokens, @output_tokens, @cached_tokens)
   `);
+  // One transaction for the whole fixture. Row by row, every insert is its own
+  // commit with its own flush to disk: nothing on a laptop, but 300 of them
+  // took a slow CI runner past the test's time limit.
+  source.exec('BEGIN');
   for (const span of spans) {
     insert.run({
       conversation_id: null,
@@ -110,6 +114,7 @@ function writeSourceDb(
   for (const [spanId, key, value] of attributes) {
     attr.run(spanId, key, value);
   }
+  source.exec('COMMIT');
   source.close();
 }
 
@@ -438,7 +443,8 @@ describe('refresh revisions', () => {
     expect(db.staleAnalysis(300)).toEqual([]);
     expect(db.analysisCounts()).toEqual({ total: 300, analyzed: 300 });
     expect(db.listSessions({ limit: 300 }).every((row) => row.indexedAtMs === 5_000)).toBe(true);
-  }, 30_000);
+    // The largest fixture in the suite, so it gets a ceiling of its own.
+  }, 120_000);
 
   it('keeps revisions stable across a new indexer and index connection', () => {
     writeSourceDb([{ span_id: 's1', chat_session_id: UUID_A, operation_name: 'chat' }]);
