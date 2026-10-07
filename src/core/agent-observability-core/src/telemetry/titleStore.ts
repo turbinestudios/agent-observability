@@ -8,8 +8,7 @@ import { readChatSessionIndexTitles } from './chatSessionIndex';
 /**
  * LOCAL-ONLY merged session-title resolution over one or more VS Code
  * `workspaceStorage` directories, shared by the read layer
- * ({@link ./telemetryService.TelemetryService}) and the durable-archive sweep
- * ({@link ../otel/copilotArchiver.CopilotArchiver}).
+ * ({@link ./telemetryService.TelemetryService}).
  *
  * Titles live in two per-workspace stores (see {@link ./chatSessionIndex} and
  * {@link ./sessionTitles}); this module locates those stores from candidate

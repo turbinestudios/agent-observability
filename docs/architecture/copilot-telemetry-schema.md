@@ -13,10 +13,19 @@
 ## 1. Overview
 
 GitHub Copilot Chat writes OpenTelemetry-style trace data to a local SQLite
-database, `agent-traces.db`. This is the **local raw source** for the VS Code
-extension and the desktop app, which read it through the shared core package. They
-read it **read-only** and never upload raw content; only opt-in aggregates leave
-the machine.
+database, `agent-traces.db`. This is the **local raw source** for the desktop
+app, which reads it through the shared core package. It reads it **read-only** and
+never shares raw content; only the opt-in team shard, which carries aggregates,
+leaves the machine.
+
+**Legacy durable archive.** The retired VS Code extension could keep a durable
+Copilot archive that mirrors this schema exactly (format:
+`src/core/agent-observability-core/src/otel/ingestStore.ts`). When such an archive
+exists, the desktop reads it **instead of** the native databases, because it keeps
+history Copilot's own rolling database discards
+(`src/desktop/agent-observability-desktop/src/datahost/indexer/copilotIndexer.ts`).
+Nothing writes the archive any more: it is read-only legacy data, and everything in
+this document applies to it unchanged.
 
 Facts validated against the snapshot:
 
@@ -83,7 +92,7 @@ CREATE TABLE spans (
 | `start_time_ms` | INTEGER | not null | Start time, **epoch milliseconds**. |
 | `end_time_ms` | INTEGER | not null | End time, epoch ms. Duration = `end - start`. |
 | `status_code` | INTEGER | not null | OTEL status: `0`=unset, `1`=ok, `2`=error. |
-| `status_message` | TEXT | nullable | Optional status detail. May echo an error string; treat as borderline, do not upload verbatim. |
+| `status_message` | TEXT | nullable | Optional status detail. May echo an error string; treat as borderline, never share verbatim. |
 | `operation_name` | TEXT | nullable | One of `chat` / `execute_tool` / `execute_hook` / `invoke_agent`. |
 | `provider_name` | TEXT | nullable | LLM provider, e.g. `github`. **Null on non-`chat` spans** (263 null vs 166 `github` in snapshot). |
 | `agent_name` | TEXT | nullable | Agent name (max len 31), e.g. the active chat agent. |
@@ -209,11 +218,11 @@ GROUP BY COALESCE(conversation_id, chat_session_id);
 This is the privacy contract. Every `span_attributes.key` observed
 in the snapshot is classified below.
 
-- **SAFE-FOR-AGGREGATE:** non-sensitive metadata; may feed cloud aggregate
-  buckets (after pseudonymization where relevant).
+- **SAFE-FOR-AGGREGATE:** non-sensitive metadata; may feed the aggregate
+  buckets carried in the team shard (after pseudonymization where relevant).
 - **RAW-CONTENT (local-only):** prompts, completions, tool I/O, instructions.
-  **MUST NEVER leave the machine.** Used only inside the extension for local
-  session detail.
+  **MUST NEVER leave the machine** on the aggregate/team path. Used inside the
+  desktop app for local session detail.
 
 ### 6.1 SAFE-FOR-AGGREGATE keys
 
@@ -254,20 +263,20 @@ in the snapshot is classified below.
 | `copilot_chat.mode_name` | 14 | 14 | Agent mode (e.g. `agent`, `ask`). |
 | `error.type` | 8 | 10 | Error classification (on error spans). |
 
-### 6.2 BORDERLINE: local-only, do NOT upload
+### 6.2 BORDERLINE: local-only, do NOT share
 
 These are non-prompt metadata but are still developer/workspace-identifying.
-Keep local; exclude from cloud aggregates.
+Keep local; exclude from aggregates.
 
 | Attribute key | Occ. | Max len | Why excluded |
 | --- | --- | --- | --- |
-| `copilot_chat.repo.head_commit_hash` | 17 | 40 | Commit hash, forbidden from cloud. |
-| `copilot_chat.repo.head_branch_name` | 17 | 4 | Branch name, optional/borderline; do not upload. |
+| `copilot_chat.repo.head_commit_hash` | 17 | 40 | Commit hash, forbidden from aggregates. |
+| `copilot_chat.repo.head_branch_name` | 17 | 4 | Branch name, optional/borderline; never shared. |
 | `copilot_chat.request.options` | 149 | 429 | Flagged sensitive in snapshot; may embed request internals. |
 
-> Also forbidden from cloud regardless of source: file paths, machine name, OS
-> username, developer email. **There is no developer email/identity column in
-> this DB**; the extension mints a pseudonymous developer id instead.
+> Also forbidden from aggregates regardless of source: file paths, machine name,
+> OS username, developer email. **There is no developer email/identity column in
+> this DB**; the desktop mints a pseudonymous developer id instead.
 
 ### 6.3 RAW-CONTENT keys (local-only, MUST NEVER leave the machine)
 
@@ -296,9 +305,8 @@ Keep local; exclude from cloud aggregates.
 ## 7. Read Strategy: WAL / Locking Behavior
 
 `agent-traces.db` runs in **WAL (Write-Ahead Logging) mode** and is typically
-**open and being written by VS Code / the Copilot extension** while the
-observability extension wants to read it. In WAL mode the live database is
-split across three files:
+**open and being written by VS Code / the Copilot extension** while the desktop
+app wants to read it. In WAL mode the live database is split across three files:
 
 - `agent-traces.db`: the main database file.
 - `agent-traces.db-wal`: the write-ahead log holding recent, not-yet-
@@ -307,10 +315,29 @@ split across three files:
 
 **The most recent committed data may live only in the `-wal` file**, not yet
 merged into the main `.db`. Reading the `.db` alone can therefore return a
-stale snapshot, and opening the live file in place risks lock contention with
+stale snapshot, and holding a reader open for long risks contention with
 Copilot's writer.
 
-### Adopted strategy: snapshot-copy + READ-ONLY open
+### Desktop strategy: short-lived READ-ONLY native transactions
+
+The desktop reads the database in place
+(`src/desktop/agent-observability-desktop/src/datahost/drivers/nativeTelemetryBackend.ts`):
+
+1. Open the file with a native **read-only** SQLite connection.
+2. Run each request inside its own read transaction, so it sees one consistent
+   committed state, WAL included.
+3. Close the connection before returning, so no idle WAL reader is left behind.
+
+Nothing is copied, no WAL is replayed by hand, and no migration or index creation
+touches the source. The shared query, schema and sanitization logic is the same
+as core's snapshot reader below.
+
+### Core snapshot reader: snapshot-copy + READ-ONLY open
+
+Core also ships a portable reader,
+`src/core/agent-observability-core/src/telemetry/snapshot.ts`, used by
+`TelemetryService` when no read backend is injected and for the Copilot CLI's
+session store:
 
 1. Copy all three sidecar files together (`*.db`, `*.db-wal`, `*.db-shm`) to
    a private temp directory.
@@ -318,25 +345,24 @@ Copilot's writer.
    (e.g. `mode=ro` / `SQLITE_OPEN_READONLY`).
 3. Read, then delete the temp copy.
 
-This is implemented in `src/core/agent-observability-core/src/telemetry/snapshot.ts`. One
-extra step applies there: the bundled SQLite driver (node-sqlite3-wasm) cannot open a file
-flagged for WAL mode, so the code folds the copy's committed `-wal` frames into the copy's
-main file and rewrites its header to rollback-journal mode before opening it. Only the
-copy is changed; the original file is never opened.
+One extra step applies there: the bundled SQLite driver (node-sqlite3-wasm)
+cannot open a file flagged for WAL mode, so the code folds the copy's committed
+`-wal` frames into the copy's main file and rewrites its header to
+rollback-journal mode before opening it. Only the copy is changed; the original
+file is never opened.
 
-Rationale:
+Rationale for both readers:
 
-- **Consistent snapshot including WAL:** copying the `-wal` and `-shm`
-  alongside the `.db` lets SQLite replay the WAL on first open, so the reader
-  sees the latest committed state, not a stale checkpoint.
-- **Zero lock contention:** the live DB owned by VS Code is never opened by
-  us; the writer is never blocked and we never wait on its locks.
-- **Zero write risk:** read-only mode plus operating on a disposable copy
-  guarantees we can never modify, checkpoint, or truncate Copilot's real DB.
+- **Consistent state including WAL:** each read sees the latest committed
+  state, not a stale checkpoint.
+- **No lock contention:** the writer is never blocked; the native reader holds
+  only a short read transaction, the snapshot reader never opens the live file.
+- **Zero write risk:** read-only connections can never modify, checkpoint, or
+  truncate Copilot's real DB.
 
-> Practical notes: copy the sidecars as close together in time as possible to
-> minimize tearing; if the `-wal`/`-shm` are absent (DB was cleanly
-> checkpointed), copying just the `.db` is sufficient. Never issue
+> Practical notes for the snapshot copy: copy the sidecars as close together in
+> time as possible to minimize tearing; if the `-wal`/`-shm` are absent (DB was
+> cleanly checkpointed), copying just the `.db` is sufficient. Never issue
 > `PRAGMA wal_checkpoint` or any write against the original file.
 
 ---
@@ -347,23 +373,9 @@ Rationale:
 (it appears on `invoke_agent` spans, not on every `chat`/`tool`/`hook` span).
 A naive per-span read would label most activity as `unknown`. Repository must
 therefore be **resolved per session** and back-filled onto every span in that
-session. The earlier cloud dashboard (`LogAnalyticsService`, since removed) used the
-same pattern in KQL.
+session.
 
-### Earlier cloud pattern (KQL, for reference)
-
-```kql
-let RepoBySession = AppDependencies
-| where isnotempty(Properties["copilot_chat.repo.remote_url"])
-| summarize RepoUrl=take_any(tostring(Properties["copilot_chat.repo.remote_url"]))
-    by SessionId=tostring(Properties["session.id"]);
-AppDependencies
-| extend SessionId=tostring(Properties["session.id"])
-| join kind=leftouter RepoBySession on SessionId
-| extend Repository=coalesce(RepoUrl, tostring(Properties["copilot_chat.repo.remote_url"]), "unknown")
-```
-
-### Local replication (SQLite)
+### Resolution (SQLite)
 
 Build a `(session_id → repo_url)` lookup from the sparse spans that have a
 URL, then `LEFT JOIN` it onto every span by session key, coalescing to the
@@ -381,7 +393,7 @@ WITH repo_by_session AS (
     GROUP BY COALESCE(s.conversation_id, s.chat_session_id)
 )
 SELECT s.*,
-       COALESCE(r.repo_url_raw, 'unknown') AS repository_raw   -- NOT yet cloud-safe
+       COALESCE(r.repo_url_raw, 'unknown') AS repository_raw   -- NOT yet safe to share
 FROM spans s
 LEFT JOIN repo_by_session r
   ON r.session_id = COALESCE(s.conversation_id, s.chat_session_id);
@@ -391,13 +403,13 @@ LEFT JOIN repo_by_session r
 > (`repository_raw`). It is **NOT** yet safe to bucket or ship. A raw git remote
 > can embed credentials (e.g. `https://user:token@host/...`,
 > `https://x-access-token:ghp_...@host/...`), query strings, fragments, or a
-> `.git` suffix, any of which would leak a PAT/credential to the cloud.
+> `.git` suffix, any of which would leak a PAT/credential off the machine.
 
 #### MANDATORY sanitization step (privacy-critical)
 
 Before `repository_raw` may be used as a bucket dimension or placed in any
-outgoing aggregate, the extension MUST normalize it to canonical
-`https://{host}/{owner}/{repo}` form:
+aggregate, it MUST be normalized to canonical `https://{host}/{owner}/{repo}` form
+(`src/core/agent-observability-core/src/telemetry/repositoryUrl.ts`):
 
 - **Strip userinfo:** drop any `user:token@` / `x-access-token@` segment.
 - **Strip query (`?…`) and fragment (`#…`).**
@@ -410,17 +422,17 @@ outgoing aggregate, the extension MUST normalize it to canonical
 This is enforced downstream by the aggregate batch schema: the `repository`
 field pattern `^(unknown|https?://[A-Za-z0-9.\-]+(:[0-9]+)?/[^\s@?#]+)$` forbids
 `@`, `?`, `#`, and whitespace, so a credential-bearing remote **cannot** pass
-validation, and the whole batch is rejected if sanitization is skipped. See
-`aggregate-payload-schema-v1.md` §4.1.
+validation, and the whole team shard is rejected if sanitization is skipped. See
+[`aggregate-payload-schema-v1.md`](aggregate-payload-schema-v1.md) §4.1.
 
 Key points:
 - Session key is `COALESCE(conversation_id, chat_session_id)`, identical to
-  the `sessions` view and the cloud `session.id` join key.
-- `MAX(value)` plays the role of KQL `take_any` (one stable URL per session).
-- The resolved URL is **sanitized (mandatory)** before bucketing/upload.
+  the `sessions` view.
+- `MAX(value)` picks one stable URL per session.
+- The resolved URL is **sanitized (mandatory)** before bucketing.
 - Spans whose session never recorded a URL resolve to `'unknown'`.
-- The earlier cloud queries additionally filtered out `Repository == "unknown"` for
-  repository/overview rollups; mirror that filter locally where appropriate.
+- Distinct-repository counts exclude `'unknown'` (see
+  [`aggregate-payload-schema-v1.md`](aggregate-payload-schema-v1.md) §9).
 
 ---
 
@@ -430,23 +442,23 @@ The internal models are TypeScript interfaces in
 `src/core/agent-observability-core/src/telemetry/models.ts`, built from the
 **local** DB. The tables below list fields by concept; the TypeScript fields use
 camelCase names and units in the name (for example `timestampMs`, `durationMs`).
-There is no developer email: where the dashboard needs a developer, it gets a
-**pseudonymous developer id** minted by the extension (a salted hash, defined in
+There is no developer email: where the team shard needs a member, it carries a
+**pseudonymous developer id** minted by the desktop (a salted hash, defined in
 [`pseudonymization-strategy.md`](pseudonymization-strategy.md)).
 
 ### 9.1 Interaction (one span) → `Interaction` / `SessionTimelineEntry`
 
 | Internal field | Local source | Notes |
 | --- | --- | --- |
-| `Timestamp` | `spans.start_time_ms` | Epoch ms → `DateTimeOffset`. |
-| `Repository` | resolved per session (Section 8) | sparse `copilot_chat.repo.remote_url`, **sanitized (mandatory, Section 8)** before any cloud use, else `unknown`. |
+| `Timestamp` | `spans.start_time_ms` | Epoch ms. |
+| `Repository` | resolved per session (Section 8) | sparse `copilot_chat.repo.remote_url`, **sanitized (mandatory, Section 8)** before it can leave the machine, else `unknown`. |
 | `Agent` | `spans.agent_name` (attr `gen_ai.agent.name`) | default `copilot`. |
 | `ToolName` | `spans.tool_name` (attr `gen_ai.tool.name`) | `execute_tool` spans; else `name`. |
 | `Model` | `spans.request_model` / `response_model` | attrs `gen_ai.request.model` / `gen_ai.response.model`. |
-| `DurationMs` | `spans.end_time_ms - spans.start_time_ms` | replaces cloud `DurationMs`. |
-| `Success` | `spans.status_code` | `true` when `status_code` ∈ {0 unset, 1 ok}; `false` only when `2` (error). **Unset (0) is treated as a non-error**; there was no legacy success baseline (`LogAnalyticsService` computed no success rate), so this is a new explicit definition. Aggregated as `successCount` / `errorCount`. |
+| `DurationMs` | `spans.end_time_ms - spans.start_time_ms` | Wall-clock span duration. |
+| `Success` | `spans.status_code` | `true` when `status_code` ∈ {0 unset, 1 ok}; `false` only when `2` (error). **Unset (0) is treated as a non-error**, an explicit definition of this contract. Aggregated as `successCount` / `errorCount`. |
 | `AgentMode` | attr `copilot_chat.mode_name` | default `default`. |
-| `UserRequest` | attr `copilot_chat.user_request` | **RAW-CONTENT, local-only.** Local session detail only (`SessionTimelineEntry`); never aggregated/uploaded. |
+| `UserRequest` | attr `copilot_chat.user_request` | **RAW-CONTENT, local-only.** Local session detail only (`SessionTimelineEntry`); never aggregated or shared. |
 
 > `SessionTimelineEntry` is **local-only** (it includes `userRequest`).
 > `Interaction` carries no raw content and is the basis for deviation
@@ -457,38 +469,40 @@ There is no developer email: where the dashboard needs a developer, it gets a
 | Internal field | Local source | Notes |
 | --- | --- | --- |
 | `SessionId` | `sessions.session_id` | `COALESCE(conversation_id, chat_session_id)`. |
-| `StartTime` | `sessions.started_at` | epoch ms → `DateTimeOffset`. |
-| `EndTime` | `sessions.ended_at` | epoch ms → `DateTimeOffset`. |
-| `RequestCount` | `sessions.span_count` (or `llm_calls`) | choose per UX; cloud used per-span count. |
+| `StartTime` | `sessions.started_at` | epoch ms. |
+| `EndTime` | `sessions.ended_at` | epoch ms. |
+| `RequestCount` | `sessions.span_count` (or `llm_calls`) | choose per UX. |
 | `AgentModes` | distinct attr `copilot_chat.mode_name` per session | set → joined string. |
 | `Repository` (lookup) | resolved per session (Section 8) | used to list sessions by repo. |
 
-### 9.3 Aggregate buckets → cloud-safe fields (feeds `DashboardMetrics`, etc.)
+### 9.3 Aggregate buckets → shard-safe measures
 
-Aggregates are computed locally over **SAFE** columns only, then time-binned.
-The extension ships the bucket measures defined in
-[`aggregate-payload-schema-v1.md`](aggregate-payload-schema-v1.md), and the dashboard
-computes the fields below from them at query time. Each field and its local source:
+Aggregates are computed locally over **SAFE** columns only, then time-binned into
+30-minute buckets by `src/core/agent-observability-core/src/aggregate/aggregator.ts`.
+The bucket fields are defined in
+[`aggregate-payload-schema-v1.md`](aggregate-payload-schema-v1.md); each one's local
+source:
 
-| Aggregate field | Local source / formula | Maps to cloud model |
-| --- | --- | --- |
-| `TotalRequests` | `COUNT(*)` of spans in bin | `DashboardMetrics.TotalRequests` |
-| `AverageLatencyMs` | `AVG(end_time_ms - start_time_ms)` | `DashboardMetrics.AverageLatencyMs` |
-| `P95LatencyMs` | p95 of per-span duration | `DashboardMetrics.P95LatencyMs` |
-| `ActiveRepositories` | distinct resolved repository | `DashboardMetrics.ActiveRepositories` |
-| `ActiveDevelopers` | distinct pseudonymous developer id | `DashboardMetrics.ActiveDevelopers` |
-| `RequestVolume` (time series) | `COUNT(*)` by 30-min `bin(start_time_ms)` | `DashboardMetrics.RequestVolume` (`TimeSeriesPoint`) |
-| `ModelBreakdown` | `COUNT(*)` by `request_model`/`response_model` | `DashboardMetrics.ModelBreakdown` (`NamedValue`) |
-| model `InputTokens` | `SUM(input_tokens)` (chat spans) by model | `NamedValue.SecondaryValue` (model usage) |
-| model `OutputTokens` | `SUM(output_tokens)` (chat spans) by model | `NamedValue.SecondaryValue` (model usage) |
-| per-developer `Requests` | `COUNT(*)` by developer id (+ repository) | `DeveloperActivitySummary.Requests` |
-| per-developer `AverageLatencyMs` | `AVG(duration)` by developer id | `DeveloperActivitySummary.AverageLatencyMs` |
-| per-developer `UniqueModels` | `dcount(model)` by developer id | `DeveloperActivitySummary.UniqueModels` |
-| per-developer `LastSeen` | `MAX(start_time_ms)` by developer id | `DeveloperActivitySummary.LastSeen` |
-| per-repo `Requests` | `COUNT(*)` by repository | `RepositoryActivitySummary.Requests` |
-| per-repo `ActiveDevelopers` | `dcount(developer id)` by repository | `RepositoryActivitySummary.ActiveDevelopers` |
-| per-repo `AverageLatencyMs` | `AVG(duration)` by repository | `RepositoryActivitySummary.AverageLatencyMs` |
-| per-repo `UniqueModels` | `dcount(model)` by repository | `RepositoryActivitySummary.UniqueModels` |
+| Bucket field | Local source / formula |
+| --- | --- |
+| `bucketStart` | 30-min bin of `spans.start_time_ms` |
+| `repository` | resolved per session (Section 8), sanitized |
+| `model` | `response_model` / `request_model`, else `unknown` |
+| `agentMode` | attr `copilot_chat.mode_name`, mapped to a closed set |
+| `operation` | `spans.operation_name` |
+| `toolName` | `spans.tool_name` (`execute_tool` only), non-built-in → `custom` |
+| `interactionCount` | `COUNT(*)` of spans in the row |
+| `successCount` / `errorCount` | `status_code` ∈ {0, 1} / `status_code` = 2 |
+| `inputTokens` / `outputTokens` | `SUM(input_tokens)` / `SUM(output_tokens)` (chat spans) |
+| `cachedTokens` / `reasoningTokens` | `SUM(cached_tokens)` / `SUM(reasoning_tokens)` |
+| `durationMsSum` | `SUM(end_time_ms - start_time_ms)` |
+| `latencyHistogram` | per-span duration counted into fixed bounds |
+| `distinctSessionCount` | distinct `COALESCE(conversation_id, chat_session_id)` in the row |
+| `lastActivityAtMs` | `MAX(start_time_ms)` in the row |
+
+Averages, percentiles and distinct counts of members, repositories and models are
+**not** shipped; a consumer derives them from these fields at read time (see the
+aggregate schema doc, §§8–9).
 
 Token aggregates follow the `sessions` view convention: **count token columns
 only on `chat` spans** (other operations have null/zero tokens).
@@ -507,4 +521,7 @@ only on `chat` spans** (other operations have null/zero tokens).
 - Machine-readable snapshot: `tools/copilot-telemetry/copilot-telemetry-schema.json`
 - Internal models: `src/core/agent-observability-core/src/telemetry/models.ts`
 - Snapshot reader: `src/core/agent-observability-core/src/telemetry/snapshot.ts`
-- Dashboard models filled from aggregates: `src/dashboard/AgentObservability.Dashboard/Models/DashboardMetrics.cs`
+- Desktop reader: `src/desktop/agent-observability-desktop/src/datahost/drivers/nativeTelemetryBackend.ts`
+- Legacy durable archive format: `src/core/agent-observability-core/src/otel/ingestStore.ts`
+- Repository sanitization: `src/core/agent-observability-core/src/telemetry/repositoryUrl.ts`
+- Aggregator: `src/core/agent-observability-core/src/aggregate/aggregator.ts`

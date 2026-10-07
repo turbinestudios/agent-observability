@@ -1,10 +1,9 @@
 /**
- * Model-id sanitizer for the cloud aggregation path (privacy + contract guard).
+ * Model-id sanitizer for the aggregation path (privacy + contract guard).
  *
- * The ingestion API rejects the WHOLE batch if any bucket's `model` is empty or
+ * The batch validator rejects the WHOLE batch if any bucket's `model` is empty or
  * contains a character outside the allowed set `[A-Za-z0-9._:\-/]` (max 128
- * chars) — see `AggregateBatchValidator.ModelRegex` /
- * `schemas/aggregate-batch.schema.json`. Source telemetry, however, can carry a
+ * chars) — see `schemas/aggregate-batch.schema.json`. Source telemetry, however, can carry a
  * raw model string that is a human-facing display name rather than a clean id
  * (e.g. Copilot's `Claude Sonnet 4.5` or `GPT-4o (Preview)`), which has spaces /
  * parentheses and so fails the server regex.

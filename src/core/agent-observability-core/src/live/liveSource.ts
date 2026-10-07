@@ -2,13 +2,12 @@
  * The shared "live source" seam.
  *
  * A live source is anything that detects new on-machine agent activity in
- * near-real-time and asks the extension to re-render: Copilot's localhost OTLP
- * receiver ({@link ../otel/liveOtlpService.LiveOtlpService}) and Claude Code's
+ * near-real-time and asks the host to re-render, such as Claude Code's
  * transcript file watcher ({@link ./claudeWatcher.ClaudeWatcher}). Each is a dumb
  * producer — it only needs to start, stop, and `signal()` the
  * {@link ./liveUpdateController.LiveUpdateController} when something changed. The
  * controller owns the single debounce and the refresh fan-out, so a burst from
- * either source (or both at once) coalesces into one render.
+ * any source (or several at once) coalesces into one render.
  *
  * Keeping the contract this small means a third source (a future agent's logs,
  * another exporter) is one class that calls `signal()`, not a wiring rewrite.

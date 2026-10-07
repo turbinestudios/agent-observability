@@ -24,7 +24,7 @@ export const UNKNOWN_REPOSITORY = 'unknown';
 
 /**
  * The schema-mandated repository pattern. Kept here (and asserted in tests) so
- * the producer guarantees structural compatibility with the C# consumer.
+ * every batch the producer emits passes the schema.
  */
 export const REPOSITORY_PATTERN = /^(unknown|https?:\/\/[A-Za-z0-9.-]+(:[0-9]+)?\/[^\s@?#]+)$/;
 

@@ -1,11 +1,11 @@
 # Claude Code ingestion
 
-Agent Observability reads two agent-telemetry sources and shows them in one
-unified set of views: **GitHub Copilot** (the local SQLite `agent-traces.db`) and
-**Claude Code** (the JSON-lines transcripts Claude Code writes under
-`~/.claude/projects`). The Claude Code reader lives in the shared core package
-(`src/core/agent-observability-core`), so the VS Code extension and the desktop
-app use the same code. This document covers the Claude Code path. It follows the
+Agent Observability reads several agent-telemetry sources and shows them in one
+unified set of views, among them **GitHub Copilot** (the local SQLite
+`agent-traces.db`) and **Claude Code** (the JSON-lines transcripts Claude Code
+writes under `~/.claude/projects`). The Claude Code reader lives in the shared core
+package (`src/core/agent-observability-core`) and is run by the desktop app. This
+document covers the Claude Code path. It follows the
 approach of [`yessGlory17/argus`](https://github.com/yessGlory17/argus)
 (read the JSONL transcripts, parse every tool call, prompt and token) but feeds the
 shared model layer rather than a separate dashboard.
@@ -18,7 +18,7 @@ shared model layer rather than a separate dashboard.
 ```
 
 `<config>` is `~/.claude` by default, honoring the `CLAUDE_CONFIG_DIR` env var and
-the `agentObservability.claudeCode.projectsPath` override. The `<encoded-cwd>`
+the `claudeCode.projectsPath` override. The `<encoded-cwd>`
 directory name is lossy, so the real working directory is read from the `cwd`
 field inside the records, not decoded from the path.
 
@@ -56,15 +56,15 @@ The Claude path produces the **same** model shapes as the Copilot path
 (`SessionSummary` / `SessionDetail` / `Interaction` / `OverviewMetrics` /
 `AggregationRow`). A source-agnostic `SessionDataSource` interface
 (`sources/sessionSource.ts`) is implemented by a Copilot adapter (wrapping
-`TelemetryService`) and by `ClaudeCodeService`; a `SourceRegistry` holds both.
-The view names below are the extension's; the desktop app shows the same data in
-its own screens.
+`TelemetryService`), by `ClaudeCodeService`, and by the other sources; the
+desktop's data host holds them all in one `SourceRegistry`
+(`src/desktop/agent-observability-desktop/src/datahost/index.ts`) and indexes
+Claude sessions into its local index
+(`src/desktop/agent-observability-desktop/src/datahost/indexer/claudeIndexer.ts`).
 
-- **Sessions view:** three levels when more than one source is enabled
-  (source → repository → session); the source level is elided for a single
-  source so the original Copilot layout is preserved.
-- **Overview view:** merges metrics across sources, with a per-source breakdown.
-- **Session-detail webview:** reused verbatim. The cost basis follows the source
+- **Sessions:** Claude sessions are listed alongside the other sources.
+- **Overview:** merges metrics across sources, with a per-source breakdown.
+- **Session detail:** shared across sources. The cost basis follows the source
   via a `CostMode`: Copilot shows AIU (`aiuToUsd`), Claude shows the token-priced
   USD estimate carried on `costUsdMicros`. Both sources drive the deviation and
   **Context Analysis** passes; each source produces its own context analysis
@@ -89,8 +89,8 @@ reconstructs the loaded-context set (`claude/claudeContextDiscovery.ts`):
 Caveats (surfaced as a caption on the tab, `SessionContextAnalysis.note`): the
 filesystem is read at analysis time, so it reflects the **current** on-disk state,
 not the exact bytes present during the run (Copilot's is point-in-time); skills and
-sub-agent definitions are counted as loaded only when invoked. Everything stays
-LOCAL-ONLY: none of it reaches the cloud-aggregate `AggregationRow`.
+sub-agent definitions are counted as loaded only when invoked. The analysis
+itself stays LOCAL-ONLY: none of it reaches the content-free `AggregationRow`.
 
 ### Mapping semantics (mirrors the Copilot mapping)
 
@@ -102,15 +102,17 @@ LOCAL-ONLY: none of it reaches the cloud-aggregate `AggregationRow`.
   so summing never double-counts a sub-agent (its tokens are on its own `chat`
   rows). The repository groups Claude + Copilot sessions under the same node.
 
-## Sync (org dashboard)
+## Team shard
 
-Cloud sync is a VS Code extension feature; the desktop app does not upload.
-Claude aggregates feed the existing opt-in cloud sync. `ClaudeCodeService` emits
-the **same** content-free `AggregationRow` shape, so a `CompositeAggregationSource`
-(`sync/compositeAggregationSource.ts`) simply concatenates Copilot + Claude
-rows into the `SyncEngine`. No `aggregate-batch.schema.json` change and no
-dashboard change are needed: Claude rows commingle, distinguished by `model`
-(`claude-*`) and `repository`. Claude sessions map to `agentMode: 'agent'`.
+Nothing about Claude sessions leaves the machine unless the user turns on Team
+sharing in the desktop app (off by default). `ClaudeCodeService` emits the
+**same** content-free `AggregationRow` shape as the Copilot path, so the team
+export (`src/desktop/agent-observability-desktop/src/datahost/team/teamShardSource.ts`)
+simply concatenates the rows of every enabled source before building the
+embedded aggregate batch. No `aggregate-batch.schema.json` change is needed:
+Claude rows commingle, distinguished by `model` (`claude-*`) and `repository`.
+Claude sessions map to `agentMode: 'agent'`. The shard's `outcomes` block counts
+them under the source `claude`.
 
 ## Privacy
 
@@ -120,32 +122,38 @@ and never logged. `buildAggregationRows` / `buildInteractions` carry only
 non-sensitive metadata (counts, tokens, sanitized repository, mapped tool/mode).
 Repository URLs pass through the same `sanitizeRepositoryUrl` chokepoint as the
 Copilot path, so credential-bearing remotes cannot reach a view or an aggregate.
+The AI features that can send session content to a vendor are the sanctioned,
+user-initiated exceptions described in [`AGENTS.md`](../../AGENTS.md#privacy-invariant-do-not-break);
+none of them is on the aggregate or team path.
 
 ## Performance & limits
 
 Transcripts are parsed on demand and memoized by file mtime. A developer can
-accumulate thousands of sessions, so the Sessions list and the default sync set
-are bounded to the `agentObservability.claudeCode.maxSessions` (default 150)
-most-recently-active sessions; the count of older sessions is surfaced as an info
-row (`truncationNote`) rather than dropped silently.
+accumulate thousands of sessions, so `ClaudeCodeService`'s session list and its
+aggregation rows (and so the team shard) are bounded to the
+`claudeCode.maxSessions` (default 150) most-recently-active sessions; the count of
+older sessions is surfaced as a note (`truncationNote`) rather than dropped
+silently.
 
 ## Settings
 
-These are VS Code settings. The desktop app reads the same ids (without the
-`agentObservability.` prefix) from `~/.agent-observability/desktop/config.json`,
-and its Settings screen exposes `claudeCode.enabled` and `claudeCode.projectsPath`.
+The desktop app reads these ids from `~/.agent-observability/desktop/config.json`
+(`src/desktop/agent-observability-desktop/src/datahost/drivers/desktopConfig.ts`);
+its Settings screen exposes `claudeCode.enabled` and `claudeCode.projectsPath`.
 
 | Key | Default | Purpose |
 |---|---|---|
-| `agentObservability.claudeCode.enabled` | `true` | Capture Claude Code sessions. |
-| `agentObservability.claudeCode.projectsPath` | `""` | Override the `projects` directory. |
-| `agentObservability.claudeCode.scanDepth` | `8` | Max project-tree scan depth (the `subagents/` subtree is always scanned in full). |
-| `agentObservability.claudeCode.maxSessions` | `150` | Most-recent sessions surfaced/aggregated. |
+| `claudeCode.enabled` | `true` | Capture Claude Code sessions. |
+| `claudeCode.projectsPath` | `""` | Override the `projects` directory. |
+| `claudeCode.scanDepth` | `8` | Max project-tree scan depth (the `subagents/` subtree is always scanned in full). |
+| `claudeCode.maxSessions` | `150` | Most-recent sessions surfaced/aggregated. |
 
 ## Live updates
 
-In the VS Code extension, `live/claudeWatcher.ts` watches the Claude `projects`
-directories recursively for `*.jsonl` changes. Each change signals the
-`LiveUpdateController`, which debounces and refreshes the views, re-parsing only
-the changed transcript. Unlike Copilot's OpenTelemetry receiver, this needs no
+The desktop's live board
+(`src/desktop/agent-observability-desktop/src/datahost/live/liveBoard.ts`) uses
+core's `live/claudeWatcher.ts` to watch the Claude `projects` directories for
+`*.jsonl` changes. Each change signals a `LiveUpdateController`, which debounces
+the burst into one recompute and, once the transcript has been quiet, requests a
+re-index so the lists pick up the changed transcript. This needs no hooks and no
 exporter configuration: Claude Code writes the transcripts anyway.

@@ -3,9 +3,7 @@
 A desktop app for macOS and Windows that lets you look back at your
 **GitHub Copilot** and **Claude Code** sessions: Copilot in VS Code, the
 Copilot CLI, the GitHub Copilot app and Copilot in JetBrains IDEs such as
-Rider, plus Claude Code. It reads the same data as the VS Code extension, opens
-much faster, and works without VS Code running. You can use both at the same
-time.
+Rider, plus Claude Code. It works without VS Code running.
 
 ## Features
 
@@ -126,8 +124,9 @@ npx esbuild scripts/benchmark.ts --bundle --platform=node --format=cjs \
   --external:better-sqlite3 --outfile=scripts/benchmark.js && node scripts/benchmark.js
 ```
 
-`compare.ts` runs the extension's approach and this one over the same data,
-which is where the table below comes from.
+`compare.ts` runs core's parse-when-asked approach (the one the retired VS Code
+extension used) and this one over the same data, which is where the table below
+comes from.
 
 ### Architecture
 
@@ -160,7 +159,7 @@ and adds no network requests or sandbox changes.
 
 ### Indexing
 
-The extension builds its session list by parsing transcripts when asked, so
+Parsing transcripts when asked (as the retired VS Code extension did) means
 the list cannot appear until hundreds of megabytes have been read. This app
 keeps an index at `~/.agent-observability/desktop/index.db` and does that work
 once, in the background.
@@ -171,12 +170,12 @@ query time, **not** full startup:
 
 | | Indexer / list-query time |
 | --- | --- |
-| Extension, Claude (parse when asked) | 3,696 ms, capped at 150 sessions |
-| Extension, Copilot (copy + WAL replay) | 68,365 ms for 47 sessions |
+| Parse when asked, Claude | 3,696 ms, capped at 150 sessions |
+| Parse when asked, Copilot (copy + WAL replay) | 68,365 ms for 47 sessions |
 | Desktop, first indexed rows | **76 ms**, before full hydration |
 | Desktop, warm list query | **0.8 ms**, all 230 sessions, uncapped |
 
-The Copilot rows match the extension's exactly (same 47 sessions, step counts,
+The Copilot rows match the parse-when-asked results exactly (same 47 sessions, step counts,
 titles and repositories). Speed is worth nothing if the data differs.
 
 How the index stays fast:
@@ -186,12 +185,12 @@ How the index stays fast:
   afterwards, newest first.
 - **Claude fingerprints.** A transcript whose size and modified time have not
   changed is not parsed again.
-- **Copilot's database is read in place.** The extension's SQLite driver cannot
+- **Copilot's database is read in place.** Core's WASM SQLite driver cannot
   open a WAL database, so it copies all 1.6 GB and replays the WAL by hand on
   every refresh. `better-sqlite3` reads WAL directly, so indexing needs no copy
   and uses aggregate queries. Nothing is ever written to Copilot's file.
 - **Titles are indexed once.** They live in per-workspace stores of about 4 GB
-  in total, which the extension rereads on every refresh. Here a store that has
+  in total, which parsing when asked rereads on every refresh. Here a store that has
   not changed is skipped, and a changed session file is read only up to its
   first line.
 - **Stable Copilot revisions.** When source metadata and database/WAL
@@ -230,7 +229,7 @@ that might be stale.
 The index is a cache and holds nothing that cannot be rebuilt. Deleting it, or
 using **Rebuild index**, is always safe.
 
-The extension still uses its WASM snapshot reader. The desktop app does not
-quietly fall back to copying when it cannot read a source: it reports the
-failure or uses another source it found. Startup still cleans up temporary
+The desktop app does not quietly fall back to copying (core's WASM snapshot
+reader) when it cannot read a source: it reports the failure or uses another
+source it found. Startup still cleans up temporary
 snapshots left by older versions.

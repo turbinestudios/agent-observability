@@ -1,44 +1,44 @@
 {
   "$schema": "https://aka.ms/codetour-schema",
   "title": "3: Live updates",
-  "description": "End-to-end: how a Copilot OTLP span or a Claude transcript write becomes a near-real-time view refresh, coalesced behind one debounce. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
-  "nextTour": "4: Telemetry archiving",
+  "description": "End-to-end: how a Copilot database write or a Claude transcript append becomes a near-real-time refresh of the desktop's live board, coalesced behind one debounce. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
+  "nextTour": "5: Workflow deviation markers",
   "steps": [
     {
-      "title": "Step 1 — Receive OTLP spans",
-      "file": "src/core/agent-observability-core/src/otel/otlpReceiver.ts",
-      "line": 54,
-      "description": "![3: Live updates](.tours/diagrams/d-19.svg)\n\n**▶ Step 1 of 6 in the sequence diagram — `Copilot OTLP → OtlpReceiver: POST OTLP spans`**\n\nCopilot is configured to export OTLP over HTTP to a local port. `OtlpReceiver` is that endpoint — a tiny embedded HTTP server the extension owns, listening only on localhost. Nothing leaves the machine."
+      "title": "Step 1 — Watch Copilot's database",
+      "file": "src/desktop/agent-observability-desktop/src/datahost/live/liveBoard.ts",
+      "line": 331,
+      "description": "![3: Live updates](.tours/diagrams/d-19.svg)\n\n**▶ Step 1 of 6 in the sequence diagram — `Copilot DB → LiveBoardService: DB / WAL file change`**\n\nThe live board watches Copilot's database and its `-wal` file as plain files. Nothing is installed into Copilot — no hooks, no exporters — because it already writes these files. Nothing leaves the machine."
     },
     {
-      "title": "Step 2 — Decode and forward",
-      "file": "src/core/agent-observability-core/src/otel/otlpReceiver.ts",
-      "line": 105,
-      "description": "![3: Live updates](.tours/diagrams/d-20.svg)\n\n**▶ Step 2 of 6 in the sequence diagram — `OtlpReceiver → LiveOtlpService: decode → onSpans`**\n\nA `/v1/traces` POST is decoded and the resulting span rows are handed to the injected `onSpans` callback. The receiver knows nothing about views or databases — it just decodes and forwards."
+      "title": "Step 2 — Signal, don't refresh",
+      "file": "src/desktop/agent-observability-desktop/src/datahost/live/liveBoard.ts",
+      "line": 333,
+      "description": "![3: Live updates](.tours/diagrams/d-20.svg)\n\n**▶ Step 2 of 6 in the sequence diagram — `LiveBoardService → LiveUpdateController: signal()`**\n\nEach change arms a quiet-period re-index and calls `controller.signal()` to say new activity arrived. The watcher never recomputes anything itself."
     },
     {
-      "title": "Step 3 — Ingest, then signal",
-      "file": "src/core/agent-observability-core/src/otel/liveOtlpService.ts",
-      "line": 95,
-      "description": "![3: Live updates](.tours/diagrams/d-21.svg)\n\n**▶ Step 3 of 6 in the sequence diagram — `LiveOtlpService → LiveUpdateController: signal()`**\n\n`LiveOtlpService.onSpans` ingests the rows into the live store, then calls `this.deps.signal()` to tell the shared controller new activity arrived. It never refreshes anything itself."
-    },
-    {
-      "title": "Step 4 — The other producer signals too",
+      "title": "Step 3 — The other producer signals too",
       "file": "src/core/agent-observability-core/src/live/claudeWatcher.ts",
       "line": 68,
-      "description": "![3: Live updates](.tours/diagrams/d-22.svg)\n\n**▶ Step 4 of 6 in the sequence diagram — `ClaudeWatcher → LiveUpdateController: file change → signal()`**\n\n`ClaudeWatcher` watches Claude's transcript directories. Each filesystem event calls the same `signal()` — so Copilot spans and Claude file writes feed one controller, not two competing refresh loops."
+      "description": "![3: Live updates](.tours/diagrams/d-21.svg)\n\n**▶ Step 3 of 6 in the sequence diagram — `ClaudeWatcher → LiveUpdateController: file change → signal()`**\n\n`ClaudeWatcher` watches Claude's transcript directories. Each filesystem event calls the same `signal()` — so Copilot writes and Claude file appends feed one controller, not competing refresh loops. The Copilot CLI and JetBrains stores register the same way."
     },
     {
-      "title": "Step 5 — Coalesce with one debounce",
+      "title": "Step 4 — Coalesce with one debounce",
       "file": "src/core/agent-observability-core/src/live/liveUpdateController.ts",
       "line": 65,
-      "description": "![3: Live updates](.tours/diagrams/d-23.svg)\n\n**▶ Step 5 of 6 in the sequence diagram — `LiveUpdateController → Views/panels: debounced refresh`**\n\n`LiveUpdateController.signal` folds a burst of signals into a single debounced flush (default 400 ms), so a storm of spans or file appends becomes one refresh instead of hundreds."
+      "description": "![3: Live updates](.tours/diagrams/d-22.svg)\n\n**▶ Step 4 of 6 in the sequence diagram — `LiveUpdateController → LiveBoardService: debounced onRefresh`**\n\n`LiveUpdateController.signal` folds a burst of signals into a single debounced flush (`LIVE_DEBOUNCE_MS`, 750 ms on the desktop), so a storm of span commits or file appends becomes one `recompute` instead of hundreds."
     },
     {
-      "title": "Step 6 — Re-query and repaint",
-      "file": "src/core/agent-observability-core/src/live/liveUpdateController.ts",
-      "line": 21,
-      "description": "![3: Live updates](.tours/diagrams/d-24.svg)\n\n**▶ Step 6 of 6 in the sequence diagram — `Views/panels → LiveUpdateController: re-query telemetry`**\n\nWhen the debounce fires, the controller invokes its `onRefresh` callback — wired by the extension to re-run the read pipeline (flow 1). The views re-query the read-only snapshot and repaint in near-real-time."
+      "title": "Step 5 — Quiet-period re-index",
+      "file": "src/desktop/agent-observability-desktop/src/datahost/live/liveBoard.ts",
+      "line": 312,
+      "description": "![3: Live updates](.tours/diagrams/d-23.svg)\n\n**▶ Step 5 of 6 in the sequence diagram — `LiveBoardService → Index pass: requestIndex()`**\n\nOnce the files have been quiet for a moment, `armReindex` asks for an index pass (flow 1) so the Sessions list and the dashboard pick up the change without a manual Refresh. The request is never awaited: the board's own status comes from the transcript tail."
+    },
+    {
+      "title": "Step 6 — Push and repaint",
+      "file": "src/desktop/agent-observability-desktop/src/renderer/src/views/workspace/useLiveBoard.ts",
+      "line": 25,
+      "description": "![3: Live updates](.tours/diagrams/d-24.svg)\n\n**▶ Step 6 of 6 in the sequence diagram — `LiveBoardService → Workspace view: workspace.live snapshot`**\n\n`recompute` re-derives each session's status and emits a `workspace.live` event only when something really changed. The renderer's `useLiveBoard` hook swaps in the new snapshot and the live board repaints in near-real-time."
     }
   ]
 }

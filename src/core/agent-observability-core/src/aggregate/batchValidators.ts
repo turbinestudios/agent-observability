@@ -1,15 +1,14 @@
 /**
- * Pure TypeScript ports of the dashboard's server-side validators
- * (`AggregateBatchValidator.cs`, `ContextInsightsBatchValidator.cs`), so a
- * batch arriving by FILE (the team shard) is checked by exactly the rules a
- * batch arriving by HTTP would be. The error strings mirror the C# ones.
+ * Validators for the aggregate and context-insights batches a team shard
+ * embeds, so a batch arriving by FILE is checked against the full contract
+ * before it is merged. They began as ports of the retired cloud dashboard's
+ * server-side validators and still enforce the same rules.
  *
- * One rule the C# side gets for free from `JsonUnmappedMemberHandling.Disallow`
- * is spelled out here: every object has an allowlist of keys and any other key
- * is an error, which is what `additionalProperties: false` means in the schema.
+ * Every object has an allowlist of keys and any other key is an error, which
+ * is what `additionalProperties: false` means in the schema.
  *
- * Keep this file in step with the two C# validators and the JSON schemas; the
- * parity tests compile the schemas with ajv and assert both sides agree.
+ * Keep this file in step with the JSON schemas in `schemas/`; the parity tests
+ * compile the schemas with ajv and assert both sides agree.
  */
 
 const EXPECTED_SCHEMA_VERSION = '1.0';
@@ -313,7 +312,7 @@ function validateContextRow(row: unknown, index: number, errors: string[]): void
 /**
  * The privacy-critical path check: repo-relative, allowlisted customization
  * paths only. The dangerous shapes are rejected explicitly before the
- * allowlist pattern runs, as in the C# validator.
+ * allowlist pattern runs.
  */
 function validateContextFile(contextFile: unknown, prefix: string, errors: string[]): void {
   if (typeof contextFile !== 'string' || contextFile.length === 0 || contextFile.length > 256) {

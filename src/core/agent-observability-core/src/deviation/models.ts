@@ -1,13 +1,11 @@
 /**
  * Workflow-deviation config and result shapes.
  *
- * Originally a faithful TypeScript port of the cloud dashboard's
- * `Models/WorkflowConfig.cs` and `Models/WorkflowDeviation.cs`. It has since
+ * Originally a TypeScript port of the retired cloud dashboard's C# workflow
+ * models (the "Mirrors C# …" notes below name the originals). It has since
  * grown a structured predicate DSL ({@link StepPredicate}, {@link WorkflowStep},
- * {@link ContentPredicate}) that gives the local detector the same expressive
- * power as the cloud's `TriggerKqlQuery` + `WorkflowStep.KqlQuery` model —
- * without KQL. The user-facing reference is the "Workflows and flagged
- * sessions" section of the extension README.
+ * {@link ContentPredicate}) that gives the local detector the expressive power
+ * of the old KQL-based model, without KQL.
  *
  * Two tiers of matching:
  * - METADATA ({@link StepPredicate}) over the safe {@link ../telemetry/models.Interaction}

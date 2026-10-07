@@ -43,9 +43,9 @@ export interface CopilotDatabaseCandidate {
 
 /**
  * Every Copilot database the next index pass will read, in priority order: the
- * durable archive the extension maintains when it exists (it merges every
- * native source and keeps history Copilot's own rolling database discards),
- * else EVERY readable native/override database.
+ * durable archive the retired VS Code extension maintained, when it exists (it
+ * merges every native source and keeps history Copilot's own rolling database
+ * discards), else EVERY readable native/override database.
  *
  * Reading all of them matters on a machine with more than one VS Code install:
  * when only the first candidate was read, a stale stable-Code database could

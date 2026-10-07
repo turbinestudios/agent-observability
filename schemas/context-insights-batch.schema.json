@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://turbine.dev/schemas/context-insights-batch.schema.json",
   "title": "Agent Observability Context-Insights Batch (v1)",
-  "description": "Privacy-scoped aggregate batch POSTed by the VS Code extension to the dashboard's context-insights ingestion API. It carries pre-aggregated hotspot signals about CUSTOMIZATION FILES ONLY (instructions/skills/prompts/agents/hooks) so a team can review, per repository and per sprint, which context-engineering artifacts to refine. This is the FIRST contract to convey repo-relative file PATHS to the cloud; it is therefore tightly scoped: paths are repo-relative POSIX form, restricted to an allowlist of customization-file suffixes, repo-scoped only (files that resolve inside the developer's open workspace), and NEVER carry file contents, raw skip-reason text, branches, or identities. additionalProperties is false at every object level so the API REJECTS any unexpected (potentially raw/sensitive) field. It is the single shared contract between the TypeScript producer (extension) and the C# consumer (dashboard API).",
+  "description": "Privacy-scoped aggregate batch, embedded unchanged in the desktop app's team shard. It carries pre-aggregated hotspot signals about CUSTOMIZATION FILES ONLY (instructions/skills/prompts/agents/hooks) so a team can review, per repository and per sprint, which context-engineering artifacts to refine. This contract conveys repo-relative file PATHS off the machine; it is therefore tightly scoped: paths are repo-relative POSIX form, restricted to an allowlist of customization-file suffixes, repo-scoped only (files that resolve inside the developer's open workspace), and NEVER carry file contents, raw skip-reason text, branches, or identities. additionalProperties is false at every object level so a validator REJECTS any unexpected (potentially raw/sensitive) field. It is the single shared contract between the producer that builds the batch and the importer that validates it.",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -23,30 +23,30 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "description": "Deterministic idempotency hint for the whole batch. Computed by the extension as a hash of (pseudonymousDeveloperId + window.start + window.end + schemaVersion). At most an optimization for byte-identical retries: correctness is guaranteed by per-row upsert on rowKey (latest-wins), NOT by batchId dedup."
+      "description": "Deterministic idempotency hint for the whole batch. Computed by the producer as a hash of (pseudonymousDeveloperId + window.start + window.end + schemaVersion). At most an optimization for byte-identical retries: correctness is guaranteed by per-row upsert on rowKey (latest-wins), NOT by batchId dedup."
     },
     "generatedAt": {
       "type": "string",
       "format": "date-time",
-      "description": "RFC 3339 / ISO 8601 UTC timestamp of when the extension produced this batch. Informational only; not part of any idempotency key."
+      "description": "RFC 3339 / ISO 8601 UTC timestamp of when the producer built this batch. Informational only; not part of any idempotency key."
     },
     "toolVersion": {
       "type": "string",
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$",
-      "description": "Semantic version of the VS Code extension that produced the batch (e.g. '1.4.2'). Used for compatibility diagnostics and schema-drift triage."
+      "description": "Semantic version of the app that produced the batch (e.g. '1.4.2'). Used for compatibility diagnostics and schema-drift triage."
     },
     "pseudonymousDeveloperId": {
       "type": "string",
       "minLength": 36,
       "maxLength": 36,
       "pattern": "^dev_[0-9a-f]{32}$",
-      "description": "Opaque, stable developer identifier: literal 'dev_' prefix + 32 lowercase hex chars (first 16 bytes of HMAC-SHA256(salt, normalized git email)). The strict pattern structurally excludes emails, usernames, and any free text. MUST NOT be reversible without the org salt (which is never transmitted). Identical derivation to the aggregate-batch contract, so a developer's context insights and interaction aggregates share the same pseudonymous id. Used server-side as the distinct-developer dimension for hotspot review."
+      "description": "Opaque, stable developer identifier: literal 'dev_' prefix + 32 lowercase hex chars (first 16 bytes of HMAC-SHA256(salt, normalized git email)). The strict pattern structurally excludes emails, usernames, and any free text. MUST NOT be reversible without the org salt (which is never transmitted). Identical derivation to the aggregate-batch contract, so a developer's context insights and interaction aggregates share the same pseudonymous id. Used by the consumer as the distinct-developer dimension for hotspot review."
     },
     "window": {
       "type": "object",
-      "description": "The closed-open UTC time range [start, end) that all rows in this batch fall within. Defines the slice of local telemetry the extension has aggregated and is uploading.",
+      "description": "The closed-open UTC time range [start, end) that all rows in this batch fall within. Defines the slice of local telemetry the producer has aggregated.",
       "required": ["start", "end"],
       "properties": {
         "start": {
@@ -73,7 +73,7 @@
   "$defs": {
     "contextFileRow": {
       "type": "object",
-      "description": "One aggregate row at the grain (bucketStart, bucketDurationSeconds, repository, contextFile, category) for a single pseudonymousDeveloperId. All measures are additive across rows EXCEPT distinctSessionCount and estTokensMax (a max, not a sum), which must be recombined server-side accordingly.",
+      "description": "One aggregate row at the grain (bucketStart, bucketDurationSeconds, repository, contextFile, category) for a single pseudonymousDeveloperId. All measures are additive across rows EXCEPT distinctSessionCount and estTokensMax (a max, not a sum), which must be recombined by the consumer accordingly.",
       "required": [
         "rowKey",
         "bucketStart",
@@ -94,12 +94,12 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
-          "description": "Stable per-row idempotency key. Hash of the full grain tuple (bucketStart, bucketDurationSeconds, repository, contextFile, category) + pseudonymousDeveloperId. The API upserts by rowKey so re-uploaded or overlapping windows converge to the same row instead of double-counting."
+          "description": "Stable per-row idempotency key. Hash of the full grain tuple (bucketStart, bucketDurationSeconds, repository, contextFile, category) + pseudonymousDeveloperId. A consumer upserts by rowKey so re-sent or overlapping windows converge to the same row instead of double-counting."
         },
         "bucketStart": {
           "type": "string",
           "format": "date-time",
-          "description": "Aligned UTC start of the time bin (ISO 8601). In v1 bins are ALWAYS aligned to 30-minute boundaries (minutes \u2208 {00,30}, seconds=0, ms=0), matching the aggregate-batch contract so the dashboard can window context insights and interaction metrics over the same sprint range."
+          "description": "Aligned UTC start of the time bin (ISO 8601). In v1 bins are ALWAYS aligned to 30-minute boundaries (minutes \u2208 {00,30}, seconds=0, ms=0), matching the aggregate-batch contract so a consumer can window context insights and interaction metrics over the same sprint range."
         },
         "bucketDurationSeconds": {
           "type": "integer",
@@ -118,7 +118,7 @@
           "minLength": 1,
           "maxLength": 256,
           "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))(?:[A-Za-z0-9_.-]+/)*(?:[A-Za-z0-9_.-]+\\.(?:instructions|prompt|agent|skill)\\.md|copilot-instructions\\.md|AGENTS\\.md|CLAUDE\\.md|SKILL\\.md)$",
-          "description": "Repo-relative POSIX path of a CUSTOMIZATION file, resolved by the extension against the developer's open workspace (repo-scoped only \u2014 user/global-scope files are excluded). CRITICAL PRIVACY RULES enforced structurally by the pattern: (1) relative only \u2014 no leading '/', no drive letter, no backslashes; (2) no '..' path segments (no directory traversal / escaping the repo); (3) safe segment charset [A-Za-z0-9_.-] only (no whitespace, '@', '?', '#', ':'); (4) the filename MUST match the customization allowlist suffixes (*.instructions.md, *.prompt.md, *.agent.md, *.skill.md) or be a known root/skill file (copilot-instructions.md, AGENTS.md, CLAUDE.md, SKILL.md). File CONTENTS are NEVER included \u2014 only this path plus aggregate counts. Source/doc files pulled into context are explicitly OUT of scope and cannot satisfy this pattern."
+          "description": "Repo-relative POSIX path of a CUSTOMIZATION file, resolved by the producer against the developer's open workspace (repo-scoped only \u2014 user/global-scope files are excluded). CRITICAL PRIVACY RULES enforced structurally by the pattern: (1) relative only \u2014 no leading '/', no drive letter, no backslashes; (2) no '..' path segments (no directory traversal / escaping the repo); (3) safe segment charset [A-Za-z0-9_.-] only (no whitespace, '@', '?', '#', ':'); (4) the filename MUST match the customization allowlist suffixes (*.instructions.md, *.prompt.md, *.agent.md, *.skill.md) or be a known root/skill file (copilot-instructions.md, AGENTS.md, CLAUDE.md, SKILL.md). File CONTENTS are NEVER included \u2014 only this path plus aggregate counts. Source/doc files pulled into context are explicitly OUT of scope and cannot satisfy this pattern."
         },
         "category": {
           "type": "string",
@@ -142,12 +142,12 @@
         "estTokensSum": {
           "type": "integer",
           "minimum": 0,
-          "description": "Sum of the file's estimated token weight (\u2248 charCount / 4) over the sessions where it was applied in this row (additive). Combined with appliedCount server-side to derive an average token cost; signals context-budget pressure."
+          "description": "Sum of the file's estimated token weight (\u2248 charCount / 4) over the sessions where it was applied in this row (additive). Combined with appliedCount by the consumer to derive an average token cost; signals context-budget pressure."
         },
         "estTokensMax": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum single-session estimated token weight observed for this file in this row. NOT additive across rows; the server takes the max when merging. Surfaces oversized files."
+          "description": "Maximum single-session estimated token weight observed for this file in this row. NOT additive across rows; the consumer takes the max when merging. Surfaces oversized files."
         },
         "sessionsWithErrorCount": {
           "type": "integer",
@@ -162,12 +162,12 @@
         "distinctSessionCount": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of distinct sessions (COALESCE(conversation_id, chat_session_id)) in which this file appeared within THIS row only. WARNING: NOT additive across rows; true distinct totals over a range require server-side distinct counting."
+          "description": "Number of distinct sessions (COALESCE(conversation_id, chat_session_id)) in which this file appeared within THIS row only. WARNING: NOT additive across rows; true distinct totals over a range require by the consumer distinct counting."
         },
         "lastActivityAtMs": {
           "type": "integer",
           "minimum": 0,
-          "description": "OPTIONAL. Unix epoch milliseconds of the latest session start in which this file appeared in this row (max over the row). Lets the server recover last-seen at true event resolution rather than the 30-minute bucketStart. Non-sensitive (a timestamp)."
+          "description": "OPTIONAL. Unix epoch milliseconds of the latest session start in which this file appeared in this row (max over the row). Lets the consumer recover last-seen at true event resolution rather than the 30-minute bucketStart. Non-sensitive (a timestamp)."
         }
       },
       "additionalProperties": false

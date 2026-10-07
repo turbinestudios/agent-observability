@@ -195,8 +195,8 @@ export class TelemetryService {
   /** When set + present, the extension's OWN live-OTLP ingest DB (the sink). */
   private ingestDbPath: string | undefined;
   /**
-   * When set + present, the DURABLE, home-anchored Copilot archive
-   * ({@link ../otel/copilotArchiver.CopilotArchiver}). Read as the sole source,
+   * When set + present, the DURABLE, home-anchored Copilot archive the VS Code
+   * extension wrote before it was removed. Read as the sole source,
    * preferred over the live-OTLP ingest DB (the archiver sweeps ingest into it,
    * and ingest is pruned to days while the archive keeps months) and over
    * auto-detecting Copilot's short-lived native DB(s).

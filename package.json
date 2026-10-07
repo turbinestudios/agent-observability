@@ -2,11 +2,10 @@
   "name": "agent-observability-monorepo",
   "private": true,
   "version": "0.0.0",
-  "description": "Workspace root for the Agent Observability extension, shared core, and desktop app. Not published; the .NET dashboard and Bicep infra are built separately.",
+  "description": "Workspace root for the Agent Observability desktop app and its shared core. Not published.",
   "license": "MIT",
   "workspaces": [
     "src/core/agent-observability-core",
-    "src/extension/agent-observability-vscode",
     "src/desktop/*"
   ],
   "scripts": {

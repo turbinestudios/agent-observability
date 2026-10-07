@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://turbine.dev/schemas/team-shard.schema.json",
   "title": "Agent Observability Team Shard (v1)",
-  "description": "Privacy-first per-member file written by the desktop app into a folder the team shares (OneDrive, SharePoint, a network drive). There is no server: every member's app writes one shard named after its pseudonymous developer id and reads everyone else's. The shard EMBEDS the two existing upload contracts UNCHANGED — the aggregate batch and the context-insights batch, by $ref to their own schemas, so the embedded parts can never drift from what the dashboard would accept — and adds exactly ONE new block, 'outcomes': per UTC day, repository and source, how many sessions ran, how they went (verdict counts) and their estimated cost. That block is the only thing in this file that is new relative to the embedded contracts. Counts and closed-set labels only: no session titles, prompts, responses, tool I/O, branch names, identities, or paths beyond the already-sanctioned repo-relative context-file names the context-insights contract carries. additionalProperties is false at every object level so an importer REJECTS any unexpected (potentially raw/sensitive) field, and the TypeScript importer re-validates every shard against the same rules the dashboard's C# validators apply before merging it.",
+  "description": "Privacy-first per-member file written by the desktop app into a folder the team shares (OneDrive, SharePoint, a network drive). There is no server: every member's app writes one shard named after its pseudonymous developer id and reads everyone else's. The shard EMBEDS the two aggregate contracts UNCHANGED — the aggregate batch and the context-insights batch, by $ref to their own schemas, so the embedded parts can never drift from those contracts — and adds exactly ONE new block, 'outcomes': per UTC day, repository and source, how many sessions ran, how they went (verdict counts) and their estimated cost. That block is the only thing in this file that is new relative to the embedded contracts. Counts and closed-set labels only: no session titles, prompts, responses, tool I/O, branch names, identities, or paths beyond the already-sanctioned repo-relative context-file names the context-insights contract carries. additionalProperties is false at every object level so an importer REJECTS any unexpected (potentially raw/sensitive) field, and the TypeScript importer re-validates every shard against the full rules of the embedded contracts before merging it.",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -59,7 +59,7 @@
     },
     "aggregate": {
       "$ref": "https://turbine.dev/schemas/aggregate-batch.schema.json",
-      "description": "The UNCHANGED aggregate-batch v1.0 contract, built by the same core builder the VS Code extension uploads with. Byte-for-byte POST-able to the dashboard's /api/ingest/aggregate if a hosted consumer is ever wanted. Its pseudonymousDeveloperId and window MUST equal the envelope's."
+      "description": "The UNCHANGED aggregate-batch v1.0 contract, built by the core aggregate builder. Its pseudonymousDeveloperId and window MUST equal the envelope's."
     },
     "contextInsights": {
       "$ref": "https://turbine.dev/schemas/context-insights-batch.schema.json",

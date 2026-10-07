@@ -14,10 +14,6 @@ import { computeDeveloperId, getIdentityInput } from '@agent-observability/core/
  * into a person (given the team's emails), so it lives where nothing else
  * reads, with owner-only permissions where the OS honours them, and it never
  * enters a shard or the shared folder.
- *
- * The extension keeps its salt in VS Code SecretStorage; the two salts are
- * unrelated, so the same person appears under different ids in the cloud
- * dashboard and in a team folder. That is documented, not a bug.
  */
 export function resolveTeamSaltPath(): string {
   return path.join(os.homedir(), '.agent-observability', 'desktop', 'team-salt');

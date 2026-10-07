@@ -16,16 +16,15 @@ We especially want to hear about anything that could:
 
 - send prompts, responses, tool input or output, file paths, or names off the
   user's computer without the user asking for it
-- let a repository or workspace change where data or API keys are sent
+- let a repository or workspace change where data is sent
 - let the AI features write files outside the context files they are allowed
   to change
-- give someone access to a team dashboard, or its data, without signing in or
-  holding a valid API key
+- let a team shard from the shared folder carry, or be merged with, anything
+  its schema does not allow
 
 The rules the code must keep are listed under "Privacy invariant" in
 [AGENTS.md](AGENTS.md#privacy-invariant-do-not-break).
 
 ## Supported versions
 
-Only the latest release of the desktop app and the VS Code extension gets
-security fixes.
+Only the latest release of the desktop app gets security fixes.

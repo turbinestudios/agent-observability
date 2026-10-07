@@ -1,37 +1,19 @@
-# Build output
-[Bb]in/
-[Oo]bj/
-
 # Node workspaces install at the repo root (npm hoists dependencies here).
 node_modules/
 
-# User-specific files
-*.rsuser
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
-
-# Visual Studio and VS Code workspace state
+# Visual Studio workspace state
 .vs/
 
 # Test and coverage output
-TestResults/
 coverage/
 coverage-*.json
 *.coverage
 *.coveragexml
 
-# NuGet
-packages/
-*.nupkg
-*.snupkg
-
 # Logs
 *.log
 
 # Local app settings and secrets
-appsettings.Development.json
 secrets.json
 
 # OS files

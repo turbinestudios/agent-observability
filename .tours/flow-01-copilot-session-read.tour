@@ -1,63 +1,63 @@
 {
   "$schema": "https://aka.ms/codetour-schema",
   "title": "1: Copilot session read",
-  "description": "End-to-end: how opening the extension turns on-disk Copilot telemetry into rows in the Sessions view. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
+  "description": "End-to-end: how launching the desktop app turns on-disk Copilot telemetry into rows in the Sessions view. Every step embeds the numbered sequence diagram and points at the exact code for that step.",
   "isPrimary": true,
   "nextTour": "2: Session detail & token trend",
   "steps": [
     {
-      "title": "Step 1 — Open the extension",
-      "file": "src/extension/agent-observability-vscode/src/extension.ts",
-      "line": 81,
-      "description": "![1: Copilot session read](.tours/diagrams/d-1.svg)\n\n**▶ Step 1 of 9 in the sequence diagram — `Dev → extension.ts: Open the extension`**\n\nOpening the workspace fires the extension's single entry point, `activate()`. Everything downstream — sources, views, live updates — is wired here, and the read-only, privacy-first pipeline starts: nothing is read from disk until a view actually asks for it."
+      "title": "Step 1 — Fork the data host",
+      "file": "src/desktop/agent-observability-desktop/src/main/index.ts",
+      "line": 127,
+      "description": "![1: Copilot session read](.tours/diagrams/d-1.svg)\n\n**▶ Step 1 of 9 in the sequence diagram — `Dev → Electron main: Launch the app`**\n\nLaunching the app runs `startDataHost`, which forks the data host as an Electron `utilityProcess`. Every read, parse and index pass happens there — off the main process and out of the renderer — and the read-only, privacy-first pipeline starts: nothing leaves the machine."
     },
     {
-      "title": "Step 2 — Build the SourceRegistry",
-      "file": "src/extension/agent-observability-vscode/src/extension.ts",
-      "line": 106,
-      "description": "![1: Copilot session read](.tours/diagrams/d-2.svg)\n\n**▶ Step 2 of 9 in the sequence diagram — `extension.ts → SourceRegistry: activate() builds registry`**\n\n`activate()` builds a `SourceRegistry` over the telemetry sources — `CopilotSource`, the Claude source, the Copilot (Cloud) source, and the Copilot (Autonomous) source. The registry is the seam the views talk to, so no view ever knows which on-disk database it is really reading from."
+      "title": "Step 2 — Connect the renderer to the data host",
+      "file": "src/desktop/agent-observability-desktop/src/main/index.ts",
+      "line": 141,
+      "description": "![1: Copilot session read](.tours/diagrams/d-2.svg)\n\n**▶ Step 2 of 9 in the sequence diagram — `Electron main → Sessions view: hand over a MessagePort`**\n\n`connectRendererToDataHost` creates a `MessageChannelMain` and gives one end to the data host and the other to the page (the preload transfers it with `window.postMessage`). From then on the two talk directly; main is out of the path entirely."
     },
     {
-      "title": "Step 3 — Register the tree views",
-      "file": "src/extension/agent-observability-vscode/src/extension.ts",
-      "line": 257,
-      "description": "![1: Copilot session read](.tours/diagrams/d-3.svg)\n\n**▶ Step 3 of 9 in the sequence diagram — `extension.ts → Sessions view: register tree providers`**\n\nThe Sessions tree is registered with `createTreeView(..., { canSelectMany: true })` so several sessions can be selected and combined. Registration only wires the provider — still no telemetry is read yet."
+      "title": "Step 3 — The index pass runs each source",
+      "file": "src/desktop/agent-observability-desktop/src/datahost/background/worker.ts",
+      "line": 114,
+      "description": "![1: Copilot session read](.tours/diagrams/d-3.svg)\n\n**▶ Step 3 of 9 in the sequence diagram — `Data host → CopilotIndexer: background index pass`**\n\nThe data host's background worker runs one indexer per enabled source in turn; for Copilot that is `CopilotIndexer.run()`. The renderer never waits on this pass — rows stream in as they are found."
     },
     {
-      "title": "Step 4 — getChildren() lazy trigger",
-      "file": "src/extension/agent-observability-vscode/src/views/sessionsView.ts",
-      "line": 34,
-      "description": "![1: Copilot session read](.tours/diagrams/d-4.svg)\n\n**▶ Step 4 of 9 in the sequence diagram — `Sessions view → SourceRegistry: getChildren()`**\n\nWhen the user expands the Sessions view, VS Code calls `getChildren`. This is the lazy trigger — the first point where the extension actually goes looking for data."
+      "title": "Step 4 — Read-only open",
+      "file": "src/desktop/agent-observability-desktop/src/datahost/indexer/copilotIndexer.ts",
+      "line": 215,
+      "description": "![1: Copilot session read](.tours/diagrams/d-4.svg)\n\n**▶ Step 4 of 9 in the sequence diagram — `CopilotIndexer → Copilot DB: read-only open`**\n\nCopilot's database is somebody else's live file, so it is opened `readonly` with `fileMustExist`: it is never created, migrated or written. A candidate that cannot be opened is reported and skipped, without hiding the others."
     },
     {
-      "title": "Step 5 — View asks the source for sessions",
-      "file": "src/extension/agent-observability-vscode/src/views/sessionsView.ts",
-      "line": 85,
-      "description": "![1: Copilot session read](.tours/diagrams/d-5.svg)\n\n**▶ Step 5 of 9 in the sequence diagram — `SourceRegistry → CopilotSource: listSessions()`**\n\nDrilling into a repository, `getSessions` calls `source.listSessions(repository, limit)`. The view holds no data of its own; it always pulls from the source on demand."
+      "title": "Step 5 — One consistent read",
+      "file": "src/desktop/agent-observability-desktop/src/datahost/indexer/copilotIndexer.ts",
+      "line": 234,
+      "description": "![1: Copilot session read](.tours/diagrams/d-5.svg)\n\n**▶ Step 5 of 9 in the sequence diagram — `Copilot DB → CopilotIndexer: session aggregates`**\n\nAll summaries for a source are read inside one `db.transaction`, so they describe the same SQLite snapshot even while Copilot keeps committing spans. Only per-session aggregates come back — counts, durations, token totals — never raw prompt or completion text."
     },
     {
-      "title": "Step 6 — Read-only snapshot",
-      "file": "src/core/agent-observability-core/src/telemetry/snapshot.ts",
-      "line": 96,
-      "description": "![1: Copilot session read](.tours/diagrams/d-6.svg)\n\n**▶ Step 6 of 9 in the sequence diagram — `CopilotSource → TelemetryDatabase: readonly snapshot + query`**\n\nThe extension's default reader uses `createReadonlySnapshot` to copy the on-disk DB and replay its WAL on that private copy. The desktop instead supplies a native read-only transaction through `TelemetryReadBackend`; it shares the query layer without copying the archive. Neither reader mutates the source."
+      "title": "Step 6 — Upsert into the local index",
+      "file": "src/desktop/agent-observability-desktop/src/datahost/indexer/copilotIndexer.ts",
+      "line": 316,
+      "description": "![1: Copilot session read](.tours/diagrams/d-6.svg)\n\n**▶ Step 6 of 9 in the sequence diagram — `CopilotIndexer → IndexDb: upsertChangedSessions(rows)`**\n\nThe rows land in the app's own `IndexDb`, and only rows that actually changed are reported through `onRows`. The data host re-emits those as a `sessions.upserted` event, so an open list patches in place instead of re-querying."
     },
     {
-      "title": "Step 7 — Summary query returns rows",
-      "file": "src/core/agent-observability-core/src/telemetry/database.ts",
-      "line": 604,
-      "description": "![1: Copilot session read](.tours/diagrams/d-7.svg)\n\n**▶ Step 7 of 9 in the sequence diagram — `TelemetryDatabase → CopilotSource: session rows`**\n\n`TelemetryDatabase.listSessions` runs the summary query against the snapshot and returns one row per session — counts, durations, token totals — but no raw prompt or completion text."
+      "title": "Step 7 — The view asks for a page",
+      "file": "src/desktop/agent-observability-desktop/src/renderer/src/views/sessions/useSessions.ts",
+      "line": 127,
+      "description": "![1: Copilot session read](.tours/diagrams/d-7.svg)\n\n**▶ Step 7 of 9 in the sequence diagram — `Sessions view → Data host: sessions.list`**\n\nThe Sessions view's `useSessions` hook calls `dataHost.call('sessions.list', ...)` over the port. The view holds no data of its own; it always pulls a page from the data host on demand."
     },
     {
-      "title": "Step 8 — Source returns SessionSummary[]",
-      "file": "src/core/agent-observability-core/src/sources/sessionSource.ts",
-      "line": 137,
-      "description": "![1: Copilot session read](.tours/diagrams/d-8.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `CopilotSource → Sessions view: SessionRow[]`**\n\n`CopilotSource.listSessions` hands the `SessionSummary[]` back up through the registry to the view, unchanged. The source is a thin adapter over `TelemetryService`."
+      "title": "Step 8 — Query the index",
+      "file": "src/desktop/agent-observability-desktop/src/datahost/indexer/indexDb.ts",
+      "line": 511,
+      "description": "![1: Copilot session read](.tours/diagrams/d-8.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `Data host → IndexDb: IndexDb.listSessions()`**\n\n`IndexDb.listSessions` answers from the local index — filters, hidden sessions and the rename/tag overlays applied in SQL — so listing never opens Copilot's database at all. The data host decorates the rows and returns them."
     },
     {
-      "title": "Step 9 — Paint the session tree",
-      "file": "src/extension/agent-observability-vscode/src/views/sessionsView.ts",
-      "line": 50,
-      "description": "![1: Copilot session read](.tours/diagrams/d-9.svg)\n\n**▶ Step 9 of 9 in the sequence diagram — `Sessions view → Dev: render session tree`**\n\nFinally the view turns those summaries into tree items in `getRoots`/`getRepositories`, and the Sessions panel paints. The loop stays lazy: collapse and re-expand and the whole chain runs again."
+      "title": "Step 9 — Paint the session list",
+      "file": "src/desktop/agent-observability-desktop/src/renderer/src/views/sessions/SessionsView.tsx",
+      "line": 369,
+      "description": "![1: Copilot session read](.tours/diagrams/d-9.svg)\n\n**▶ Step 9 of 9 in the sequence diagram — `IndexDb → Sessions view: SessionRow[]`**\n\nFinally the view renders each row as a `SessionRowItem` inside a virtualized list, and the Sessions panel paints. The loop stays lazy: the next index pass pushes only the rows that changed."
     }
   ]
 }

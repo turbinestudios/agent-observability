@@ -105,12 +105,11 @@ const config = new Configuration(settings);
 const indexPath = resolveIndexDbPath();
 const db = new IndexDb(indexPath);
 
-// The same registry abstraction the extension wires up. Listing comes from the
-// index; the registry serves session detail, where the per-source parsing
-// differences live. Cloud sources plug in here unchanged as they land.
+// Core's registry abstraction. Listing comes from the index; the registry
+// serves session detail, where the per-source parsing differences live.
 //
-// The archive has to be pointed at explicitly, exactly as the extension does at
-// startup. Without it the read layer falls back to Copilot's own short-lived
+// The durable Copilot archive (written by the retired VS Code extension, read
+// here when it exists) has to be pointed at explicitly at startup. Without it the read layer falls back to Copilot's own short-lived
 // database, which holds a rolling handful of sessions — so every session the
 // indexer found in the archive fails to open with "database not found".
 const telemetry = new TelemetryService(config, undefined, new NativeTelemetryBackend(db));
@@ -474,7 +473,7 @@ function runIndex(): IndexStatus {
   return status;
 }
 
-/** Settings keys shared with the extension, so both honour the same accepts. */
+/** Settings keys for the accepted missing context files and sources. */
 const ACCEPTED_FILES_KEY = 'context.acceptedMissingFiles';
 const ACCEPTED_SOURCES_KEY = 'context.acceptedMissingSources';
 

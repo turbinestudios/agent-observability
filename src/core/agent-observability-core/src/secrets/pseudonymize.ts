@@ -14,10 +14,10 @@ import { createHmac, randomBytes } from 'node:crypto';
  * aggregate batch (`pseudonymousDeveloperId`). It satisfies the schema pattern
  * `^dev_[0-9a-f]{32}$` (exactly 36 chars) by construction.
  *
- * This module is intentionally free of any `vscode` import so it can be unit
- * tested headless (like {@link sanitizeRepositoryUrl}). The org salt is supplied
- * by the caller (read from SecretStorage); it is used PURELY as the HMAC key and
- * is NEVER returned, logged, or placed on any networked path.
+ * This module imports no host API so it can be unit tested headless (like
+ * {@link sanitizeRepositoryUrl}). The salt is supplied by the caller (the
+ * desktop's per-install team salt file); it is used PURELY as the HMAC key and
+ * is NEVER returned, logged, or placed in a shard.
  *
  * The identity `tier` is a LOCAL-ONLY diagnostic and is deliberately excluded
  * from any aggregate batch — the v1 schema has no `tier` field and sets
@@ -66,8 +66,8 @@ export function generateSaltHex(): string {
  * Mint the pseudonymous developer id from a hex-encoded org salt and a resolved
  * identity input.
  *
- * @param saltHex hex-encoded org salt (the HMAC key) — read from SecretStorage,
- *   never transmitted.
+ * @param saltHex hex-encoded salt (the HMAC key) — read from the per-install
+ *   salt file, never shared.
  * @param input the resolved identity value + tier.
  * @returns the `dev_<32 hex>` id plus the local-only tier marker.
  */

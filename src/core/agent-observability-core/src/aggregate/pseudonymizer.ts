@@ -16,9 +16,9 @@ import { DEVELOPER_ID_PATTERN, IdentityTier } from '../secrets/pseudonymize';
  * The result satisfies the shared schema pattern `^dev_[0-9a-f]{32}$` (exactly 36
  * chars) by construction; an email/username structurally cannot satisfy it.
  *
- * This module never imports `vscode`, so it is headless-testable. The org salt is
- * supplied by the caller (read from SecretStorage); it is used PURELY as the HMAC
- * key and is NEVER returned, logged, or placed on any networked path.
+ * This module imports no host API, so it is headless-testable. The salt is
+ * supplied by the caller (the desktop's per-install team salt file); it is used
+ * PURELY as the HMAC key and is NEVER returned, logged, or placed in a shard.
  *
  * The identity {@link IdentityTier} is a LOCAL-ONLY diagnostic. There is NO `tier`
  * slot in the v1 aggregate batch schema (which sets `additionalProperties: false`),
@@ -37,11 +37,11 @@ export interface ResolvedIdentity {
 }
 
 /**
- * Compute the pseudonymous developer id from a hex-encoded org salt and a raw
+ * Compute the pseudonymous developer id from a hex-encoded salt and a raw
  * identity input string.
  *
- * @param saltHex hex-encoded org salt (the HMAC key) — read from SecretStorage,
- *   never transmitted.
+ * @param saltHex hex-encoded salt (the HMAC key) — read from the per-install
+ *   salt file, never shared.
  * @param identityInput the raw identity value (e.g. git email). Normalized
  *   (trim + lowercase) before hashing.
  * @returns `dev_` + 32 lowercase hex chars (matches `^dev_[0-9a-f]{32}$`).

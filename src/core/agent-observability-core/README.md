@@ -4,10 +4,9 @@ The host-independent core of Agent Observability: everything that reads, parses,
 analyzes, and renders agent sessions, with no dependency on any particular
 application shell.
 
-Two hosts consume it (the [VS Code extension](../../extension/agent-observability-vscode)
-and the standalone desktop app), so a fix to session parsing or a new data source
-lands in both at once. The package is `private` and never published; it is
-consumed inside this repo through npm workspaces.
+The [desktop app](../../desktop/agent-observability-desktop) consumes it. The
+package is `private` and never published; it is consumed inside this repo
+through npm workspaces.
 
 ## What lives here
 
@@ -16,10 +15,9 @@ consumed inside this repo through npm workspaces.
 | `sources/` | `SessionDataSource` + `SourceRegistry`: the central abstraction every UI reads through |
 | `telemetry/` | Copilot SQLite read layer, the shared session model (`models.ts`), snapshotting, titles, repository resolution |
 | `claude/` | Claude Code JSONL discovery, parsing, and mapping to the shared model |
-| `cloud/`, `cloud-agent/` | Copilot Cloud and autonomous-agent sources with their local sinks |
-| `otel/` | Local OTLP receiver, ingest store, archiver, writer-lease election |
+| `otel/` | The durable Copilot archive format (read by the desktop app), archive paths, writer-lease election |
 | `aggregate/`, `context/`, `deviation/` | Aggregation and the privacy contract, context analysis, workflow deviation |
-| `sync/`, `consent/` | The opt-in upload path, gated on consent plus an API key |
+| `team/`, `consent/` | Team-shard building, validation and merging; consent disclosures |
 | `views/`, `chat/` | Pure HTML renderers and the AI Helper's backend-agnostic seams |
 
 ## The one rule
@@ -28,14 +26,13 @@ consumed inside this repo through npm workspaces.
 applies to Electron: this package must load in a plain Node process.
 
 When core needs something only a host can provide, it declares an interface and
-the host implements it. The existing seams are `Logger`, `SettingsReader`,
-`FileWatchFactory`, `SyncStateStore`, `HttpPoster`, `Clock`, and
-`CancellationToken`. Prefer extending one of those over inventing a new
+the host implements it. The existing seams are `SettingsReader`,
+`FileWatchFactory` and `CancellationToken`. Prefer extending one of those over inventing a new
 abstraction.
 
 The telemetry query layer also accepts `ReadonlySqliteConnection` and
-`TelemetryReadBackend` from `telemetry/readBackend.ts`. The extension keeps the
-default WASM snapshot reader. The desktop supplies native, read-only SQLite
+`TelemetryReadBackend` from `telemetry/readBackend.ts`. The default is a WASM
+snapshot reader. The desktop supplies native, read-only SQLite
 transactions and indexed titles, while sharing all queries, validation, and
 sanitization. Backend handles and derived caches are scoped to synchronous
 `readConsistently` calls; they must not survive a transaction or pin WAL files
@@ -55,16 +52,12 @@ event DOM work, not all memory or payload size.
 
 ## Consuming it
 
-There is no build step: `main` and `types` point at `src/index.ts`, and each
-consumer's bundler compiles the TypeScript directly. Edit core and the extension
-picks it up on its next build, with no `dist` to keep in sync.
-
-`src/index.ts` re-exports the common entry points. Deep imports work too, and are
-preferred in large consumers so imports stay traceable. Note the `/src/` segment,
-which is what makes the same specifier resolve under tsc, esbuild, vitest, and Vite:
+There is no build step and no barrel file: the desktop app deep-imports the
+TypeScript source and its bundler compiles it directly, with no `dist` to keep
+in sync. Note the `/src/` segment, which is what makes the same specifier
+resolve under tsc, vitest, and Vite:
 
 ```ts
-import { TelemetryService } from '@agent-observability/core';
 import { SessionSummary } from '@agent-observability/core/src/telemetry/models';
 ```
 
@@ -81,5 +74,4 @@ controller, pagination, live updates, and hostile template content. Query reuse
 tests assert work counts rather than machine-dependent elapsed time.
 
 Some tests read fixtures from the repo root (`schemas/`, `tools/`) by relative
-path, which is why this package sits at the same directory depth as the
-extension. Keep that depth if the package ever moves.
+path, so keep this package's directory depth if it ever moves.

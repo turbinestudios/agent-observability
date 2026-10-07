@@ -1,12 +1,12 @@
 # Agent Observability: agent guide
 
 A local tool for looking back at GitHub Copilot and Claude Code sessions. A
-desktop app and a VS Code extension read the sessions the agents record on disk
-and keep all raw content on the machine. The desktop app also reads GitHub
-Copilot CLI sessions from `~/.copilot/session-state`, read-only: nothing in
-this product writes or deletes under the Copilot CLI's own store. An optional team dashboard receives
-only the totals a user chooses to share. See [README.md](README.md) for the
-overview.
+desktop app reads the sessions the agents record on disk and keeps all raw
+content on the machine. It also reads GitHub Copilot CLI sessions from
+`~/.copilot/session-state`, read-only: nothing in this product writes or
+deletes under the Copilot CLI's own store. An optional Team view shares only
+the totals a user chooses to share, through a folder the team picks. See
+[README.md](README.md) for the overview.
 
 ## Never commit or push
 
@@ -24,81 +24,54 @@ status`, `git diff`, creating a branch to work on, staging.
 | Area | Path | Stack |
 | --- | --- | --- |
 | Shared core (host-independent) | [src/core/agent-observability-core](src/core/agent-observability-core) | TypeScript, vitest |
-| VS Code extension (producer) | [src/extension/agent-observability-vscode](src/extension/agent-observability-vscode) | TypeScript, esbuild, vitest |
 | Desktop app | [src/desktop/agent-observability-desktop](src/desktop/agent-observability-desktop) | Electron, React, vitest |
-| Cloud dashboard (consumer) | [src/dashboard/AgentObservability.Dashboard](src/dashboard/AgentObservability.Dashboard) | Blazor Server (.NET), xUnit |
-| Shared aggregate contract | [schemas/aggregate-batch.schema.json](schemas/aggregate-batch.schema.json) | JSON Schema |
-| Infrastructure | [infra](infra) | Bicep |
+| Aggregate and team-shard contracts | [schemas](schemas) | JSON Schema |
 | Docs | [docs](docs) | Markdown |
 
 ## Build, test, run
 
-**Extension.** The repo is an npm workspace, so dependencies install once from
-the **repo root** (they hoist to the root `node_modules`; there is a single root
+The repo is an npm workspace, so dependencies install once from the **repo
+root** (they hoist to the root `node_modules`; there is a single root
 `package-lock.json`):
 
 ```bash
 npm install         # run at the repo root, installs every workspace
-```
-
-Build and test commands run from `src/extension/agent-observability-vscode`:
-
-```bash
-npm run compile     # esbuild bundle to dist/extension.js + stages node-sqlite3-wasm
-npm run typecheck   # tsc --noEmit (strict)
+npm run typecheck   # tsc --noEmit across core and desktop
 npm run lint        # eslint
 npm test            # vitest run (headless)
-npm run package     # vsce package --no-dependencies (.vsix)
 ```
 
-Or across all workspaces from the root: `npm run typecheck --workspaces
---if-present` (same for `lint`, `test`, `compile`).
+The desktop app's own commands run from `src/desktop/agent-observability-desktop`:
 
-`node-sqlite3-wasm` is external to the esbuild bundle and is staged into
-`dist/node_modules` by `scripts/stageSqliteWasm.js`, because workspace hoisting puts it
-in the root `node_modules`, out of reach of `.vscodeignore`. Never re-add a
-`!node_modules/**` re-include; verify packaging with `npx vsce ls
---no-dependencies` and check the `.wasm` sidecar is listed.
+```bash
+npm run dev         # electron-vite dev: the app with hot reload
+npm run build       # electron-vite build
+npm run package     # build + electron-builder installers
+```
 
-Press <kbd>F5</kbd> to launch an Extension Development Host. See the
-extension's [DEVELOPMENT.md](src/extension/agent-observability-vscode/DEVELOPMENT.md)
-for the code layout and the `node-sqlite3-wasm` packaging notes.
-
-### Where code goes: core vs. extension
+### Where code goes: core vs. desktop
 
 Most of the logic lives in **`src/core/agent-observability-core`**: session
-sources and parsing, the telemetry/SQLite layer, aggregation, sync, deviation
-and context analysis, the OTLP stack, and the pure HTML renderers. It is
-host-independent: importing `vscode` there is a lint error, because the same
-code is consumed by a standalone desktop app where that module does not exist.
+sources and parsing, the telemetry/SQLite layer, aggregation, team shards,
+deviation and context analysis, and the pure HTML renderers. It is
+host-independent: importing `vscode` or Electron there is a lint error, so it
+can be exercised headlessly by vitest and stays free of UI concerns.
 
-The extension package keeps only what genuinely needs the VS Code API: the tree
-views, the webview panel and chat provider, commands, `extension.ts` wiring, and
-five small host adapters (`OutputChannelLogger`, `VscodeSettingsReader`,
-`SecretManager`, `ConsentManager`, `GlobalStateSyncStateStore`, and
-`vscodeFileWatchFactory`). When something needs a host capability, add an
-interface in core and implement it here rather than reaching for `vscode`.
+The desktop app keeps what needs Electron or the UI: the main process, the data
+host, the preload bridge, and the React renderer. When core needs a host
+capability (settings, file watching), add an interface in core and implement it
+in the desktop app.
 
-Core is consumed as TypeScript source and bundled in by esbuild, so there is no
-build step and no `dist` to keep fresh; edit core and press F5. Cross-package
-imports carry the `/src/` segment:
+Core is consumed as TypeScript source and bundled in by electron-vite, so there
+is no build step and no `dist` to keep fresh. Cross-package imports carry the
+`/src/` segment:
 
 ```ts
 import { SessionSummary } from '@agent-observability/core/src/telemetry/models';
 ```
 
-**Dashboard** (run from repo root):
-
-```powershell
-dotnet run  --project src/dashboard/AgentObservability.Dashboard/AgentObservability.Dashboard.csproj
-dotnet test src/dashboard/AgentObservability.Dashboard.Tests/AgentObservability.Dashboard.Tests.csproj
-```
-
 [ci.yml](.github/workflows/ci.yml) runs typecheck, lint and tests for every
-workspace on Windows and macOS, plus the dashboard tests, on every pull request
-and push to `main`. The deploy workflows publish the dashboard and infra. They
-run only when started by hand, and in the `production` environment. The
-dashboard is not deployed for now, so do not add a `push:` trigger back.
+workspace on Windows and macOS on every pull request and push to `main`.
 
 ## Tests must not depend on the machine that runs them
 
@@ -136,26 +109,23 @@ on the answer to "whose machine?", the assertion is wrong, not the runner.
 
 Raw content (prompts, completions, tool I/O, file paths, identities, branch and
 commit names) **never leaves the machine**. The only things that do are two
-opt-in, schema-bound aggregate artifacts: the **aggregate batch** (with its
-companion **context-insights batch**) that the VS Code extension uploads to
-the dashboard, defined by
-[schemas/aggregate-batch.schema.json](schemas/aggregate-batch.schema.json) and
-[schemas/context-insights-batch.schema.json](schemas/context-insights-batch.schema.json);
-and the desktop app's **team shard**, a JSON file written to a folder the user
-chose, defined by
-[schemas/team-shard.schema.json](schemas/team-shard.schema.json), which embeds
-those same two batches unchanged plus per-day session-outcome counts
-(sessions, verdict mix, estimated cost) by repository and source. All three
-schemas are `additionalProperties: false` at every level.
+opt-in, schema-bound aggregate artifact: the desktop app's **team shard**, a
+JSON file written to a folder the user chose, defined by
+[schemas/team-shard.schema.json](schemas/team-shard.schema.json). It embeds
+the **aggregate batch** and its companion **context-insights batch** unchanged
+([schemas/aggregate-batch.schema.json](schemas/aggregate-batch.schema.json),
+[schemas/context-insights-batch.schema.json](schemas/context-insights-batch.schema.json))
+plus per-day session-outcome counts (sessions, verdict mix, estimated cost) by
+repository and source. All three schemas are `additionalProperties: false` at
+every level.
 
-- Never add a raw-content field to any aggregate / sync / team path
+- Never add a raw-content field to any aggregate / team path
   (`src/core/agent-observability-core/src/aggregate/*`,
-  `src/core/agent-observability-core/src/sync/*`,
   `src/core/agent-observability-core/src/team/*`,
   `src/desktop/agent-observability-desktop/src/datahost/team/*`). The team
   shard may only embed the two batch schemas by `$ref`, never copy or extend
   them; update the TypeScript validators in `aggregate/batchValidators.ts` in
-  the same change as the C# ones.
+  the same change as the schemas.
 - The Team view in the desktop app is **off by default** (`team.enabled`);
   while it is off the team folder is neither read nor written. Team sharing
   is a second switch, also **off by default**, gated on a disclosure
@@ -166,18 +136,12 @@ schemas are `additionalProperties: false` at every level.
   every shard is validated against the schema before merging, and anything
   that fails is skipped with a visible notice. The per-install salt behind the
   anonymous id lives in its own file, never in `config.json`, never in a shard.
-- Cloud sharing is **off by default** and gated on explicit consent plus an API
-  key in VS Code SecretStorage (never in `settings.json`).
-- The dashboard address (`agentObservability.sync.dashboardUrl`) is an
-  `application`-scoped setting, so only the user's own settings can set it and
-  a workspace can never redirect the API key. Only `https://` addresses are
-  accepted; anything else counts as unset and blocks sync.
 - **Three sanctioned exceptions**, all desktop-only and all strictly the
   user's **own local AI CLI login**: Claude Code (`claude`, sends to
   Anthropic) or the GitHub Copilot CLI (`copilot`, sends to GitHub),
   whichever backend the user selects in Settings; their account, never a
   product API key. They are only ever user-initiated, never in the background,
-  and never on the aggregate/sync path, which continues to carry no raw
+  and never on the aggregate/team path, which continues to carry no raw
   content, ever:
   1. The **Deep Retrospective**: when the user turns it on in Settings (off by
      default) *and* confirms a per-session dialog stating exactly what is
@@ -234,9 +198,9 @@ schemas are `additionalProperties: false` at every level.
   3. **Never in the background.** No scheduled, automatic or hidden
      session; none starts at launch; closing the app stops hosting.
   4. **Separate from sharing.** Nothing from a hosted session enters the
-     aggregate, sync or team paths other than the counts every indexed
-     session contributes. The run host has no import from `aggregate/*`,
-     `sync/*` or `team/*`.
+     aggregate or team paths other than the counts every indexed
+     session contributes. The run host has no import from `aggregate/*`
+     or `team/*`.
   5. **Claude Code is never driven.** The app only opens the user's own
      terminal with their own `claude --resume <id>`; it does not use the
      Claude Agent SDK and does not spawn `claude` to run a session.
@@ -255,21 +219,18 @@ schemas are `additionalProperties: false` at every level.
   the Copilot CLI's own tools, each write approved by the user under the
   clause above.
 
-Before changing anything on the producer→consumer path, read
+Before changing anything on the team-shard path, read
 [docs/privacy-validation.md](docs/privacy-validation.md) and
-[docs/architecture](docs/architecture), and keep the schemas, the extension
-aggregator, the dashboard `AggregateBatchValidator`, and core's
-`aggregate/batchValidators.ts` / `team/teamShardValidator.ts` in sync.
+[docs/architecture](docs/architecture), and keep the schemas, core's
+aggregator, and core's `aggregate/batchValidators.ts` /
+`team/teamShardValidator.ts` in sync.
 
 ## Changelogs: user-facing change only
 
-Both shipped products keep a changelog, and both are read by the people who use
-them rather than by reviewers:
-
-| Product | File | Where users read it |
-| --- | --- | --- |
-| Desktop app | [CHANGELOG.md](src/desktop/agent-observability-desktop/CHANGELOG.md) | The **What's new** dialog, opened from the sparkle at the bottom of the sidebar |
-| VS Code extension | [CHANGELOG.md](src/extension/agent-observability-vscode/CHANGELOG.md) | The Marketplace listing |
+The desktop app's
+[CHANGELOG.md](src/desktop/agent-observability-desktop/CHANGELOG.md) is read by
+the people who use it rather than by reviewers: the app shows it in the
+**What's new** dialog, opened from the sparkle at the bottom of the sidebar.
 
 **Add an entry when, and only when, a user can see or do something differently
 because of the change.** A new capability, changed behaviour, a bug they could
@@ -279,8 +240,8 @@ comments, documentation, dependency bumps that change nothing observable.
 
 When a change qualifies, in the same commit as the change itself:
 
-1. **Bump `version`** in that package's `package.json`, following SemVer.
-2. **Insert `## [x.y.z] - YYYY-MM-DD`** at the top of that package's
+1. **Bump `version`** in the desktop app's `package.json`, following SemVer.
+2. **Insert `## [x.y.z] - YYYY-MM-DD`** at the top of its
    `CHANGELOG.md`, above the previous version, using today's date and the exact
    version you set.
 3. **Group the notes** under `### Added`, `### Changed`, `### Fixed`,
@@ -296,12 +257,3 @@ so it has to stay in that exact shape (`## [version] - date`, `### Group`,
 `- item`), with `**bold**`, `` `code` `` and `[links](url)` as the only inline
 markup. Its tests parse the real file, so a malformed entry fails the build
 rather than reaching a user as an empty dialog.
-
-## Changing the extension: bump version + update CHANGELOG
-
-Any change to the extension code or manifest **must** bump the version in
-[package.json](src/extension/agent-observability-vscode/package.json) and add a
-matching entry to
-[CHANGELOG.md](src/extension/agent-observability-vscode/CHANGELOG.md). The
-detailed, enforced rule lives in
-[.github/instructions/extension-versioning.instructions.md](.github/instructions/extension-versioning.instructions.md).

@@ -1,15 +1,15 @@
 # Getting started
 
 Agent Observability reads the sessions your AI coding agents record on your
-computer and lets you look back at them. You can use the desktop app, the VS
-Code extension, or both. They read the same data.
+computer and lets you look back at them. It is a desktop app for macOS and
+Windows.
 
 Everything in steps 1 to 3 stays on your computer. Step 4, team sharing, is
 optional and off by default.
 
 ## Step 1: Install
 
-**Desktop app (recommended).** Download the installer for your system from
+Download the installer for your system from
 [Releases](https://github.com/turbinestudios/agent-observability/releases).
 
 - **macOS:** open the `.dmg` and drag the app to Applications. There are builds
@@ -20,17 +20,6 @@ optional and off by default.
 
 The app checks for updates when it starts and always asks before downloading.
 
-**VS Code extension.** Build the `.vsix` as described in the
-[README](../README.md#build-from-source), then install it:
-
-```bash
-code --install-extension agent-observability-<version>.vsix
-```
-
-Open **Agent Observability** in the Activity Bar. It has five views:
-**Local Overview**, **Sessions**, **Sync**, **Context Hotspots** and
-**AI Helper**.
-
 ## Step 2: Make sure your agent is recording
 
 **Claude Code** always saves its sessions under `~/.claude/projects`. There is
@@ -40,7 +29,7 @@ nothing to set up.
 by default. Without it there is nothing to read, even if you use Copilot every
 day.
 
-- **In the desktop app:** when nothing is being recorded, the app offers to
+- **In the app:** when nothing is being recorded, the app offers to
   turn the setting on for you. You can also do it per editor under
   **Settings > Copilot**. It works for VS Code, Insiders, Cursor, VSCodium and
   Windsurf. Restart the editor afterwards.
@@ -51,9 +40,9 @@ day.
   "github.copilot.chat.otel.dbSpanExporter.enabled": true
   ```
 
-Copilot then writes a file called `agent-traces.db`, which both apps find on
-their own. If yours is somewhere unusual, set `agentObservability.sqlitePath`
-in the extension.
+Copilot then writes a file called `agent-traces.db`, which the app finds on
+its own. If yours is somewhere unusual, set **Copilot database** under
+**Settings**.
 
 ## Step 3: Look at your sessions
 
@@ -66,53 +55,36 @@ Some things worth trying:
 - Read the **retrospective** for a session that went badly.
 - Open **Context Hotspots** to see which instruction files and skills your
   agents actually read.
-- In the desktop app, open **Improve** to get a suggested plan for your context
-  files.
-
-### Optional sources in the VS Code extension
-
-- **Copilot (Cloud):** sessions from the GitHub Copilot coding agent that runs
-  on GitHub. Turn on `agentObservability.copilotCloud.enabled`. It signs in
-  through the `gh` command-line tool (`gh auth login`). You can also give it a
-  token with **Copilot (Cloud): Set account token**. These sessions are
-  downloaded to your computer and never uploaded.
-- **Workflows:** describe the steps you expect for a repository in
-  `agentObservability.workflows`, and sessions that drift from them are
-  flagged. This runs on your computer only.
+- Open **Improve** to get a suggested plan for your context files.
 
 ## Step 4 (optional): Share totals with your team
 
-Only do this if your team runs the
-[team dashboard](../src/dashboard/AgentObservability.Dashboard). Team sharing
-is in the VS Code extension.
+Team sharing works through a folder your team already shares, such as
+OneDrive, SharePoint or a network drive. There is no server and no account.
+Each member's app writes one file there and reads everyone else's.
 
-You need two things from whoever runs the dashboard: its **address** and an
-**API key** (it looks like `aoa_<keyId>_<secret>`).
+1. **Turn on the Team view.** Under **Settings > Team**, turn on **Show the
+   Team view**.
+2. **Choose the folder.** Next to **Team folder**, choose the shared folder.
+   The app only reads it. The one file it writes there is your own, and only
+   once you turn sharing on.
+3. **Look before you share.** **Preview what will be shared** shows the exact
+   file the app would write.
+4. **Turn on sharing.** Turn on **Share my aggregates with the team folder**.
+   A dialog shows exactly what is shared and lets you pick the repositories
+   to include. Nothing is written until you confirm.
+5. **Share.** Use **Export now** in the **Team** view, or turn on **Export
+   automatically every hour while the app runs**.
 
-1. **Set the address.** Open your **user** settings and set
-   `agentObservability.sync.dashboardUrl`, for example
-   `https://dashboard.example.com`. Only `https://` addresses work. This
-   setting is ignored in workspace settings, so a repository you open cannot
-   change where your data goes.
-2. **Turn on sharing.** Run **Agent Observability: Toggle Cloud Sharing**. A
-   dialog shows exactly what is shared and what is not.
-3. **Add the API key.** Run **Agent Observability: Set Organization API Key**.
-   The key is kept in your system's secure storage (Keychain on macOS,
-   Credential Manager on Windows), never in a settings file.
-4. **Pick repositories.** Run **Agent Observability: Choose Repositories to
-   Sync**. Nothing is uploaded until you pick at least one.
-5. **Check it.** Run **Agent Observability: Preview Aggregate Payload** to see
-   exactly what would be sent. Then run **Agent Observability: Sync Now**. The
-   **Sync** view shows the result.
-
-To sync in the background, turn on `agentObservability.sync.enabled`. It runs
-every 60 minutes by default (`agentObservability.sync.intervalMinutes`,
-minimum 5). Turning sharing off stops all uploads at once.
+Turning off the Team view also stops sharing. Each install has its own
+anonymous id, so the same person on two computers counts twice.
 
 ### What is shared
 
 - Counts, token totals and timing ranges, in 30-minute blocks, grouped by
   repository, model, agent mode and tool.
+- Per day and repository: how many sessions there were, how they went, and
+  their estimated cost.
 - For your context files only (instructions, skills, prompts, agents, hooks):
   the path inside the repository, and counts of how often each was used and
   how those sessions went. Never the file contents.
@@ -122,31 +94,28 @@ minimum 5). Turning sharing off stops all uploads at once.
 
 Prompts, responses, file contents, paths of any other files, commit hashes,
 branch names, your computer's name, your username, and your email. Sessions
-from the Copilot coding agent are never shared either.
+from Copilot in JetBrains IDEs are never shared either.
 
-The upload formats are fixed in
+The file format is fixed in
+[schemas/team-shard.schema.json](../schemas/team-shard.schema.json), which
+includes
 [schemas/aggregate-batch.schema.json](../schemas/aggregate-batch.schema.json)
 and
-[schemas/context-insights-batch.schema.json](../schemas/context-insights-batch.schema.json).
-The dashboard rejects anything that does not match. The full rules, and how
-they are tested, are in [privacy-validation.md](privacy-validation.md).
+[schemas/context-insights-batch.schema.json](../schemas/context-insights-batch.schema.json)
+unchanged. The app checks every file against it, and skips with a notice any
+file in the folder that does not match. The full rules, and how they are
+tested, are in [privacy-validation.md](privacy-validation.md).
 
 ## Troubleshooting
 
 | What you see | Likely cause | What to do |
 | --- | --- | --- |
 | No Copilot sessions | Copilot tracing is off | See step 2, then restart the editor and chat with Copilot once. |
-| No Claude Code sessions | Sessions are stored somewhere else | Set `agentObservability.claudeCode.projectsPath` (extension) or the path in the app's Settings. |
-| Sync view says "Dashboard URL: Not set" | No address, or not `https://` | Set `agentObservability.sync.dashboardUrl` in your user settings. |
-| Sync never runs | Sharing off or no API key | Turn on sharing and add the API key (step 4). |
-| Upload rejected (401) | Wrong or expired API key | Ask for a new key and set it again. |
-| Upload rejected (400) | The app and dashboard disagree on the format | Update the extension. |
-| Upload rejected (503) | The dashboard has uploads turned off | Ask whoever runs the dashboard to set `Ingestion:Enabled=true`. |
-| Copilot (Cloud) says "GitHub CLI not found" | `gh` is not on your PATH | Set `agentObservability.copilotCloud.ghCliPath`, or add a token with **Copilot (Cloud): Set account token**. |
+| No Claude Code sessions | Sessions are stored somewhere else | Set **Claude Code projects folder** under **Settings**. |
+| Copilot tracing is on but no sessions | `agent-traces.db` is somewhere unusual | Set **Copilot database** under **Settings**. |
 
 ## More reading
 
 - [Privacy rules and how they are enforced](privacy-validation.md)
-- [Architecture and upload formats](architecture/)
-- [VS Code extension settings and commands](../src/extension/agent-observability-vscode/README.md)
+- [Architecture and data formats](architecture/)
 - [Desktop app](../src/desktop/agent-observability-desktop/README.md)

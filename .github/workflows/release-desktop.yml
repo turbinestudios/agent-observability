@@ -1,7 +1,7 @@
 name: Release Desktop App
 
-# Tagged releases only. The extension versions independently, so desktop tags
-# are namespaced: desktop-v0.1.0, desktop-v0.2.0, …
+# Tagged releases only. Desktop tags are namespaced: desktop-v0.1.0,
+# desktop-v0.2.0, …
 on:
   push:
     tags:

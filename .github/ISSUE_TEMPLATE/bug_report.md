@@ -15,9 +15,7 @@ labels: bug
 
 **Where**
 
-- [ ] Desktop app, version:
-- [ ] VS Code extension, version:
-- [ ] Team dashboard
+Desktop app version:
 
 Operating system:
 

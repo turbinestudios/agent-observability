@@ -5,12 +5,14 @@ import { SessionTitleInfo } from '../telemetry/sessionTitles';
 import { READ_INDEX_DDL } from '../telemetry/schemaIndexes';
 
 /**
- * The extension's OWN telemetry store, written from the OTLP receiver.
+ * The format of the durable Copilot archive (and the old live-OTLP ingest DB)
+ * that the now-removed VS Code extension wrote. The desktop app still READS
+ * existing archives; this writer is kept so tests can build archive fixtures in
+ * exactly that format.
  *
  * It mirrors Copilot's `agent-traces.db` schema EXACTLY (verified DDL), so the
  * entire existing read layer ({@link ../telemetry/database.TelemetryDatabase} +
- * the detail/deviation/aggregation code) works against it unchanged — the
- * extension simply becomes the sink instead of polling Copilot's DB.
+ * the detail/deviation/aggregation code) works against it unchanged.
  *
  * Opened READ-WRITE (rollback-journal, not WAL) and owned by a single process,
  * so the bundled WASM driver can both write here and let the snapshot reader copy
@@ -141,8 +143,8 @@ const INSERT_ATTR_SQL = 'INSERT OR REPLACE INTO span_attributes (span_id, key, v
 /**
  * Sidecar table (NOT part of Copilot's schema) tracking, per swept source DB,
  * the high-water `end_time_ms` already copied into this store and the source's
- * last-seen mtime for a cheap skip-if-unchanged. Used only by the
- * {@link ./copilotArchiver.CopilotArchiver}; empty (and ignored) in the live
+ * last-seen mtime for a cheap skip-if-unchanged. Used only by the archive
+ * sweep (removed with the extension); empty (and ignored) in the live
  * ingest DB. The read layer validates only `spans`/`span_attributes`/`sessions`,
  * so this extra table is invisible to it.
  */

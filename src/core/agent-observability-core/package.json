@@ -2,10 +2,8 @@
   "name": "@agent-observability/core",
   "version": "0.1.0",
   "private": true,
-  "description": "Host-independent core for Agent Observability: session sources, parsing, telemetry, aggregation, sync, and pure renderers. Imports no host API (no `vscode`, no Electron) so both the VS Code extension and the desktop app can consume it.",
+  "description": "Host-independent core for Agent Observability: session sources, parsing, telemetry, aggregation, team shards, and pure renderers. Imports no host API (no Electron) so the desktop app consumes it from its data host.",
   "license": "MIT",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext ts",

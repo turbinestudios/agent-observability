@@ -65,8 +65,8 @@ describe('validateAggregateBatch ↔ aggregate-batch.schema.json', () => {
 
   // Rules the JSON Schema cannot express (free-text fields with a closed set
   // enforced server-side, and cross-field arithmetic). The schema accepts them;
-  // the C# validator refuses them, and so must the port — this is exactly the
-  // "defense in depth" the server adds on top of the schema.
+  // the validator refuses them — this is the "defense in depth" it adds on
+  // top of the schema.
   const serverOnly: [string, (copy: Json) => void, string][] = [
     ['bad agentMode', (c) => void ((c.buckets as Json[])[0].agentMode = 'my-mode'), 'agentMode must be one of'],
     [
@@ -91,7 +91,7 @@ describe('validateAggregateBatch ↔ aggregate-batch.schema.json', () => {
   }
 
   it('rejects an inverted window on both sides', () => {
-    // The schema cannot compare the two dates; the validator must, and the C# one does.
+    // The schema cannot compare the two dates; the validator must.
     const broken = mutate(batch, (c) => {
       const w = c.window as Json;
       [w.start, w.end] = [w.end, w.start];

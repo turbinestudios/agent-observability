@@ -1826,8 +1826,8 @@ export class TelemetryDatabase {
 
   /**
    * LOCAL-ONLY session titles archived into this store's `session_titles`
-   * sidecar at sweep time (see {@link ../otel/copilotArchiver.CopilotArchiver})
-   * — present only in the extension's durable archive; Copilot's native DB has
+   * sidecar at sweep time — present only in the durable archive the VS Code
+   * extension wrote; Copilot's native DB has
    * no such table, so this returns an empty map there. Like every other title
    * surface, the values never reach the aggregate/sync path.
    */

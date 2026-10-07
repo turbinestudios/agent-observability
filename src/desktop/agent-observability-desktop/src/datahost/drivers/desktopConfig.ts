@@ -7,8 +7,8 @@ import type { SettingsReader, SettingsSubscription } from '@agent-observability/
  * The desktop implementation of core's {@link SettingsReader}, over a JSON file
  * at `~/.agent-observability/desktop/config.json`.
  *
- * Keys are the same section-relative ids the extension uses (`claudeCode.enabled`,
- * `sync.intervalMinutes`, …), so core's `Configuration` — every typed accessor,
+ * Keys are core's section-relative ids (`claudeCode.enabled`,
+ * `aiHelper.backend`, …), so core's `Configuration` — every typed accessor,
  * every default, every clamp — works unchanged against this store. Settings the
  * desktop has no equivalent for simply fall back to those defaults.
  *

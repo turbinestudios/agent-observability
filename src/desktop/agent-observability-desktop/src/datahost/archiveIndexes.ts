@@ -24,7 +24,7 @@ import { pickCopilotDatabase } from './indexer/copilotIndexer';
  *    strictly alone, which is the same promise the indexer makes.
  *  - Only while holding the archive's writer lease, so this can never interleave
  *    with a VS Code window mid-sweep. Losing the lease is a non-event: the holder
- *    is the extension's archiver, which applies the same DDL on every open.
+ *    is an older VS Code extension's archiver, which applies the same DDL on every open.
  */
 
 /** Matches the archiver's own lock file, so both elect the same single writer. */

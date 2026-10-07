@@ -6,57 +6,57 @@
   "steps": [
     {
       "title": "Step 1 — Click a session",
-      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
-      "line": 253,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-10.svg)\n\n**▶ Step 1 of 9 in the sequence diagram — `Dev → sessionDetailPanel: Click a session`**\n\nClicking a session invokes the panel's `render(panel, sourceId, sessionKey)`. The first render mounts the full webview document; later renders live-update just the body (see step 9)."
+      "file": "src/desktop/agent-observability-desktop/src/renderer/src/views/sessions/SessionsView.tsx",
+      "line": 380,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-10.svg)\n\n**▶ Step 1 of 9 in the sequence diagram — `Dev → SessionDetail: Click a session`**\n\nClicking a row's `onSelect` sets the selection, and the right-hand pane mounts a `SessionDetail` keyed by source and session id — so a new selection always starts a fresh load."
     },
     {
-      "title": "Step 2 — Ask the source for detail",
-      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
-      "line": 258,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-11.svg)\n\n**▶ Step 2 of 9 in the sequence diagram — `sessionDetailPanel → TelemetryService: getSessionDetail(key)`**\n\n`render` asks the owning source for the full detail with `source.getSessionDetail(sessionKey)`. This is the click-to-data hop; the panel itself stores nothing."
+      "title": "Step 2 — Ask the data host for the document",
+      "file": "src/desktop/agent-observability-desktop/src/renderer/src/views/sessions/SessionDetail.tsx",
+      "line": 91,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-11.svg)\n\n**▶ Step 2 of 9 in the sequence diagram — `SessionDetail → DetailRenderer: sessions.detail`**\n\n`SessionDetail` calls `dataHost.call('sessions.detail', source, sessionId, theme)`. In the data host that lands on `DetailRenderer.renderDocument`; the renderer process itself stores nothing."
     },
     {
-      "title": "Step 3 — Service delegates to the DB",
+      "title": "Step 3 — Ask the source for detail",
+      "file": "src/desktop/agent-observability-desktop/src/datahost/detail/detailRenderer.ts",
+      "line": 287,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-12.svg)\n\n**▶ Step 3 of 9 in the sequence diagram — `DetailRenderer → TelemetryService: getSessionDetail(key)`**\n\n`DetailRenderer` looks the owning source up in core's `SourceRegistry` and asks it for `getSessionDetail(sessionId)`. The Copilot source forwards straight to `TelemetryService`. Parses are memoized by index stamp, so reopening a session is cheap."
+    },
+    {
+      "title": "Step 4 — Service delegates to the DB",
       "file": "src/core/agent-observability-core/src/telemetry/telemetryService.ts",
-      "line": 712,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-12.svg)\n\n**▶ Step 3 of 9 in the sequence diagram — `TelemetryService → TelemetryDatabase: getSessionDetail()`**\n\nThe Copilot source forwards to `TelemetryService.getSessionDetail`. The extension uses the default read-only snapshot; the desktop injects a native backend whose short-lived read transaction pins a consistent view. Both use the same database queries, while desktop titles come from its local index and archived names rather than a workspace-store scan."
+      "line": 721,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-13.svg)\n\n**▶ Step 4 of 9 in the sequence diagram — `TelemetryService → TelemetryDatabase: getSessionDetail()`**\n\n`TelemetryService.getSessionDetail` delegates to the database layer. The desktop injects a native backend whose short-lived read transaction pins a consistent view of the archive without copying it; the source database is never written."
     },
     {
-      "title": "Step 4 — Local-only detail assembly",
+      "title": "Step 5 — Local-only detail assembly",
       "file": "src/core/agent-observability-core/src/telemetry/database.ts",
-      "line": 826,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-13.svg)\n\n**▶ Step 4 of 9 in the sequence diagram — `TelemetryDatabase → TelemetryService: SessionDetail (turns, tokens)`**\n\n`TelemetryDatabase.getSessionDetail` assembles prompts, responses, turns, and agent-tree totals for local display. The tree traversal and numeric write deltas are reused across rollups within the immutable read view; raw tool arguments are discarded. Binary timestamp lookup attributes writes to turns without rescanning every preceding turn. Raw detail never enters aggregation or sync."
-    },
-    {
-      "title": "Step 5 — Detail lands in the panel",
-      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
-      "line": 263,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-14.svg)\n\n**▶ Step 5 of 9 in the sequence diagram — `TelemetryService → sessionDetailPanel: SessionDetail`**\n\nBack in the panel, `const detail = result.value` holds the assembled turns, token counts, and turn tree. From here on everything is pure, local rendering."
+      "line": 879,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-14.svg)\n\n**▶ Step 5 of 9 in the sequence diagram — `TelemetryDatabase → TelemetryService: SessionDetail (turns, tokens)`**\n\n`TelemetryDatabase.getSessionDetail` assembles prompts, responses, turns, and agent-tree totals for local display. The tree traversal and numeric write deltas are reused across rollups within the immutable read view; raw tool arguments are discarded. Raw detail stays in-process and is only ever rendered on this machine."
     },
     {
       "title": "Step 6 — Render the document",
-      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
-      "line": 279,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-15.svg)\n\n**▶ Step 6 of 9 in the sequence diagram — `sessionDetailPanel → sessionDetailHtml: renderSessionDetailHtml()`**\n\nOn first mount the panel sets `panel.webview.html = renderSessionDetailHtml(detail, ...)`, building the whole document — styles, tabs, and a per-render nonce for the content security policy."
+      "file": "src/desktop/agent-observability-desktop/src/datahost/detail/detailRenderer.ts",
+      "line": 117,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-15.svg)\n\n**▶ Step 6 of 9 in the sequence diagram — `DetailRenderer → sessionDetailHtml: renderSessionDetailHtml()`**\n\n`renderDocument` calls core's `renderSessionDetailHtml(detail, deviations, ...)`, building the whole document — styles, tabs, and a per-render nonce for the content security policy."
     },
     {
       "title": "Step 7 — Call renderTokenTrend",
       "file": "src/core/agent-observability-core/src/views/sessionDetailHtml.ts",
-      "line": 974,
+      "line": 1070,
       "description": "![2: Session detail & token trend](.tours/diagrams/d-16.svg)\n\n**▶ Step 7 of 9 in the sequence diagram — `sessionDetailHtml → sessionDetailHtml: renderTokenTrend(modelTurns)`**\n\nThe content's tree-summary card calls `renderTokenTrend(modelTurns, trendSessions)` to draw the per-turn token trend graph. Charts stay eager; event rows in large timelines are deferred until their disclosure opens."
     },
     {
       "title": "Step 8 — Build the inline SVG",
       "file": "src/core/agent-observability-core/src/views/sessionDetailHtml.ts",
-      "line": 1211,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-17.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `sessionDetailHtml → sessionDetailPanel: HTML + SVG trend graph`**\n\n`renderTokenTrend` buckets model turns into inline SVG with an empty state for fewer than two points. The nonce-authorized controller handles legend filtering and lazy event pagination without an external chart library."
+      "line": 1307,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-17.svg)\n\n**▶ Step 8 of 9 in the sequence diagram — `sessionDetailHtml → DetailRenderer: HTML + SVG trend graph`**\n\n`renderTokenTrend` buckets model turns into inline SVG with an empty state for fewer than two points. The nonce-authorized controller handles legend filtering and lazy event pagination without an external chart library."
     },
     {
-      "title": "Step 9 — Mount or live-update the webview",
-      "file": "src/extension/agent-observability-vscode/src/views/sessionDetailPanel.ts",
-      "line": 273,
-      "description": "![2: Session detail & token trend](.tours/diagrams/d-18.svg)\n\n**▶ Step 9 of 9 in the sequence diagram — `sessionDetailPanel → Dev: webview shows detail`**\n\nThe document mounts once. Subsequent `{ type: 'update' }` messages replace its body while preserving open sections, the active tab, scroll, and lazy timeline pages. Large timelines carry compact escaped data in inert templates; opening one constructs at most 100 rows with textContent, and Previous/Next keeps all events accessible."
+      "title": "Step 9 — Mount or live-update the frame",
+      "file": "src/desktop/agent-observability-desktop/src/renderer/src/views/sessions/SessionDetail.tsx",
+      "line": 332,
+      "description": "![2: Session detail & token trend](.tours/diagrams/d-18.svg)\n\n**▶ Step 9 of 9 in the sequence diagram — `DetailRenderer → Dev: document in a sandboxed iframe`**\n\nThe document is stashed behind a URL and loaded into an iframe sandboxed to `allow-scripts` only, so it cannot touch the app's DOM, storage or preload bridge. Later refreshes post a `{ type: 'update' }` message that swaps the body while preserving open sections, the active tab, and scroll."
     }
   ]
 }

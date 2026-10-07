@@ -1,7 +1,5 @@
 /**
- * The composite hotspot score — the same transparent formula the cloud
- * dashboard's Context Hotspots page uses (`ContextHotspotAnalyticsService.cs`),
- * computed locally. Lives in core so the desktop Dashboard, the repository
+ * The composite hotspot score — a transparent formula, computed locally. Lives in core so the desktop Dashboard, the repository
  * hub and the Team view all rank with the same numbers.
  *
  * Each sub-score is normalized to [0,1]:

@@ -5,16 +5,15 @@ import * as path from 'node:path';
 /**
  * Rework rows carry absolute file paths, so they are LOCAL-ONLY in the same
  * class as context-file paths. This pins that no module on a path that leaves
- * the machine (team shard, aggregate batch, sync) reads them.
+ * the machine (team shard, aggregate batch) reads them.
  */
 describe('rework data stays local', () => {
-  it('is referenced by no team, aggregate or sync module', () => {
+  it('is referenced by no team or aggregate module', () => {
     const core = path.join(__dirname, '..', '..', '..', '..', '..', 'core', 'agent-observability-core', 'src');
     const roots = [
       path.join(__dirname, '..', 'team'),
       path.join(core, 'team'),
       path.join(core, 'aggregate'),
-      path.join(core, 'sync'),
     ];
     const offenders: string[] = [];
     for (const root of roots) {

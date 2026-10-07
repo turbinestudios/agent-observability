@@ -31,7 +31,11 @@
         "paths": [
           {
             "name": "vscode",
-            "message": "Core must stay host-independent — it is consumed by the desktop app too, where `vscode` does not exist. Keep VS Code-specific code in the extension package behind a seam (see Logger, FileWatchFactory, SettingsReader)."
+            "message": "Core must stay host-independent. Keep host-specific code in the desktop app behind a seam (see FileWatchFactory, SettingsReader)."
+          },
+          {
+            "name": "electron",
+            "message": "Core must stay host-independent. Keep Electron code in the desktop app behind a seam (see FileWatchFactory, SettingsReader)."
           }
         ]
       }

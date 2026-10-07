@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://turbine.dev/schemas/aggregate-batch.schema.json",
   "title": "Agent Observability Aggregate Batch (v1)",
-  "description": "Privacy-first aggregate telemetry batch POSTed by the VS Code extension to the dashboard ingestion API. Carries ONLY pre-aggregated, non-sensitive measures bucketed by a fixed dimension grain. additionalProperties is false at every object level so the API REJECTS any unexpected (potentially raw/sensitive) field. This is the single shared contract between the TypeScript producer (extension) and the C# consumer (dashboard API).",
+  "description": "Privacy-first aggregate telemetry batch, embedded unchanged in the desktop app's team shard. Carries ONLY pre-aggregated, non-sensitive measures bucketed by a fixed dimension grain. additionalProperties is false at every object level so a validator REJECTS any unexpected (potentially raw/sensitive) field. This is the single shared contract between the producer that builds the batch and the importer that validates it.",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -23,30 +23,30 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "description": "Deterministic idempotency hint for the whole batch. Computed by the extension as a hash of (pseudonymousDeveloperId + window.start + window.end + schemaVersion). It is at most an optimization for byte-identical retries: the API MAY skip re-processing an identical batchId, but correctness is guaranteed by per-row upsert on rowKey (latest-wins), NOT by batchId dedup. A repeated batchId carrying corrected/fuller buckets (e.g. late-arriving spans) MUST still re-apply row upserts; the API must never silently drop a batch solely because batchId was seen before."
+      "description": "Deterministic idempotency hint for the whole batch. Computed by the producer as a hash of (pseudonymousDeveloperId + window.start + window.end + schemaVersion). It is at most an optimization for byte-identical retries: the API MAY skip re-processing an identical batchId, but correctness is guaranteed by per-row upsert on rowKey (latest-wins), NOT by batchId dedup. A repeated batchId carrying corrected/fuller buckets (e.g. late-arriving spans) MUST still re-apply row upserts; the API must never silently drop a batch solely because batchId was seen before."
     },
     "generatedAt": {
       "type": "string",
       "format": "date-time",
-      "description": "RFC 3339 / ISO 8601 UTC timestamp of when the extension produced this batch. Informational only; not part of any idempotency key."
+      "description": "RFC 3339 / ISO 8601 UTC timestamp of when the producer built this batch. Informational only; not part of any idempotency key."
     },
     "toolVersion": {
       "type": "string",
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$",
-      "description": "Semantic version of the VS Code extension that produced the batch (e.g. '1.4.2'). Used for compatibility diagnostics and schema-drift triage."
+      "description": "Semantic version of the app that produced the batch (e.g. '1.4.2'). Used for compatibility diagnostics and schema-drift triage."
     },
     "pseudonymousDeveloperId": {
       "type": "string",
       "minLength": 36,
       "maxLength": 36,
       "pattern": "^dev_[0-9a-f]{32}$",
-      "description": "Opaque, stable developer identifier: literal 'dev_' prefix + 32 lowercase hex chars (first 16 bytes of HMAC-SHA256(salt, normalized git email)). The strict pattern structurally excludes emails, usernames, and any free text — an email or PII value cannot satisfy ^dev_[0-9a-f]{32}$. MUST NOT be reversible without the org salt (which is never transmitted). See pseudonymization-strategy.md. Used server-side as the distinct-count dimension for 'active developers'."
+      "description": "Opaque, stable developer identifier: literal 'dev_' prefix + 32 lowercase hex chars (first 16 bytes of HMAC-SHA256(salt, normalized git email)). The strict pattern structurally excludes emails, usernames, and any free text — an email or PII value cannot satisfy ^dev_[0-9a-f]{32}$. MUST NOT be reversible without the org salt (which is never transmitted). See pseudonymization-strategy.md. Used by the consumer as the distinct-count dimension for 'active developers'."
     },
     "window": {
       "type": "object",
-      "description": "The closed-open UTC time range [start, end) that all buckets in this batch fall within. Defines the slice of local telemetry the extension has aggregated and is uploading.",
+      "description": "The closed-open UTC time range [start, end) that all buckets in this batch fall within. Defines the slice of local telemetry the producer has aggregated.",
       "required": ["start", "end"],
       "properties": {
         "start": {
@@ -73,7 +73,7 @@
   "$defs": {
     "bucket": {
       "type": "object",
-      "description": "One aggregate row at grain (bucketStart, bucketDurationSeconds, repository, model, agentMode, operation, toolName?) for a single pseudonymousDeveloperId. All measures are additive across rows EXCEPT distinctSessionCount and the dimension distinct-counts, which must be recomputed server-side (see doc).",
+      "description": "One aggregate row at grain (bucketStart, bucketDurationSeconds, repository, model, agentMode, operation, toolName?) for a single pseudonymousDeveloperId. All measures are additive across rows EXCEPT distinctSessionCount and the dimension distinct-counts, which must be recomputed by the consumer (see doc).",
       "required": [
         "rowKey",
         "bucketStart",
@@ -97,7 +97,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
-          "description": "Stable per-row idempotency key. Hash of the full grain tuple (bucketStart, bucketDurationSeconds, repository, model, agentMode, operation, toolName) + pseudonymousDeveloperId. The API upserts by rowKey so re-uploaded or overlapping windows converge to the same row instead of double-counting."
+          "description": "Stable per-row idempotency key. Hash of the full grain tuple (bucketStart, bucketDurationSeconds, repository, model, agentMode, operation, toolName) + pseudonymousDeveloperId. A consumer upserts by rowKey so re-sent or overlapping windows converge to the same row instead of double-counting."
         },
         "bucketStart": {
           "type": "string",
@@ -114,12 +114,12 @@
           "minLength": 1,
           "maxLength": 512,
           "pattern": "^(unknown|https?://[A-Za-z0-9.\\-]+(:[0-9]+)?/[^\\s@?#]+)$",
-          "description": "SANITIZED git remote, resolved per session (COALESCE of copilot_chat.repo.remote_url across the session, else literal 'unknown'). CRITICAL PRIVACY RULE: the extension MUST normalize to 'https://{host}/{owner}/{repo}' form — stripping any userinfo (the 'user:token@' / 'x-access-token@' segment that git remotes can embed, which would leak PATs/credentials), any query string, and any fragment, and dropping a trailing '.git'. The pattern enforces this structurally by forbidding '@', whitespace, '?', and '#'; a credential-bearing URL cannot satisfy it. SSH remotes (git@host:owner/repo) MUST be converted to the https host/path form. May be replaced by a salted hash in a future schema version."
+          "description": "SANITIZED git remote, resolved per session (COALESCE of copilot_chat.repo.remote_url across the session, else literal 'unknown'). CRITICAL PRIVACY RULE: the producer MUST normalize to 'https://{host}/{owner}/{repo}' form — stripping any userinfo (the 'user:token@' / 'x-access-token@' segment that git remotes can embed, which would leak PATs/credentials), any query string, and any fragment, and dropping a trailing '.git'. The pattern enforces this structurally by forbidding '@', whitespace, '?', and '#'; a credential-bearing URL cannot satisfy it. SSH remotes (git@host:owner/repo) MUST be converted to the https host/path form. May be replaced by a salted hash in a future schema version."
         },
         "repositoryBranch": {
           "type": "string",
           "maxLength": 256,
-          "description": "OPTIONAL and OMITTED by default. Source: copilot_chat.repo.head_branch_name. Privacy tradeoff: branch names can leak feature/customer/ticket identifiers, so the extension omits this unless an org explicitly opts in. Never required by the API."
+          "description": "OPTIONAL and OMITTED by default. Source: copilot_chat.repo.head_branch_name. Privacy tradeoff: branch names can leak feature/customer/ticket identifiers, so the producer omits this unless an org explicitly opts in. Never required by the API."
         },
         "model": {
           "type": "string",
@@ -131,7 +131,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "description": "Copilot chat mode (copilot_chat.mode_name), defaulting to 'default' when absent. PRIVACY NOTE: custom chat mode names are user-defined and could embed project/customer identifiers, so the extension MUST map any mode not in the known set {default, ask, edit, agent} to the literal 'custom' before sending. Only the mapped value appears here."
+          "description": "Copilot chat mode (copilot_chat.mode_name), defaulting to 'default' when absent. PRIVACY NOTE: custom chat mode names are user-defined and could embed project/customer identifiers, so the producer MUST map any mode not in the known set {default, ask, edit, agent} to the literal 'custom' before sending. Only the mapped value appears here."
         },
         "operation": {
           "type": "string",
@@ -141,7 +141,7 @@
         "toolName": {
           "type": "string",
           "maxLength": 128,
-          "description": "OPTIONAL. Present only when operation = 'execute_tool'. Source: gen_ai.tool.name (e.g. 'read_file', 'run_in_terminal'). PRIVACY NOTE: built-in Copilot tool names are passed through verbatim, but third-party/MCP tool names are vendor-defined and could embed identifiers, so the extension maps any tool name outside the known built-in allowlist to 'custom'. Tool arguments/results are NEVER included."
+          "description": "OPTIONAL. Present only when operation = 'execute_tool'. Source: gen_ai.tool.name (e.g. 'read_file', 'run_in_terminal'). PRIVACY NOTE: built-in Copilot tool names are passed through verbatim, but third-party/MCP tool names are vendor-defined and could embed identifiers, so the producer maps any tool name outside the known built-in allowlist to 'custom'. Tool arguments/results are NEVER included."
         },
         "interactionCount": {
           "type": "integer",
@@ -181,21 +181,21 @@
         "durationMsSum": {
           "type": "number",
           "minimum": 0,
-          "description": "Sum of span durations in milliseconds (end_time_ms - start_time_ms) (additive). Average latency = durationMsSum / interactionCount, computed server-side after merging rows. A raw average is intentionally NOT shipped because averages are not additive."
+          "description": "Sum of span durations in milliseconds (end_time_ms - start_time_ms) (additive). Average latency = durationMsSum / interactionCount, computed by the consumer after merging rows. A raw average is intentionally NOT shipped because averages are not additive."
         },
         "latencyHistogram": {
           "$ref": "#/$defs/latencyHistogram",
-          "description": "Fixed-bound duration histogram enabling mergeable approximate percentiles (e.g. p95) server-side. Counts are additive bound-for-bound."
+          "description": "Fixed-bound duration histogram enabling mergeable approximate percentiles (e.g. p95) by the consumer. Counts are additive bound-for-bound."
         },
         "distinctSessionCount": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of distinct sessions (COALESCE(conversation_id, chat_session_id)) observed within THIS row only. WARNING: NOT additive across rows; the server uses it only for per-row context. True distinct session totals over a range require server-side distinct counting (see doc)."
+          "description": "Number of distinct sessions (COALESCE(conversation_id, chat_session_id)) observed within THIS row only. WARNING: NOT additive across rows; the consumer uses it only for per-row context. True distinct session totals over a range require by the consumer distinct counting (see doc)."
         },
         "lastActivityAtMs": {
           "type": "integer",
           "minimum": 0,
-          "description": "OPTIONAL. Unix epoch milliseconds of the latest span start_time_ms aggregated into this row (max over the row). Lets the server recover DeveloperActivitySummary.LastSeen at true event resolution (taking the max across a developer's rows) rather than degrading it to the 30-minute bucketStart. Non-sensitive (a timestamp)."
+          "description": "OPTIONAL. Unix epoch milliseconds of the latest span start_time_ms aggregated into this row (max over the row). Lets the consumer recover a last-seen time at true event resolution (taking the max across a developer's rows) rather than degrading it to the 30-minute bucketStart. Non-sensitive (a timestamp)."
         }
       },
       "additionalProperties": false

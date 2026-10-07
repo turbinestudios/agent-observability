@@ -133,12 +133,11 @@ describe('completion check in the index', () => {
 });
 
 describe('completion data stays local', () => {
-  it('is referenced by no team, aggregate or sync module', () => {
+  it('is referenced by no team or aggregate module', () => {
     const roots = [
       path.join(__dirname, '..', 'team'),
       path.join(__dirname, '..', '..', '..', '..', '..', 'core', 'agent-observability-core', 'src', 'team'),
       path.join(__dirname, '..', '..', '..', '..', '..', 'core', 'agent-observability-core', 'src', 'aggregate'),
-      path.join(__dirname, '..', '..', '..', '..', '..', 'core', 'agent-observability-core', 'src', 'sync'),
     ];
     const offenders: string[] = [];
     for (const root of roots) {

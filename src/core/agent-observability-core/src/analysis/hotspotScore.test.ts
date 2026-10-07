@@ -11,9 +11,8 @@ interface HotspotRow extends Scorable {
 }
 
 /**
- * The composite must mirror the cloud dashboard's formula exactly — the two
- * surfaces rank with the same numbers, so a drift here would make the desktop
- * disagree with the org view for no visible reason.
+ * The composite is shared by every desktop surface that ranks hotspots, so a
+ * drift here would make the views disagree with each other for no visible reason.
  */
 
 function hotspot(over: Partial<HotspotRow> & Pick<HotspotRow, 'file'>): HotspotRow {
