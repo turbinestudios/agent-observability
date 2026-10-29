@@ -9,7 +9,7 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [2.4.0] - 2026-10-29
+## [2.4.1] - 2026-10-29
 
 ### Added
 
