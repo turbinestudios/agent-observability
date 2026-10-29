@@ -14,6 +14,7 @@ import {
   jetbrainsIdeName,
   type JetbrainsStoreFile,
 } from '@agent-observability/core/src/copilotJetbrains/paths';
+import { opencodeDbPath } from '@agent-observability/core/src/opencode/paths';
 import type { SettingsPatch, SettingsSnapshot } from '../shared/rpc';
 import type { DesktopSettingsReader } from './drivers/desktopConfig';
 import { resolveConfigPath } from './drivers/desktopConfig';
@@ -106,6 +107,12 @@ export function buildSettingsSnapshot(
     resolvedJetbrainsStores: (seams.jetbrainsStores ?? (() => discoverJetbrainsStores(config.getCopilotJetbrainsStorePath())))().map(
       (store) => ({ path: store.path, ide: jetbrainsIdeName(store.ide) }),
     ),
+    opencodeEnabled: config.isOpencodeEnabled(),
+    opencodeDbPath: storedString(settings, ConfigKeys.opencodeDbPath),
+    // The file the OpenCode reader opens and whether it is there, so Settings
+    // can say why the list is empty on a machine without OpenCode.
+    opencodeResolvedDbPath: opencodeDbPath(config.getOpencodeDbPath()),
+    opencodeDbFound: exists(opencodeDbPath(config.getOpencodeDbPath())),
     resolvedClaudeDirs: resolveClaudeProjectsDirs(config, seams.claudeFs ?? defaultFs),
     claudeOverrideMissing: claudeProjectsPath !== '' && !exists(claudeProjectsPath),
     resolvedCopilotDbs: pick(config).map((db) => ({
@@ -198,6 +205,17 @@ export function applySettingsPatch(
     const next = patch.copilotJetbrainsStorePath.trim();
     if (next !== storedString(settings, ConfigKeys.copilotJetbrainsStorePath)) {
       update[ConfigKeys.copilotJetbrainsStorePath] = next.length > 0 ? next : undefined;
+      changed.copilot = true;
+    }
+  }
+  if (typeof patch.opencodeEnabled === 'boolean' && patch.opencodeEnabled !== storedBoolean(settings, ConfigKeys.opencodeEnabled, ConfigDefaults.opencodeEnabled)) {
+    update[ConfigKeys.opencodeEnabled] = patch.opencodeEnabled;
+    changed.copilot = true;
+  }
+  if (typeof patch.opencodeDbPath === 'string') {
+    const next = patch.opencodeDbPath.trim();
+    if (next !== storedString(settings, ConfigKeys.opencodeDbPath)) {
+      update[ConfigKeys.opencodeDbPath] = next.length > 0 ? next : undefined;
       changed.copilot = true;
     }
   }

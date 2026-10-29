@@ -128,6 +128,15 @@ export function SettingsView(): JSX.Element {
           />
           GitHub Copilot in JetBrains IDEs (Rider, IntelliJ IDEA, …)
         </label>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.opencodeEnabled}
+            disabled={saving}
+            onChange={(e) => save({ opencodeEnabled: e.target.checked })}
+          />
+          OpenCode (any provider, GitHub Copilot included)
+        </label>
         <p className="settings-hint">
           Turning a source off removes its sessions from the list; turning it back on re-reads them.
         </p>
@@ -181,6 +190,17 @@ export function SettingsView(): JSX.Element {
             onCommit={(value) => save({ copilotJetbrainsStorePath: value })}
           />
           <span className="settings-resolved">{describeJetbrainsResolution(snapshot)}</span>
+        </div>
+
+        <div className="settings-row">
+          <span className="settings-label">OpenCode database</span>
+          <PathInput
+            value={snapshot.opencodeDbPath}
+            disabled={saving}
+            ariaLabel="OpenCode database"
+            onCommit={(value) => save({ opencodeDbPath: value })}
+          />
+          <span className="settings-resolved">{describeOpencodeResolution(snapshot)}</span>
         </div>
       </section>
 
@@ -548,6 +568,16 @@ function describeJetbrainsResolution(snapshot: SettingsSnapshot): string {
   }
   const ides = [...new Set(stores.map((s) => s.ide))].sort().join(', ');
   return `Found ${stores.length} chat ${stores.length === 1 ? 'store' : 'stores'} (${ides}) in ${snapshot.copilotJetbrainsRoot}.`;
+}
+
+/** Which OpenCode database is read, and whether it is there. */
+function describeOpencodeResolution(snapshot: SettingsSnapshot): string {
+  if (!snapshot.opencodeEnabled) {
+    return 'OpenCode is turned off.';
+  }
+  return snapshot.opencodeDbFound
+    ? `Reading from: ${snapshot.opencodeResolvedDbPath}`
+    : `No OpenCode database at ${snapshot.opencodeResolvedDbPath}.`;
 }
 
 /**

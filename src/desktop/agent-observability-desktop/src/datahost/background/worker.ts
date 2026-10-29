@@ -17,6 +17,8 @@ import { CopilotCliIndexer, dropCopilotDuplicates } from '../indexer/copilotCliI
 import { CopilotCliSource } from '@agent-observability/core/src/copilotCli/copilotCliSource';
 import { CopilotJetbrainsSource } from '@agent-observability/core/src/copilotJetbrains/copilotJetbrainsSource';
 import { CopilotJetbrainsIndexer } from '../indexer/copilotJetbrainsIndexer';
+import { OpencodeSource } from '@agent-observability/core/src/opencode/opencodeSource';
+import { OpencodeIndexer } from '../indexer/opencodeIndexer';
 import { NativeTelemetryBackend } from '../drivers/nativeTelemetryBackend';
 import { AnalysisQueue } from '../analysis/analysisQueue';
 import { ensureArchiveIndexes } from '../archiveIndexes';
@@ -43,6 +45,7 @@ const sources = new SourceRegistry([
   new CopilotCliSource(config),
   new CopilotCliSource(config, undefined, 'app'),
   new CopilotJetbrainsSource(config),
+  new OpencodeSource(config),
 ]);
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'discovering' };
 const progress = (): void => {
@@ -108,6 +111,15 @@ try {
   } else {
     db.removeMissing('copilot-jetbrains', new Set());
     notes.push('Copilot (JetBrains) is turned off in Settings');
+  }
+  if (config.isOpencodeEnabled()) {
+    try {
+      const result = new OpencodeIndexer({ db, config, onRows, onDiscovered }).run();
+      if (result.problem !== undefined) { notes.push(`OpenCode: could not read its database (${result.problem})`); }
+    } catch (error) { notes.push(`OpenCode: ${String(error)}`); }
+  } else {
+    db.removeMissing('opencode', new Set());
+    notes.push('OpenCode is turned off in Settings');
   }
   if (config.isLocalTelemetryEnabled()) {
     try {

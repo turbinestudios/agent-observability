@@ -31,6 +31,8 @@ export const ConfigKeys = {
   copilotAppEnabled: 'copilotApp.enabled',
   copilotJetbrainsEnabled: 'copilotJetbrains.enabled',
   copilotJetbrainsStorePath: 'copilotJetbrains.storePath',
+  opencodeEnabled: 'opencode.enabled',
+  opencodeDbPath: 'opencode.dbPath',
   claudeProjectsPath: 'claudeCode.projectsPath',
   claudeScanDepth: 'claudeCode.scanDepth',
   claudeMaxSessions: 'claudeCode.maxSessions',
@@ -64,6 +66,8 @@ export const ConfigDefaults = {
   copilotAppEnabled: true,
   copilotJetbrainsEnabled: true,
   copilotJetbrainsStorePath: '',
+  opencodeEnabled: true,
+  opencodeDbPath: '',
   claudeProjectsPath: '',
   claudeScanDepth: 8,
   claudeMaxSessions: 150,
@@ -259,6 +263,20 @@ export class Configuration {
     const value = this.config()
       .get<string>(ConfigKeys.copilotJetbrainsStorePath, ConfigDefaults.copilotJetbrainsStorePath)
       .trim();
+    return value.length > 0 ? value : undefined;
+  }
+
+  /** Whether OpenCode sessions (any provider, GitHub Copilot included) are read. On by default. */
+  isOpencodeEnabled(): boolean {
+    return this.config().get<boolean>(ConfigKeys.opencodeEnabled, ConfigDefaults.opencodeEnabled);
+  }
+
+  /**
+   * Explicit override of OpenCode's database file (`opencode.db`).
+   * `undefined` when unset, so `OPENCODE_DB` or the XDG default is used.
+   */
+  getOpencodeDbPath(): string | undefined {
+    const value = this.config().get<string>(ConfigKeys.opencodeDbPath, ConfigDefaults.opencodeDbPath).trim();
     return value.length > 0 ? value : undefined;
   }
 

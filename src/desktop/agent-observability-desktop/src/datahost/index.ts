@@ -5,6 +5,7 @@ import { TelemetryService } from '@agent-observability/core/src/telemetry/teleme
 import { CopilotSource, SourceRegistry } from '@agent-observability/core/src/sources/sessionSource';
 import { CopilotCliSource } from '@agent-observability/core/src/copilotCli/copilotCliSource';
 import { CopilotJetbrainsSource } from '@agent-observability/core/src/copilotJetbrains/copilotJetbrainsSource';
+import { OpencodeSource } from '@agent-observability/core/src/opencode/opencodeSource';
 import { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
 import * as path from 'node:path';
@@ -118,24 +119,27 @@ telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
 // Held directly as well as via the registry: its directory-listing cache must
 // be dropped on every index pass, or a session created while the app is open
 // shows in the list but fails to open with "not found" until a restart.
-// The runtime-store sources and the JetBrains reader cache their discovery the
-// same way, so they are dropped with it.
+// The runtime-store sources and the JetBrains and OpenCode readers cache their
+// discovery the same way, so they are dropped with it.
 const claude = new ClaudeCodeService(config);
 const copilotCli = new CopilotCliSource(config);
 const copilotApp = new CopilotCliSource(config, undefined, 'app');
 const copilotJetbrains = new CopilotJetbrainsSource(config);
+const opencode = new OpencodeSource(config);
 const sources = new SourceRegistry([
   claude,
   new CopilotSource(telemetry, config),
   copilotCli,
   copilotApp,
   copilotJetbrains,
+  opencode,
 ]);
 const invalidateDiscovery = (): void => {
   claude.invalidateDiscovery();
   copilotCli.refresh();
   copilotApp.refresh();
   copilotJetbrains.refresh();
+  opencode.refresh();
 };
 
 // One detector for the whole process: it is stateless and reads the live config

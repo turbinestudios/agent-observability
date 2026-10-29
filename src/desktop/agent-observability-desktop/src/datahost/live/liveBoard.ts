@@ -26,6 +26,7 @@ import type { IndexDb } from '../indexer/indexDb';
 import { pickCopilotDatabases } from '../indexer/copilotIndexer';
 import { cliClientOf, readCliEventsTail, readWorkspaceYaml, type CliEventsTail } from '@agent-observability/core/src/copilotCli/events';
 import { discoverJetbrainsStores } from '@agent-observability/core/src/copilotJetbrains/paths';
+import { opencodeDbPath } from '@agent-observability/core/src/opencode/paths';
 import { deriveCliLive, resolveCliRepository } from '@agent-observability/core/src/copilotCli/mapper';
 import {
   copilotHelperCwd,
@@ -120,6 +121,8 @@ export interface LiveBoardDeps {
   copilotCliHelperCwd?: () => string;
   /** Copilot JetBrains seam: the chat store files to watch. */
   jetbrainsStores?: () => { path: string }[];
+  /** OpenCode seam: the database file to watch. */
+  opencodeDb?: () => string;
 }
 
 const defaultTimers: LiveTimers = {
@@ -222,6 +225,9 @@ export class LiveBoardService {
     }
     if (this.deps.config.isCopilotJetbrainsEnabled()) {
       controller.register(this.copilotJetbrainsSource(controller));
+    }
+    if (this.deps.config.isOpencodeEnabled()) {
+      controller.register(this.opencodeSource(controller));
     }
 
     void controller.start();
@@ -408,6 +414,45 @@ export class LiveBoardService {
             );
           } catch {
             // A store that cannot be watched still updates on the next pass.
+          }
+        }
+      },
+      stop: () => {
+        for (const handle of handles) {
+          try {
+            handle.dispose();
+          } catch {
+            // best-effort
+          }
+        }
+        handles.length = 0;
+      },
+    };
+  }
+
+  /**
+   * OpenCode's database and its `-wal`, where every write lands first. Like
+   * the JetBrains stores, a change asks for an index pass and adds no live row.
+   */
+  private opencodeSource(controller: LiveUpdateController): LiveSource {
+    const handles: WatchHandle[] = [];
+    return {
+      label: 'OpenCode database watcher',
+      start: () => {
+        const db = this.deps.opencodeDb?.() ?? opencodeDbPath(this.deps.config.getOpencodeDbPath());
+        for (const file of [db, `${db}-wal`]) {
+          if (this.statFile(file) === undefined) {
+            continue;
+          }
+          try {
+            handles.push(
+              this.factories.databases.watch(file, () => {
+                this.armReindex();
+                controller.signal();
+              }),
+            );
+          } catch {
+            // A database that cannot be watched still updates on the next pass.
           }
         }
       },

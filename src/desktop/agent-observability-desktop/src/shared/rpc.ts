@@ -1242,6 +1242,14 @@ export interface SettingsSnapshot {
   copilotJetbrainsRoot: string;
   /** The JetBrains chat store files found there, with a readable IDE name. */
   resolvedJetbrainsStores: { path: string; ide: string }[];
+  /** `opencode.enabled`: read OpenCode sessions, whichever provider served them. */
+  opencodeEnabled: boolean;
+  /** `opencode.dbPath`; empty string means `OPENCODE_DB` or the default. */
+  opencodeDbPath: string;
+  /** The `opencode.db` file the reader opens (override or default). */
+  opencodeResolvedDbPath: string;
+  /** Whether that file exists. */
+  opencodeDbFound: boolean;
   /** Directories the Claude scan will actually read (override first; only existing dirs). */
   resolvedClaudeDirs: string[];
   /** True when a non-empty projects-path override does not exist on disk. */
@@ -1443,6 +1451,8 @@ export interface SettingsPatch {
   copilotAppEnabled?: boolean;
   copilotJetbrainsEnabled?: boolean;
   copilotJetbrainsStorePath?: string;
+  opencodeEnabled?: boolean;
+  opencodeDbPath?: string;
   sqlitePath?: string;
   maxSessionMinutes?: number;
   deepRetroEnabled?: boolean;

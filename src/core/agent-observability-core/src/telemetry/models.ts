@@ -28,7 +28,9 @@ export type Operation = 'chat' | 'execute_tool' | 'execute_hook' | 'invoke_agent
  * source and to switch the detail panel's cost basis (Copilot and the autonomous
  * Copilot agent both bill in AIU — they emit the same OTel schema; Claude is
  * priced by tokens — see {@link SessionTreeStats.costUsdMicros}; the cloud agent
- * bills in AI credits — see {@link SessionTreeStats.creditsNano}).
+ * bills in AI credits — see {@link SessionTreeStats.creditsNano}). `opencode`
+ * reads OpenCode's own SQLite store; its sessions can be served by any provider
+ * (GitHub Copilot among them) and carry the USD cost OpenCode recorded.
  */
 export type AgentSourceId =
   | 'copilot'
@@ -37,7 +39,8 @@ export type AgentSourceId =
   | 'copilot-agent'
   | 'copilot-cli'
   | 'copilot-app'
-  | 'copilot-jetbrains';
+  | 'copilot-jetbrains'
+  | 'opencode';
 
 /**
  * Cost basis a source is priced in, used by the detail panel to render the right

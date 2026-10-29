@@ -3,7 +3,8 @@
 A desktop app for macOS and Windows that lets you look back at your
 **GitHub Copilot** and **Claude Code** sessions: Copilot in VS Code, the
 Copilot CLI, the GitHub Copilot app and Copilot in JetBrains IDEs such as
-Rider, plus Claude Code. It works without VS Code running.
+Rider, plus Claude Code and OpenCode (whichever provider it runs on, GitHub
+Copilot included). It works without VS Code running.
 
 ## Features
 

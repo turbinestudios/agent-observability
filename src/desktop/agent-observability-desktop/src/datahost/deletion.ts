@@ -76,6 +76,14 @@ export function describeDeletion(
         "This app does not change the plugin's chat history. You can hide the session here, or delete the chat in the IDE.",
     };
   }
+  if (source === 'opencode') {
+    return {
+      supported: false,
+      target: 'Stored by OpenCode',
+      consequence:
+        "This app does not change OpenCode's session history. You can hide the session here, or delete it in OpenCode.",
+    };
+  }
   if (source === 'claude') {
     const files = claudeFilesFor(sessionId, deps);
     if (files.length === 0) {

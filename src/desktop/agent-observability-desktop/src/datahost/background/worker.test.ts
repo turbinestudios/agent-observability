@@ -159,6 +159,7 @@ describe('independent worker and broker connections', () => {
         'copilotCli.enabled': false,
         'copilotApp.enabled': false,
         'copilotJetbrains.enabled': false,
+        'opencode.enabled': false,
       },
     };
     const worker = start(backgroundCode, input);

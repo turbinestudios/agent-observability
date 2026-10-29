@@ -43,6 +43,7 @@ function config(overrides: Record<string, unknown> = {}): Configuration {
     'copilotCli.enabled': false,
     'copilotApp.enabled': false,
     'copilotJetbrains.enabled': false,
+    'opencode.enabled': false,
     ...overrides,
   };
   return new Configuration({

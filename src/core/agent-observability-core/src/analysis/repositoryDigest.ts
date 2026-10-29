@@ -303,6 +303,8 @@ function sourceLabel(source: string): string {
       return 'Copilot app';
     case 'copilot-jetbrains':
       return 'Copilot (JetBrains)';
+    case 'opencode':
+      return 'OpenCode';
     default:
       return clean(source);
   }

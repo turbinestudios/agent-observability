@@ -51,6 +51,7 @@ const SOURCE_SERIES: SeriesStyle[] = [
   { key: 'copilot-cli', label: 'Copilot CLI', colorVar: '--series-cli' },
   { key: 'copilot-app', label: 'Copilot app', colorVar: '--series-app' },
   { key: 'copilot-jetbrains', label: 'Copilot (JetBrains)', colorVar: '--series-jetbrains' },
+  { key: 'opencode', label: 'OpenCode', colorVar: '--series-opencode' },
 ];
 
 const TOKEN_SERIES: SeriesStyle[] = [

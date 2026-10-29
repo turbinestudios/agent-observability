@@ -6,6 +6,7 @@ const SOURCE_LABELS: Record<string, string> = {
   'copilot-cli': 'Copilot CLI',
   'copilot-app': 'Copilot app',
   'copilot-jetbrains': 'Copilot (JetBrains)',
+  opencode: 'OpenCode',
   'copilot-cloud': 'Copilot Cloud',
   'copilot-agent': 'Copilot Agent',
 };
@@ -21,6 +22,7 @@ export function enabledSources(snapshot: {
   copilotCliEnabled: boolean;
   copilotAppEnabled: boolean;
   copilotJetbrainsEnabled: boolean;
+  opencodeEnabled: boolean;
 }): string[] {
   const on: [string, boolean][] = [
     ['claude', snapshot.claudeEnabled],
@@ -28,6 +30,7 @@ export function enabledSources(snapshot: {
     ['copilot-cli', snapshot.copilotCliEnabled],
     ['copilot-app', snapshot.copilotAppEnabled],
     ['copilot-jetbrains', snapshot.copilotJetbrainsEnabled],
+    ['opencode', snapshot.opencodeEnabled],
   ];
   return on.filter(([, enabled]) => enabled).map(([id]) => id);
 }
