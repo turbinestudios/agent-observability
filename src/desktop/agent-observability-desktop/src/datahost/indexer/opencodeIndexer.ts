@@ -21,8 +21,13 @@ import type { FileState, IndexDb } from './indexDb';
  */
 const SOURCE = 'opencode';
 const HYDRATE_BATCH = 20;
-/** Bump whenever the reader or mapper changes what a store yields. */
-export const OPENCODE_READER_VERSION = 2;
+/**
+ * Bump whenever the reader or mapper changes what a store yields. A bump also
+ * re-stamps every OpenCode row, which marks its analysis stale, so a change
+ * to the context analysis reaches Context Hotspots without OpenCode writing.
+ * 2: the 2.x tables. 3: instruction files and skills for Context Analysis.
+ */
+export const OPENCODE_READER_VERSION = 3;
 
 export interface OpencodeIndexerDeps {
   db: IndexDb;

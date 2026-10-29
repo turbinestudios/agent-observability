@@ -355,6 +355,137 @@ CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, typ
   });
 });
 
+/**
+ * The Context Analysis tab from OpenCode 2.x's own record of what it loaded:
+ * `instruction_state` pointing at a `core/instructions` blob of
+ * `[{path, content}]`, a nested AGENTS.md loaded mid-session, a `skill` call
+ * whose SKILL.md sits in the project, and a `read` of a context file next to
+ * a `read` of an ordinary file that must not surface.
+ */
+describe('OpencodeSource context analysis', { timeout: 30_000 }, () => {
+  const accepted = { global: [], perRepo: {} } as never;
+  let repo: string;
+
+  beforeEach(() => {
+    fs.rmSync(dbPath, { force: true });
+    fs.rmSync(`${dbPath}-wal`, { force: true });
+    fs.rmSync(`${dbPath}-shm`, { force: true });
+    repo = path.join(root, 'repo');
+    const skillDir = path.join(repo, '.opencode', 'skill', 'db-migration');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), 'm'.repeat(4_000));
+    const rootAgents = path.join(repo, 'AGENTS.md');
+    const nestedAgents = path.join(repo, 'services', 'api', 'AGENTS.md');
+
+    const db = new DatabaseSync(dbPath);
+    db.exec('PRAGMA journal_mode = WAL;');
+    db.exec(`
+CREATE TABLE project (id text PRIMARY KEY, worktree text NOT NULL);
+CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL, parent_id text, directory text NOT NULL, title text,
+  version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL);
+CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL,
+  time_created integer NOT NULL, data text NOT NULL);
+CREATE TABLE instruction_blob (hash text PRIMARY KEY, value text);
+CREATE TABLE instruction_state (session_id text PRIMARY KEY, epoch_start integer NOT NULL, through_seq integer NOT NULL,
+  initial_values text NOT NULL, current_values text NOT NULL);
+`);
+    db.prepare('INSERT INTO project VALUES (?, ?)').run('prj', repo);
+    const session = db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    session.run('ses_main', 'prj', null, repo, 'Add a migration', '2.1.2', T0, T0 + 60_000);
+    session.run('ses_rev', 'prj', 'ses_main', repo, 'Review', '2.1.2', T0 + 20_000, T0 + 30_000);
+    const blob = db.prepare('INSERT INTO instruction_blob VALUES (?, ?)');
+    blob.run('h-instr', JSON.stringify([{ path: rootAgents, content: 'a'.repeat(12_000) }]));
+    blob.run('h-date', 'Today is Thursday');
+    const state = db.prepare('INSERT INTO instruction_state VALUES (?, ?, ?, ?, ?)');
+    const values = JSON.stringify({ 'core/instructions': 'h-instr', 'core/date': 'h-date' });
+    state.run('ses_main', 0, 9, values, values);
+    state.run('ses_rev', 0, 3, values, values);
+
+    let seq = 0;
+    const message = db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?)');
+    const msg = (id: string, sessionId: string, type: string, at: number, data: Record<string, unknown>): void => {
+      message.run(id, sessionId, type, seq++, at, JSON.stringify(data));
+    };
+    const tool = (name: string, input: Record<string, unknown>, at: number) => ({
+      type: 'tool',
+      id: `${name}-${at}`,
+      name,
+      state: { status: 'completed', input, content: ['secret tool output'] },
+      time: { created: at, completed: at + 100 },
+    });
+    const reply = (agent: string, at: number, prompt: number, content: unknown[]) => ({
+      agent,
+      model: { id: 'claude-opus-5.5', providerID: 'github-copilot' },
+      time: { created: at, completed: at + 1_000 },
+      tokens: { input: 10, output: 50, reasoning: 0, cache: { read: prompt, write: 0 } },
+      cost: 0.1,
+      content,
+    });
+    msg('u1', 'ses_main', 'user', T0, { text: 'Add a migration', time: { created: T0 } });
+    msg('a1', 'ses_main', 'assistant', T0 + 1_000, reply('build', T0 + 1_000, 40_000, [
+      tool('skill', { id: 'db-migration' }, T0 + 1_100),
+      tool('read', { filePath: path.join(repo, 'src', 'private-notes.ts') }, T0 + 1_200),
+      tool('read', { filePath: path.join(repo, 'docs', 'release.instructions.md') }, T0 + 1_300),
+    ]));
+    msg('n1', 'ses_main', 'synthetic', T0 + 2_000, {
+      description: 'Loaded services/api/AGENTS.md',
+      metadata: { instruction: { paths: [nestedAgents] } },
+      text: `Instructions from: ${nestedAgents}\n${'n'.repeat(6_000)}`,
+      time: { created: T0 + 2_000 },
+    });
+    msg('a2', 'ses_main', 'assistant', T0 + 3_000, reply('build', T0 + 3_000, 90_000, [{ type: 'text', text: 'Done.' }]));
+    msg('r1', 'ses_rev', 'user', T0 + 20_000, { text: 'Review it', time: { created: T0 + 20_000 } });
+    msg('r2', 'ses_rev', 'assistant', T0 + 21_000, reply('security-reviewer', T0 + 21_000, 30_000, [{ type: 'text', text: 'Fine.' }]));
+    db.close();
+  });
+
+  it('lists the instruction files OpenCode loaded, sized from what it loaded', () => {
+    const analysis = new OpencodeSource(config()).getContextAnalysis('ses_main', accepted);
+    expect(analysis).toBeDefined();
+    const main = analysis!.agents[0];
+    expect(main.agentName).toBe('Main agent');
+    const byPath = new Map(main.loadedFiles.map((f) => [f.filePath, f]));
+    // Same base name twice, so each is named by its folder.
+    expect(byPath.get(path.join(repo, 'AGENTS.md'))).toMatchObject({ name: 'repo/AGENTS.md', category: 'instruction', status: 'applied', charCount: 12_000 });
+    const nested = byPath.get(path.join(repo, 'services', 'api', 'AGENTS.md'));
+    expect(nested).toMatchObject({ name: 'api/AGENTS.md', status: 'applied' });
+    expect(nested!.charCount).toBeGreaterThan(6_000);
+    expect(main.totalContextTokens).toBe(90_010);
+  });
+
+  it('counts a loaded skill, sized from its SKILL.md, and a context file the agent read', () => {
+    const main = new OpencodeSource(config()).getContextAnalysis('ses_main', accepted)!.agents[0];
+    expect(main.loadedFiles.find((f) => f.name === 'db-migration')).toMatchObject({
+      category: 'skill',
+      status: 'applied',
+      filePath: path.join(repo, '.opencode', 'skill', 'db-migration', 'SKILL.md'),
+      charCount: 4_000,
+    });
+    expect(main.loadedFiles.some((f) => f.status === 'read' && f.filePath === path.join(repo, 'docs', 'release.instructions.md'))).toBe(true);
+  });
+
+  it('gives each sub-agent type its own row', () => {
+    const analysis = new OpencodeSource(config()).getContextAnalysis('ses_main', accepted)!;
+    expect(analysis.agents.map((a) => [a.agentName, a.kind])).toEqual([
+      ['Main agent', 'main'],
+      ['Sub-agent: security-reviewer', 'subagent'],
+    ]);
+    expect(analysis.agents[1].loadedFiles.map((f) => f.name)).toEqual(['AGENTS.md']);
+  });
+
+  it('never surfaces ordinary file paths, tool output or instruction text', () => {
+    const source = new OpencodeSource(config());
+    const all = JSON.stringify([source.getContextAnalysis('ses_main', accepted), ok(source.getSessionDetail('ses_main'))]);
+    for (const hidden of ['private-notes', 'secret tool output', 'aaaaaaaaaa', 'nnnnnnnnnn', 'Today is Thursday']) {
+      expect(all).not.toContain(hidden);
+    }
+  });
+
+  it('shows no tab while the source is off', () => {
+    expect(new OpencodeSource(config(false)).getContextAnalysis('ses_main', accepted)).toBeUndefined();
+  });
+});
+
 describe('mapping helpers', () => {
   it('maps OpenCode agents onto the fixed mode set', () => {
     expect(opencodeAgentMode('build')).toBe('agent');

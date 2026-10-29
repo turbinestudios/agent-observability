@@ -9,6 +9,18 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.4.4] - 2026-10-29
+
+### Added
+
+- **Context Analysis for OpenCode sessions.** The tab now opens on OpenCode
+  sessions, showing which AGENTS.md and other instruction files each session
+  loaded, including nested ones picked up in sub-folders. It also shows the
+  skills the agent used and the context files it read, each with an estimated
+  size, broken down by sub-agent. These files now count in **Context
+  Hotspots** and can be improved from there, like Claude Code and Copilot
+  sessions.
+
 ## [2.4.3] - 2026-10-29
 
 ### Fixed

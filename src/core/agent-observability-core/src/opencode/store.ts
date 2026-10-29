@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import { Database } from 'node-sqlite3-wasm';
+import { isContextPath } from '../claude/claudeContextDiscovery';
 import { createReadonlySnapshot, type SnapshotOptions } from '../telemetry/snapshot';
 
 /**
@@ -8,8 +9,12 @@ import { createReadonlySnapshot, type SnapshotOptions } from '../telemetry/snaps
  * OpenCode keeps the file in WAL mode, so it is read through the same
  * private snapshot copy as every other SQLite store; the original is never
  * opened. From the JSON `data` columns only the fields named below are
- * read: never tool input or output, never reasoning text, never the
- * `account`, `credential` or `control_account` tables.
+ * read: never tool output, never reasoning text, never the `account`,
+ * `credential` or `control_account` tables. Of tool input exactly two
+ * fields are read, for the Context Analysis tab: a `skill` call's skill id,
+ * and a `read` call's path when that path is a context file (AGENTS.md,
+ * SKILL.md, …); any other path is dropped on the spot. Instruction files
+ * are kept as path and length, never their text.
  *
  * Two layouts exist in the same file. OpenCode 2.x writes `session_v2` and
  * `session_message` (one row per user or assistant message in `seq`
@@ -59,6 +64,23 @@ export interface OpencodeToolPart {
   status?: string;
   startMs: number;
   endMs?: number;
+  /** A `skill` call's skill id. */
+  skillId?: string;
+  /** A `read` call's target, kept only when it is a context file. */
+  contextPath?: string;
+}
+
+/**
+ * An instruction file OpenCode put in a session's context: the files behind
+ * its `core/instructions` block (AGENTS.md, CLAUDE.md, configured
+ * instructions), and nested AGENTS.md files loaded on the way as the agent
+ * worked in a sub-folder. `chars` is the length of what was loaded.
+ */
+export interface OpencodeInstructionLoad {
+  sessionId: string;
+  path: string;
+  chars?: number;
+  via: 'session' | 'nested';
 }
 
 export interface OpencodeTextPart {
@@ -72,6 +94,7 @@ export interface OpencodeStore {
   messages: OpencodeMessageRow[];
   tools: OpencodeToolPart[];
   texts: OpencodeTextPart[];
+  instructions: OpencodeInstructionLoad[];
 }
 
 /** Caps one text part held in memory; a pasted log can run to megabytes. */
@@ -100,7 +123,9 @@ const LEGACY = {
   json_extract(data, '$.tool') AS tool,
   json_extract(data, '$.state.status') AS status,
   json_extract(data, '$.state.time.start') AS startMs,
-  json_extract(data, '$.state.time.end') AS endMs
+  json_extract(data, '$.state.time.end') AS endMs,
+  NULL AS skillId,
+  CASE WHEN json_extract(data, '$.tool') = 'read' THEN json_extract(data, '$.state.input.filePath') END AS readPath
   FROM part WHERE json_extract(data, '$.type') = 'tool' ORDER BY session_id, time_created, id`,
   texts: `SELECT message_id AS messageId, session_id AS sessionId,
   substr(json_extract(data, '$.text'), 1, ${TEXT_MAX_CHARS}) AS text
@@ -136,7 +161,9 @@ const V2 = {
   json_extract(c.value, '$.name') AS tool,
   json_extract(c.value, '$.state.status') AS status,
   json_extract(c.value, '$.time.created') AS startMs,
-  json_extract(c.value, '$.time.completed') AS endMs
+  json_extract(c.value, '$.time.completed') AS endMs,
+  CASE WHEN json_extract(c.value, '$.name') = 'skill' THEN json_extract(c.value, '$.state.input.id') END AS skillId,
+  CASE WHEN json_extract(c.value, '$.name') = 'read' THEN json_extract(c.value, '$.state.input.filePath') END AS readPath
   FROM session_message m, json_each(m.data, '$.content') c
   WHERE m.type = 'assistant' AND json_extract(c.value, '$.type') = 'tool'
   ORDER BY m.session_id, m.seq, c.key`,
@@ -152,6 +179,19 @@ const V2 = {
 };
 
 const HAS_V2 = `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('session_v2', 'session_message')`;
+const HAS_INSTRUCTION_STATE = `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('instruction_state', 'instruction_blob')`;
+
+/** Per session, the instruction blocks it started with and holds now; values are `instruction_blob` hashes. */
+const INSTRUCTION_STATE = `SELECT session_id AS sessionId, initial_values AS initialValues, current_values AS currentValues
+  FROM instruction_state`;
+const INSTRUCTION_BLOB = `SELECT value FROM instruction_blob WHERE hash = ?`;
+/** Nested AGENTS.md files OpenCode loaded mid-session, recorded as synthetic messages. */
+const NESTED_INSTRUCTIONS = `SELECT session_id AS sessionId,
+  json_extract(data, '$.metadata.instruction.paths') AS paths,
+  length(json_extract(data, '$.text')) AS chars
+  FROM session_message WHERE type = 'synthetic' AND json_extract(data, '$.metadata.instruction.paths') IS NOT NULL`;
+/** The instruction block that lists the instruction files themselves, as JSON `[{path, content}]`. */
+const INSTRUCTIONS_KEY = 'core/instructions';
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined);
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
@@ -219,6 +259,7 @@ export function readOpencodeStore(dbPath: string, options: SnapshotOptions = {})
         continue;
       }
       const endMs = optNum(r.endMs);
+      const readPath = str(r.readPath);
       tools.push({
         messageId,
         sessionId,
@@ -226,6 +267,8 @@ export function readOpencodeStore(dbPath: string, options: SnapshotOptions = {})
         ...(str(r.status) !== undefined ? { status: str(r.status) } : {}),
         startMs: num(r.startMs) || num(r.createdMs),
         ...(endMs !== undefined ? { endMs } : {}),
+        ...(str(r.skillId) !== undefined ? { skillId: str(r.skillId) } : {}),
+        ...(readPath !== undefined && isContextPath(readPath) ? { contextPath: readPath } : {}),
       });
     }
     const texts: OpencodeTextPart[] = [];
@@ -237,7 +280,9 @@ export function readOpencodeStore(dbPath: string, options: SnapshotOptions = {})
         texts.push({ messageId, sessionId, text });
       }
     }
-    return { sessions, messages, tools, texts };
+    const instructions =
+      q === V2 && rows(HAS_INSTRUCTION_STATE)[0]?.n === 2 ? readInstructionLoads(db, rows) : [];
+    return { sessions, messages, tools, texts, instructions };
   } finally {
     try {
       db?.close();
@@ -246,6 +291,82 @@ export function readOpencodeStore(dbPath: string, options: SnapshotOptions = {})
     }
     snapshot.dispose();
   }
+}
+
+/**
+ * The instruction files each session loaded. Each `core/instructions` blob is
+ * parsed once, and only every file's path and text length are kept. A blob or
+ * row that does not parse is skipped: this feeds a diagnostic tab and must
+ * never fail the session list.
+ */
+function readInstructionLoads(db: Database, rows: (sql: string) => Record<string, unknown>[]): OpencodeInstructionLoad[] {
+  const blobs = new Map<string, { path: string; chars: number }[]>();
+  const filesIn = (hash: string): { path: string; chars: number }[] => {
+    let files = blobs.get(hash);
+    if (files === undefined) {
+      files = [];
+      try {
+        const value = (db.get(INSTRUCTION_BLOB, [hash]) as { value?: unknown } | undefined)?.value;
+        const parsed: unknown = typeof value === 'string' ? JSON.parse(value) : undefined;
+        for (const item of Array.isArray(parsed) ? parsed : []) {
+          const p = (item as { path?: unknown } | null)?.path;
+          const content = (item as { content?: unknown } | null)?.content;
+          if (typeof p === 'string' && p.length > 0) {
+            files.push({ path: p, chars: typeof content === 'string' ? content.length : 0 });
+          }
+        }
+      } catch {
+        // An unreadable blob contributes nothing.
+      }
+      blobs.set(hash, files);
+    }
+    return files;
+  };
+  const out: OpencodeInstructionLoad[] = [];
+  for (const r of rows(INSTRUCTION_STATE)) {
+    const sessionId = str(r.sessionId);
+    if (sessionId === undefined) {
+      continue;
+    }
+    const seen = new Set<string>();
+    for (const column of [r.initialValues, r.currentValues]) {
+      let hash: unknown;
+      try {
+        hash = typeof column === 'string' ? (JSON.parse(column) as Record<string, unknown>)[INSTRUCTIONS_KEY] : undefined;
+      } catch {
+        hash = undefined;
+      }
+      if (typeof hash !== 'string') {
+        continue;
+      }
+      for (const file of filesIn(hash)) {
+        if (!seen.has(file.path)) {
+          seen.add(file.path);
+          out.push({ sessionId, path: file.path, ...(file.chars > 0 ? { chars: file.chars } : {}), via: 'session' });
+        }
+      }
+    }
+  }
+  for (const r of rows(NESTED_INSTRUCTIONS)) {
+    const sessionId = str(r.sessionId);
+    if (sessionId === undefined) {
+      continue;
+    }
+    let paths: unknown;
+    try {
+      paths = typeof r.paths === 'string' ? JSON.parse(r.paths) : undefined;
+    } catch {
+      paths = undefined;
+    }
+    const list = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string' && p.length > 0) : [];
+    // The text is one "Instructions from: <path>" block per path, so its
+    // length is the file's only when it names a single one.
+    const chars = list.length === 1 ? num(r.chars) : 0;
+    for (const p of list) {
+      out.push({ sessionId, path: p, ...(chars > 0 ? { chars } : {}), via: 'nested' });
+    }
+  }
+  return out;
 }
 
 /**

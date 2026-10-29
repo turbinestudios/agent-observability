@@ -2,6 +2,8 @@ import type { AggregationRow } from '../aggregate/aggregator';
 import { buildSessionRetrospective, type SessionRetrospective } from '../analysis/retrospective';
 import { GitRemoteResolver } from '../claude/gitRemote';
 import { defaultCopilotCliFs, type CopilotCliFs } from '../copilotCli/paths';
+import type { AcceptedMissingConfig } from '../context/contextAnalyzer';
+import type { SessionContextAnalysis } from '../context/models';
 import type { SessionDataSource } from '../sources/sessionSource';
 import type {
   AgentSourceId,
@@ -21,6 +23,7 @@ import {
   groupOpencodeSessions,
   type OpencodeSessionInput,
 } from './mapper';
+import { analyzeOpencodeContext } from './contextAnalysis';
 import { opencodeDbPath } from './paths';
 import { OpencodeStoreCache, type OpencodeStore } from './store';
 
@@ -37,8 +40,10 @@ export interface OpencodeSourceConfig {
  * Anthropic and the rest. Read-only, through a snapshot copy of
  * `opencode.db` that is re-taken only when the file moves.
  *
- * Priced in USD from the cost OpenCode records; Copilot-served turns carry
- * none and stay unpriced (see `./mapper.ts`).
+ * Priced in USD from the cost OpenCode records; Copilot-served turns stay
+ * unpriced (see `./mapper.ts`). Context analysis comes from OpenCode's own
+ * record of the instruction files and skills it loaded (see
+ * `./contextAnalysis.ts`).
  */
 export class OpencodeSource implements SessionDataSource {
   readonly id: AgentSourceId = 'opencode';
@@ -135,6 +140,18 @@ export class OpencodeSource implements SessionDataSource {
 
   getSessionRetrospective(sessionKey: string, detail?: SessionDetail): Result<SessionRetrospective> {
     return this.guard(() => buildSessionRetrospective(detail ?? buildOpencodeSessionDetail(this.find(sessionKey))));
+  }
+
+  getContextAnalysis(sessionKey: string, acceptedMissing: AcceptedMissingConfig): SessionContextAnalysis | undefined {
+    if (!this.isEnabled()) {
+      return undefined;
+    }
+    try {
+      const input = this.sessions().find((s) => s.session.id === sessionKey);
+      return input === undefined ? undefined : analyzeOpencodeContext(input, acceptedMissing, this.env);
+    } catch {
+      return undefined;
+    }
   }
 
   listRepositories(): Result<RepositorySummary[]> {

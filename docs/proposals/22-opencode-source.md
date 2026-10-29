@@ -68,22 +68,52 @@ stores, so before this source that use was invisible to the app.
 - The same folder holds `auth.json` and the `account`, `credential` and
   `control_account` tables. None is ever read.
 
+**Grounding: what OpenCode records about context (2.x)**
+
+- `instruction_state`: per session, `initial_values` and `current_values`,
+  each a JSON map from an instruction block (`core/instructions`,
+  `core/skill-guidance`, `core/environment`, `core/date`, …) to an
+  `instruction_blob` hash. The `core/instructions` blob is
+  `[{path, content}]`, one entry per instruction file put in the context
+  (AGENTS.md, CLAUDE.md, configured instructions).
+- `session_message` rows of type `synthetic` with
+  `metadata.instruction.paths`: a nested AGENTS.md loaded as the agent worked
+  in a sub-folder; `text` is `Instructions from: <path>` plus the file.
+- `skill` tool calls carry the skill as `state.input.id`; `read` calls carry
+  `state.input.filePath`.
+
 **What was built**
 
 - Core `opencode/`: `paths.ts`, `store.ts` (snapshot copy, explicit
   `json_extract` fields only, re-read when the file or its `-wal` moves),
-  `mapper.ts`, `opencodeSource.ts` (`costMode: 'usd'`).
+  `mapper.ts`, `opencodeSource.ts` (`costMode: 'usd'`), and
+  `contextAnalysis.ts`.
+- **Context Analysis tab** (2.4.4), through the shared pipeline the Claude and
+  Copilot sources use. The instruction files come from OpenCode's own record,
+  sized from the text it loaded. Skills come from `skill` calls, with sizes
+  from the `SKILL.md` on disk (project `.opencode/skill(s)`, `.claude/skills`
+  and `.agents/skills` from the session folder upwards, then the same under
+  the home folder). Context files the agent read are listed too. There is one
+  main agent and one row per sub-agent type, and the context window is the
+  largest `input + cache read + cache write` of any call. The same analysis
+  feeds Context Hotspots and Improve. Core's size estimator now keeps a size
+  the source recorded.
 - Desktop: `opencodeIndexer.ts` (one `files` row for the database carrying the
-  ids it produced), worker and live board wiring (database and `-wal`
-  watched), Settings toggle, database override and resolution line, source
-  chip and chart colour, hide-only deletion text.
+  ids it produced and the reader version, so a reader change re-reads an
+  unchanged file and marks its sessions for re-analysis), worker and live
+  board wiring (database and `-wal` watched), Settings toggle, database
+  override and resolution line, source chip and chart colour, hide-only
+  deletion text.
 
 **Constraints**
 
 - Read-only, through the shared snapshot copy; the original file is never
   opened.
-- Never tool input or output, never reasoning text, never synthetic text
-  parts.
+- Never tool output, never reasoning text, never synthetic text parts as
+  conversation. Of tool input, exactly two fields: a `skill` call's id, and a
+  `read` call's path only when it names a context file; any other path is
+  dropped as it is read. Instruction files are kept as path and length,
+  never their text.
 - Not shared in team shards; no shard or index schema change.
 
 **Out of scope**
@@ -91,7 +121,9 @@ stores, so before this source that use was invisible to the app.
 - The legacy JSON `storage/` layout.
 - Estimating Copilot premium requests per turn; the multiplier per model is
   not recorded locally.
-- Live status rows and context analysis for this source.
+- Live status rows for this source.
+- Context analysis on the 1.x layout beyond context files read and the
+  window size: those builds record no instruction loads.
 
 **Verification**
 

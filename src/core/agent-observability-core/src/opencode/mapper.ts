@@ -13,7 +13,13 @@ import type {
 } from '../telemetry/models';
 import { agentUsageKey } from '../telemetry/models';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
-import type { OpencodeMessageRow, OpencodeSessionRow, OpencodeStore, OpencodeToolPart } from './store';
+import type {
+  OpencodeInstructionLoad,
+  OpencodeMessageRow,
+  OpencodeSessionRow,
+  OpencodeStore,
+  OpencodeToolPart,
+} from './store';
 
 /**
  * Maps OpenCode sessions onto the shared session models.
@@ -45,6 +51,8 @@ export interface OpencodeThread {
   session: OpencodeSessionRow;
   messages: OpencodeMessageRow[];
   tools: OpencodeToolPart[];
+  /** Instruction files this session loaded (for the Context Analysis tab). */
+  instructions: OpencodeInstructionLoad[];
 }
 
 export interface OpencodeSessionInput extends OpencodeThread {
@@ -67,6 +75,7 @@ export function groupOpencodeSessions(
   const byId = new Map(store.sessions.map((s) => [s.id, s]));
   const messages = groupBy(store.messages, (m) => m.sessionId);
   const tools = groupBy(store.tools, (t) => t.sessionId);
+  const instructions = groupBy(store.instructions, (i) => i.sessionId);
   const texts = new Map<string, string>();
   for (const t of store.texts) {
     const prior = texts.get(t.messageId);
@@ -89,6 +98,7 @@ export function groupOpencodeSessions(
     session: s,
     messages: messages.get(s.id) ?? [],
     tools: tools.get(s.id) ?? [],
+    instructions: instructions.get(s.id) ?? [],
   });
   const roots = new Map<string, OpencodeSessionInput>();
   for (const s of store.sessions) {
@@ -163,7 +173,7 @@ function lastActivity(input: OpencodeSessionInput): number {
 }
 
 /** The agent a sub-agent session ran as (`explore`, `general`, …). */
-function subagentName(t: OpencodeThread): string {
+export function subagentName(t: OpencodeThread): string {
   return t.messages.find((m) => m.role === 'assistant' && m.agent !== undefined)?.agent ?? 'subagent';
 }
 

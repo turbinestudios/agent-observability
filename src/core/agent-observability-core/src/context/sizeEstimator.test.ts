@@ -25,6 +25,17 @@ describe('sizeEstimator', () => {
       expect(result.totalContextTokens).toBeGreaterThan(0);
     });
 
+    it('keeps a size the source recorded over any estimate or the file on disk', () => {
+      const entries: ContextFileEntry[] = [
+        // The path does not exist; the recorded size must still be used.
+        { name: 'AGENTS.md', filePath: 'no-such-dir/AGENTS.md', category: 'instruction', status: 'applied', charCount: 1_200 },
+      ];
+      const result = estimateContextSizes(entries, undefined, 10_000);
+      expect(result.entries[0].estimatedTokens).toBe(300);
+      expect(result.contextFileTokens).toBe(300);
+      expect(result.otherContextTokens).toBe(9_700);
+    });
+
     it('uses input tokens as total context when available', () => {
       const entries: ContextFileEntry[] = [];
       const result = estimateContextSizes(entries, 'some instructions', 10000);

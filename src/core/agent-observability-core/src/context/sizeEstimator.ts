@@ -87,12 +87,18 @@ export function findOversizedFiles(
 
 /**
  * Estimate the character count for a single context file entry.
- * Tries system_instructions first, then falls back to disk.
+ * Uses a size the source already recorded, then system_instructions, then disk.
  */
 function estimateFileCharCount(
   entry: ContextFileEntry,
   systemInstructionsText: string | undefined,
 ): number | undefined {
+  // Strategy 0: the source recorded what was actually loaded (OpenCode keeps
+  // each instruction file's text), which beats any estimate or today's disk.
+  if (entry.charCount !== undefined && entry.charCount > 0) {
+    return entry.charCount;
+  }
+
   // Strategy 1: Try to find the file's content in system_instructions
   if (systemInstructionsText) {
     const charCount = estimateFromSystemInstructions(entry.name, systemInstructionsText);
