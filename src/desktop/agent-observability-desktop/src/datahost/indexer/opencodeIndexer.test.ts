@@ -105,6 +105,23 @@ describe('OpenCode indexing', { timeout: 30_000 }, () => {
     expect(db.getRow('opencode', 'ses_b')).toBeDefined();
   });
 
+  it('re-reads an unchanged database whose file row an older reader wrote', () => {
+    writeStore(['ses_a', 'ses_b']);
+    const indexer = new OpencodeIndexer({ db, config: config() });
+    indexer.run();
+    // What 2.4.1 left behind: the file's current stamp, no reader version, and
+    // only the sessions its 1.x-only reader could see.
+    const state = db.getFileState(dbPath)!;
+    db.putFileState({ ...state, accState: JSON.stringify({ ids: ['ses_a'] }) });
+    db.removeMissing('opencode', new Set(['ses_a']));
+    expect(db.getRow('opencode', 'ses_b')).toBeUndefined();
+
+    expect(new OpencodeIndexer({ db, config: config() }).run()).toMatchObject({ discovered: 2, hydrated: 2 });
+    expect(db.getRow('opencode', 'ses_b')).toBeDefined();
+    // Stamped with the current reader, the next pass skips it again.
+    expect(new OpencodeIndexer({ db, config: config() }).run()).toMatchObject({ discovered: 2, hydrated: 0 });
+  });
+
   it('removes its rows when the database is gone, and indexes nothing while off', () => {
     writeStore(['ses_a']);
     new OpencodeIndexer({ db, config: config() }).run();

@@ -168,16 +168,18 @@ jobs:
           name: installers-${{ matrix.artifact }}
           if-no-files-found: error
           retention-days: 7
-          # latest*.yml and *.blockmap are the electron-updater feed: without
-          # them attached to the release, installed apps never see an update.
-          # The globs deliberately miss builder-debug.yml and
-          # builder-effective-config.yaml, which also land in release/.
+          # latest*.yml is the electron-updater feed: without it attached to
+          # the release, installed apps never see an update. The *.blockmap
+          # files electron-builder also writes are left off on purpose: they
+          # only serve differential downloads, which the updater has turned
+          # off (see src/main/updater.ts), so a release lists the installers
+          # and the feed and nothing else. The globs also miss
+          # builder-debug.yml and builder-effective-config.yaml.
           path: |
             src/desktop/agent-observability-desktop/release/*.dmg
             src/desktop/agent-observability-desktop/release/*.zip
             src/desktop/agent-observability-desktop/release/*.exe
             src/desktop/agent-observability-desktop/release/latest*.yml
-            src/desktop/agent-observability-desktop/release/*.blockmap
 
   release:
     name: Publish release

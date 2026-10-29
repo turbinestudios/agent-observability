@@ -63,6 +63,9 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | undefined): voi
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
+  // Releases carry no *.blockmap files, so always fetch the whole installer
+  // rather than first trying a block-level diff against a missing file.
+  autoUpdater.disableDifferentialDownload = true;
   // The public provider resolves the latest *published* release from the
   // repo's release feed. Drafts never appear there, which is what makes the
   // release workflow's draft a safe smoke-test gate.

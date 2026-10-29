@@ -9,6 +9,14 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.4.3] - 2026-10-29
+
+### Fixed
+
+- **OpenCode** now lists all your sessions straight after updating. Before,
+  an install that had read OpenCode with an earlier build kept showing only
+  its older sessions until OpenCode next ran.
+
 ## [2.4.2] - 2026-10-29
 
 ### Added

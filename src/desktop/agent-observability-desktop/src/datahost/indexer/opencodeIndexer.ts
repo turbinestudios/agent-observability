@@ -12,9 +12,17 @@ import type { FileState, IndexDb } from './indexDb';
  * rows stay; once it moves, every session is written again. A file that
  * cannot be read leaves the earlier rows in place rather than emptying the
  * list.
+ *
+ * The file row also records which reader produced it. An unchanged file is
+ * skipped only when that reader is the current one, so a release that reads
+ * the store differently re-reads it at once instead of waiting for OpenCode
+ * to write again. (2.4.1 read only the 1.x tables, and its two-session result
+ * stuck on any machine where OpenCode had not run since.)
  */
 const SOURCE = 'opencode';
 const HYDRATE_BATCH = 20;
+/** Bump whenever the reader or mapper changes what a store yields. */
+export const OPENCODE_READER_VERSION = 2;
 
 export interface OpencodeIndexerDeps {
   db: IndexDb;
@@ -54,7 +62,11 @@ export class OpencodeIndexer {
     }
     const state = this.deps.db.getFileState(dbPath);
     const kept = this.keptIds(state?.accState);
-    const unchanged = state !== undefined && state.size === stamp.size && state.mtimeMs === stamp.mtimeMs;
+    const unchanged =
+      state !== undefined &&
+      state.size === stamp.size &&
+      state.mtimeMs === stamp.mtimeMs &&
+      this.readerOf(state.accState) === OPENCODE_READER_VERSION;
     if (unchanged && kept !== undefined && kept.every((id) => this.deps.db.getRow(SOURCE, id) !== undefined)) {
       this.deps.onDiscovered?.(kept.length);
       this.deps.db.removeMissing(SOURCE, new Set(kept));
@@ -125,8 +137,21 @@ export class OpencodeIndexer {
       mtimeMs: stamp.mtimeMs,
       headHash: null,
       parsedBytes: stamp.size,
-      accState: JSON.stringify({ ids }),
+      accState: JSON.stringify({ ids, reader: OPENCODE_READER_VERSION }),
     };
+  }
+
+  /** The reader version a file row was written by; absent before 2.4.3. */
+  private readerOf(accState: string | null | undefined): number | undefined {
+    if (accState === null || accState === undefined) {
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(accState) as { reader?: unknown };
+      return typeof parsed.reader === 'number' ? parsed.reader : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private keptIds(accState: string | null | undefined): string[] | undefined {
