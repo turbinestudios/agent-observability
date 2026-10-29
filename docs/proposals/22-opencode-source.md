@@ -15,8 +15,9 @@ clients.
 - The model reads `provider/model` (`github-copilot/claude-sonnet-4.5`,
   `openai/gpt-5.4`), so a Copilot-served session is recognisable as one.
 - Cost is the USD OpenCode recorded. Turns served through a GitHub Copilot
-  login are billed as premium requests, which OpenCode does not record, so they
-  stay **unpriced, never $0**.
+  login are billed as premium requests. OpenCode records an API list-price
+  estimate for them instead, which is not what Copilot charges, so they stay
+  **unpriced, never $0 and never the list price**.
 - Sub-agent sessions (`task` tool children) fold into their root as sub-agent
   usage, named by their agent (`explore`, `general`, …).
 - Settings has a toggle (on by default) and a database override, and says
@@ -40,13 +41,29 @@ stores, so before this source that use was invisible to the app.
   SQLite database in WAL mode, with schema managed by Drizzle migrations.
   Builds before the SQLite move kept JSON files under `storage/`; that layout
   is not read.
-- `session`: `id`, `project_id`, `parent_id` (sub-agent child), `title`
+- **Two table layouts share the file.** OpenCode 2.x writes `session_v2` and
+  `session_message` and migrates the 1.x rows into them, leaving the 1.x
+  tables behind with only the old sessions. The reader uses the v2 tables
+  whenever they exist, and the 1.x tables only when they do not. (2.4.1 read
+  only the 1.x tables, so it missed every session written by OpenCode 2.x.)
+- `session_v2`: as 1.x `session` below, plus `model {id, providerID,
+  variant}`, `agent`, and per-session token and cost totals that equal the
+  sum of its messages.
+- `session_message`: `type`, `seq` and `data`. Only `user` and `assistant`
+  are turns; `synthetic`, `system`, `shell`, `idle`, `compaction`,
+  `agent-switched` and `model-switched` are skipped. A user message is
+  `{text, time}`. An assistant message is `{agent, model {id, providerID},
+  tokens, cost, time, error {type}, content[]}`, whose `content` items are
+  `text`, `reasoning`, or `tool {name, state {status, input, content}, time
+  {created, completed}}`. Assistant messages carry no `parentID`; they answer
+  the user message before them in `seq` order.
+- 1.x `session`: `id`, `project_id`, `parent_id` (sub-agent child), `title`
   (`New session - <iso>` until generated), `directory`, `version`, times in ms.
-- `message.data` (JSON): `role`, `providerID`, `modelID`, `agent`, `parentID`
+- 1.x `message.data` (JSON): `role`, `providerID`, `modelID`, `agent`, `parentID`
   (the user message an assistant message answers), `time`,
   `tokens {input, output, reasoning, cache {read, write}}`, `cost`, `error`.
   User messages carry the model as `model {providerID, modelID}`.
-- `part.data` (JSON): `type` ∈ `text | reasoning | tool | step-start |
+- 1.x `part.data` (JSON): `type` ∈ `text | reasoning | tool | step-start |
   step-finish`; tool parts carry `tool`, `state.status`, `state.time`.
 - The same folder holds `auth.json` and the `account`, `credential` and
   `control_account` tables. None is ever read.
@@ -78,11 +95,16 @@ stores, so before this source that use was invisible to the app.
 
 **Verification**
 
-- Core tests build a WAL-mode store with the real DDL: a Copilot-served
-  session with a sub-agent, an OpenAI-served one with an error, placeholder
-  titles, synthetic text, a planted credential and tool payload that must
-  never surface, and an untouched source file.
+- Core tests build WAL-mode stores in both layouts.
+  - The 2.x store has a migrated 1.x session that must be counted once,
+    inline tool calls, skipped message types, and list-price costs on Copilot
+    turns that must stay unpriced.
+  - The 1.x store has a Copilot-served session with a sub-agent, an
+    OpenAI-served one with an error, placeholder titles, synthetic text, a
+    planted credential and tool payload that must never surface, and an
+    untouched source file.
 - Desktop tests: an unchanged store is skipped, a moved one re-read, a removed
   one drops its rows.
-- Checked against a copy of a real store: totals per session match the
-  `session` table's own token and cost columns.
+- Checked against a copy of a real 2.x store: all 9 root sessions (7 on
+  GitHub Copilot, 2 on OpenAI) appear with their sub-agents, and their totals
+  match each session's own token and cost columns.

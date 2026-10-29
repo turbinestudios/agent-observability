@@ -7,10 +7,16 @@ import { createReadonlySnapshot, type SnapshotOptions } from '../telemetry/snaps
  *
  * OpenCode keeps the file in WAL mode, so it is read through the same
  * private snapshot copy as every other SQLite store; the original is never
- * opened. Only the `session`, `message`, `part` and `project` tables are
- * queried, and from the JSON `data` columns only the fields named below:
- * never tool input or output, never reasoning text, never the `account`,
- * `credential` or `control_account` tables.
+ * opened. From the JSON `data` columns only the fields named below are
+ * read: never tool input or output, never reasoning text, never the
+ * `account`, `credential` or `control_account` tables.
+ *
+ * Two layouts exist in the same file. OpenCode 2.x writes `session_v2` and
+ * `session_message` (one row per user or assistant message in `seq`
+ * order, tool calls inline in the assistant message's `content`) and
+ * migrates the 1.x rows into them. Earlier builds have only `session`,
+ * `message` and `part`. The v2 tables are read whenever they exist; the
+ * legacy ones only when they do not, so nothing is counted twice.
  */
 
 export interface OpencodeSessionRow {
@@ -71,11 +77,11 @@ export interface OpencodeStore {
 /** Caps one text part held in memory; a pasted log can run to megabytes. */
 const TEXT_MAX_CHARS = 20_000;
 
-const SESSIONS = `SELECT s.id AS id, s.parent_id AS parentId, s.title AS title, s.directory AS directory,
+const LEGACY = {
+  sessions: `SELECT s.id AS id, s.parent_id AS parentId, s.title AS title, s.directory AS directory,
   s.version AS version, s.time_created AS createdMs, s.time_updated AS updatedMs, p.worktree AS worktree
-  FROM session s LEFT JOIN project p ON p.id = s.project_id`;
-
-const MESSAGES = `SELECT id, session_id AS sessionId, time_created AS createdMs,
+  FROM session s LEFT JOIN project p ON p.id = s.project_id`,
+  messages: `SELECT id, session_id AS sessionId, time_created AS createdMs,
   json_extract(data, '$.role') AS role,
   json_extract(data, '$.time.completed') AS completedMs,
   json_extract(data, '$.agent') AS agent,
@@ -89,19 +95,63 @@ const MESSAGES = `SELECT id, session_id AS sessionId, time_created AS createdMs,
   json_extract(data, '$.tokens.cache.write') AS cacheWrite,
   json_extract(data, '$.cost') AS cost,
   json_extract(data, '$.error.name') AS error
-  FROM message ORDER BY session_id, time_created, id`;
-
-const TOOLS = `SELECT message_id AS messageId, session_id AS sessionId, time_created AS createdMs,
+  FROM message ORDER BY session_id, time_created, id`,
+  tools: `SELECT message_id AS messageId, session_id AS sessionId, time_created AS createdMs,
   json_extract(data, '$.tool') AS tool,
   json_extract(data, '$.state.status') AS status,
   json_extract(data, '$.state.time.start') AS startMs,
   json_extract(data, '$.state.time.end') AS endMs
-  FROM part WHERE json_extract(data, '$.type') = 'tool' ORDER BY session_id, time_created, id`;
-
-const TEXTS = `SELECT message_id AS messageId, session_id AS sessionId,
+  FROM part WHERE json_extract(data, '$.type') = 'tool' ORDER BY session_id, time_created, id`,
+  texts: `SELECT message_id AS messageId, session_id AS sessionId,
   substr(json_extract(data, '$.text'), 1, ${TEXT_MAX_CHARS}) AS text
   FROM part WHERE json_extract(data, '$.type') = 'text' AND COALESCE(json_extract(data, '$.synthetic'), 0) = 0
-  ORDER BY session_id, time_created, id`;
+  ORDER BY session_id, time_created, id`,
+};
+
+/**
+ * OpenCode 2.x. Messages of other types (`synthetic`, `system`, `shell`,
+ * `idle`, `compaction`, the switch markers) are context or bookkeeping, not
+ * turns, and are skipped. Assistant messages carry no `parentID`; the
+ * mapper groups them under the user message before them in `seq` order.
+ */
+const V2 = {
+  sessions: `SELECT s.id AS id, s.parent_id AS parentId, s.title AS title, s.directory AS directory,
+  s.version AS version, s.time_created AS createdMs, s.time_updated AS updatedMs, p.worktree AS worktree
+  FROM session_v2 s LEFT JOIN project p ON p.id = s.project_id`,
+  messages: `SELECT id, session_id AS sessionId, time_created AS createdMs, type AS role,
+  json_extract(data, '$.time.completed') AS completedMs,
+  json_extract(data, '$.agent') AS agent,
+  json_extract(data, '$.model.providerID') AS providerId,
+  json_extract(data, '$.model.id') AS modelId,
+  NULL AS parentId,
+  json_extract(data, '$.tokens.input') AS input,
+  json_extract(data, '$.tokens.output') AS output,
+  json_extract(data, '$.tokens.reasoning') AS reasoning,
+  json_extract(data, '$.tokens.cache.read') AS cacheRead,
+  json_extract(data, '$.tokens.cache.write') AS cacheWrite,
+  json_extract(data, '$.cost') AS cost,
+  json_extract(data, '$.error.type') AS error
+  FROM session_message WHERE type IN ('user', 'assistant') ORDER BY session_id, seq`,
+  tools: `SELECT m.id AS messageId, m.session_id AS sessionId, m.time_created AS createdMs,
+  json_extract(c.value, '$.name') AS tool,
+  json_extract(c.value, '$.state.status') AS status,
+  json_extract(c.value, '$.time.created') AS startMs,
+  json_extract(c.value, '$.time.completed') AS endMs
+  FROM session_message m, json_each(m.data, '$.content') c
+  WHERE m.type = 'assistant' AND json_extract(c.value, '$.type') = 'tool'
+  ORDER BY m.session_id, m.seq, c.key`,
+  texts: `SELECT id AS messageId, session_id AS sessionId, seq, -1 AS item,
+  substr(json_extract(data, '$.text'), 1, ${TEXT_MAX_CHARS}) AS text
+  FROM session_message WHERE type = 'user'
+  UNION ALL
+  SELECT m.id, m.session_id, m.seq, c.key,
+  substr(json_extract(c.value, '$.text'), 1, ${TEXT_MAX_CHARS})
+  FROM session_message m, json_each(m.data, '$.content') c
+  WHERE m.type = 'assistant' AND json_extract(c.value, '$.type') = 'text'
+  ORDER BY sessionId, seq, item`,
+};
+
+const HAS_V2 = `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('session_v2', 'session_message')`;
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined);
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
@@ -114,8 +164,9 @@ export function readOpencodeStore(dbPath: string, options: SnapshotOptions = {})
   try {
     db = new Database(snapshot.dbPath, { readOnly: true, fileMustExist: true });
     const rows = (sql: string): Record<string, unknown>[] => db!.all(sql) as Record<string, unknown>[];
+    const q = rows(HAS_V2)[0]?.n === 2 ? V2 : LEGACY;
     const sessions: OpencodeSessionRow[] = [];
-    for (const r of rows(SESSIONS)) {
+    for (const r of rows(q.sessions)) {
       const id = str(r.id);
       if (id === undefined) {
         continue;
@@ -133,7 +184,7 @@ export function readOpencodeStore(dbPath: string, options: SnapshotOptions = {})
       });
     }
     const messages: OpencodeMessageRow[] = [];
-    for (const r of rows(MESSAGES)) {
+    for (const r of rows(q.messages)) {
       const id = str(r.id);
       const sessionId = str(r.sessionId);
       if (id === undefined || sessionId === undefined || (r.role !== 'user' && r.role !== 'assistant')) {
@@ -161,7 +212,7 @@ export function readOpencodeStore(dbPath: string, options: SnapshotOptions = {})
       });
     }
     const tools: OpencodeToolPart[] = [];
-    for (const r of rows(TOOLS)) {
+    for (const r of rows(q.tools)) {
       const messageId = str(r.messageId);
       const sessionId = str(r.sessionId);
       if (messageId === undefined || sessionId === undefined) {
@@ -178,7 +229,7 @@ export function readOpencodeStore(dbPath: string, options: SnapshotOptions = {})
       });
     }
     const texts: OpencodeTextPart[] = [];
-    for (const r of rows(TEXTS)) {
+    for (const r of rows(q.texts)) {
       const messageId = str(r.messageId);
       const sessionId = str(r.sessionId);
       const text = str(r.text);

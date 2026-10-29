@@ -20,16 +20,18 @@ import type { OpencodeMessageRow, OpencodeSessionRow, OpencodeStore, OpencodeToo
  *
  * - One root session per row; sub-agent sessions (`parent_id` set) fold into
  *   their root as `subagent` usage, the way Claude Code's sub-agents do.
- * - A turn is a user message plus the assistant messages answering it
- *   (`parentID`). Each assistant message is one LLM call; each tool part one
- *   tool call.
+ * - A turn is a user message plus the assistant messages answering it: by
+ *   `parentID` in the 1.x layout, else the replies that follow it in order
+ *   (2.x). Each assistant message is one LLM call; each tool call one tool
+ *   call.
  * - The model shows as `provider/model` (`github-copilot/gpt-5.4`), so a
  *   Copilot-served turn is visible as such.
  * - Tokens follow the Claude convention: input counts cache writes, cached
  *   counts cache reads, and the two never overlap.
  * - Cost is the USD OpenCode recorded per message. Turns served through a
- *   GitHub Copilot login are billed as Copilot premium requests, which
- *   OpenCode does not record, so they stay unpriced rather than $0.
+ *   GitHub Copilot login are billed as Copilot premium requests; OpenCode
+ *   records an API list-price estimate for them instead, which is not what
+ *   Copilot charges, so they stay unpriced rather than $0 or that estimate.
  */
 
 export const COPILOT_PROVIDERS: ReadonlySet<string> = new Set(['github-copilot', 'github-copilot-enterprise']);

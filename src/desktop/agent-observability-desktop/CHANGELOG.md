@@ -9,17 +9,17 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [2.4.1] - 2026-10-29
+## [2.4.2] - 2026-10-29
 
 ### Added
 
 - **OpenCode sessions** now appear beside your other sessions, including those
   that run on your GitHub Copilot subscription. Each shows the provider and
-  model that served it, such as `github-copilot/claude-sonnet-4.5`, with its
+  model that served it, such as `github-copilot/claude-opus-5.5`, with its
   turns, tool calls, tokens and any sub-agents. Sessions on other providers
-  show the cost OpenCode recorded. Copilot-served ones stay unpriced rather
-  than $0, because Copilot bills them as premium requests. Turn it off, or
-  point it at a different database, in Settings.
+  show the cost OpenCode recorded. Copilot-served ones stay unpriced, because
+  Copilot bills them as premium requests rather than the list price OpenCode
+  estimates. Turn it off, or point it at a different database, in Settings.
 
 ## [2.3.0] - 2026-10-06
 

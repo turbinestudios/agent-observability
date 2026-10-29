@@ -231,6 +231,130 @@ describe('OpencodeSource', { timeout: 30_000 }, () => {
   });
 });
 
+/**
+ * OpenCode 2.x as it writes today: `session_v2` and `session_message`, one
+ * row per message in `seq` order with tool calls inline, beside the 1.x
+ * tables it migrated from. The legacy copy of `ses_old` must not be counted
+ * a second time.
+ */
+describe('OpencodeSource on the 2.x layout', { timeout: 30_000 }, () => {
+  const V2_DDL = `
+CREATE TABLE project (id text PRIMARY KEY, worktree text NOT NULL);
+CREATE TABLE session (id text PRIMARY KEY, project_id text NOT NULL, parent_id text, directory text NOT NULL, title text NOT NULL,
+  version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL);
+CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL, time_created integer NOT NULL, data text NOT NULL);
+CREATE TABLE part (id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL, time_created integer NOT NULL, data text NOT NULL);
+CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL, parent_id text, slug text NOT NULL, directory text NOT NULL,
+  title text, version text NOT NULL, model text, agent text, time_created integer NOT NULL, time_updated integer NOT NULL);
+CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL,
+  time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL);
+`;
+
+  beforeEach(() => {
+    fs.rmSync(dbPath, { force: true });
+    fs.rmSync(`${dbPath}-wal`, { force: true });
+    fs.rmSync(`${dbPath}-shm`, { force: true });
+    const db = new DatabaseSync(dbPath);
+    db.exec('PRAGMA journal_mode = WAL;');
+    db.exec(V2_DDL);
+    const repo = path.join(root, 'repo');
+    db.prepare('INSERT INTO project VALUES (?, ?)').run('prj', repo);
+    // The 1.x row and its message, as left behind after migration.
+    db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('ses_old', 'prj', null, repo, 'Old one', '1.4.3', T0, T0);
+    db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run('lm1', 'ses_old', T0, JSON.stringify({ role: 'user', time: { created: T0 } }));
+    const session = db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const copilot = JSON.stringify({ id: 'claude-opus-5.5', providerID: 'github-copilot', variant: 'default' });
+    session.run('ses_old', 'prj', null, 'a', repo, 'Old one', '1.4.3', copilot, 'build', T0, T0);
+    session.run('ses_new', 'prj', null, 'b', repo, 'Ship the parser', '2.1.2', copilot, 'build', T0 + 100_000, T0 + 200_000);
+    session.run('ses_sub', 'prj', 'ses_new', 'c', repo, 'Review', '2.1.2', copilot, 'security-reviewer', T0 + 120_000, T0 + 130_000);
+    const message = db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)');
+    let seq = 0;
+    const msg = (id: string, sessionId: string, type: string, at: number, data: Record<string, unknown>): void => {
+      message.run(id, sessionId, type, seq++, at, at, JSON.stringify(data));
+    };
+    const reply = (agent: string, at: number, content: unknown[], extra: Record<string, unknown> = {}) => ({
+      agent,
+      model: { id: 'claude-opus-5.5', providerID: 'github-copilot', variant: 'default' },
+      time: { created: at, completed: at + 2_000 },
+      tokens: { input: 10, output: 100, reasoning: 5, cache: { read: 1_000, write: 200 } },
+      cost: 0.25,
+      content,
+      ...extra,
+    });
+    const tool = (name: string, at: number, status = 'completed') => ({
+      type: 'tool',
+      id: `t-${name}-${at}`,
+      name,
+      state: { status, input: { filePath: '/secret/path' }, content: ['tool output body'] },
+      time: { created: at, completed: at + 500 },
+    });
+    msg('o1', 'ses_old', 'user', T0, { text: 'Old prompt', time: { created: T0 } });
+    msg('o2', 'ses_old', 'assistant', T0 + 1_000, reply('build', T0 + 1_000, [{ type: 'text', text: 'Old answer' }]));
+    msg('n1', 'ses_new', 'user', T0 + 100_000, { text: 'Ship the parser', time: { created: T0 + 100_000 } });
+    msg('n1s', 'ses_new', 'synthetic', T0 + 100_001, { text: 'injected instructions', time: { created: T0 + 100_001 } });
+    msg('n2', 'ses_new', 'assistant', T0 + 101_000, reply('build', T0 + 101_000, [
+      { type: 'reasoning', text: 'private reasoning' },
+      tool('read', T0 + 101_500),
+      tool('edit', T0 + 102_000, 'error'),
+    ]));
+    msg('n3', 'ses_new', 'assistant', T0 + 110_000, reply('build', T0 + 110_000, [tool('subagent', T0 + 110_500), { type: 'text', text: 'Shipped.' }]));
+    msg('n4', 'ses_new', 'idle', T0 + 140_000, { outcome: 'completed', time: { created: T0 + 140_000 } });
+    msg('n5', 'ses_new', 'user', T0 + 150_000, { text: 'Now the tests', time: { created: T0 + 150_000 } });
+    msg('n6', 'ses_new', 'assistant', T0 + 151_000, reply('plan', T0 + 151_000, [], { error: { type: 'aborted', message: 'stopped' } }));
+    msg('s1', 'ses_sub', 'user', T0 + 120_000, { text: 'Review the diff', time: { created: T0 + 120_000 } });
+    msg('s2', 'ses_sub', 'assistant', T0 + 121_000, reply('security-reviewer', T0 + 121_000, [tool('grep', T0 + 121_500)]));
+    db.close();
+  });
+
+  it('reads the v2 tables and counts a migrated session once', () => {
+    const sessions = ok(new OpencodeSource(config()).listSessions());
+    expect(sessions.map((s) => s.sessionId)).toEqual(['ses_new', 'ses_old']);
+    const old = ok(new OpencodeSource(config()).getSessionDetail('ses_old'));
+    expect(old.summary.llmCalls).toBe(1);
+    expect(old.turns[0].userRequest).toBe('Old prompt');
+  });
+
+  it('groups replies under the prompt before them and reads tools from the message content', () => {
+    const detail = ok(new OpencodeSource(config()).getSessionDetail('ses_new'));
+    expect(detail.summary.model).toBe('github-copilot/claude-opus-5.5');
+    expect(detail.summary.title).toBe('Ship the parser');
+    expect(detail.turns.map((t) => [t.userRequest, t.llmCalls, t.success])).toEqual([
+      ['Ship the parser', 2, true],
+      ['Now the tests', 1, false],
+    ]);
+    expect(detail.turns[0].finalResponse).toBe('Shipped.');
+    expect(detail.turns[0].events.map((e) => e.toolName ?? e.operation)).toEqual(['chat', 'read', 'edit', 'chat', 'subagent']);
+    expect(detail.summary.agentModes).toEqual(['agent', 'ask']);
+    // Main thread: 3 replies of 10 input + 200 cache writes, 100 output, 1,000 cache reads.
+    expect([detail.summary.llmCalls, detail.summary.toolCalls, detail.summary.inputTokens, detail.summary.outputTokens, detail.summary.cachedTokens]).toEqual([
+      3, 3, 630, 300, 3_000,
+    ]);
+  });
+
+  it('keeps Copilot-served turns unpriced although OpenCode records a list-price cost', () => {
+    const detail = ok(new OpencodeSource(config()).getSessionDetail('ses_new'));
+    expect(detail.summary.costMicros).toBeUndefined();
+    expect(detail.treeStats.costUsdMicros).toBeUndefined();
+  });
+
+  it('folds the sub-agent session in, named by its agent', () => {
+    const detail = ok(new OpencodeSource(config()).getSessionDetail('ses_new'));
+    expect(detail.agentUsage.map((a) => [a.agentName, a.kind, a.llmCalls])).toEqual([
+      ['opencode', 'main', 3],
+      ['security-reviewer', 'subagent', 1],
+    ]);
+    expect(detail.treeStats).toMatchObject({ modelTurns: 4, toolCalls: 4, errorCount: 2 });
+  });
+
+  it('never surfaces tool payloads, reasoning or synthetic text', () => {
+    const source = new OpencodeSource(config());
+    const all = JSON.stringify([ok(source.getSessionDetail('ses_new')), ok(source.getSessionInteractions('ses_new'))]);
+    for (const hidden of ['/secret/path', 'tool output body', 'private reasoning', 'injected instructions']) {
+      expect(all).not.toContain(hidden);
+    }
+  });
+});
+
 describe('mapping helpers', () => {
   it('maps OpenCode agents onto the fixed mode set', () => {
     expect(opencodeAgentMode('build')).toBe('agent');
