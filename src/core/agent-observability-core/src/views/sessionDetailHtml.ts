@@ -1085,7 +1085,11 @@ function treeTotalsRows(stats: SessionTreeStats, costMode: CostMode): string {
   // own unit, never a $ figure). Exactly one tile is rendered.
   const costTile =
     costMode === 'usd'
-      ? { acr: 'COST', label: 'Estimated Cost (USD)', value: formatUsdMicros(stats.costUsdMicros) }
+      ? {
+          acr: 'COST',
+          label: (stats.copilotCreditsNano ?? 0) > 0 ? 'Cost (USD) / GitHub Copilot AI credits' : 'Estimated Cost (USD)',
+          value: formatUsdWithCredits(stats.costUsdMicros, stats.copilotCreditsNano),
+        }
       : costMode === 'credits'
         ? {
             acr: creditUnitAcronym(stats.creditUnit),
@@ -1751,6 +1755,7 @@ function renderAgentUsage(
       acc.cachedTokens += u.cachedTokens;
       acc.aiuNano += u.aiuNano;
       acc.costUsdMicros += u.costUsdMicros ?? 0;
+      acc.copilotCreditsNano += u.copilotCreditsNano ?? 0;
       acc.creditsNano += u.creditsNano ?? 0;
       acc.linesOfCode += u.linesOfCode;
       acc.linesOfDoc += u.linesOfDoc;
@@ -1766,6 +1771,7 @@ function renderAgentUsage(
       cachedTokens: 0,
       aiuNano: 0,
       costUsdMicros: 0,
+      copilotCreditsNano: 0,
       creditsNano: 0,
       linesOfCode: 0,
       linesOfDoc: 0,
@@ -1786,19 +1792,19 @@ function renderAgentUsage(
   const creditUnit = rows.find((u) => u.creditUnit !== undefined)?.creditUnit;
   const costCell = (u: SessionAgentUsage): string =>
     costMode === 'usd'
-      ? formatUsdMicros(u.costUsdMicros)
+      ? formatUsdWithCredits(u.costUsdMicros, u.copilotCreditsNano)
       : costMode === 'credits'
         ? formatCredits(u.creditsNano, u.creditUnit)
         : formatAiu(u.aiuNano);
   const costFooter =
     costMode === 'usd'
-      ? formatUsdMicros(totals.costUsdMicros)
+      ? formatUsdWithCredits(totals.costUsdMicros, totals.copilotCreditsNano)
       : costMode === 'credits'
         ? formatCredits(totals.creditsNano, creditUnit)
         : formatAiu(totals.aiuNano);
   const costHeader =
     costMode === 'usd'
-      ? '<th class="n" title="Estimated USD cost for these model turns (token×rate)">Cost</th>'
+      ? '<th class="n" title="Estimated USD cost for these model turns (token×rate). GitHub Copilot turns show the AI credits they used, at $0.01 each">Cost</th>'
       : costMode === 'credits'
         ? `<th class="n" title="GitHub cloud coding-agent ${creditUnit === 'pru' ? 'premium requests' : 'AI credits'} recorded for these model turns (the billed unit; no published $ rate)">${creditUnitLabel(creditUnit)}</th>`
         : '<th class="n" title="AIU (Copilot premium-request units) recorded on these spans — the actual billed usage — with the derived cost at $0.01/AIU">AIU</th>';
@@ -1830,7 +1836,7 @@ function renderAgentUsage(
       <thead>
         <tr>
           <th>Agent</th><th>Model</th><th class="n" title="${escapeHtml(opts.callsTitle)}">Calls</th>
-          <th class="n" title="Wall-clock run time attributed to this agent (first to last model-turn activity in a session; combined/repository views sum per-session times). The totals row sums the rows — concurrently running agents count separately.">Run time</th>
+          <th class="n" title="Wall-clock run time attributed to this agent in a session (first to last model-turn activity; for OpenCode, the time its model calls and tools were running, idle gaps excluded). Combined and repository views sum per-session times. The totals row sums the rows — concurrently running agents count separately.">Run time</th>
           <th class="n">Input</th>
           <th class="n">Output</th><th class="n">Cached</th>
           ${costHeader}
@@ -2045,6 +2051,20 @@ function formatAiu(aiuNano: number): string {
   const aiu = aiuNano / 1_000_000_000;
   const value = aiu.toFixed(aiu < 1 ? 4 : 2);
   return `${value} ($${aiuToUsd(aiuNano).toFixed(2)})`;
+}
+
+/**
+ * USD cost, followed by the GitHub Copilot AI credits inside it when a source
+ * prices some turns in credits (OpenCode signed in to Copilot). Plain
+ * {@link formatUsdMicros} otherwise. Safe to inject unescaped, like
+ * {@link formatAiu}.
+ */
+function formatUsdWithCredits(micros: number | undefined, creditsNano: number | undefined): string {
+  if (!((creditsNano ?? 0) > 0)) {
+    return formatUsdMicros(micros);
+  }
+  const credits = (creditsNano ?? 0) / 1_000_000_000;
+  return `${formatUsdMicros(micros)} · ${credits.toFixed(credits < 1 ? 4 : 2)} AI credits`;
 }
 
 /** Collapse whitespace and truncate a label to `max` chars with an ellipsis. */

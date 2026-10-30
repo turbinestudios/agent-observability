@@ -9,6 +9,19 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.4.5] - 2026-10-30
+
+### Added
+
+- **AI credits for GitHub Copilot in OpenCode.** When OpenCode runs on your
+  Copilot subscription, each agent and sub-agent now shows the GitHub AI
+  credits it used, worked out from its tokens at Copilot's published rates
+  for each model. Their dollar value counts in the session's cost and in your
+  totals. Before, these sessions showed no cost at all.
+- **Run time per agent for OpenCode sessions.** The agent tables now show how
+  long each agent and sub-agent was working. Time spent idle between your
+  prompts is left out.
+
 ## [2.4.4] - 2026-10-29
 
 ### Added

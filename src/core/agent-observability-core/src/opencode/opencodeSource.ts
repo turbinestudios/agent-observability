@@ -40,10 +40,10 @@ export interface OpencodeSourceConfig {
  * Anthropic and the rest. Read-only, through a snapshot copy of
  * `opencode.db` that is re-taken only when the file moves.
  *
- * Priced in USD from the cost OpenCode records; Copilot-served turns stay
- * unpriced (see `./mapper.ts`). Context analysis comes from OpenCode's own
- * record of the instruction files and skills it loaded (see
- * `./contextAnalysis.ts`).
+ * Priced in USD from the cost OpenCode records; Copilot-served turns are
+ * priced in AI credits from their tokens (see `./mapper.ts`). Context
+ * analysis comes from OpenCode's own record of the instruction files and
+ * skills it loaded (see `./contextAnalysis.ts`).
  */
 export class OpencodeSource implements SessionDataSource {
   readonly id: AgentSourceId = 'opencode';

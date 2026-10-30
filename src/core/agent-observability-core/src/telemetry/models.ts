@@ -376,6 +376,15 @@ export interface SessionModelUsage {
    * derivation would be a lie for credits).
    */
   creditsNano?: number;
+  /**
+   * GitHub Copilot AI credits in INTEGER NANO-CREDITS (1 credit = 1 AIU = 1e9)
+   * that are already counted in {@link costUsdMicros}, at $0.01 each. Set ONLY by
+   * a USD-priced source that computes Copilot credits from tokens (OpenCode
+   * signed in to Copilot); the panel shows them beside the dollar figure. Kept
+   * apart from {@link aiuNano}, which the AIU sources bill in and which is
+   * never part of a USD cost.
+   */
+  copilotCreditsNano?: number;
 }
 
 /**
@@ -429,6 +438,8 @@ export interface SessionAgentUsage {
    * See {@link SessionModelUsage.creditsNano}.
    */
   creditsNano?: number;
+  /** Copilot AI credits inside {@link costUsdMicros}. See {@link SessionModelUsage.copilotCreditsNano}. */
+  copilotCreditsNano?: number;
   /**
    * The unit {@link creditsNano} is denominated in ({@link CloudCreditUnit}). Set
    * ONLY by the Copilot (Cloud) source; absent for local sources. See
@@ -540,6 +551,12 @@ export interface SessionTreeStats {
    * `creditsNano` rollups.
    */
   creditsNano?: number;
+  /**
+   * Whole-tree Copilot AI credits inside {@link costUsdMicros}. See
+   * {@link SessionModelUsage.copilotCreditsNano}. Equals the sum of the
+   * per-model / per-agent rollups.
+   */
+  copilotCreditsNano?: number;
   /**
    * The unit {@link creditsNano} is denominated in ({@link CloudCreditUnit}). Set
    * ONLY by the Copilot (Cloud) source alongside {@link creditsNano}; absent for

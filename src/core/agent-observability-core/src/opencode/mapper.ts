@@ -11,7 +11,9 @@ import type {
   SessionTimelineEntry,
   SessionTurn,
 } from '../telemetry/models';
+import { copilotCreditsNano } from '../telemetry/copilotCredits';
 import { agentUsageKey } from '../telemetry/models';
+import { aiuToUsd } from '../telemetry/pricing';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
 import type {
   OpencodeInstructionLoad,
@@ -34,10 +36,16 @@ import type {
  *   Copilot-served turn is visible as such.
  * - Tokens follow the Claude convention: input counts cache writes, cached
  *   counts cache reads, and the two never overlap.
- * - Cost is the USD OpenCode recorded per message. Turns served through a
- *   GitHub Copilot login are billed as Copilot premium requests; OpenCode
- *   records an API list-price estimate for them instead, which is not what
- *   Copilot charges, so they stay unpriced rather than $0 or that estimate.
+ * - Cost is the USD OpenCode recorded per message, except for turns served
+ *   through a GitHub Copilot login. OpenCode records an API list-price
+ *   estimate for those, which is not what Copilot charges. Copilot bills AI
+ *   credits per token at its own per-model rates, so those turns carry the
+ *   credits computed from their tokens (`copilotCreditsNano`) and cost their dollar
+ *   value. A Copilot model without a published rate stays unpriced rather
+ *   than $0 or OpenCode's estimate.
+ * - An agent's run time is the time its (agent, model) calls and their tools
+ *   were running, overlaps counted once. OpenCode sessions are often resumed
+ *   over days, so first-to-last activity would count the idle time between.
  */
 
 export const COPILOT_PROVIDERS: ReadonlySet<string> = new Set(['github-copilot', 'github-copilot-enterprise']);
@@ -151,9 +159,25 @@ export function opencodeModel(m: Pick<OpencodeMessageRow, 'providerId' | 'modelI
   return m.providerId !== undefined ? `${m.providerId}/${m.modelId}` : m.modelId;
 }
 
-const isPriced = (m: OpencodeMessageRow): boolean =>
-  m.cost !== undefined && !(m.providerId !== undefined && COPILOT_PROVIDERS.has(m.providerId));
-const micros = (usd: number): number => Math.round(usd * 1_000_000);
+const isCopilot = (m: OpencodeMessageRow): boolean => m.providerId !== undefined && COPILOT_PROVIDERS.has(m.providerId);
+/** AI credits (nano) for a Copilot-served message, else `undefined`. */
+const creditsOf = (m: OpencodeMessageRow): number | undefined =>
+  isCopilot(m)
+    ? copilotCreditsNano(m.modelId, {
+        input: m.inputTokens,
+        cacheRead: m.cacheReadTokens,
+        cacheWrite: m.cacheWriteTokens,
+        output: m.outputTokens + m.reasoningTokens,
+      })
+    : undefined;
+/** The message's cost in micro-USD, or `undefined` when it is unpriced. */
+const costMicros = (m: OpencodeMessageRow): number | undefined => {
+  if (isCopilot(m)) {
+    const credits = creditsOf(m);
+    return credits === undefined ? undefined : Math.round(aiuToUsd(credits) * 1_000_000);
+  }
+  return m.cost === undefined ? undefined : Math.round(m.cost * 1_000_000);
+};
 const inputOf = (m: OpencodeMessageRow): number => m.inputTokens + m.cacheWriteTokens;
 const endOf = (m: OpencodeMessageRow): number => Math.max(m.createdMs, m.completedMs ?? 0);
 const toolEnd = (t: OpencodeToolPart): number => Math.max(t.startMs, t.endMs ?? 0);
@@ -320,8 +344,8 @@ function sum<T>(items: readonly T[], of: (item: T) => number): number {
 
 /** Priced USD in micro-dollars, or `undefined` when nothing in `messages` carries a price. */
 function costMicrosOf(messages: readonly OpencodeMessageRow[]): number | undefined {
-  const priced = messages.filter((m) => m.role === 'assistant' && isPriced(m));
-  return priced.length === 0 ? undefined : sum(priced, (m) => micros(m.cost ?? 0));
+  const costs = messages.filter((m) => m.role === 'assistant').map(costMicros).filter((c) => c !== undefined);
+  return costs.length === 0 ? undefined : sum(costs, (c) => c);
 }
 
 function titleOf(input: OpencodeSessionInput): { title: string; titleDerived: boolean } | undefined {
@@ -376,13 +400,14 @@ export function buildOpencodeSessionDetail(input: OpencodeSessionInput): Session
   const modelUsage = new Map<string, SessionModelUsage>();
   const agentUsage = new Map<string, SessionAgentUsage>();
   const treeModelTurns: SessionModelTurnPoint[] = [];
+  const busy = new Map<string, [number, number][]>();
   for (const { thread, name, kind } of allThreads) {
+    const toolsByMessage = groupBy(thread.tools, (tool) => tool.messageId);
     for (const m of thread.messages) {
       if (m.role !== 'assistant') {
         continue;
       }
       const model = opencodeModel(m);
-      const priced = isPriced(m);
       const usage = modelUsage.get(model) ?? {
         model,
         llmCalls: 0,
@@ -392,7 +417,7 @@ export function buildOpencodeSessionDetail(input: OpencodeSessionInput): Session
         reasoningTokens: 0,
         aiuNano: 0,
       };
-      addUsage(usage, m, priced);
+      addUsage(usage, m);
       modelUsage.set(model, usage);
       const key = agentUsageKey({ agentName: name, model, kind });
       const agent = agentUsage.get(key) ?? {
@@ -410,8 +435,17 @@ export function buildOpencodeSessionDetail(input: OpencodeSessionInput): Session
         linesOfCodeRemoved: 0,
         linesOfDocRemoved: 0,
       };
-      addUsage(agent, m, priced);
+      addUsage(agent, m);
       agentUsage.set(key, agent);
+      if (m.createdMs > 0) {
+        const endMs = Math.max(endOf(m), ...(toolsByMessage.get(m.id) ?? []).map(toolEnd));
+        const spans = busy.get(key);
+        if (spans === undefined) {
+          busy.set(key, [[m.createdMs, endMs]]);
+        } else {
+          spans.push([m.createdMs, endMs]);
+        }
+      }
       treeModelTurns.push({
         timestampMs: m.createdMs,
         model,
@@ -427,11 +461,18 @@ export function buildOpencodeSessionDetail(input: OpencodeSessionInput): Session
     }
   }
   treeModelTurns.sort((a, b) => a.timestampMs - b.timestampMs);
+  for (const [key, spans] of busy) {
+    const row = agentUsage.get(key);
+    if (row !== undefined) {
+      row.runDurationMs = busyMs(spans);
+    }
+  }
 
   const treeInput = sum(allReplies, inputOf);
   const treeOutput = sum(allReplies, (m) => m.outputTokens);
   const treeCached = sum(allReplies, (m) => m.cacheReadTokens);
   const treeCost = costMicrosOf(allReplies);
+  const treeCredits = sum(allReplies, (m) => creditsOf(m) ?? 0);
   return {
     summary,
     treeStats: {
@@ -444,6 +485,7 @@ export function buildOpencodeSessionDetail(input: OpencodeSessionInput): Session
       errorCount: allReplies.filter((m) => m.error !== undefined).length + allTools.filter(toolFailed).length,
       aiuNano: 0,
       ...(treeCost !== undefined ? { costUsdMicros: treeCost } : {}),
+      ...(treeCredits > 0 ? { copilotCreditsNano: treeCredits } : {}),
       linesOfCode: 0,
       linesOfDoc: 0,
       linesOfCodeRemoved: 0,
@@ -458,14 +500,36 @@ export function buildOpencodeSessionDetail(input: OpencodeSessionInput): Session
   };
 }
 
-function addUsage(row: SessionModelUsage, m: OpencodeMessageRow, priced: boolean): void {
+/** Total time covered by the spans, overlaps counted once. */
+function busyMs(spans: [number, number][]): number {
+  let total = 0;
+  let open: [number, number] | undefined;
+  for (const [start, end] of [...spans].sort((a, b) => a[0] - b[0])) {
+    if (open !== undefined && start <= open[1]) {
+      open[1] = Math.max(open[1], end);
+      continue;
+    }
+    if (open !== undefined) {
+      total += open[1] - open[0];
+    }
+    open = [start, end];
+  }
+  return open !== undefined ? total + open[1] - open[0] : total;
+}
+
+function addUsage(row: SessionModelUsage, m: OpencodeMessageRow): void {
   row.llmCalls += 1;
   row.inputTokens += inputOf(m);
   row.outputTokens += m.outputTokens;
   row.cachedTokens += m.cacheReadTokens;
   row.reasoningTokens += m.reasoningTokens;
-  if (priced) {
-    row.costUsdMicros = (row.costUsdMicros ?? 0) + micros(m.cost ?? 0);
+  const credits = creditsOf(m);
+  if (credits !== undefined) {
+    row.copilotCreditsNano = (row.copilotCreditsNano ?? 0) + credits;
+  }
+  const cost = costMicros(m);
+  if (cost !== undefined) {
+    row.costUsdMicros = (row.costUsdMicros ?? 0) + cost;
   }
 }
 

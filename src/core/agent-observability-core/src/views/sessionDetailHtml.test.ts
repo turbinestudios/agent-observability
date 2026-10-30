@@ -382,6 +382,46 @@ describe('renderSessionDetailHtml — Copilot (Cloud) credit units', () => {
     expect(html).toMatch(/Copilot cloud agent<\/td>[\s\S]*?<td class="n">3<\/td>/);
   });
 
+  it('shows Copilot AI credits beside a USD cost only when the cost includes them', () => {
+    const usdDetail = (copilot: boolean): SessionDetail => ({
+      ...detail,
+      treeStats: {
+        ...ZERO_TREE_STATS,
+        modelTurns: 1,
+        costUsdMicros: 2_250_000,
+        ...(copilot ? { copilotCreditsNano: 225_000_000_000 } : {}),
+        // AIU from another source never reads as credits inside the dollars.
+        aiuNano: 5_000_000_000,
+      },
+      agentUsage: [
+        {
+          agentName: 'opencode',
+          model: 'github-copilot/claude-opus-5.5',
+          kind: 'main',
+          llmCalls: 1,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          aiuNano: 0,
+          costUsdMicros: 2_250_000,
+          ...(copilot ? { copilotCreditsNano: 225_000_000_000 } : {}),
+          linesOfCode: 0,
+          linesOfDoc: 0,
+          linesOfCodeRemoved: 0,
+          linesOfDocRemoved: 0,
+        },
+      ],
+    });
+    const withCredits = renderSessionDetailHtml(usdDetail(true), [], NONCE, undefined, 'usd');
+    expect(withCredits).toMatch(/opencode<\/td>[\s\S]*?<td class="n">\$2\.25 · 225\.00 AI credits<\/td>/);
+    expect(withCredits).toContain('Cost (USD) / GitHub Copilot AI credits');
+    const plain = renderSessionDetailHtml(usdDetail(false), [], NONCE, undefined, 'usd');
+    expect(plain).toMatch(/opencode<\/td>[\s\S]*?<td class="n">\$2\.25<\/td>/);
+    expect(plain).not.toContain(' AI credits</');
+    expect(plain).toContain('Estimated Cost (USD)');
+  });
+
   it('renders a legacy `ai_credits` value as "AI Credits" with decimals', () => {
     const html = renderSessionDetailHtml(creditDetail(10_191_735_000, 'ai_credits'), [], NONCE, undefined, 'credits');
     expect(html).toContain('AI Credits');

@@ -14,10 +14,15 @@ clients.
   with title, repository, turns, tool calls, tokens and times.
 - The model reads `provider/model` (`github-copilot/claude-sonnet-4.5`,
   `openai/gpt-5.4`), so a Copilot-served session is recognisable as one.
-- Cost is the USD OpenCode recorded. Turns served through a GitHub Copilot
-  login are billed as premium requests. OpenCode records an API list-price
-  estimate for them instead, which is not what Copilot charges, so they stay
-  **unpriced, never $0 and never the list price**.
+- Cost is the USD OpenCode recorded, except for turns served through a
+  GitHub Copilot login. OpenCode records an API list-price estimate for
+  those, which is not what Copilot charges. They show the **GitHub AI
+  credits** computed from their tokens at Copilot's per-model rates, with
+  the credits' dollar value ($0.01 each) as their cost. A model with no
+  published rate stays **unpriced, never $0 and never the list price**.
+  (Before 2.4.5 every Copilot turn stayed unpriced.)
+- Each agent and sub-agent shows its run time: the time its model calls and
+  their tools were running, with idle gaps between resumes left out.
 - Sub-agent sessions (`task` tool children) fold into their root as sub-agent
   usage, named by their agent (`explore`, `general`, …).
 - Settings has a toggle (on by default) and a database override, and says
@@ -67,6 +72,23 @@ stores, so before this source that use was invisible to the app.
   step-finish`; tool parts carry `tool`, `state.status`, `state.time`.
 - The same folder holds `auth.json` and the `account`, `credential` and
   `control_account` tables. None is ever read.
+
+**Grounding: Copilot AI credits (verified October 2026)**
+
+- Copilot bills AI credits per token (1 credit = 1 AIU = $0.01) at per-model
+  input, cached-input, cache-write and output rates, some with a long-context
+  tier, published at
+  https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing.
+- Checked against `assistant_usage_events` in the Copilot CLI's
+  `session-store.db`: a least-squares fit of `total_nano_aiu` on the four
+  token buckets reproduces every call with zero error and yields exactly the
+  published rates. The request multiplier plays no part.
+- OpenCode's own costs for Copilot turns use other rates: no cache-write
+  charge, for one. On the reference store, the credits come to about $366
+  where OpenCode recorded $225.
+- OpenCode's v2 tokens are disjoint (`input` is fresh; cache read and write
+  are separate), and reasoning is counted apart from output, so the credits
+  bill `output + reasoning` at the output rate.
 
 **Grounding: what OpenCode records about context (2.x)**
 
@@ -119,8 +141,6 @@ stores, so before this source that use was invisible to the app.
 **Out of scope**
 
 - The legacy JSON `storage/` layout.
-- Estimating Copilot premium requests per turn; the multiplier per model is
-  not recorded locally.
 - Live status rows for this source.
 - Context analysis on the 1.x layout beyond context files read and the
   window size: those builds record no instruction loads.

@@ -66,6 +66,7 @@ function mergeTreeStats(details: readonly SessionDetail[]): SessionTreeStats {
     errorCount: 0,
     aiuNano: 0,
     costUsdMicros: 0,
+    copilotCreditsNano: 0,
     creditsNano: 0,
     linesOfCode: 0,
     linesOfDoc: 0,
@@ -83,6 +84,8 @@ function mergeTreeStats(details: readonly SessionDetail[]): SessionTreeStats {
     // Claude carries token-priced USD here (Copilot's is absent → 0); summing
     // keeps the combined "Agent run totals" cost tile correct for Claude.
     acc.costUsdMicros = (acc.costUsdMicros ?? 0) + (t.costUsdMicros ?? 0);
+    // OpenCode's Copilot credits are inside that USD, so they sum alongside it.
+    acc.copilotCreditsNano = (acc.copilotCreditsNano ?? 0) + (t.copilotCreditsNano ?? 0);
     // Copilot (Cloud) carries AI credits here (local sources' is absent → 0).
     acc.creditsNano = (acc.creditsNano ?? 0) + (t.creditsNano ?? 0);
     // Carry the credit unit from the first cloud session that reports one. A
@@ -205,6 +208,8 @@ interface TokenCounts {
   aiuNano: number;
   /** Claude token-priced USD (micro-USD); absent for Copilot (uses aiuNano). */
   costUsdMicros?: number;
+  /** Copilot AI credits already inside costUsdMicros (OpenCode). */
+  copilotCreditsNano?: number;
   /** Copilot (Cloud) AI credits (nano-credits); absent for local sources. */
   creditsNano?: number;
 }
@@ -217,6 +222,7 @@ function addTokens(into: TokenCounts, from: TokenCounts): void {
   into.reasoningTokens += from.reasoningTokens;
   into.aiuNano += from.aiuNano;
   into.costUsdMicros = (into.costUsdMicros ?? 0) + (from.costUsdMicros ?? 0);
+  into.copilotCreditsNano = (into.copilotCreditsNano ?? 0) + (from.copilotCreditsNano ?? 0);
   into.creditsNano = (into.creditsNano ?? 0) + (from.creditsNano ?? 0);
 }
 

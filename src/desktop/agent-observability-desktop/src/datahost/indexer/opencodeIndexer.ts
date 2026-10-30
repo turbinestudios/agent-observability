@@ -26,8 +26,9 @@ const HYDRATE_BATCH = 20;
  * re-stamps every OpenCode row, which marks its analysis stale, so a change
  * to the context analysis reaches Context Hotspots without OpenCode writing.
  * 2: the 2.x tables. 3: instruction files and skills for Context Analysis.
+ * 4: Copilot AI credits and per-agent run time.
  */
-export const OPENCODE_READER_VERSION = 3;
+export const OPENCODE_READER_VERSION = 4;
 
 export interface OpencodeIndexerDeps {
   db: IndexDb;

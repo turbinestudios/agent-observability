@@ -144,12 +144,13 @@ describe('OpencodeSource', { timeout: 30_000 }, () => {
     expect(sessions.every((s) => s.source === 'opencode')).toBe(true);
   });
 
-  it('shows a Copilot-served session by provider and leaves it unpriced, not $0', () => {
+  it('shows a Copilot-served session by provider and leaves a model without a credit rate unpriced, not $0', () => {
     const detail = ok(new OpencodeSource(config()).getSessionDetail('ses_copilot'));
     const s = detail.summary;
     expect(s.model).toBe('github-copilot/claude-sonnet-4.5');
     expect(s.costMicros).toBeUndefined();
     expect(detail.treeStats.costUsdMicros).toBeUndefined();
+    expect(detail.treeStats.copilotCreditsNano).toBeUndefined();
     expect(s.title).toBe('Fix the login form');
     expect(s.titleDerived).toBe(false);
     expect(s.agentModes).toEqual(['agent']);
@@ -162,9 +163,11 @@ describe('OpencodeSource', { timeout: 30_000 }, () => {
   it('counts the sub-agent in the tree and names it by its agent', () => {
     const detail = ok(new OpencodeSource(config()).getSessionDetail('ses_copilot'));
     expect(detail.treeStats).toMatchObject({ modelTurns: 3, toolCalls: 3, inputTokens: 1_850, errorCount: 1 });
-    expect(detail.agentUsage.map((a) => [a.agentName, a.kind, a.model, a.llmCalls])).toEqual([
-      ['opencode', 'main', 'github-copilot/claude-sonnet-4.5', 2],
-      ['explore', 'subagent', 'github-copilot/gpt-5-mini', 1],
+    expect(detail.agentUsage.map((a) => [a.agentName, a.kind, a.model, a.llmCalls, a.runDurationMs])).toEqual([
+      // Main: +1s to +9.5s (the first reply's task tool), then +10s to +12s.
+      ['opencode', 'main', 'github-copilot/claude-sonnet-4.5', 2, 10_500],
+      // Sub-agent: one reply from +6s to its completion at +8s, outlasting its tool.
+      ['explore', 'subagent', 'github-copilot/gpt-5-mini', 1, 2_000],
     ]);
     expect(detail.treeModelTurns).toHaveLength(3);
   });
@@ -331,10 +334,27 @@ CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, typ
     ]);
   });
 
-  it('keeps Copilot-served turns unpriced although OpenCode records a list-price cost', () => {
+  it('prices Copilot-served turns in AI credits from their tokens, never the list price OpenCode records', () => {
     const detail = ok(new OpencodeSource(config()).getSessionDetail('ses_new'));
-    expect(detail.summary.costMicros).toBeUndefined();
-    expect(detail.treeStats.costUsdMicros).toBeUndefined();
+    // Claude Opus 5.5 per reply: 10 × $4 + 1,000 × $0.20 + 200 × $5 + (100 + 5) × $20 per 1M
+    // = $0.00334 = 0.334 credits. OpenCode recorded $0.25.
+    expect(detail.summary.costMicros).toBe(3 * 3_340);
+    expect(detail.treeStats.copilotCreditsNano).toBe(4 * 334_000_000);
+    expect(detail.treeStats.aiuNano).toBe(0);
+    expect(detail.treeStats.costUsdMicros).toBe(4 * 3_340);
+    const main = detail.agentUsage.find((a) => a.kind === 'main');
+    expect([main?.copilotCreditsNano, main?.costUsdMicros]).toEqual([3 * 334_000_000, 3 * 3_340]);
+    expect(detail.modelUsage.map((m) => m.copilotCreditsNano)).toEqual([4 * 334_000_000]);
+  });
+
+  it('gives each agent the time its calls and tools ran, idle gaps excluded', () => {
+    const detail = ok(new OpencodeSource(config()).getSessionDetail('ses_new'));
+    expect(detail.agentUsage.map((a) => [a.agentName, a.runDurationMs])).toEqual([
+      // Three 2s replies (+101s, +110s, +151s); their tools end inside them.
+      ['opencode', 6_000],
+      // One reply from +121s to its completion at +123s.
+      ['security-reviewer', 2_000],
+    ]);
   });
 
   it('folds the sub-agent session in, named by its agent', () => {
