@@ -1,0 +1,649 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://turbine.dev/schemas/shared-session.schema.json",
+  "title": "Agent Observability Shared Session (v1)",
+  "description": "One session a user exported to a file to share with a colleague. Carries raw content (prompts and responses, secrets redacted best-effort). Generated from src/core/agent-observability-core/src/share/sharedSessionShape.ts; do not edit by hand.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schemaVersion",
+    "exportedAtMs",
+    "toolVersion",
+    "origin",
+    "redactions",
+    "detail"
+  ],
+  "properties": {
+    "kind": {
+      "const": "agent-observability.shared-session"
+    },
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "exportedAtMs": {
+      "type": "number",
+      "minimum": 0
+    },
+    "toolVersion": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "costMode"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "claude",
+            "copilot",
+            "copilot-cloud",
+            "copilot-agent",
+            "copilot-cli",
+            "copilot-app",
+            "copilot-jetbrains",
+            "opencode"
+          ]
+        },
+        "costMode": {
+          "enum": [
+            "aiu",
+            "usd",
+            "credits"
+          ]
+        }
+      }
+    },
+    "redactions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "kinds"
+      ],
+      "properties": {
+        "count": {
+          "type": "number",
+          "minimum": 0
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "token",
+              "authorization",
+              "env-assignment",
+              "private-key",
+              "url-credentials"
+            ]
+          },
+          "maxItems": 16
+        }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "treeStats",
+        "turns",
+        "modelUsage",
+        "agentUsage",
+        "treeModelTurns"
+      ],
+      "properties": {
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sessionId",
+            "repository",
+            "startedAtMs",
+            "endedAtMs",
+            "durationMs",
+            "interactionCount",
+            "llmCalls",
+            "toolCalls",
+            "inputTokens",
+            "outputTokens",
+            "cachedTokens",
+            "model",
+            "agentModes"
+          ],
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "repository": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "startedAtMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "endedAtMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "durationMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "interactionCount": {
+              "type": "number",
+              "minimum": 0
+            },
+            "llmCalls": {
+              "type": "number",
+              "minimum": 0
+            },
+            "toolCalls": {
+              "type": "number",
+              "minimum": 0
+            },
+            "inputTokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "outputTokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cachedTokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "costMicros": {
+              "type": "number",
+              "minimum": 0
+            },
+            "model": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "agentModes": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "default",
+                  "ask",
+                  "edit",
+                  "agent",
+                  "custom"
+                ]
+              },
+              "maxItems": 16
+            },
+            "title": {
+              "type": "string"
+            },
+            "titleDerived": {
+              "type": "boolean"
+            },
+            "stateLabel": {
+              "type": "string",
+              "maxLength": 1024
+            }
+          }
+        },
+        "treeStats": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "modelTurns",
+            "toolCalls",
+            "inputTokens",
+            "outputTokens",
+            "cachedTokens",
+            "totalTokens",
+            "errorCount",
+            "aiuNano",
+            "linesOfCode",
+            "linesOfDoc",
+            "linesOfCodeRemoved",
+            "linesOfDocRemoved"
+          ],
+          "properties": {
+            "modelTurns": {
+              "type": "number",
+              "minimum": 0
+            },
+            "toolCalls": {
+              "type": "number",
+              "minimum": 0
+            },
+            "inputTokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "outputTokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cachedTokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "totalTokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "errorCount": {
+              "type": "number",
+              "minimum": 0
+            },
+            "aiuNano": {
+              "type": "number",
+              "minimum": 0
+            },
+            "costUsdMicros": {
+              "type": "number",
+              "minimum": 0
+            },
+            "creditsNano": {
+              "type": "number",
+              "minimum": 0
+            },
+            "copilotCreditsNano": {
+              "type": "number",
+              "minimum": 0
+            },
+            "creditUnit": {
+              "enum": [
+                "ai_credits",
+                "pru"
+              ]
+            },
+            "linesOfCode": {
+              "type": "number",
+              "minimum": 0
+            },
+            "linesOfDoc": {
+              "type": "number",
+              "minimum": 0
+            },
+            "linesOfCodeRemoved": {
+              "type": "number",
+              "minimum": 0
+            },
+            "linesOfDocRemoved": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "turns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "timestampMs",
+              "agentMode",
+              "model",
+              "durationMs",
+              "success",
+              "llmCalls",
+              "inputTokens",
+              "outputTokens",
+              "cachedTokens",
+              "reasoningTokens",
+              "linesOfCode",
+              "linesOfDoc",
+              "linesOfCodeRemoved",
+              "linesOfDocRemoved",
+              "events"
+            ],
+            "properties": {
+              "timestampMs": {
+                "type": "number",
+                "minimum": 0
+              },
+              "agentMode": {
+                "enum": [
+                  "default",
+                  "ask",
+                  "edit",
+                  "agent",
+                  "custom"
+                ]
+              },
+              "model": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "durationMs": {
+                "type": "number",
+                "minimum": 0
+              },
+              "success": {
+                "type": "boolean"
+              },
+              "userRequest": {
+                "type": "string"
+              },
+              "finalResponse": {
+                "type": "string"
+              },
+              "llmCalls": {
+                "type": "number",
+                "minimum": 0
+              },
+              "inputTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "outputTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cachedTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "reasoningTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfCode": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfDoc": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfCodeRemoved": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfDocRemoved": {
+                "type": "number",
+                "minimum": 0
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "timestampMs",
+                    "operation",
+                    "agentMode",
+                    "model",
+                    "durationMs",
+                    "success"
+                  ],
+                  "properties": {
+                    "timestampMs": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "operation": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "agentMode": {
+                      "enum": [
+                        "default",
+                        "ask",
+                        "edit",
+                        "agent",
+                        "custom"
+                      ]
+                    },
+                    "model": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "toolName": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "durationMs": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "userRequest": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "modelUsage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "model",
+              "llmCalls",
+              "inputTokens",
+              "outputTokens",
+              "cachedTokens",
+              "reasoningTokens",
+              "aiuNano"
+            ],
+            "properties": {
+              "model": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "llmCalls": {
+                "type": "number",
+                "minimum": 0
+              },
+              "inputTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "outputTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cachedTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "reasoningTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "aiuNano": {
+                "type": "number",
+                "minimum": 0
+              },
+              "costUsdMicros": {
+                "type": "number",
+                "minimum": 0
+              },
+              "creditsNano": {
+                "type": "number",
+                "minimum": 0
+              },
+              "copilotCreditsNano": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "agentUsage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "agentName",
+              "model",
+              "kind",
+              "llmCalls",
+              "inputTokens",
+              "outputTokens",
+              "cachedTokens",
+              "reasoningTokens",
+              "aiuNano",
+              "linesOfCode",
+              "linesOfDoc",
+              "linesOfCodeRemoved",
+              "linesOfDocRemoved"
+            ],
+            "properties": {
+              "agentName": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "model": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "kind": {
+                "enum": [
+                  "main",
+                  "subagent"
+                ]
+              },
+              "llmCalls": {
+                "type": "number",
+                "minimum": 0
+              },
+              "inputTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "outputTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cachedTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "reasoningTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "aiuNano": {
+                "type": "number",
+                "minimum": 0
+              },
+              "costUsdMicros": {
+                "type": "number",
+                "minimum": 0
+              },
+              "creditsNano": {
+                "type": "number",
+                "minimum": 0
+              },
+              "copilotCreditsNano": {
+                "type": "number",
+                "minimum": 0
+              },
+              "creditUnit": {
+                "enum": [
+                  "ai_credits",
+                  "pru"
+                ]
+              },
+              "linesOfCode": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfDoc": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfCodeRemoved": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfDocRemoved": {
+                "type": "number",
+                "minimum": 0
+              },
+              "runDurationMs": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "treeModelTurns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "timestampMs",
+              "model",
+              "inputTokens",
+              "outputTokens",
+              "cachedTokens",
+              "reasoningTokens",
+              "linesOfCode",
+              "linesOfDoc",
+              "linesOfCodeRemoved",
+              "linesOfDocRemoved"
+            ],
+            "properties": {
+              "timestampMs": {
+                "type": "number",
+                "minimum": 0
+              },
+              "model": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "inputTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "outputTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cachedTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "reasoningTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfCode": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfDoc": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfCodeRemoved": {
+                "type": "number",
+                "minimum": 0
+              },
+              "linesOfDocRemoved": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

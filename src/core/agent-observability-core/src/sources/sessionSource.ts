@@ -115,6 +115,13 @@ export interface SessionDataSource {
    * the method.
    */
   getSessionActivity?(sessionKey: string, detail?: SessionDetail): Result<SessionActivity>;
+
+  /**
+   * Optional per-session cost basis, for a source whose sessions do not share
+   * one: an imported shared session keeps the basis of the source it was
+   * recorded by. `undefined` falls back to {@link costMode}.
+   */
+  costModeOf?(sessionKey: string): CostMode | undefined;
 }
 
 /**

@@ -52,7 +52,7 @@ export interface SessionTextDeps {
   row: (source: string, sessionId: string) => { repository: string; title?: string } | undefined;
   /** The verified local checkout for a repository, when one is known. */
   resolveRoot: (repository: string) => string | undefined;
-  costMode: (source: string) => CostMode;
+  costMode: (source: string, sessionId: string) => CostMode;
 }
 
 export interface ReviewPacketsResult {
@@ -84,7 +84,7 @@ export function buildReviewPackets(refs: readonly SessionRef[], deps: SessionTex
         repository,
         ...(row?.title !== undefined ? { title: row.title } : {}),
         toRepoPath: repoPathFn(root),
-        costMode: deps.costMode(ref.source),
+        costMode: deps.costMode(ref.source, ref.sessionId),
       });
       // The builder knows the session only by its detail; the list knows it by
       // source too, and the renderer needs both to label a multi-session packet.

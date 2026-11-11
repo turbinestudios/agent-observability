@@ -38,6 +38,9 @@ declare global {
       }): Promise<{ ok: boolean; fallbackCommand?: string }>;
       getVersion(): Promise<string>;
       pickFolder(): Promise<string | undefined>;
+      pickShareSave(suggestedName: string): Promise<string | undefined>;
+      pickShareOpen(): Promise<string | undefined>;
+      pathForFile(file: File): string;
       setRunActive(count: number): void;
       setNativeTheme(theme: 'dark' | 'light'): void;
       onUpdateStatus(listener: (status: UpdateStatus) => void): () => void;

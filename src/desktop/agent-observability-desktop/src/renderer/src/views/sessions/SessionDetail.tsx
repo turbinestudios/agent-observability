@@ -1,7 +1,14 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dataHost } from '../../api/client';
-import type { AiAvailability, AiBackendInfo, ContextPromptFacts, SessionRow, TagCount } from '../../../../shared/rpc';
+import type {
+  AiAvailability,
+  AiBackendInfo,
+  ContextPromptFacts,
+  SessionRow,
+  SharedOrigin,
+  TagCount,
+} from '../../../../shared/rpc';
 import { useThemeValue } from '../../theme/ThemeContext';
 import { Spinner } from '../../components/Spinner';
 import { rotatedNote } from '../../components/loadingNotes';
@@ -9,6 +16,9 @@ import { useNoteTick } from '../../components/useNoteTick';
 import { ImprovePromptDialog } from './ImprovePromptDialog';
 import { HandoffDialog, ReviewPacketDialog } from './SessionTextDialog';
 import { openRunDoor, useRunEnabled } from '../run/doors';
+import { ShareDialog } from './ShareDialog';
+import { isSharedSession } from './share';
+import { sourceLabel } from './format';
 
 /**
  * Renders a session using the shared detail renderer, inside a sandboxed iframe.
@@ -59,6 +69,28 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
   const [promptFacts, setPromptFacts] = useState<ContextPromptFacts | undefined>(undefined);
   // Local, copy-only dialogs: nothing leaves the app until the user presses Copy.
   const [textDialog, setTextDialog] = useState<'packet' | 'handoff' | undefined>(undefined);
+  const [sharing, setSharing] = useState(false);
+  // Someone else's session: it can be read, compared and packeted, but not
+  // continued, re-shared, or sent to an AI as if it were the user's own work.
+  const imported = isSharedSession(row.source);
+  const [origin, setOrigin] = useState<SharedOrigin | undefined>(undefined);
+  useEffect(() => {
+    if (!imported) {
+      return;
+    }
+    let cancelled = false;
+    void dataHost
+      .call('share.origin', row.sessionId)
+      .then((value) => {
+        if (!cancelled) {
+          setOrigin(value);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [imported, row.sessionId]);
   const frameRef = useRef<HTMLIFrameElement>(null);
   // Bumped by the refresh button; the ref marks the next fetch as forced so
   // only a deliberate refresh re-parses (a theme change reuses the cache).
@@ -231,7 +263,7 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
         row={row}
         actions={
           <>
-            {onAskAi !== undefined && (
+            {onAskAi !== undefined && !imported && (
               <button
                 type="button"
                 className="detail-ask-ai"
@@ -249,14 +281,26 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
             >
               Review packet
             </button>
-            <button
-              type="button"
-              className="detail-ask-ai"
-              title="A brief for continuing this work in a new session, built on this computer with no AI"
-              onClick={() => setTextDialog('handoff')}
-            >
-              Hand off
-            </button>
+            {!imported && (
+              <button
+                type="button"
+                className="detail-ask-ai"
+                title="A brief for continuing this work in a new session, built on this computer with no AI"
+                onClick={() => setTextDialog('handoff')}
+              >
+                Hand off
+              </button>
+            )}
+            {!imported && (
+              <button
+                type="button"
+                className="detail-ask-ai"
+                title="Save this session to a file a colleague can import and compare with their own"
+                onClick={() => setSharing(true)}
+              >
+                Share…
+              </button>
+            )}
             {runEnabled && row.source === 'copilot-cli' && (
               <button
                 type="button"
@@ -267,7 +311,7 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
                 Continue in Run
               </button>
             )}
-            {runEnabled && (
+            {runEnabled && !imported && (
               <button
                 type="button"
                 className="detail-ask-ai"
@@ -293,6 +337,19 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
           </>
         }
       />
+      {imported && (
+        <div className="shared-origin" role="note">
+          Shared session
+          {origin !== undefined && (
+            <>
+              {' · '}recorded with {sourceLabel(origin.source)}
+              {' · '}exported {new Date(origin.exportedAtMs).toLocaleDateString()}
+            </>
+          )}
+          . Read-only here, and not counted in your own figures.
+        </div>
+      )}
+      {sharing && <ShareDialog row={row} onClose={() => setSharing(false)} />}
       {deepRunning && (
         <div className="deep-retro-status" role="status" aria-live="polite">
           <Spinner size={14} stroke={2} />

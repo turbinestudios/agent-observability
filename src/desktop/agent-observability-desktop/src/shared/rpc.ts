@@ -816,6 +816,44 @@ export interface TeamMemberInfo {
   stale: boolean;
 }
 
+/**
+ * What exporting one session to a shared-session file would write, for the
+ * dialog the user confirms before choosing where to save it.
+ */
+export type SharePreview =
+  | {
+      ok: true;
+      /** Size of the file as it would be written. */
+      bytes: number;
+      turns: number;
+      /** How many secret-looking strings the redaction pass replaced. */
+      redactions: number;
+      redactionKinds: string[];
+      /** The name the file is suggested under. */
+      title?: string;
+    }
+  | { ok: false; message: string };
+
+export type ShareExportResult = { ok: true; path: string; bytes: number } | { ok: false; message: string };
+
+export type ShareImportResult =
+  | {
+      ok: true;
+      source: 'shared';
+      sessionId: string;
+      /** True when an earlier import of the same session was replaced. */
+      replaced: boolean;
+    }
+  | { ok: false; problems: string[] };
+
+/** Where an imported session came from, for its detail header. */
+export interface SharedOrigin {
+  /** The source that recorded it on the sender's machine. */
+  source: string;
+  exportedAtMs: number;
+  toolVersion: string;
+}
+
 /** The exact file that sharing would write, for the preview dialog. */
 export interface TeamPreview {
   json: string;
@@ -1764,6 +1802,21 @@ export interface RpcMethods {
   'sessions.handoffBrief'(source: string, sessionId: string): { brief: HandoffBrief; note?: string };
   /** Where and with which CLI this session can be resumed in the user's terminal. */
   'sessions.handoff'(source: string, sessionId: string): ResumeTarget;
+  /**
+   * What a shared-session file for this session would hold, built but not
+   * written. Refused for a session that was itself imported.
+   */
+  'share.preview'(source: string, sessionId: string): SharePreview;
+  /**
+   * Write the shared-session file to the path the user chose in the save
+   * dialog. Only after the share dialog; the path must end in
+   * `.aosession.json`.
+   */
+  'share.export'(source: string, sessionId: string, filePath: string): ShareExportResult;
+  /** Validate a shared-session file and keep a copy in the app's own folder. */
+  'share.import'(filePath: string): ShareImportResult;
+  /** The origin of an imported session, or `undefined` when it is not one. */
+  'share.origin'(sessionId: string): SharedOrigin | undefined;
   /** Whether Run can be used on this machine, and the models it may pick. */
   'run.availability'(): RunAvailability;
   /** Record that the user read the Run notice. The only way `run.disclosed` is set. */

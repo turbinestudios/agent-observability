@@ -11,6 +11,7 @@ import { CompareBar } from './CompareBar';
 import { ReviewPacketDialog } from './SessionTextDialog';
 import { refsFromKeys } from './selection';
 import { IndexStatusBar } from './IndexStatusBar';
+import { droppedShareFile, importNotice } from './share';
 import { SourceFilter } from './SourceFilter';
 import { FilterPanel } from './FilterPanel';
 import { Spinner } from '../../components/Spinner';
@@ -94,6 +95,11 @@ export function SessionsView({
   // Orthogonal to the source chips: it narrows whichever set is on screen.
   const [onlyDeviations, setOnlyDeviations] = useState(false);
   const [onlyFriction, setOnlyFriction] = useState(false);
+  // The outcome of the last shared-session import, shown above the list.
+  const [shareNotice, setShareNotice] = useState<{ ok: boolean; text: string; problems?: string[] } | undefined>(
+    undefined,
+  );
+  const [dropping, setDropping] = useState(false);
   const {
     rows,
     groups,
@@ -216,6 +222,39 @@ export function SessionsView({
     }
   }, [openIntent, rows, virtualizer]);
 
+  // Import a shared session from a file the user picked or dropped, then open
+  // it, so the next step (ticking it with one of their own) is right there.
+  const importShared = useCallback((filePath: string) => {
+    setShareNotice(undefined);
+    void dataHost
+      .call('share.import', filePath)
+      .then(async (result) => {
+        if (!result.ok) {
+          setShareNotice({ ok: false, text: 'This file could not be imported.', problems: result.problems.slice(0, 5) });
+          return;
+        }
+        setShareNotice({ ok: true, text: importNotice(result.replaced) });
+        const row = await dataHost.call('sessions.row', result.source, result.sessionId);
+        if (row !== undefined) {
+          setPinned(row);
+          setSelected(sessionKey(row.source, row.sessionId));
+          setComparing(undefined);
+        }
+      })
+      .catch((err: Error) => setShareNotice({ ok: false, text: err.message }));
+  }, []);
+
+  const pickShared = useCallback(() => {
+    void window.desktop
+      .pickShareOpen()
+      .then((filePath) => {
+        if (filePath !== undefined) {
+          importShared(filePath);
+        }
+      })
+      .catch(() => undefined);
+  }, [importShared]);
+
   const restore = useCallback(
     (row: SessionRow) => {
       void dataHost
@@ -242,7 +281,30 @@ export function SessionsView({
           }}
         />
       )}
-      <aside className="sessions-pane">
+      <aside
+        className={`sessions-pane${dropping ? ' sessions-pane-drop' : ''}`}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            setDropping(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+            setDropping(false);
+          }
+        }}
+        onDrop={(e) => {
+          setDropping(false);
+          const file = droppedShareFile([...e.dataTransfer.files]);
+          if (file === undefined) {
+            return;
+          }
+          e.preventDefault();
+          importShared(window.desktop.pathForFile(file));
+        }}
+      >
         <header className="sessions-header">
           <input
             className="sessions-search"
@@ -261,6 +323,17 @@ export function SessionsView({
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M3 5h18l-7 8v6l-4 2v-8L3 5Z" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={pickShared}
+            title="Import a session someone shared with you (or drop the file on the list)"
+            aria-label="Import a shared session"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16 6.3 10.3l1.4-1.4 3.3 3.3V3Zm-7 14h2v2h12v-2h2v4H4v-4Z" />
             </svg>
           </button>
           <button type="button" className="icon-button" onClick={refresh} title="Refresh">
@@ -304,6 +377,24 @@ export function SessionsView({
           showingFriction={onlyFriction}
           onToggleFriction={() => setOnlyFriction((v) => !v)}
         />
+
+        {shareNotice !== undefined && (
+          <div className={`share-notice${shareNotice.ok ? '' : ' share-notice-error'}`} role="status">
+            <div>
+              <p>{shareNotice.text}</p>
+              {shareNotice.problems !== undefined && shareNotice.problems.length > 0 && (
+                <ul>
+                  {shareNotice.problems.map((problem) => (
+                    <li key={problem}>{problem}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setShareNotice(undefined)}>
+              ×
+            </button>
+          </div>
+        )}
 
         <IndexStatusBar
           status={status}

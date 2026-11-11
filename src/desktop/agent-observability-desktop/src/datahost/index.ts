@@ -6,10 +6,13 @@ import { CopilotSource, SourceRegistry } from '@agent-observability/core/src/sou
 import { CopilotCliSource } from '@agent-observability/core/src/copilotCli/copilotCliSource';
 import { CopilotJetbrainsSource } from '@agent-observability/core/src/copilotJetbrains/copilotJetbrainsSource';
 import { OpencodeSource } from '@agent-observability/core/src/opencode/opencodeSource';
+import { SharedSessionSource } from '@agent-observability/core/src/share/sharedSessionSource';
+import { SHARED_SOURCE_ID } from '@agent-observability/core/src/share/sharedSessionModels';
 import { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
 import * as path from 'node:path';
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
+import type { CostMode } from '@agent-observability/core/src/telemetry/models';
 import type {
   ContextAction,
   AnalysisStatus,
@@ -44,12 +47,16 @@ import { DesktopSettingsReader } from './drivers/desktopConfig';
 import { NativeTelemetryBackend } from './drivers/nativeTelemetryBackend';
 import { applySettingsPatch, buildSettingsSnapshot } from './settings';
 import { IndexDb, resolveIndexDbPath } from './indexer/indexDb';
+import { SharedIndexer } from './indexer/sharedIndexer';
 import type { SessionKeyOverlay } from './indexer/indexDb';
 import { RenameStore } from './renames';
 import { HiddenStore } from './hidden';
 import { TagStore } from './tags';
 import { NoteStore } from './notes';
 import { describeDeletion, deleteSession } from './deletion';
+import { exportShare, importShare, previewShare, removeShared, resolveSharedDir } from './share/shareFiles';
+import type { ShareSessionInput } from './share/shareFiles';
+import { figureExclusions } from './share/figures';
 import { DeepRetroStore, toLlmVerdict } from './deepRetros';
 import { DEEP_RETRO_ENABLED_KEY, runDeepRetrospective } from './deepRetro';
 import { ContextPlanStore } from './improve/contextPlans';
@@ -126,6 +133,7 @@ const copilotCli = new CopilotCliSource(config);
 const copilotApp = new CopilotCliSource(config, undefined, 'app');
 const copilotJetbrains = new CopilotJetbrainsSource(config);
 const opencode = new OpencodeSource(config);
+const shared = new SharedSessionSource(resolveSharedDir());
 const sources = new SourceRegistry([
   claude,
   new CopilotSource(telemetry, config),
@@ -133,6 +141,7 @@ const sources = new SourceRegistry([
   copilotApp,
   copilotJetbrains,
   opencode,
+  shared,
 ]);
 const invalidateDiscovery = (): void => {
   claude.invalidateDiscovery();
@@ -140,6 +149,7 @@ const invalidateDiscovery = (): void => {
   copilotApp.refresh();
   copilotJetbrains.refresh();
   opencode.refresh();
+  shared.refresh();
 };
 
 // One detector for the whole process: it is stateless and reads the live config
@@ -149,6 +159,9 @@ const deviations = new LocalDeviationDetector(config);
 const detail = new DetailRenderer(sources, deviations);
 const renames = new RenameStore();
 const hidden = new HiddenStore();
+// Aggregates read through this, never through `hidden`: imported shared
+// sessions are listed and comparable, but never counted as this user's work.
+const figures = figureExclusions(hidden, () => db.hydratedSessionIds(SHARED_SOURCE_ID));
 // Tags and notes deliberately do NOT reach the AI backends below: everything
 // they hold is text the user wrote, and the consent notices on the deep
 // retrospective and the AI Helper enumerate exactly what those requests carry.
@@ -166,7 +179,7 @@ const aiHelper = new AiHelperController({
   sources,
   settings,
   renames,
-  hidden,
+  hidden: figures,
   backend: () => aiBackends.active(),
   emit,
 });
@@ -244,7 +257,7 @@ const runRef: { current?: RunController } = {};
 const live = new LiveBoardService({
   db,
   config,
-  hidden,
+  hidden: figures,
   renames,
   emit: (event) => {
     emit(event);
@@ -260,7 +273,7 @@ const live = new LiveBoardService({
 });
 const attention = new InboxService({
   db,
-  hidden,
+  hidden: figures,
   renames,
   store: new InboxStore(),
   live: () => live.snapshot(),
@@ -281,7 +294,7 @@ const team = new TeamController({
   db,
   settings,
   sources,
-  hidden,
+  hidden: figures,
   emit,
   exclusive: (work) => background.exclusive(work),
   toolVersion: () => toolVersion,
@@ -292,7 +305,7 @@ const settingsSeams = { teamDeveloperId: () => team.developerId() };
 
 const hubDeps = {
   db,
-  hiddenKeys: () => hidden.all(),
+  hiddenKeys: () => figures.all(),
   decorate,
   liveRows: () => live.snapshot().rows,
   plans: (repository: string) => contextPlans.list(repository).map(planSummary),
@@ -333,7 +346,7 @@ const run = new RunService({
     const value = settings.get<unknown>(RUN_DEFAULT_MODEL_KEY, '');
     return typeof value === 'string' ? value : '';
   },
-  repositories: () => [...new Set(db.listGroups(hidden.all()).map((group) => group.repository))],
+  repositories: () => [...new Set(db.listGroups(figures.all()).map((group) => group.repository))],
   resolveRoot: (repository) => {
     const resolved = resolveRepoRoot(repository, db);
     return 'root' in resolved ? resolved.root : undefined;
@@ -488,13 +501,39 @@ function acceptedMissing(): AcceptedMissingConfig {
   };
 }
 
+/** A session's cost basis: per session where the source says so, else the source's. */
+function costModeFor(source: string, sessionId: string): CostMode | undefined {
+  const dataSource = sources.get(source);
+  return dataSource?.costModeOf?.(sessionId) ?? dataSource?.costMode;
+}
+
+/**
+ * What exporting a session reads: the detail view's memoized parse, the cost
+ * basis, and the name the user sees for it.
+ */
+function shareInput(source: string, sessionId: string): ShareSessionInput {
+  const renamed = renames.get(source, sessionId);
+  return {
+    source,
+    sessionId,
+    detail: () =>
+      detail.sessionFacts(source, sessionId, stampOf(source, sessionId), detailContext(source, sessionId)).detail,
+    costMode: costModeFor(source, sessionId) ?? 'usd',
+    ...(renamed !== undefined ? { title: renamed } : {}),
+    toolVersion,
+    nowMs: Date.now(),
+  };
+}
+
 function detailContext(source: string, sessionId: string): DetailContext {
   const stored = deepRetros.get(source, sessionId);
   return {
     acceptedMissing: acceptedMissing(),
     renamedTitle: renames.get(source, sessionId),
     deepRetro: {
-      enabled: settings.get<boolean>(DEEP_RETRO_ENABLED_KEY, false) === true,
+      // Never offered for someone else's session: the consent it asks for is
+      // about sending the user's own work.
+      enabled: source !== SHARED_SOURCE_ID && settings.get<boolean>(DEEP_RETRO_ENABLED_KEY, false) === true,
       ...(stored !== undefined ? { stored: toLlmVerdict(stored) } : {}),
     },
   };
@@ -584,7 +623,7 @@ function sessionTextDeps(): HandoffBriefDeps {
       const resolved = resolveRepoRoot(repository, db);
       return 'root' in resolved ? resolved.root : undefined;
     },
-    costMode: (source) => sources.get(source)?.costMode ?? 'usd',
+    costMode: (source, sessionId) => costModeFor(source, sessionId) ?? 'usd',
     live: (source, sessionId) => {
       const row = live.snapshot().rows.find((r) => r.source === source && r.sessionId === sessionId);
       if (row === undefined) {
@@ -621,12 +660,27 @@ function handle(request: RpcRequest): unknown {
       return hidden.size();
     case 'sessions.deletionPlan': {
       const [source, sessionId] = request.params;
+      if (source === SHARED_SOURCE_ID) {
+        const file = shared.fileFor(sessionId);
+        return {
+          supported: file !== undefined,
+          target: file ?? 'Not an imported session',
+          consequence:
+            "This app's copy of the imported session is removed. The file it was imported from is not touched, so you can import it again.",
+        };
+      }
       return describeDeletion(source, sessionId, { config });
     }
     case 'sessions.delete': {
       const [source, sessionId] = request.params;
       return background.exclusive(() => {
-        const result = deleteSession(source, sessionId, { config });
+        const sharedFile = source === SHARED_SOURCE_ID ? shared.fileFor(sessionId) : undefined;
+        const result =
+          source === SHARED_SOURCE_ID
+            ? sharedFile === undefined
+              ? { ok: false, detail: 'Not an imported session.' }
+              : removeShared(sharedFile)
+            : deleteSession(source, sessionId, { config });
         if (result.ok) {
           // The stopped worker cannot reinsert this session after deletion.
           db.removeSession(source, sessionId);
@@ -716,6 +770,34 @@ function handle(request: RpcRequest): unknown {
       const [source, sessionId] = request.params;
       return resumeTarget(source, sessionId, { mainPath: (src, id) => db.mainPath(src, id) });
     }
+    case 'share.preview': {
+      const [source, sessionId] = request.params;
+      return previewShare(shareInput(source, sessionId));
+    }
+    case 'share.export': {
+      const [source, sessionId, filePath] = request.params;
+      return exportShare(shareInput(source, sessionId), filePath);
+    }
+    case 'share.import': {
+      const [filePath] = request.params;
+      // Behind the background controller like every other index write, so a
+      // running pass cannot interleave with the new row.
+      return background.exclusive(() => {
+        const result = importShare(filePath, shared.directory());
+        if (result.ok) {
+          shared.refresh();
+          detail.invalidate(SHARED_SOURCE_ID, result.sessionId);
+          new SharedIndexer({ db, source: shared }).run();
+          pushRow(SHARED_SOURCE_ID, result.sessionId);
+          refreshCounts();
+        }
+        return result;
+      });
+    }
+    case 'share.origin': {
+      const [sessionId] = request.params;
+      return shared.originDetails(sessionId);
+    }
     case 'sessions.contextPrompt': {
       const [source, sessionId, section] = request.params;
       return detail.contextPromptFacts(
@@ -760,7 +842,7 @@ function handle(request: RpcRequest): unknown {
       return tags.list(hidden.all());
     case 'hotspots.get': {
       const params = request.params[0] ?? {};
-      const hiddenKeys = hidden.all();
+      const hiddenKeys = figures.all();
       return {
         rows: db.hotspots(params, hiddenKeys),
         repositories: db.hotspotRepositories(hiddenKeys),
@@ -769,11 +851,11 @@ function handle(request: RpcRequest): unknown {
     }
     case 'hotspots.sessions': {
       const [file, params] = request.params;
-      return db.hotspotSessions(file, params ?? {}, hidden.all());
+      return db.hotspotSessions(file, params ?? {}, figures.all());
     }
     case 'retro.get': {
       const params = request.params[0] ?? {};
-      const { rows, repositories } = db.retro(params, hidden.all());
+      const { rows, repositories } = db.retro(params, figures.all());
       // User-chosen names are layered on here exactly as the list does it —
       // the index stores the source's own titles.
       const named = rows.map((row) => {
@@ -785,7 +867,7 @@ function handle(request: RpcRequest): unknown {
     case 'evidence.rework': {
       const params = request.params[0] ?? {};
       const window = toOverviewWindow(params.window ?? DEFAULT_OVERVIEW_WINDOW);
-      const hiddenKeys = hidden.all();
+      const hiddenKeys = figures.all();
       const endedAfterMs = window === 'all' ? undefined : windowStartMs(window);
       const ranking = db.reworkRanking(
         {
@@ -810,7 +892,7 @@ function handle(request: RpcRequest): unknown {
     case 'evidence.completion': {
       const params = request.params[0] ?? {};
       const window = toOverviewWindow(params.window ?? DEFAULT_OVERVIEW_WINDOW);
-      const hiddenKeys = hidden.all();
+      const hiddenKeys = figures.all();
       const endedAfterMs = window === 'all' ? undefined : windowStartMs(window);
       return {
         summary: db.completionSummary(
@@ -831,7 +913,7 @@ function handle(request: RpcRequest): unknown {
     case 'evidence.tools': {
       const params = request.params[0] ?? {};
       const window = toOverviewWindow(params.window ?? DEFAULT_OVERVIEW_WINDOW);
-      const hiddenKeys = hidden.all();
+      const hiddenKeys = figures.all();
       const endedAfterMs = window === 'all' ? undefined : windowStartMs(window);
       return {
         rows: db.toolRanking(
@@ -941,11 +1023,11 @@ function handle(request: RpcRequest): unknown {
       // count that includes what the user removed reads as a bug.
       return db.overview(
         toOverviewWindow(request.params[0]?.window ?? DEFAULT_OVERVIEW_WINDOW),
-        hidden.all(),
+        figures.all(),
       );
     case 'overview.insights': {
       const window = toOverviewWindow(request.params[0]?.window ?? DEFAULT_OVERVIEW_WINDOW);
-      const hiddenKeys = hidden.all();
+      const hiddenKeys = figures.all();
       const { verdictDaily, themes, windowDays, dailyCapped } = db.insights(window, hiddenKeys);
       // The hotspot card rides the same query as the Hotspots view, windowed to
       // the Dashboard's range and scored over the FULL windowed set — the
@@ -986,7 +1068,7 @@ function handle(request: RpcRequest): unknown {
       return buildRepositoryCards(
         toOverviewWindow(request.params[0]?.window ?? DEFAULT_OVERVIEW_WINDOW),
         db,
-        hidden.all(),
+        figures.all(),
         live.snapshot().rows,
       );
     case 'workspace.repoHub':

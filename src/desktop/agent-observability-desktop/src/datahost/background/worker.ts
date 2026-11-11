@@ -19,6 +19,9 @@ import { CopilotJetbrainsSource } from '@agent-observability/core/src/copilotJet
 import { CopilotJetbrainsIndexer } from '../indexer/copilotJetbrainsIndexer';
 import { OpencodeSource } from '@agent-observability/core/src/opencode/opencodeSource';
 import { OpencodeIndexer } from '../indexer/opencodeIndexer';
+import { SharedSessionSource } from '@agent-observability/core/src/share/sharedSessionSource';
+import { SharedIndexer } from '../indexer/sharedIndexer';
+import { resolveSharedDir } from '../share/shareFiles';
 import { NativeTelemetryBackend } from '../drivers/nativeTelemetryBackend';
 import { AnalysisQueue } from '../analysis/analysisQueue';
 import { ensureArchiveIndexes } from '../archiveIndexes';
@@ -39,6 +42,10 @@ const settings = {
 const config = new Configuration(settings);
 const telemetry = new TelemetryService(config, undefined, new NativeTelemetryBackend(db));
 telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
+// Sessions other people shared and this user imported. Listed (and analyzed
+// for the list's verdict chip) like any other; never part of the user's own
+// figures, which the data host's aggregate queries enforce.
+const shared = new SharedSessionSource(resolveSharedDir());
 const sources = new SourceRegistry([
   new ClaudeCodeService(config),
   new CopilotSource(telemetry, config),
@@ -46,6 +53,7 @@ const sources = new SourceRegistry([
   new CopilotCliSource(config, undefined, 'app'),
   new CopilotJetbrainsSource(config),
   new OpencodeSource(config),
+  shared,
 ]);
 let status: IndexStatus = { indexed: 0, total: 0, phase: 'discovering' };
 const progress = (): void => {
@@ -130,6 +138,12 @@ try {
     db.removeMissing('copilot', new Set());
     notes.push('Copilot is turned off in Settings');
   }
+  try {
+    const result = new SharedIndexer({ db, source: shared, onRows }).run();
+    if (result.problems.length > 0) {
+      notes.push(`Shared: could not read ${result.problems.length} imported session${result.problems.length === 1 ? '' : 's'}`);
+    }
+  } catch (error) { notes.push(`Shared: ${String(error)}`); }
   // A session the CLI stored and VS Code also traced is one session: the CLI row wins.
   dropCopilotDuplicates(db);
   const present = new Set(db.sessionKeys());

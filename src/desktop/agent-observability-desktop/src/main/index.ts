@@ -240,6 +240,35 @@ app.whenReady().then(() => {
         : await dialog.showOpenDialog(mainWindow, options);
     return result.canceled ? undefined : result.filePaths[0];
   });
+  // Sharing a session: where to save the file, and which file to import.
+  // Only the chosen path goes back to the renderer; the data host does the
+  // reading and writing, and re-checks the extension itself.
+  ipcMain.handle('app:pick-share-save', async (_event, suggestedName: unknown) => {
+    const options: Electron.SaveDialogOptions = {
+      title: 'Save shared session',
+      defaultPath: shareFileName(suggestedName),
+      filters: [{ name: 'Shared session', extensions: ['aosession.json'] }],
+    };
+    const result =
+      mainWindow === undefined
+        ? await dialog.showSaveDialog(options)
+        : await dialog.showSaveDialog(mainWindow, options);
+    return result.canceled || result.filePath === undefined || result.filePath.length === 0
+      ? undefined
+      : result.filePath;
+  });
+  ipcMain.handle('app:pick-share-open', async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: 'Import a shared session',
+      properties: ['openFile'],
+      filters: [{ name: 'Shared session', extensions: ['json'] }],
+    };
+    const result =
+      mainWindow === undefined
+        ? await dialog.showOpenDialog(options)
+        : await dialog.showOpenDialog(mainWindow, options);
+    return result.canceled ? undefined : result.filePaths[0];
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -317,3 +346,14 @@ app.on('before-quit', (event) => {
   }
   dataHost?.kill();
 });
+
+/**
+ * A file name for the save dialog from the session's title: letters, digits,
+ * spaces and dashes only, so no title can steer the dialog to another folder.
+ */
+function shareFileName(suggested: unknown): string {
+  const base = typeof suggested === 'string'
+    ? suggested.replace(/[^\p{L}\p{N} _-]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)
+    : '';
+  return `${base.length > 0 ? base : 'session'}.aosession.json`;
+}

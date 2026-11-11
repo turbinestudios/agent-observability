@@ -208,6 +208,36 @@ every level.
   This clause is not one of the sanctioned exceptions and none of them may
   be cited to widen it.
 
+- **Sharing one session as a file.** The user may export **one session at a
+  time** to a shared-session file (`*.aosession.json`, defined by
+  [schemas/shared-session.schema.json](schemas/shared-session.schema.json)),
+  to give to a colleague who imports it and compares it with their own. This
+  is the only path on which the app writes a session's raw content (its
+  prompts, the assistant's final responses, the title, tool names and every
+  figure the detail view shows) to a file meant for someone else. The rules:
+  1. **User-initiated, one session per export.** A dialog first states that
+     the file holds the full conversation and what it leaves out; nothing is
+     written until the user picks a location in the save dialog, and only to
+     that path. The app never sends the file anywhere.
+  2. **Allowlisted, redacted, validated.** The exporter copies only the
+     fields the format allows (never tags, notes, hidden flags, rename
+     history, external URLs, tool inputs or outputs, file paths, or any
+     identity), runs best-effort secret redaction over every free-text
+     field, shows the redaction count, and validates its own output exactly
+     as an importer would.
+  3. **Imports are untrusted.** A file is validated in full before anything
+     is kept, and the app's own copy is re-validated on every read. A file
+     that fails is reported and nothing is stored.
+  4. **Never the receiver's own figures.** Imported sessions are listed under
+     the `shared` source and can be opened and compared, but they are
+     excluded from every aggregate (overview, insights, hotspots,
+     retrospective trends, evidence, workspace, inbox, AI Helper corpus) and
+     from the team shard. They cannot be re-exported, sent to an AI backend,
+     handed off, resumed or run.
+
+  Like the Run clause, this is not one of the sanctioned exceptions, and
+  none of them may be cited to widen it, nor it to widen them.
+
 - **One sanctioned local write path.** Applying a Context Improvement Plan may
   write **only** allowlisted context files (`CLAUDE.md`, `AGENTS.md`,
   `copilot-instructions.md`, `SKILL.md`, `*.instructions.md`, `*.prompt.md`,

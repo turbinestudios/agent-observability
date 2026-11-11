@@ -9,6 +9,7 @@ const SOURCE_LABELS: Record<string, string> = {
   opencode: 'OpenCode',
   'copilot-cloud': 'Copilot Cloud',
   'copilot-agent': 'Copilot Agent',
+  shared: 'Shared',
 };
 
 export function sourceLabel(source: string): string {

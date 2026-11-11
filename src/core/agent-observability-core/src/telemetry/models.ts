@@ -40,7 +40,13 @@ export type AgentSourceId =
   | 'copilot-cli'
   | 'copilot-app'
   | 'copilot-jetbrains'
-  | 'opencode';
+  | 'opencode'
+  /**
+   * A session someone else exported and this user imported (see
+   * `../share/sharedSessionModels.ts`). Served from the app's own copy of the
+   * file; never part of this user's own figures, aggregates or team shard.
+   */
+  | 'shared';
 
 /**
  * Cost basis a source is priced in, used by the detail panel to render the right

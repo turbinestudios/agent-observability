@@ -53,6 +53,14 @@ reference for a privacy audit.
 > answer unless the user chose Allow all for that one session; nothing runs in
 > the background; and nothing about it enters the aggregate or team paths.
 > Claude Code is never driven by the app.
+> Also separately, the user may **share one session as a file**: after a
+> dialog stating that the file holds the full conversation, the app writes
+> that one session (prompts, final responses, title, tool names and
+> figures; never tags, notes, tool I/O, file paths or identities), with
+> best-effort secret redaction, to the path the user picks, and never sends
+> it anywhere. An imported shared session is validated before it is kept,
+> listed under its own `shared` source, and never counted in the receiver's
+> aggregates or team shard.
 > Applying a plan is the product's one sanctioned **local write path**:
 > allowlisted context files under the plan's re-verified repository root
 > only, per-file approved after a diff preview, staleness-checked against the
@@ -94,6 +102,10 @@ not trust the producer.
 | 24 | **Copilot app** sessions enter a team shard only under the existing `copilot-cli` source, so the shard's closed source set and schema are unchanged; **Copilot (JetBrains)** sessions are not shared at all | desktop `datahost/team/teamShardSource.ts` (`shardSource`, the `OUTCOME_SOURCES` filter) | `datahost/indexer/copilotAppIndexer.test.ts` ("is shared in a team shard as a Copilot CLI session") |
 | 25 | The Copilot JetBrains plugin's chat stores are **read whole into memory and never opened for writing**; the probe script prints structure only (counts, record names, header bytes), never prompts, replies, titles, project names or account-named folders | core `copilotJetbrains/copilotJetbrainsSource.ts`, desktop `scripts/jetbrainsProbe.ts` | `copilotJetbrains/copilotJetbrains.test.ts` (side records never surface; a locked store is reported, not failed) |
 | 26 | OpenCode's `opencode.db` is read **only as a snapshot copy**, and only named fields of the `session_v2` and `session_message` tables (2.x) or the `session`, `message` and `part` tables (1.x), plus `project`, and for the Context Analysis tab the `instruction_state` and `instruction_blob` tables, kept as instruction-file paths and lengths, never their text: never tool output, never reasoning text, never synthetic or system messages as conversation, and of tool input only a `skill` call's id and a `read` call's path when it names a context file (any other path is dropped as it is read), never `auth.json` or the `account`, `credential` and `control_account` tables; **OpenCode** sessions are not shared in team shards | core `opencode/store.ts`, desktop `datahost/team/teamShardSource.ts` (the `OUTCOME_SOURCES` filter) | `opencode/opencode.test.ts` ("never reads the credential table or tool payloads", "leaves the database untouched", "never surfaces tool payloads, reasoning or synthetic text", "never surfaces ordinary file paths, tool output or instruction text") |
+| 27 | A shared-session file is written **only after the share dialog** and only to the path the user chose in the save dialog, which must end in `.aosession.json`; an imported (`shared`) session is **never re-exported** | desktop `datahost/share/shareFiles.ts` (`exportShare`), `renderer/.../sessions/ShareDialog.tsx`; core `share/sharedSession.ts` (`isShareableSource`) | `datahost/share/share.test.ts` ("writes only to a path with the shared-session extension", "refuses an imported session"), `share/sharedSession.test.ts` ("refuses to re-share an imported session") |
+| 28 | The exported file holds **only allowlisted fields**: no `titleOriginal`, no `externalUrl`, no field the format does not name, and every free-text field is run through `redactSecrets`; the exporter validates its own output as an importer would | core `share/sharedSessionShape.ts` (`pickShape`, `SHARED_SESSION_SHAPE`), `share/sharedSession.ts` (`buildSharedSession`) | `share/sharedSession.test.ts` ("redacts secrets in the conversation", "leaves out the local rename history and the external link", "drops fields the format does not know"), `datahost/share/share.test.ts` ("writes a file that imports") |
+| 29 | An imported file is **validated in full before anything is stored** (closed key sets at every level, closed enums, non-negative numbers, a 50 MB cap) and the stored copy is **re-validated on every read** and checked against its name | core `share/sharedSession.ts` (`validateSharedSession`), `share/sharedSessionSource.ts`; desktop `datahost/share/shareFiles.ts` (`importShare`) | `share/sharedSession.test.ts` ("rejects an unknown key at any level", "refuses a stored file that was edited", "never resolves an id outside its folder"; ajv parity with the checked-in schema), `datahost/share/share.test.ts` ("stores nothing when the file is invalid") |
+| 30 | Imported sessions are **never counted as the receiver's work**: the `shared` source has no aggregation rows or overview, and every aggregate query, the inbox, the AI Helper corpus and the team shard read through the exclusions that leave the `shared` source out; the team shard's closed source set does not include it | core `share/sharedSessionSource.ts`; desktop `datahost/share/figures.ts` (`figureExclusions`), `datahost/index.ts`, `team/teamShardModels.ts` (`OUTCOME_SOURCES`) | `datahost/share/share.test.ts` ("never counts toward the receiver's own figures"), `share/sharedSession.test.ts` ("contributes nothing to the user's own figures") |
 
 ## Local enforcement (desktop app and core)
 
@@ -199,6 +211,19 @@ envelope (schema version, generation time, tool version, pseudonymous
 developer id, window) and adds an `outcomes` block of per-day,
 per-repository session counts, verdict mix and estimated cost over closed
 source and verdict sets. It sets `additionalProperties:false` at every level.
+
+## Session-sharing contract: `schemas/shared-session.schema.json`
+
+The file a user writes when they share one session, and the only file the
+app reads from someone else besides team shards. Unlike the three contracts
+above it **carries raw content** by design: the session's prompts, final
+responses, title, tool names and the figures the detail view shows, with
+best-effort secret redaction. It never carries tags, notes, rename history,
+external links, tool inputs or outputs, file paths, or any identity. It is
+generated from `share/sharedSessionShape.ts`, the same definition the
+exporter's allowlist and the importer's validator use, and a test fails if
+the checked-in file differs. It sets `additionalProperties:false` at every
+level.
 
 ## Validation on write and on read (defense in depth)
 

@@ -9,6 +9,25 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.5.0] - 2026-11-11
+
+### Added
+
+- **Share a session with a colleague.** Open a session and press **Share…** to
+  save it as a file you can send any way you like. Before anything is saved, a
+  dialog tells you exactly what the file holds: the full conversation (your
+  prompts and the assistant's responses), the title, repository, models, tool
+  names, tokens and cost. Tags, notes, tool inputs, file paths and anything
+  that identifies you stay on your machine. Secret-looking strings are
+  replaced first, and the dialog says how many, but read the session before
+  you send it.
+- **Import a shared session and compare it with your own.** Press the import
+  button above the session list, or drop the file onto the list. The session
+  appears under **Shared**, with the cost in the units it was recorded in.
+  Tick it and one of your own sessions, then press **Compare**. Shared
+  sessions never count in your own dashboard, insights, hotspots or team
+  figures. Importing the same session again replaces the earlier copy.
+
 ## [2.4.5] - 2026-10-30
 
 ### Added

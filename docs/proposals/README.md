@@ -40,6 +40,7 @@ observing sessions to judging them and starting the next one.
 | 20 | [The Copilot app as a session source](20-copilot-app-source.md) | See my Copilot app sessions as their own source, with project and tokens | Completed (2.2.0) | S/M | Proposal 14's source and indexer, the runtime's `session-store.db` |
 | 21 | [Copilot in JetBrains IDEs](21-copilot-jetbrains-source.md) | See my Copilot chats from Rider and other JetBrains IDEs beside everything else | Built (2.2.0), not verified on a real store | M/L | The `SessionDataSource` seam, codeburn's description of the plugin's store |
 | 22 | [OpenCode](22-opencode-source.md) | See my OpenCode sessions, Copilot-served ones included, with provider and model | Completed (2.4.2) | M | The `SessionDataSource` seam, the snapshot reader, the JetBrains indexer's one-file shape |
+| 23 | [Share a session](23-share-a-session.md) | Send one session to a colleague as a file, so they can compare it with their own | Built (2.5.0) | M | The `SessionDataSource` seam, Compare, the redaction helper, the team shard's validate-before-merge pattern |
 
 **Suggested order.** Proposals 1–6 and 9–13 are built. What remains runs on
 two tracks that touch mostly different files and can be built in parallel:

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { UPDATE_STATUS_CHANNEL } from '../shared/updates';
 import type { UpdateStatus } from '../shared/updates';
 
@@ -73,6 +73,21 @@ const api = {
   /** Native folder picker for the Team folder; `undefined` when cancelled. */
   pickFolder(): Promise<string | undefined> {
     return ipcRenderer.invoke('app:pick-folder');
+  },
+
+  /** Native save dialog for a shared session; `undefined` when cancelled. */
+  pickShareSave(suggestedName: string): Promise<string | undefined> {
+    return ipcRenderer.invoke('app:pick-share-save', suggestedName);
+  },
+
+  /** Native open dialog for importing a shared session; `undefined` when cancelled. */
+  pickShareOpen(): Promise<string | undefined> {
+    return ipcRenderer.invoke('app:pick-share-open');
+  },
+
+  /** The local path of a file dropped onto the window, for importing a shared session. */
+  pathForFile(file: File): string {
+    return webUtils.getPathForFile(file);
   },
 
   /**

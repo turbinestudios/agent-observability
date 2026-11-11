@@ -119,7 +119,7 @@ export class DetailRenderer {
       entry.deviations,
       nonce,
       entry.context,
-      this.costMode(source),
+      this.costMode(source, sessionId),
       // Host-authored only — never interpolate session content here.
       detailHeadHtml(nonce, theme),
       retrospectiveView(entry, context),
@@ -135,7 +135,7 @@ export class DetailRenderer {
       withTitle(entry.detail, context.renamedTitle),
       entry.deviations,
       entry.context,
-      this.costMode(source),
+      this.costMode(source, sessionId),
       retrospectiveView(entry, context),
       true,
     );
@@ -217,9 +217,9 @@ export class DetailRenderer {
       // Each section carries its OWN basis: when the selection mixes sources,
       // the comparison table marks off-basis sessions as not cost-comparable
       // instead of showing them as free.
-      sections.push({ detail, turnDeviations: entry.deviations, costMode: this.costMode(request.source) });
+      sections.push({ detail, turnDeviations: entry.deviations, costMode: this.costMode(request.source, request.sessionId) });
       costSources.push({
-        costMode: this.costMode(request.source),
+        costMode: this.costMode(request.source, request.sessionId),
         label: this.sources.get(request.source)?.label ?? request.source,
         startedAtMs: detail.summary.startedAtMs,
       });
@@ -261,8 +261,10 @@ export class DetailRenderer {
     this.cache.clear();
   }
 
-  private costMode(source: string): CostMode {
-    return this.sources.get(source)?.costMode ?? 'aiu';
+  private costMode(source: string, sessionId: string): CostMode {
+    const dataSource = this.sources.get(source);
+    // An imported shared session keeps the basis of the source that recorded it.
+    return dataSource?.costModeOf?.(sessionId) ?? dataSource?.costMode ?? 'aiu';
   }
 
   private load(
