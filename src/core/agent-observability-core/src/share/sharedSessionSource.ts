@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AggregationRow } from '../aggregate/aggregator';
+import type { SessionContextAnalysis } from '../context/models';
 import type { SessionDataSource } from '../sources/sessionSource';
 import type {
   AgentSourceId,
@@ -13,7 +14,13 @@ import type {
 } from '../telemetry/models';
 import type { Result } from '../telemetry/telemetryService';
 import { SHARED_SESSION_MAX_BYTES, SHARED_SOURCE_ID, type SharedSessionEnvelope } from './sharedSessionModels';
-import { SHARED_SESSION_ID_PATTERN, importedDetail, parseSharedSession, sharedSessionId } from './sharedSession';
+import {
+  SHARED_SESSION_ID_PATTERN,
+  importedContextAnalysis,
+  importedDetail,
+  parseSharedSession,
+  sharedSessionId,
+} from './sharedSession';
 
 /** One imported session as read from the app's own copy. */
 export interface StoredSharedSession {
@@ -34,9 +41,11 @@ export interface StoredSharedSession {
  *
  * Nothing here contributes to this user's own figures: the overview and the
  * aggregation rows are empty by construction, and the data host keeps the
- * indexed rows out of every aggregate query. The context analysis is not
- * offered (its paths are the sender's), and the retrospective falls back to
- * the shared turn analysis of the detail.
+ * indexed rows out of every aggregate query. The context analysis is the
+ * one the sender's app computed and exported (format 1.1 on), with paths
+ * relative to the sender's repository; this machine's accepted-missing
+ * settings do not apply to it. The retrospective falls back to the shared
+ * turn analysis of the detail.
  */
 export class SharedSessionSource implements SessionDataSource {
   readonly id: AgentSourceId = SHARED_SOURCE_ID;
@@ -120,6 +129,11 @@ export class SharedSessionSource implements SessionDataSource {
   getSessionDetail(sessionKey: string): Result<SessionDetail> {
     const stored = this.read(sessionKey);
     return stored.ok ? { ok: true, value: importedDetail(stored.value.envelope, stored.value.id) } : stored;
+  }
+
+  getContextAnalysis(sessionKey: string): SessionContextAnalysis | undefined {
+    const stored = this.read(sessionKey);
+    return stored.ok ? importedContextAnalysis(stored.value.envelope) : undefined;
   }
 
   getSessionInteractions(): Result<Interaction[]> {

@@ -9,12 +9,19 @@ import { createReadonlySnapshot, type SnapshotOptions } from '../telemetry/snaps
  * OpenCode keeps the file in WAL mode, so it is read through the same
  * private snapshot copy as every other SQLite store; the original is never
  * opened. From the JSON `data` columns only the fields named below are
- * read: never tool output, never reasoning text, never the `account`,
- * `credential` or `control_account` tables. Of tool input exactly two
- * fields are read, for the Context Analysis tab: a `skill` call's skill id,
- * and a `read` call's path when that path is a context file (AGENTS.md,
- * SKILL.md, …); any other path is dropped on the spot. Instruction files
- * are kept as path and length, never their text.
+ * read: never reasoning text, never the `account`, `credential` or
+ * `control_account` tables. Of tool input, only these are read:
+ * - for the Context Analysis tab, a `skill` call's skill id and a `read`
+ *   call's path when that path is a context file (AGENTS.md, SKILL.md, …);
+ *   any other read path is dropped on the spot;
+ * - for lines of code and file counts, the path a file-changing call
+ *   (`edit`, `write`, …) touched, the added/removed line counts OpenCode
+ *   recorded for it, and for `write` the number of lines it wrote, counted
+ *   in SQL so the written text is never selected.
+ * Of tool output, one yes/no is kept: whether a `write` result starts with
+ * "Created file", which tells a new file from an overwritten one. The text
+ * itself is not selected. Instruction files are kept as path and length,
+ * never their text.
  *
  * Two layouts exist in the same file. OpenCode 2.x writes `session_v2` and
  * `session_message` (one row per user or assistant message in `seq`
@@ -68,6 +75,16 @@ export interface OpencodeToolPart {
   skillId?: string;
   /** A `read` call's target, kept only when it is a context file. */
   contextPath?: string;
+  /** The files a file-changing call touched, with OpenCode's own line counts. */
+  fileEdits?: OpencodeFileEdit[];
+}
+
+/** One file a tool call created or changed. `path` is as OpenCode recorded it: absolute or relative to the session directory. */
+export interface OpencodeFileEdit {
+  path: string;
+  linesAdded: number;
+  linesRemoved: number;
+  created: boolean;
 }
 
 /**
@@ -100,6 +117,32 @@ export interface OpencodeStore {
 /** Caps one text part held in memory; a pasted log can run to megabytes. */
 const TEXT_MAX_CHARS = 20_000;
 
+/**
+ * Line count of a JSON text field, computed in SQL so the text never reaches
+ * JS: newlines, plus one for a last line without one (as `countLines`).
+ */
+const lineCount = (expr: string): string =>
+  `CASE WHEN ${expr} IS NULL THEN NULL WHEN length(${expr}) = 0 THEN 0
+    ELSE length(${expr}) - length(replace(${expr}, char(10), '')) + (substr(${expr}, -1) <> char(10)) END`;
+
+/**
+ * The file-change columns for a tool item `t` (a JSON value): its path, the
+ * per-file counts OpenCode recorded (`metadata.files`, without the patch
+ * text, or the 1.x `metadata.filediff`), a `write`'s line count and whether
+ * its result says the file was created.
+ */
+const fileEditColumns = (t: string, output: string): string => `
+  COALESCE(json_extract(${t}, '$.state.input.path'), json_extract(${t}, '$.state.input.filePath')) AS editPath,
+  (SELECT json_group_array(json_object('file', json_extract(f.value, '$.file'), 'added', json_extract(f.value, '$.additions'),
+    'removed', json_extract(f.value, '$.deletions'), 'status', json_extract(f.value, '$.status')))
+    FROM json_each(${t}, '$.state.metadata.files') f) AS editFiles,
+  json_extract(${t}, '$.state.metadata.filediff.additions') AS diffAdded,
+  json_extract(${t}, '$.state.metadata.filediff.deletions') AS diffRemoved,
+  CASE WHEN json_extract(${t}, '$.tool') = 'write' OR json_extract(${t}, '$.name') = 'write'
+    THEN ${lineCount(`json_extract(${t}, '$.state.input.content')`)} END AS writeLines,
+  CASE WHEN json_extract(${t}, '$.tool') = 'write' OR json_extract(${t}, '$.name') = 'write'
+    THEN COALESCE(${output}, '') LIKE 'Created file%' END AS writeCreated`;
+
 const LEGACY = {
   sessions: `SELECT s.id AS id, s.parent_id AS parentId, s.title AS title, s.directory AS directory,
   s.version AS version, s.time_created AS createdMs, s.time_updated AS updatedMs, p.worktree AS worktree
@@ -125,7 +168,8 @@ const LEGACY = {
   json_extract(data, '$.state.time.start') AS startMs,
   json_extract(data, '$.state.time.end') AS endMs,
   NULL AS skillId,
-  CASE WHEN json_extract(data, '$.tool') = 'read' THEN json_extract(data, '$.state.input.filePath') END AS readPath
+  CASE WHEN json_extract(data, '$.tool') = 'read' THEN json_extract(data, '$.state.input.filePath') END AS readPath,
+  ${fileEditColumns('data', "substr(json_extract(data, '$.state.output'), 1, 12)")}
   FROM part WHERE json_extract(data, '$.type') = 'tool' ORDER BY session_id, time_created, id`,
   texts: `SELECT message_id AS messageId, session_id AS sessionId,
   substr(json_extract(data, '$.text'), 1, ${TEXT_MAX_CHARS}) AS text
@@ -163,7 +207,9 @@ const V2 = {
   json_extract(c.value, '$.time.created') AS startMs,
   json_extract(c.value, '$.time.completed') AS endMs,
   CASE WHEN json_extract(c.value, '$.name') = 'skill' THEN json_extract(c.value, '$.state.input.id') END AS skillId,
-  CASE WHEN json_extract(c.value, '$.name') = 'read' THEN json_extract(c.value, '$.state.input.filePath') END AS readPath
+  CASE WHEN json_extract(c.value, '$.name') = 'read'
+    THEN COALESCE(json_extract(c.value, '$.state.input.path'), json_extract(c.value, '$.state.input.filePath')) END AS readPath,
+  ${fileEditColumns('c.value', "substr(json_extract(c.value, '$.state.content[0].text'), 1, 12)")}
   FROM session_message m, json_each(m.data, '$.content') c
   WHERE m.type = 'assistant' AND json_extract(c.value, '$.type') = 'tool'
   ORDER BY m.session_id, m.seq, c.key`,
@@ -269,6 +315,7 @@ export function readOpencodeStore(dbPath: string, options: SnapshotOptions = {})
         ...(endMs !== undefined ? { endMs } : {}),
         ...(str(r.skillId) !== undefined ? { skillId: str(r.skillId) } : {}),
         ...(readPath !== undefined && isContextPath(readPath) ? { contextPath: readPath } : {}),
+        ...fileEditsOf(r),
       });
     }
     const texts: OpencodeTextPart[] = [];
@@ -291,6 +338,44 @@ export function readOpencodeStore(dbPath: string, options: SnapshotOptions = {})
     }
     snapshot.dispose();
   }
+}
+
+/**
+ * The files one tool row changed. OpenCode's per-file counts win when it
+ * recorded them; a `write` has none and counts the lines it wrote. A row that
+ * changed nothing (a read, a failed edit with no metadata) yields nothing.
+ */
+function fileEditsOf(r: Record<string, unknown>): { fileEdits?: OpencodeFileEdit[] } {
+  const inputPath = str(r.editPath);
+  let files: { file?: unknown; added?: unknown; removed?: unknown; status?: unknown }[] = [];
+  try {
+    const parsed: unknown = typeof r.editFiles === 'string' ? JSON.parse(r.editFiles) : undefined;
+    files = Array.isArray(parsed) ? (parsed as typeof files) : [];
+  } catch {
+    files = [];
+  }
+  const edits: OpencodeFileEdit[] = [];
+  for (const f of files) {
+    // A one-file call names the same file in its input; prefer that, so a
+    // later `write` to the same path is recognized as the same file.
+    const path = (files.length === 1 ? inputPath : undefined) ?? str(f.file) ?? inputPath;
+    if (path !== undefined) {
+      edits.push({
+        path,
+        linesAdded: num(f.added),
+        linesRemoved: num(f.removed),
+        created: f.status === 'added' || f.status === 'created',
+      });
+    }
+  }
+  if (edits.length === 0 && inputPath !== undefined) {
+    if (r.diffAdded !== null && r.diffAdded !== undefined) {
+      edits.push({ path: inputPath, linesAdded: num(r.diffAdded), linesRemoved: num(r.diffRemoved), created: false });
+    } else if (r.writeLines !== null && r.writeLines !== undefined) {
+      edits.push({ path: inputPath, linesAdded: num(r.writeLines), linesRemoved: 0, created: r.writeCreated === 1 });
+    }
+  }
+  return edits.length > 0 ? { fileEdits: edits } : {};
 }
 
 /**

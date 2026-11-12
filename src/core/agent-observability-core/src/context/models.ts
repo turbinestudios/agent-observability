@@ -7,6 +7,11 @@
  * between context files, and estimate per-file token usage. All data is
  * derived locally from `span_attributes` and filesystem reads; none is ever
  * uploaded to the cloud sync path.
+ *
+ * The one way an analysis leaves the machine is inside a shared-session file
+ * the user exports themselves, and then without absolute paths: each file
+ * keeps only its repository-relative path, or its name when it sits outside
+ * the repository (see `../share/sharedContext.ts`).
  */
 
 /**
@@ -40,6 +45,11 @@ export interface ContextFileEntry {
   name: string;
   /** Resolved filesystem path when known. */
   filePath?: string;
+  /**
+   * Path relative to the repository root, `/`-separated. Set only on a
+   * session imported from a shared file, which never carries `filePath`.
+   */
+  repoPath?: string;
   /** Classification based on discovery source. */
   category: ContextFileCategory;
   /** Whether the file was applied, skipped, or read (via tool call). */
@@ -115,4 +125,9 @@ export interface SessionContextAnalysis {
    * caveat); omitted by the point-in-time Copilot path.
    */
   note?: string;
+  /**
+   * Set on a session imported from someone else: its files are not on this
+   * machine, so the view offers no actions on them (open, accept as missing).
+   */
+  readOnly?: boolean;
 }

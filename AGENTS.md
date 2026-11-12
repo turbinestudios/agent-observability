@@ -213,8 +213,9 @@ every level.
   [schemas/shared-session.schema.json](schemas/shared-session.schema.json)),
   to give to a colleague who imports it and compares it with their own. This
   is the only path on which the app writes a session's raw content (its
-  prompts, the assistant's final responses, the title, tool names and every
-  figure the detail view shows) to a file meant for someone else. The rules:
+  prompts, the assistant's final responses, the title, tool names, every
+  figure the detail view shows, and its Context Analysis) to a file meant for
+  someone else. The rules:
   1. **User-initiated, one session per export.** A dialog first states that
      the file holds the full conversation and what it leaves out; nothing is
      written until the user picks a location in the save dialog, and only to
@@ -224,7 +225,10 @@ every level.
      history, external URLs, tool inputs or outputs, file paths, or any
      identity), runs best-effort secret redaction over every free-text
      field, shows the redaction count, and validates its own output exactly
-     as an importer would.
+     as an importer would. The one kind of path the file may hold is a
+     context file's path **relative to its repository** in the Context
+     Analysis; a context file outside a repository keeps only its name, and
+     the importer refuses any absolute path or `..` segment.
   3. **Imports are untrusted.** A file is validated in full before anything
      is kept, and the app's own copy is re-validated on every read. A file
      that fails is reported and nothing is stored.
@@ -232,8 +236,10 @@ every level.
      the `shared` source and can be opened and compared, but they are
      excluded from every aggregate (overview, insights, hotspots,
      retrospective trends, evidence, workspace, inbox, AI Helper corpus) and
-     from the team shard. They cannot be re-exported, sent to an AI backend,
-     handed off, resumed or run.
+     from the team shard (their context files never reach Context
+     Hotspots). They cannot be re-exported, sent to an AI backend, handed
+     off, resumed or run, and their context files cannot be opened, improved
+     or accepted as missing.
 
   Like the Run clause, this is not one of the sanctioned exceptions, and
   none of them may be cited to widen it, nor it to widen them.

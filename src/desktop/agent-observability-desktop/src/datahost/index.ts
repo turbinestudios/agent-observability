@@ -11,6 +11,7 @@ import { SHARED_SOURCE_ID } from '@agent-observability/core/src/share/sharedSess
 import { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
 import { resolveArchiveDbPath } from '@agent-observability/core/src/otel/archivePaths';
 import * as path from 'node:path';
+import { findRepoRoot } from '@agent-observability/core/src/chat/tasks/projectContext';
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
 import type { CostMode } from '@agent-observability/core/src/telemetry/models';
 import type {
@@ -518,6 +519,9 @@ function shareInput(source: string, sessionId: string): ShareSessionInput {
     sessionId,
     detail: () =>
       detail.sessionFacts(source, sessionId, stampOf(source, sessionId), detailContext(source, sessionId)).detail,
+    context: () =>
+      detail.sessionFacts(source, sessionId, stampOf(source, sessionId), detailContext(source, sessionId)).context,
+    repoRootOf: (filePath) => findRepoRoot(path.dirname(filePath)),
     costMode: costModeFor(source, sessionId) ?? 'usd',
     ...(renamed !== undefined ? { title: renamed } : {}),
     toolVersion,

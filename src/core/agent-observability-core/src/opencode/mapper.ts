@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import type { AggregationRow } from '../aggregate/aggregator';
 import { mapToolName } from '../aggregate/builtinTools';
 import type {
@@ -12,6 +13,7 @@ import type {
   SessionTurn,
 } from '../telemetry/models';
 import { copilotCreditsNano } from '../telemetry/copilotCredits';
+import { classifyExtension } from '../telemetry/locAnalysis';
 import { agentUsageKey } from '../telemetry/models';
 import { aiuToUsd } from '../telemetry/pricing';
 import { UNKNOWN_REPOSITORY } from '../telemetry/repositoryUrl';
@@ -46,7 +48,83 @@ import type {
  * - An agent's run time is the time its (agent, model) calls and their tools
  *   were running, overlaps counted once. OpenCode sessions are often resumed
  *   over days, so first-to-last activity would count the idle time between.
+ * - Lines of code come from the per-file counts OpenCode records for each
+ *   edit (a `write` counts the lines it wrote), split into code and docs by
+ *   file extension. Files created / modified count distinct paths across the
+ *   whole tree, from calls that did not fail.
  */
+
+/** The extension lists that split written lines into code and docs (normalized). Without them every count is 0. */
+export interface OpencodeLocOptions {
+  codeExts: readonly string[];
+  docExts: readonly string[];
+}
+
+interface Loc {
+  linesOfCode: number;
+  linesOfDoc: number;
+  linesOfCodeRemoved: number;
+  linesOfDocRemoved: number;
+}
+
+const zeroLoc = (): Loc => ({ linesOfCode: 0, linesOfDoc: 0, linesOfCodeRemoved: 0, linesOfDocRemoved: 0 });
+
+function addLoc(into: Loc, from: Loc): void {
+  into.linesOfCode += from.linesOfCode;
+  into.linesOfDoc += from.linesOfDoc;
+  into.linesOfCodeRemoved += from.linesOfCodeRemoved;
+  into.linesOfDocRemoved += from.linesOfDocRemoved;
+}
+
+/** The lines the given tool calls added and removed, by code vs. docs. Failed calls count nothing. */
+function locOf(tools: readonly OpencodeToolPart[], loc: OpencodeLocOptions | undefined): Loc {
+  const out = zeroLoc();
+  if (loc === undefined) {
+    return out;
+  }
+  for (const tool of tools) {
+    if (toolFailed(tool)) {
+      continue;
+    }
+    for (const edit of tool.fileEdits ?? []) {
+      const cls = classifyExtension(edit.path, loc.codeExts, loc.docExts);
+      if (cls === 'code') {
+        out.linesOfCode += edit.linesAdded;
+        out.linesOfCodeRemoved += edit.linesRemoved;
+      } else if (cls === 'doc') {
+        out.linesOfDoc += edit.linesAdded;
+        out.linesOfDocRemoved += edit.linesRemoved;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Distinct files the threads created and modified. A relative path is
+ * resolved against its session's directory, so `src/a.ts` and the absolute
+ * form of the same file count once.
+ */
+function fileCounts(threads: readonly OpencodeThread[]): { filesCreated: number; filesModified: number } {
+  const created = new Set<string>();
+  const touched = new Set<string>();
+  for (const t of threads) {
+    const base = t.session.directory ?? t.session.worktree;
+    for (const tool of t.tools) {
+      if (toolFailed(tool)) {
+        continue;
+      }
+      for (const edit of tool.fileEdits ?? []) {
+        const key = base !== undefined ? path.resolve(base, edit.path) : edit.path;
+        touched.add(key);
+        if (edit.created) {
+          created.add(key);
+        }
+      }
+    }
+  }
+  return { filesCreated: created.size, filesModified: touched.size - created.size };
+}
 
 export const COPILOT_PROVIDERS: ReadonlySet<string> = new Set(['github-copilot', 'github-copilot-enterprise']);
 
@@ -212,7 +290,7 @@ interface Walked {
   interactions: Interaction[];
 }
 
-function walkThread(input: OpencodeSessionInput, t: OpencodeThread, agentName: string): Walked {
+function walkThread(input: OpencodeSessionInput, t: OpencodeThread, agentName: string, loc?: OpencodeLocOptions): Walked {
   const byId = new Map(t.messages.map((m) => [m.id, m]));
   const toolsByMessage = groupBy(t.tools, (tool) => tool.messageId);
   const interactions: Interaction[] = [];
@@ -258,13 +336,14 @@ function walkThread(input: OpencodeSessionInput, t: OpencodeThread, agentName: s
       });
     }
   }
-  return { turns: t === input ? buildTurns(input, byId, toolsByMessage) : [], interactions };
+  return { turns: t === input ? buildTurns(input, byId, toolsByMessage, loc) : [], interactions };
 }
 
 function buildTurns(
   input: OpencodeSessionInput,
   byId: ReadonlyMap<string, OpencodeMessageRow>,
   toolsByMessage: ReadonlyMap<string, OpencodeToolPart[]>,
+  loc: OpencodeLocOptions | undefined,
 ): SessionTurn[] {
   const groups: { user?: OpencodeMessageRow; replies: OpencodeMessageRow[] }[] = [];
   const byUser = new Map<string, { user?: OpencodeMessageRow; replies: OpencodeMessageRow[] }>();
@@ -329,10 +408,7 @@ function buildTurns(
       outputTokens: sum(replies, (m) => m.outputTokens),
       cachedTokens: sum(replies, (m) => m.cacheReadTokens),
       reasoningTokens: sum(replies, (m) => m.reasoningTokens),
-      linesOfCode: 0,
-      linesOfDoc: 0,
-      linesOfCodeRemoved: 0,
-      linesOfDocRemoved: 0,
+      ...locOf(replies.flatMap((m) => toolsByMessage.get(m.id) ?? []), loc),
       events,
     };
   });
@@ -358,8 +434,8 @@ function titleOf(input: OpencodeSessionInput): { title: string; titleDerived: bo
   return derived !== undefined && derived.length > 0 ? { title: derived, titleDerived: true } : undefined;
 }
 
-export function buildOpencodeSessionDetail(input: OpencodeSessionInput): SessionDetail {
-  const main = walkThread(input, input, MAIN_AGENT);
+export function buildOpencodeSessionDetail(input: OpencodeSessionInput, loc?: OpencodeLocOptions): SessionDetail {
+  const main = walkThread(input, input, MAIN_AGENT, loc);
   const subs = input.children.map((c) => ({ thread: c, name: subagentName(c), walked: walkThread(input, c, subagentName(c)) }));
   const mainReplies = input.messages.filter((m) => m.role === 'assistant');
   const allThreads: { thread: OpencodeThread; name: string; kind: 'main' | 'subagent' }[] = [
@@ -430,12 +506,11 @@ export function buildOpencodeSessionDetail(input: OpencodeSessionInput): Session
         cachedTokens: 0,
         reasoningTokens: 0,
         aiuNano: 0,
-        linesOfCode: 0,
-        linesOfDoc: 0,
-        linesOfCodeRemoved: 0,
-        linesOfDocRemoved: 0,
+        ...zeroLoc(),
       };
       addUsage(agent, m);
+      const messageLoc = locOf(toolsByMessage.get(m.id) ?? [], loc);
+      addLoc(agent, messageLoc);
       agentUsage.set(key, agent);
       if (m.createdMs > 0) {
         const endMs = Math.max(endOf(m), ...(toolsByMessage.get(m.id) ?? []).map(toolEnd));
@@ -453,10 +528,7 @@ export function buildOpencodeSessionDetail(input: OpencodeSessionInput): Session
         outputTokens: m.outputTokens,
         cachedTokens: m.cacheReadTokens,
         reasoningTokens: m.reasoningTokens,
-        linesOfCode: 0,
-        linesOfDoc: 0,
-        linesOfCodeRemoved: 0,
-        linesOfDocRemoved: 0,
+        ...messageLoc,
       });
     }
   }
@@ -486,10 +558,8 @@ export function buildOpencodeSessionDetail(input: OpencodeSessionInput): Session
       aiuNano: 0,
       ...(treeCost !== undefined ? { costUsdMicros: treeCost } : {}),
       ...(treeCredits > 0 ? { copilotCreditsNano: treeCredits } : {}),
-      linesOfCode: 0,
-      linesOfDoc: 0,
-      linesOfCodeRemoved: 0,
-      linesOfDocRemoved: 0,
+      ...locOf(allTools, loc),
+      ...fileCounts(allThreads.map((t) => t.thread)),
     },
     turns: main.turns,
     modelUsage: [...modelUsage.values()].sort(

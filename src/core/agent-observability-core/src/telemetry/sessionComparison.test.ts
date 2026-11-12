@@ -215,3 +215,19 @@ describe('computeSessionComparison', () => {
     expect(cells[2].delta).toMatchObject({ abs: 100, pct: 100, sentiment: 'worse' });
   });
 });
+
+describe('the files created and modified rows', () => {
+  it('appear when either session records them, empty for the one that does not', () => {
+    const result = computeSessionComparison(
+      [{ detail: detail({ sessionId: 'a' }, { filesCreated: 2, filesModified: 5 }) }, { detail: detail({ sessionId: 'b' }) }],
+      'usd',
+    );
+    expect(row(result, 'filesCreated').cells.map((c) => c.value)).toEqual([2, undefined]);
+    expect(row(result, 'filesModified').cells.map((c) => c.value)).toEqual([5, undefined]);
+  });
+
+  it('are left out when no session records them', () => {
+    const result = computeSessionComparison([{ detail: detail() }, { detail: detail() }], 'usd');
+    expect(result.rows.some((r) => r.id === 'filesCreated' || r.id === 'filesModified')).toBe(false);
+  });
+});

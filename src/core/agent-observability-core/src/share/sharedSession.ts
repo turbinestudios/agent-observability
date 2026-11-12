@@ -1,16 +1,25 @@
 import { createHash } from 'node:crypto';
+import type { SessionContextAnalysis } from '../context/models';
 import type { CostMode, SessionDetail, SessionTimelineEntry, SessionTurn } from '../telemetry/models';
 import { redactSecrets, type RedactionKind } from '../text/redact';
 import { isObject, schemaVersionOf } from '../aggregate/batchValidators';
 import {
   SHARED_SESSION_KIND,
+  SHARED_SESSION_READABLE_VERSIONS,
   SHARED_SESSION_SCHEMA_VERSION,
   SHARED_SOURCE_ID,
   SHAREABLE_SOURCES,
   type ShareableSource,
   type SharedSessionEnvelope,
 } from './sharedSessionModels';
-import { SESSION_DETAIL_SHAPE, SHARED_SESSION_SHAPE, pickShape, validateShape } from './sharedSessionShape';
+import { importedContext, shareableContext } from './sharedContext';
+import {
+  SESSION_DETAIL_SHAPE,
+  SHARED_CONTEXT_SHAPE,
+  SHARED_SESSION_SHAPE,
+  pickShape,
+  validateShape,
+} from './sharedSessionShape';
 
 /**
  * Building a shared-session file on export, and checking one on import.
@@ -25,6 +34,10 @@ export interface BuildSharedSessionInput {
   title?: string;
   toolVersion: string;
   nowMs: number;
+  /** The session's Context Analysis as this machine computed it; exported without absolute paths. */
+  context?: SessionContextAnalysis;
+  /** The repository root a context file sits in, for its repository-relative path. Without it, files keep their names only. */
+  repoRootOf?: (filePath: string) => string | undefined;
 }
 
 export type BuildSharedSessionResult =
@@ -59,6 +72,16 @@ export function buildSharedSession(input: BuildSharedSessionInput): BuildSharedS
     summary,
     turns: picked.turns.map((turn) => redactTurn(turn, tally)),
   };
+  const context =
+    input.context !== undefined
+      ? (pickShape(
+          shareableContext(input.context, {
+            redact: (text) => tally.redact(text),
+            ...(input.repoRootOf !== undefined ? { repoRootOf: input.repoRootOf } : {}),
+          }),
+          SHARED_CONTEXT_SHAPE,
+        ) as SessionContextAnalysis)
+      : undefined;
   const envelope: SharedSessionEnvelope = {
     kind: SHARED_SESSION_KIND,
     schemaVersion: SHARED_SESSION_SCHEMA_VERSION,
@@ -67,6 +90,7 @@ export function buildSharedSession(input: BuildSharedSessionInput): BuildSharedS
     origin: { source: input.source, costMode: input.costMode },
     redactions: { count: tally.count, kinds: tally.kinds },
     detail,
+    ...(context !== undefined ? { contextAnalysis: context } : {}),
   };
   const errors = validateShape(envelope, SHARED_SESSION_SHAPE);
   if (errors.length > 0) {
@@ -102,10 +126,10 @@ function redactTurn(turn: SessionTurn, tally: Tally): SessionTurn {
   };
 }
 
-/** An object whose `schemaVersion` is a string other than the one we know. */
+/** An object whose `schemaVersion` is a string other than the ones we read. */
 export function isUnknownSharedSessionVersion(value: unknown): boolean {
   const version = schemaVersionOf(value);
-  return version !== undefined && version !== SHARED_SESSION_SCHEMA_VERSION;
+  return version !== undefined && !(SHARED_SESSION_READABLE_VERSIONS as readonly string[]).includes(version);
 }
 
 /**
@@ -167,4 +191,9 @@ export function importedDetail(envelope: SharedSessionEnvelope, id: string): Ses
     ...envelope.detail,
     summary: { ...envelope.detail.summary, sessionId: id, source: SHARED_SOURCE_ID },
   };
+}
+
+/** The Context Analysis an imported file carries, captioned as the sender's; `undefined` when it has none. */
+export function importedContextAnalysis(envelope: SharedSessionEnvelope): SessionContextAnalysis | undefined {
+  return envelope.contextAnalysis !== undefined ? importedContext(envelope.contextAnalysis) : undefined;
 }

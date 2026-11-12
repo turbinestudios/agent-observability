@@ -48,7 +48,8 @@ changes to either.
 
 **Grounding**
 
-- Format: `schemas/shared-session.schema.json` (v1.0), **generated** from
+- Format: `schemas/shared-session.schema.json` (v1.0; v1.1 since 2.6.0, see
+  below), **generated** from
   core `share/sharedSessionShape.ts`. The same shape definition drives:
   - the exporter's allowlist (`pickShape`);
   - the importer's validator (`validateShape`);
@@ -93,11 +94,28 @@ changes to either.
   host refuses anything else even though the save dialog proposes it.
 - The deep retrospective button is never offered for an imported session.
 
+**Format 1.1 (desktop 2.6.0): the Context Analysis**
+
+The owner asked for the Context Analysis in the file. It cannot be rebuilt
+from the turns, so the sender's analysis is exported as an optional
+`contextAnalysis` block (`share/sharedContext.ts`):
+
+- a context file inside its repository keeps its repository-relative path
+  (`repoPath`), found by walking up to `.git`; one outside keeps only the
+  label the view shows (`plan/SKILL.md`);
+- references by absolute path are cut to the repository path or the file
+  name; `skipReason` and `note` are dropped;
+- the schema refuses an absolute path or a `..` segment in any of them;
+- the receiver shows it read-only, captioned as the sender's: no open,
+  improve or accept-as-missing actions, and no `context_files` rows.
+
+2.6.0 reads 1.0 and 1.1; older apps refuse 1.1 with "update the app". The
+tree stats also gained the optional `filesCreated` / `filesModified`.
+
 **Out of scope**
 
-- Retrospective and context analysis in the file. The receiver derives its
-  own retrospective from the turns. The context analysis names the sender's
-  file paths and is not shared.
+- The retrospective in the file. The receiver derives its own from the
+  turns.
 - Sharing several sessions in one file, clipboard transport, and any upload.
 
 **Verification**

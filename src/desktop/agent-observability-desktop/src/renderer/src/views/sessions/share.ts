@@ -29,13 +29,14 @@ export function formatBytes(bytes: number): string {
 export const SHARE_CONTAINS: readonly string[] = [
   'every prompt you wrote in the session, and the assistant’s responses',
   'the session title, repository name, models, and tool names',
-  'turn timings, token counts, lines changed, and cost',
+  'turn timings, token counts, lines changed, files created and modified, and cost',
+  'the Context Analysis: which context files were loaded, with their paths inside the repository',
 ];
 
 /** What the share dialog says the file leaves out. */
 export const SHARE_LEAVES_OUT: readonly string[] = [
   'your tags, notes, and hidden sessions',
-  'tool inputs and outputs, and file paths',
+  'tool inputs and outputs, and any file path outside the repository',
   'anything that identifies you or this computer',
 ];
 

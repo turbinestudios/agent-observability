@@ -377,3 +377,56 @@ describe('buildUserRequestContent (local-only prompt lookup)', () => {
     expect(unmatched).toEqual([]);
   });
 });
+
+describe('files created and modified', () => {
+  const at = (s: number): string => `2026-05-01T10:01:${String(s).padStart(2, '0')}.000Z`;
+  const toolTurn = (s: number, blocks: unknown[]): TranscriptRecord => ({
+    type: 'assistant',
+    timestamp: at(s),
+    message: { role: 'assistant', model: OPUS, usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: 'tool_use', content: blocks },
+  } as TranscriptRecord);
+  const result = (s: number, id: string, extra: Partial<TranscriptRecord> = {}, isError = false): TranscriptRecord => ({
+    type: 'user',
+    timestamp: at(s),
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: isError }] },
+    ...extra,
+  } as TranscriptRecord);
+
+  function detailOf(records: TranscriptRecord[]) {
+    return buildSessionDetail({ sessionId: 's', mainRecords: records, subagents: [], repository: REPO, codeExts: ['.ts'], docExts: ['.md'] });
+  }
+
+  it('counts distinct files, a created one never also as modified', () => {
+    const detail = detailOf([
+      { type: 'user', timestamp: at(0), message: { role: 'user', content: 'go' } } as TranscriptRecord,
+      toolTurn(1, [{ type: 'tool_use', id: 'w1', name: 'Write', input: { file_path: '/r/new.ts', content: 'x' } }]),
+      result(2, 'w1', { toolUseResult: { type: 'create' } }),
+      toolTurn(3, [{ type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: '/r/new.ts', old_string: 'x', new_string: 'y' } }]),
+      result(4, 'e1'),
+      toolTurn(5, [{ type: 'tool_use', id: 'e2', name: 'Edit', input: { file_path: '/r/old.ts', old_string: 'a', new_string: 'b' } }]),
+      result(6, 'e2'),
+      // A Write the result says replaced an existing file, though the session never touched it.
+      toolTurn(7, [{ type: 'tool_use', id: 'w2', name: 'Write', input: { file_path: '/r/kept.ts', content: 'z' } }]),
+      result(8, 'w2', { toolUseResult: { type: 'update' } }),
+      // A failed edit counts nothing.
+      toolTurn(9, [{ type: 'tool_use', id: 'e3', name: 'Edit', input: { file_path: '/r/broken.ts', old_string: 'a', new_string: 'b' } }]),
+      result(10, 'e3', {}, true),
+    ]);
+    expect(detail.treeStats).toMatchObject({ filesCreated: 1, filesModified: 2 });
+  });
+
+  it('treats a Write to an untouched path as created when the result does not say', () => {
+    const detail = detailOf([
+      { type: 'user', timestamp: at(0), message: { role: 'user', content: 'go' } } as TranscriptRecord,
+      toolTurn(1, [{ type: 'tool_use', id: 'w1', name: 'Write', input: { file_path: '/r/a.ts', content: 'x' } }]),
+      result(2, 'w1'),
+      toolTurn(3, [{ type: 'tool_use', id: 'w2', name: 'Write', input: { file_path: '/r/a.ts', content: 'y' } }]),
+      result(4, 'w2'),
+    ]);
+    expect(detail.treeStats).toMatchObject({ filesCreated: 1, filesModified: 0 });
+  });
+
+  it('counts the sub-agents’ files too', () => {
+    expect(buildSessionDetail(input()).treeStats).toMatchObject({ filesCreated: 1, filesModified: 0 });
+  });
+});

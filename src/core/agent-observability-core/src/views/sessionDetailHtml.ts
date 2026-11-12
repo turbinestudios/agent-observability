@@ -1,3 +1,4 @@
+import { contextFileLabel } from '../context/fileLabel';
 import {
   CombinedSessionDetail,
   CombinedSummary,
@@ -1114,6 +1115,14 @@ function treeTotalsRows(stats: SessionTreeStats, costMode: CostMode): string {
     { acr: 'LOD', label: 'Lines of Documentation (added)', value: formatInt(stats.linesOfDoc) },
     { acr: 'nLOC', label: 'Lines of Code (removed)', value: formatInt(stats.linesOfCodeRemoved) },
     { acr: 'nLOD', label: 'Lines of Documentation (removed)', value: formatInt(stats.linesOfDocRemoved) },
+    // Only sources that record file edits set these; a missing count is
+    // "unknown", not 0, so it gets no tile.
+    ...(stats.filesCreated !== undefined
+      ? [{ acr: 'FC', label: 'Files Created', value: formatInt(stats.filesCreated) }]
+      : []),
+    ...(stats.filesModified !== undefined
+      ? [{ acr: 'FM', label: 'Files Modified', value: formatInt(stats.filesModified) }]
+      : []),
   ];
   return totals
     .map(
@@ -1147,6 +1156,8 @@ const METRIC_HELP: Record<string, string> = {
   LOD: "Lines of Documentation — documentation lines the agents' file-writing tool calls ADDED",
   nLOC: "Lines of Code removed — source-code lines the agents' file-writing tool calls REMOVED",
   nLOD: "Lines of Documentation removed — documentation lines the agents' file-writing tool calls REMOVED",
+  FC: 'Files created — distinct new files the agents wrote, across the whole agent tree',
+  FM: 'Files modified — distinct existing files the agents changed; a file created in the session counts as created only',
 };
 
 /** What the three token lines on the trend plot represent, per model turn. */
@@ -1189,6 +1200,8 @@ const COMPARISON_LABELS: Record<Exclude<MetricId, 'cost'>, { label: string; help
   lod: { label: 'LoD added', help: METRIC_HELP.LOD },
   nloc: { label: 'LoC removed', help: METRIC_HELP.nLOC },
   nlod: { label: 'LoD removed', help: METRIC_HELP.nLOD },
+  filesCreated: { label: 'Files created', help: METRIC_HELP.FC },
+  filesModified: { label: 'Files modified', help: METRIC_HELP.FM },
 };
 
 /**
@@ -2135,11 +2148,12 @@ function renderContextAnalysis(analysis: SessionContextAnalysis, improvePrompt =
   }
 
   // Total Overview (open by default)
-  sections.push(renderAgentContextSection(analysis.total, true, 0, improvePrompt));
+  const accept = analysis.readOnly !== true;
+  sections.push(renderAgentContextSection(analysis.total, true, 0, improvePrompt, accept));
 
   // Per-agent sections (collapsed by default)
   analysis.agents.forEach((agent, i) => {
-    sections.push(renderAgentContextSection(agent, false, i + 1, improvePrompt));
+    sections.push(renderAgentContextSection(agent, false, i + 1, improvePrompt, accept));
   });
 
   return `<div class="context-analysis">${sections.join('\n')}</div>`;
@@ -2148,7 +2162,13 @@ function renderContextAnalysis(analysis: SessionContextAnalysis, improvePrompt =
 /**
  * Render one agent's context analysis as a collapsible `<details>` section.
  */
-function renderAgentContextSection(agent: AgentContextAnalysis, open: boolean, index = 0, improvePrompt = false): string {
+function renderAgentContextSection(
+  agent: AgentContextAnalysis,
+  open: boolean,
+  index = 0,
+  improvePrompt = false,
+  accept = true,
+): string {
   const kindBadge = agent.kind === 'total'
     ? ''
     : `<span class="ctx-badge ctx-badge-${agent.kind}">${escapeHtml(agent.kind)}</span>`;
@@ -2165,7 +2185,7 @@ function renderAgentContextSection(agent: AgentContextAnalysis, open: boolean, i
   <div class="ctx-section-body">
     ${renderContextBudget(agent)}
     ${renderLoadedFilesTable(agent, improvePrompt ? index : undefined)}
-    ${renderExpectedMissing(agent)}
+    ${renderExpectedMissing(agent, accept)}
     ${renderOversizedCallouts(agent)}
   </div>
 </details>`;
@@ -2206,39 +2226,13 @@ function renderContextBudget(agent: AgentContextAnalysis): string {
 function ctxFileName(f: ContextFileEntry): string {
   const label = contextFileLabel(f);
   if (f.filePath === undefined || f.filePath.length === 0) {
-    return escapeHtml(label);
+    // An imported session's file: where it sits in the sender's repository,
+    // shown on hover, with nothing to open on this machine.
+    return f.repoPath !== undefined && f.repoPath.length > 0
+      ? `<span title="${escapeHtml(f.repoPath)}">${escapeHtml(label)}</span>`
+      : escapeHtml(label);
   }
   return `<a href="#" class="ctx-file-link" data-path="${escapeHtml(f.filePath)}" title="${escapeHtml(f.filePath)}">${escapeHtml(label)}</a>`;
-}
-
-/**
- * What to call a context file in the list.
- *
- * Every skill's file is named `SKILL.md`, so a session that loaded nine skills
- * shows nine identical rows. The skill's identity is its containing folder, so
- * that is prefixed — `plan/SKILL.md` — which names the skill while keeping the
- * row recognizable as a file. The same applies to any other convention-named
- * file whose folder carries the meaning.
- */
-function contextFileLabel(f: ContextFileEntry): string {
-  if (!FOLDER_NAMED_FILES.has(f.name.toLowerCase())) {
-    return f.name;
-  }
-  const parent = parentFolderName(f.filePath);
-  return parent === undefined ? f.name : `${parent}/${f.name}`;
-}
-
-/** Files whose folder, not their own name, is what identifies them. */
-const FOLDER_NAMED_FILES = new Set(['skill.md', 'index.md', 'readme.md']);
-
-/** The immediate folder of a path, or `undefined` when there is not one. */
-function parentFolderName(filePath: string | undefined): string | undefined {
-  if (filePath === undefined || filePath.length === 0) {
-    return undefined;
-  }
-  const parts = filePath.split(/[\\/]+/).filter((p) => p.length > 0);
-  // parts: [..., folder, file] — a bare filename has no folder to borrow.
-  return parts.length >= 2 ? parts[parts.length - 2] : undefined;
 }
 
 /**
@@ -2292,18 +2286,32 @@ function renderLoadedFilesTable(agent: AgentContextAnalysis, promptSection?: num
 }
 
 /**
- * Render expected-but-missing files section.
+ * Render expected-but-missing files section. Without `accept` (an imported
+ * session, whose files are someone else's) the names are plain text and there
+ * is no accept button: accepting is a setting on this machine.
  */
-function renderExpectedMissing(agent: AgentContextAnalysis): string {
+function renderExpectedMissing(agent: AgentContextAnalysis, accept = true): string {
   if (agent.expectedMissing.length === 0) {
     return '';
   }
 
   const rows = agent.expectedMissing.map((m) => {
     const referencedBy = m.referencedBy
-      .map((r) => `<span class="ctx-accept-source" data-source="${escapeHtml(r.sourceFile)}" title="Accept all missing references from this file">${escapeHtml(r.sourceFile)}</span>`)
+      .map((r) =>
+        accept
+          ? `<span class="ctx-accept-source" data-source="${escapeHtml(r.sourceFile)}" title="Accept all missing references from this file">${escapeHtml(r.sourceFile)}</span>`
+          : escapeHtml(r.sourceFile),
+      )
       .join(', ');
     const refType = m.referencedBy[0]?.referenceType ?? 'unknown';
+    if (!accept) {
+      return `<tr>
+      <td>${escapeHtml(m.name)}</td>
+      <td>${referencedBy}</td>
+      <td><span class="ctx-ref-type">${escapeHtml(refType)}</span></td>
+      <td></td>
+    </tr>`;
+    }
 
     return `<tr>
       <td><span class="ctx-accept-file" data-file="${escapeHtml(m.name)}" title="Accept this file as missing">${escapeHtml(m.name)}</span></td>

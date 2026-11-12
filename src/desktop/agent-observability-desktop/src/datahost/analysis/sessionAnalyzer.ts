@@ -1,3 +1,4 @@
+import { SHARED_SOURCE_ID } from '@agent-observability/core/src/share/sharedSessionModels';
 import type { LocalDeviationDetector } from '@agent-observability/core/src/deviation/localDeviations';
 import type { SessionDataSource } from '@agent-observability/core/src/sources/sessionSource';
 import type { AcceptedMissingConfig } from '@agent-observability/core/src/context/contextAnalyzer';
@@ -205,6 +206,11 @@ function contextFilesOf(
   deps: AnalyzerDeps,
   detail: SessionDetail,
 ): AnalyzedContextFile[] {
+  // An imported session's files are the sender's: they name nothing on this
+  // machine and must never reach Context Hotspots.
+  if (source.id === SHARED_SOURCE_ID) {
+    return [];
+  }
   let loaded: ContextFileEntry[];
   try {
     const analysis = source.getContextAnalysis?.(sessionId, deps.acceptedMissing, detail);

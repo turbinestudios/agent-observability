@@ -3,7 +3,7 @@ import {
   SHARED_COST_MODES,
   SHARED_REDACTION_KINDS,
   SHARED_SESSION_KIND,
-  SHARED_SESSION_SCHEMA_VERSION,
+  SHARED_SESSION_READABLE_VERSIONS,
 } from './sharedSessionModels';
 
 /**
@@ -96,6 +96,8 @@ const TREE_STATS: Shape = {
     copilotCreditsNano: opt(num),
     creditUnit: opt(CREDIT_UNIT),
     ...LINES,
+    filesCreated: opt(num),
+    filesModified: opt(num),
   },
 };
 
@@ -188,6 +190,76 @@ export const SESSION_DETAIL_SHAPE: Shape = {
   },
 };
 
+/**
+ * A context file's name or a reference to one: never an absolute path on
+ * either platform, nor a home-relative one. The exporter cuts those down; this
+ * makes the importer refuse a file that puts one back.
+ */
+const NOT_ABSOLUTE = String.raw`^(?![A-Za-z]:[\\/])(?![\\/])(?!~[\\/])`;
+const CONTEXT_NAME: Shape = { kind: 'string', pattern: NOT_ABSOLUTE, maxLength: 1024 };
+/** Repository-relative, `/`-separated, with no `..` segment. */
+const REPO_PATH: Shape = {
+  kind: 'string',
+  pattern: String.raw`${NOT_ABSOLUTE}(?!.*\\)(?!(?:.*/)?\.\.(?:/|$)).+$`,
+  maxLength: 1024,
+};
+/** Caps per list; a real session holds tens of context files, not thousands. */
+const CONTEXT_LIST_MAX = 2000;
+
+const CONTEXT_FILE: Shape = {
+  kind: 'object',
+  props: {
+    name: req(CONTEXT_NAME),
+    repoPath: opt(REPO_PATH),
+    category: req({ kind: 'enum', values: ['instruction', 'skill', 'agent', 'hook', 'prompt', 'unknown'] }),
+    status: req({ kind: 'enum', values: ['applied', 'skipped', 'read'] }),
+    estimatedTokens: opt(num),
+    charCount: opt(num),
+  },
+};
+
+const CONTEXT_REFERENCE: Shape = {
+  kind: 'object',
+  props: {
+    sourceFile: req(CONTEXT_NAME),
+    referencedFile: req(CONTEXT_NAME),
+    referenceType: req({ kind: 'enum', values: ['file-path', 'name-ref', 'yaml-ref', 'skill-file-tag'] }),
+  },
+};
+
+const AGENT_CONTEXT: Shape = {
+  kind: 'object',
+  props: {
+    agentName: req(NAME),
+    kind: req({ kind: 'enum', values: ['main', 'subagent', 'total'] }),
+    loadedFiles: req({ kind: 'array', items: CONTEXT_FILE, maxItems: CONTEXT_LIST_MAX }),
+    expectedMissing: req({
+      kind: 'array',
+      items: {
+        kind: 'object',
+        props: {
+          name: req(CONTEXT_NAME),
+          referencedBy: req({ kind: 'array', items: CONTEXT_REFERENCE, maxItems: CONTEXT_LIST_MAX }),
+        },
+      },
+      maxItems: CONTEXT_LIST_MAX,
+    }),
+    totalContextTokens: req(num),
+    contextFileTokens: req(num),
+    otherContextTokens: req(num),
+    oversizedFiles: req({ kind: 'array', items: CONTEXT_FILE, maxItems: CONTEXT_LIST_MAX }),
+  },
+};
+
+/** `SessionContextAnalysis` without `note` and without any absolute path. */
+export const SHARED_CONTEXT_SHAPE: Shape = {
+  kind: 'object',
+  props: {
+    total: req(AGENT_CONTEXT),
+    agents: req({ kind: 'array', items: AGENT_CONTEXT, maxItems: 500 }),
+  },
+};
+
 export const TOOL_VERSION_PATTERN = '^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$';
 
 /** The whole file. */
@@ -195,7 +267,7 @@ export const SHARED_SESSION_SHAPE: Shape = {
   kind: 'object',
   props: {
     kind: req({ kind: 'const', value: SHARED_SESSION_KIND }),
-    schemaVersion: req({ kind: 'const', value: SHARED_SESSION_SCHEMA_VERSION }),
+    schemaVersion: req({ kind: 'enum', values: SHARED_SESSION_READABLE_VERSIONS }),
     exportedAtMs: req(num),
     toolVersion: req({ kind: 'string', pattern: TOOL_VERSION_PATTERN, maxLength: 64 }),
     origin: req({
@@ -213,6 +285,7 @@ export const SHARED_SESSION_SHAPE: Shape = {
       },
     }),
     detail: req(SESSION_DETAIL_SHAPE),
+    contextAnalysis: opt(SHARED_CONTEXT_SHAPE),
   },
 };
 
@@ -372,7 +445,7 @@ export function sharedSessionJsonSchema(): Record<string, unknown> {
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     $id: 'https://turbine.dev/schemas/shared-session.schema.json',
-    title: 'Agent Observability Shared Session (v1)',
+    title: 'Agent Observability Shared Session (v1.x)',
     description:
       'One session a user exported to a file to share with a colleague. Carries raw content (prompts and responses, secrets redacted best-effort). Generated from src/core/agent-observability-core/src/share/sharedSessionShape.ts; do not edit by hand.',
     ...shapeToJsonSchema(SHARED_SESSION_SHAPE),

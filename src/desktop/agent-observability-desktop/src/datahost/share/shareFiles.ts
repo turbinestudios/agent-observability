@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { CostMode, SessionDetail } from '@agent-observability/core/src/telemetry/models';
+import type { SessionContextAnalysis } from '@agent-observability/core/src/context/models';
 import {
   buildSharedSession,
   isShareableSource,
@@ -42,6 +43,10 @@ export interface ShareSessionInput {
   title?: string;
   toolVersion: string;
   nowMs: number;
+  /** The session's Context Analysis, exported without absolute paths; absent when the source has none. */
+  context?: () => SessionContextAnalysis | undefined;
+  /** The repository a context file sits in, for its repository-relative path in the file. */
+  repoRootOf?: (filePath: string) => string | undefined;
 }
 
 type Built = { ok: true; json: string; turns: number; redactions: number; kinds: string[]; title?: string } | { ok: false; message: string };
@@ -56,6 +61,14 @@ function build(input: ShareSessionInput): Built {
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) };
   }
+  // Like the detail view, a session is worth sharing without its context
+  // breakdown: an analysis that fails is left out, not the whole file.
+  let context: SessionContextAnalysis | undefined;
+  try {
+    context = input.context?.();
+  } catch {
+    context = undefined;
+  }
   const built = buildSharedSession({
     detail,
     source: input.source,
@@ -63,6 +76,8 @@ function build(input: ShareSessionInput): Built {
     ...(input.title !== undefined ? { title: input.title } : {}),
     toolVersion: input.toolVersion,
     nowMs: input.nowMs,
+    ...(context !== undefined ? { context } : {}),
+    ...(input.repoRootOf !== undefined ? { repoRootOf: input.repoRootOf } : {}),
   });
   if (!built.ok) {
     return built;

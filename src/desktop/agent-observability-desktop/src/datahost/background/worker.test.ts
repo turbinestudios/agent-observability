@@ -151,6 +151,9 @@ describe('independent worker and broker connections', () => {
     db.upsertSessions([row]);
     const input: BackgroundInput = {
       indexPath, copilotNotes: [],
+      // Imported sessions have no setting; an empty folder keeps a real import
+      // on this machine out of the count.
+      sharedDir: path.join(path.dirname(indexPath), 'shared'),
       // Every source off: with any left on, the real worker would index the
       // sessions of whichever machine runs this test.
       settings: {

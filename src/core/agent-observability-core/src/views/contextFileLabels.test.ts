@@ -182,3 +182,35 @@ describe('collapseRepeatedSeparators', () => {
     );
   });
 });
+
+describe('a context file from an imported session', () => {
+  it('names a skill by the folder in its repository path, with nothing to open', () => {
+    const html = render(agent({ loadedFiles: [file({ name: 'SKILL.md', repoPath: '.github/skills/review/SKILL.md' })] }));
+    expect(html).toContain('review/SKILL.md');
+    expect(html).toContain('title=".github/skills/review/SKILL.md"');
+    expect(html).not.toContain('class="ctx-file-link"');
+  });
+
+  it('offers no accept-as-missing controls on a read-only analysis', () => {
+    const total = agent({
+      expectedMissing: [
+        { name: 'testing.md', referencedBy: [{ sourceFile: 'AGENTS.md', referencedFile: 'testing.md', referenceType: 'name-ref' }] },
+      ],
+    });
+    const own = renderSessionDetailHtml(DETAIL, [], 'n', { total, agents: [] });
+    const imported = renderSessionDetailHtml(DETAIL, [], 'n', { total, agents: [], readOnly: true });
+    expect(own).toContain('data-accept-file="testing.md"');
+    expect(imported).toContain('testing.md');
+    expect(imported).not.toContain('data-accept-file=');
+    expect(imported).not.toContain('data-source="AGENTS.md"');
+  });
+});
+
+describe('the files created and modified figures', () => {
+  it('show only for a source that records them', () => {
+    expect(renderSessionDetailHtml(DETAIL, [], 'n')).not.toContain('>FC</dt>');
+    const counted = renderSessionDetailHtml({ ...DETAIL, treeStats: { ...ZERO_TREE_STATS, filesCreated: 3, filesModified: 0 } }, [], 'n');
+    expect(counted).toContain('>FC</dt><dd>3</dd>');
+    expect(counted).toContain('>FM</dt><dd>0</dd>');
+  });
+});

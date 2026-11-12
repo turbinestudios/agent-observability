@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://turbine.dev/schemas/shared-session.schema.json",
-  "title": "Agent Observability Shared Session (v1)",
+  "title": "Agent Observability Shared Session (v1.x)",
   "description": "One session a user exported to a file to share with a colleague. Carries raw content (prompts and responses, secrets redacted best-effort). Generated from src/core/agent-observability-core/src/share/sharedSessionShape.ts; do not edit by hand.",
   "type": "object",
   "additionalProperties": false,
@@ -19,7 +19,10 @@
       "const": "agent-observability.shared-session"
     },
     "schemaVersion": {
-      "const": "1.0"
+      "enum": [
+        "1.0",
+        "1.1"
+      ]
     },
     "exportedAtMs": {
       "type": "number",
@@ -275,6 +278,14 @@
               "minimum": 0
             },
             "linesOfDocRemoved": {
+              "type": "number",
+              "minimum": 0
+            },
+            "filesCreated": {
+              "type": "number",
+              "minimum": 0
+            },
+            "filesModified": {
               "type": "number",
               "minimum": 0
             }
@@ -642,6 +653,402 @@
               }
             }
           }
+        }
+      }
+    },
+    "contextAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "agents"
+      ],
+      "properties": {
+        "total": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agentName",
+            "kind",
+            "loadedFiles",
+            "expectedMissing",
+            "totalContextTokens",
+            "contextFileTokens",
+            "otherContextTokens",
+            "oversizedFiles"
+          ],
+          "properties": {
+            "agentName": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "kind": {
+              "enum": [
+                "main",
+                "subagent",
+                "total"
+              ]
+            },
+            "loadedFiles": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "category",
+                  "status"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])"
+                  },
+                  "repoPath": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])(?!.*\\\\)(?!(?:.*/)?\\.\\.(?:/|$)).+$"
+                  },
+                  "category": {
+                    "enum": [
+                      "instruction",
+                      "skill",
+                      "agent",
+                      "hook",
+                      "prompt",
+                      "unknown"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "applied",
+                      "skipped",
+                      "read"
+                    ]
+                  },
+                  "estimatedTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "charCount": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
+              },
+              "maxItems": 2000
+            },
+            "expectedMissing": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "referencedBy"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])"
+                  },
+                  "referencedBy": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "sourceFile",
+                        "referencedFile",
+                        "referenceType"
+                      ],
+                      "properties": {
+                        "sourceFile": {
+                          "type": "string",
+                          "maxLength": 1024,
+                          "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])"
+                        },
+                        "referencedFile": {
+                          "type": "string",
+                          "maxLength": 1024,
+                          "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])"
+                        },
+                        "referenceType": {
+                          "enum": [
+                            "file-path",
+                            "name-ref",
+                            "yaml-ref",
+                            "skill-file-tag"
+                          ]
+                        }
+                      }
+                    },
+                    "maxItems": 2000
+                  }
+                }
+              },
+              "maxItems": 2000
+            },
+            "totalContextTokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "contextFileTokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "otherContextTokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "oversizedFiles": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "category",
+                  "status"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])"
+                  },
+                  "repoPath": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])(?!.*\\\\)(?!(?:.*/)?\\.\\.(?:/|$)).+$"
+                  },
+                  "category": {
+                    "enum": [
+                      "instruction",
+                      "skill",
+                      "agent",
+                      "hook",
+                      "prompt",
+                      "unknown"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "applied",
+                      "skipped",
+                      "read"
+                    ]
+                  },
+                  "estimatedTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "charCount": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
+              },
+              "maxItems": 2000
+            }
+          }
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "agentName",
+              "kind",
+              "loadedFiles",
+              "expectedMissing",
+              "totalContextTokens",
+              "contextFileTokens",
+              "otherContextTokens",
+              "oversizedFiles"
+            ],
+            "properties": {
+              "agentName": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "kind": {
+                "enum": [
+                  "main",
+                  "subagent",
+                  "total"
+                ]
+              },
+              "loadedFiles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "category",
+                    "status"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])"
+                    },
+                    "repoPath": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])(?!.*\\\\)(?!(?:.*/)?\\.\\.(?:/|$)).+$"
+                    },
+                    "category": {
+                      "enum": [
+                        "instruction",
+                        "skill",
+                        "agent",
+                        "hook",
+                        "prompt",
+                        "unknown"
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "applied",
+                        "skipped",
+                        "read"
+                      ]
+                    },
+                    "estimatedTokens": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "charCount": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "maxItems": 2000
+              },
+              "expectedMissing": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "referencedBy"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])"
+                    },
+                    "referencedBy": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "sourceFile",
+                          "referencedFile",
+                          "referenceType"
+                        ],
+                        "properties": {
+                          "sourceFile": {
+                            "type": "string",
+                            "maxLength": 1024,
+                            "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])"
+                          },
+                          "referencedFile": {
+                            "type": "string",
+                            "maxLength": 1024,
+                            "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])"
+                          },
+                          "referenceType": {
+                            "enum": [
+                              "file-path",
+                              "name-ref",
+                              "yaml-ref",
+                              "skill-file-tag"
+                            ]
+                          }
+                        }
+                      },
+                      "maxItems": 2000
+                    }
+                  }
+                },
+                "maxItems": 2000
+              },
+              "totalContextTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "contextFileTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "otherContextTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "oversizedFiles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "category",
+                    "status"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])"
+                    },
+                    "repoPath": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!~[\\\\/])(?!.*\\\\)(?!(?:.*/)?\\.\\.(?:/|$)).+$"
+                    },
+                    "category": {
+                      "enum": [
+                        "instruction",
+                        "skill",
+                        "agent",
+                        "hook",
+                        "prompt",
+                        "unknown"
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "applied",
+                        "skipped",
+                        "read"
+                      ]
+                    },
+                    "estimatedTokens": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "charCount": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "maxItems": 2000
+              }
+            }
+          },
+          "maxItems": 500
         }
       }
     }

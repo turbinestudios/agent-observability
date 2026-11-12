@@ -237,6 +237,11 @@ describe('analyzeSession', () => {
     ]);
   });
 
+  it('records no context files for a session imported from someone else', () => {
+    const imported = { ...stubSource({ detail: detail([turn(1_000)]), context: contextAnalysis() }), id: 'shared' };
+    expect(analyze(imported as SessionDataSource)?.contextFiles).toEqual([]);
+  });
+
   it('keeps the deviation verdict when the context breakdown fails', () => {
     const result = analyze(
       stubSource({

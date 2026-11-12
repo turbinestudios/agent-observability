@@ -1,3 +1,4 @@
+import type { SessionContextAnalysis } from '../context/models';
 import type { AgentSourceId, CostMode, SessionDetail } from '../telemetry/models';
 import type { RedactionKind } from '../text/redact';
 
@@ -12,17 +13,25 @@ import type { RedactionKind } from '../text/redact';
  * best-effort secret redaction applied first. The app never sends it
  * anywhere; the user does.
  *
+ * Since format 1.1 it also carries the session's Context Analysis, with
+ * every absolute path removed: a context file keeps only its path relative
+ * to its repository, or its name when it is in none (see `./sharedContext.ts`).
+ *
  * Deliberately NOT in the file: tags, notes, hidden flags, the user's
  * pseudonymous id or salt, a rename history, external URLs, tool inputs and
- * file paths (the detail model never holds them), the context analysis and
- * the retrospective (the receiver derives its own from the detail).
+ * absolute file paths (the detail model never holds them), and the
+ * retrospective (the receiver derives its own from the detail).
  *
  * Keep these types in lockstep with `schemas/shared-session.schema.json`,
  * which is generated from `sharedSessionShape.ts` and checked by a test.
  */
 
 export const SHARED_SESSION_KIND = 'agent-observability.shared-session';
-export const SHARED_SESSION_SCHEMA_VERSION = '1.0';
+/** The format this app writes. 1.1 added `contextAnalysis` and the file counts. */
+export const SHARED_SESSION_SCHEMA_VERSION = '1.1';
+/** Every format this app reads: a newer one is refused with a request to update. */
+export const SHARED_SESSION_READABLE_VERSIONS = ['1.0', '1.1'] as const;
+export type SharedSessionSchemaVersion = (typeof SHARED_SESSION_READABLE_VERSIONS)[number];
 
 /** Files larger than this are refused before parsing, on export and on import. */
 export const SHARED_SESSION_MAX_BYTES = 50 * 1024 * 1024;
@@ -58,7 +67,7 @@ export const SHARED_REDACTION_KINDS = [
 
 export interface SharedSessionEnvelope {
   kind: typeof SHARED_SESSION_KIND;
-  schemaVersion: typeof SHARED_SESSION_SCHEMA_VERSION;
+  schemaVersion: SharedSessionSchemaVersion;
   /** When the file was written, epoch ms. */
   exportedAtMs: number;
   /** The exporting app's version. */
@@ -72,4 +81,6 @@ export interface SharedSessionEnvelope {
   /** What the redaction pass replaced before writing. */
   redactions: { count: number; kinds: RedactionKind[] };
   detail: SessionDetail;
+  /** The session's Context Analysis without absolute paths; absent before 1.1 or when the source has none. */
+  contextAnalysis?: SessionContextAnalysis;
 }

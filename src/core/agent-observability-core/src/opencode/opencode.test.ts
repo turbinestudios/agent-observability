@@ -446,6 +446,8 @@ CREATE TABLE instruction_state (session_id text PRIMARY KEY, epoch_start integer
       tool('skill', { id: 'db-migration' }, T0 + 1_100),
       tool('read', { filePath: path.join(repo, 'src', 'private-notes.ts') }, T0 + 1_200),
       tool('read', { filePath: path.join(repo, 'docs', 'release.instructions.md') }, T0 + 1_300),
+      // OpenCode 2.x names most reads' file `path`.
+      tool('read', { path: path.join(repo, 'docs', 'style.instructions.md') }, T0 + 1_400),
     ]));
     msg('n1', 'ses_main', 'synthetic', T0 + 2_000, {
       description: 'Loaded services/api/AGENTS.md',
@@ -484,6 +486,11 @@ CREATE TABLE instruction_state (session_id text PRIMARY KEY, epoch_start integer
     expect(main.loadedFiles.some((f) => f.status === 'read' && f.filePath === path.join(repo, 'docs', 'release.instructions.md'))).toBe(true);
   });
 
+  it('sees a context file read through the 2.x `path` input', () => {
+    const main = new OpencodeSource(config()).getContextAnalysis('ses_main', accepted)!.agents[0];
+    expect(main.loadedFiles.some((f) => f.status === 'read' && f.filePath === path.join(repo, 'docs', 'style.instructions.md'))).toBe(true);
+  });
+
   it('gives each sub-agent type its own row', () => {
     const analysis = new OpencodeSource(config()).getContextAnalysis('ses_main', accepted)!;
     expect(analysis.agents.map((a) => [a.agentName, a.kind])).toEqual([
@@ -503,6 +510,165 @@ CREATE TABLE instruction_state (session_id text PRIMARY KEY, epoch_start integer
 
   it('shows no tab while the source is off', () => {
     expect(new OpencodeSource(config(false)).getContextAnalysis('ses_main', accepted)).toBeUndefined();
+  });
+});
+
+/**
+ * Lines of code and files created / modified, from what OpenCode records per
+ * call: an `edit`'s per-file counts in `metadata.files` (2.x) or
+ * `metadata.filediff` (1.x), and a `write`'s content, whose result says
+ * whether it created the file.
+ */
+describe('OpencodeSource lines of code and file counts', { timeout: 30_000 }, () => {
+  const locConfig = () => ({ ...config(), getCodeFileExtensions: () => ['.ts'], getDocFileExtensions: () => ['.md'] });
+  let repo: string;
+
+  const freshDb = () => {
+    fs.rmSync(dbPath, { force: true });
+    fs.rmSync(`${dbPath}-wal`, { force: true });
+    fs.rmSync(`${dbPath}-shm`, { force: true });
+    const db = new DatabaseSync(dbPath);
+    db.exec('PRAGMA journal_mode = WAL;');
+    return db;
+  };
+
+  beforeEach(() => {
+    repo = path.join(root, 'repo');
+    const db = freshDb();
+    db.exec(`
+CREATE TABLE project (id text PRIMARY KEY, worktree text NOT NULL);
+CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL, parent_id text, directory text NOT NULL, title text,
+  version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL);
+CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL,
+  time_created integer NOT NULL, data text NOT NULL);
+`);
+    db.prepare('INSERT INTO project VALUES (?, ?)').run('prj', repo);
+    const session = db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    session.run('ses_main', 'prj', null, repo, 'Build it', '2.1.2', T0, T0 + 60_000);
+    session.run('ses_sub', 'prj', 'ses_main', repo, 'Helper', '2.1.2', T0 + 20_000, T0 + 30_000);
+    let seq = 0;
+    const message = db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?)');
+    const msg = (id: string, sessionId: string, type: string, at: number, data: Record<string, unknown>): void => {
+      message.run(id, sessionId, type, seq++, at, JSON.stringify(data));
+    };
+    const edit = (file: string, input: string, additions: number, deletions: number, at: number, status = 'completed') => ({
+      type: 'tool',
+      id: `edit-${at}`,
+      name: 'edit',
+      state: {
+        status,
+        input: { path: input, oldString: 'old secret text', newString: 'new secret text' },
+        content: [{ type: 'text', text: 'Edit applied successfully.' }],
+        ...(status === 'completed'
+          ? { metadata: { files: [{ file, patch: 'PATCH BODY', status: 'modified', additions, deletions }], truncated: false } }
+          : {}),
+      },
+      time: { created: at, completed: at + 100 },
+    });
+    const write = (input: string, content: string, created: boolean, at: number) => ({
+      type: 'tool',
+      id: `write-${at}`,
+      name: 'write',
+      state: {
+        status: 'completed',
+        input: { path: input, content },
+        content: [{ type: 'text', text: created ? 'Created file successfully.' : 'Wrote file successfully.' }],
+        metadata: { truncated: false },
+      },
+      time: { created: at, completed: at + 100 },
+    });
+    const reply = (agent: string, at: number, content: unknown[]) => ({
+      agent,
+      model: { id: 'gpt-5', providerID: 'openai' },
+      time: { created: at, completed: at + 1_000 },
+      tokens: { input: 10, output: 50, reasoning: 0, cache: { read: 0, write: 0 } },
+      cost: 0.01,
+      content,
+    });
+    msg('u1', 'ses_main', 'user', T0, { text: 'Build it', time: { created: T0 } });
+    msg('a1', 'ses_main', 'assistant', T0 + 1_000, reply('build', T0 + 1_000, [
+      // A new file: three lines, the last without a newline.
+      write(path.join(repo, 'src', 'new.ts'), 'one\ntwo\nthree', true, T0 + 1_100),
+      // Then edited by its relative path: still the one created file.
+      edit('src/new.ts', 'src/new.ts', 4, 1, T0 + 1_200),
+      // An existing file, edited by absolute path, then rewritten whole.
+      edit('src/old.ts', path.join(repo, 'src', 'old.ts'), 10, 2, T0 + 1_300),
+      write(path.join(repo, 'src', 'old.ts'), 'a\nb\n', false, T0 + 1_400),
+      edit('README.md', 'README.md', 5, 3, T0 + 1_500),
+      // A failed edit counts nothing.
+      edit('src/broken.ts', 'src/broken.ts', 99, 99, T0 + 1_600, 'error'),
+    ]));
+    msg('s1', 'ses_sub', 'user', T0 + 20_000, { text: 'Help', time: { created: T0 + 20_000 } });
+    msg('s2', 'ses_sub', 'assistant', T0 + 21_000, reply('general', T0 + 21_000, [
+      write(path.join(repo, 'docs', 'guide.md'), '# Guide\n', true, T0 + 21_100),
+    ]));
+    db.close();
+  });
+
+  it('counts the lines OpenCode recorded, split into code and docs', () => {
+    const detail = ok(new OpencodeSource(locConfig()).getSessionDetail('ses_main'));
+    // Code: write 3 + edit 4/1 + edit 10/2 + write 2. Docs: edit 5/3 + the sub-agent's write 1.
+    expect(detail.treeStats).toMatchObject({ linesOfCode: 19, linesOfCodeRemoved: 3, linesOfDoc: 6, linesOfDocRemoved: 3 });
+    expect(detail.turns[0]).toMatchObject({ linesOfCode: 19, linesOfCodeRemoved: 3, linesOfDoc: 5, linesOfDocRemoved: 3 });
+    expect(detail.agentUsage.map((a) => [a.agentName, a.linesOfCode, a.linesOfDoc])).toEqual([
+      ['opencode', 19, 5],
+      ['general', 0, 1],
+    ]);
+    expect(detail.treeModelTurns.reduce((n, t) => n + t.linesOfCode, 0)).toBe(19);
+  });
+
+  it('counts each file once, as created or modified, across the agent tree', () => {
+    const detail = ok(new OpencodeSource(locConfig()).getSessionDetail('ses_main'));
+    // Created: src/new.ts, docs/guide.md. Modified: src/old.ts, README.md.
+    expect(detail.treeStats).toMatchObject({ filesCreated: 2, filesModified: 2 });
+  });
+
+  it('counts no lines without the extension lists, but still counts files', () => {
+    const detail = ok(new OpencodeSource(config()).getSessionDetail('ses_main'));
+    expect(detail.treeStats).toMatchObject({ linesOfCode: 0, linesOfDoc: 0, filesCreated: 2, filesModified: 2 });
+  });
+
+  it('never surfaces edit text, patches or tool results', () => {
+    const all = JSON.stringify(ok(new OpencodeSource(locConfig()).getSessionDetail('ses_main')));
+    for (const hidden of ['secret text', 'PATCH BODY', 'three', 'Guide', 'successfully', 'new.ts', 'README']) {
+      expect(all).not.toContain(hidden);
+    }
+  });
+
+  it('reads the 1.x `filediff` counts and `write` output', () => {
+    const db = freshDb();
+    db.exec(DDL);
+    db.prepare('INSERT INTO project VALUES (?, ?, ?, ?)').run('prj', repo, T0, T0);
+    db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('ses_legacy', 'prj', null, 's', repo, 'Legacy', '1.4.3', T0, T0);
+    const message = db.prepare('INSERT INTO message VALUES (?, ?, ?, ?, ?)');
+    message.run('m1', 'ses_legacy', T0, T0, JSON.stringify({ role: 'user', time: { created: T0 } }));
+    message.run('m2', 'ses_legacy', T0 + 1, T0 + 1, JSON.stringify({
+      role: 'assistant', parentID: 'm1', modelID: 'gpt-5', providerID: 'openai', time: { created: T0 + 1, completed: T0 + 2 },
+    }));
+    const part = db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)');
+    part.run('p1', 'm2', 'ses_legacy', T0 + 1, T0 + 1, JSON.stringify({
+      type: 'tool',
+      tool: 'edit',
+      state: {
+        status: 'completed',
+        input: { filePath: path.join(repo, 'a.ts') },
+        metadata: { diff: 'DIFF', filediff: { additions: 7, deletions: 2 } },
+        time: { start: T0 + 1, end: T0 + 2 },
+      },
+    }));
+    part.run('p2', 'm2', 'ses_legacy', T0 + 2, T0 + 2, JSON.stringify({
+      type: 'tool',
+      tool: 'write',
+      state: {
+        status: 'completed',
+        input: { filePath: path.join(repo, 'b.ts'), content: 'x\ny\n' },
+        output: 'Created file successfully.',
+        time: { start: T0 + 2, end: T0 + 3 },
+      },
+    }));
+    db.close();
+    const detail = ok(new OpencodeSource(locConfig()).getSessionDetail('ses_legacy'));
+    expect(detail.treeStats).toMatchObject({ linesOfCode: 9, linesOfCodeRemoved: 2, filesCreated: 1, filesModified: 1 });
   });
 });
 

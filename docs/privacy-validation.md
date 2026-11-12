@@ -55,8 +55,9 @@ reference for a privacy audit.
 > Claude Code is never driven by the app.
 > Also separately, the user may **share one session as a file**: after a
 > dialog stating that the file holds the full conversation, the app writes
-> that one session (prompts, final responses, title, tool names and
-> figures; never tags, notes, tool I/O, file paths or identities), with
+> that one session (prompts, final responses, title, tool names, figures
+> and its Context Analysis with repository-relative context-file paths only;
+> never tags, notes, tool I/O, absolute file paths or identities), with
 > best-effort secret redaction, to the path the user picks, and never sends
 > it anywhere. An imported shared session is validated before it is kept,
 > listed under its own `shared` source, and never counted in the receiver's
@@ -218,8 +219,15 @@ The file a user writes when they share one session, and the only file the
 app reads from someone else besides team shards. Unlike the three contracts
 above it **carries raw content** by design: the session's prompts, final
 responses, title, tool names and the figures the detail view shows, with
-best-effort secret redaction. It never carries tags, notes, rename history,
-external links, tool inputs or outputs, file paths, or any identity. It is
+best-effort secret redaction. Since format 1.1 it also carries the
+session's Context Analysis: each context file's name, category, status and
+token estimates, cross-references between them, and, for a file inside its
+repository, its path relative to that repository. A file outside a
+repository keeps only its name; the free-text skip reasons and the source's
+caption are dropped, and the schema refuses an absolute path or a `..`
+segment in any of these fields. It never carries tags, notes, rename
+history, external links, tool inputs or outputs, absolute file paths, or any
+identity. It is
 generated from `share/sharedSessionShape.ts`, the same definition the
 exporter's allowlist and the importer's validator use, and a test fails if
 the checked-in file differs. It sets `additionalProperties:false` at every

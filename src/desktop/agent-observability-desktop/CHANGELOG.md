@@ -9,6 +9,34 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.6.0] - 2026-11-12
+
+### Added
+
+- **Shared sessions include the Context Analysis.** A session you share now
+  carries its Context Analysis tab: which instruction files, skills and agents
+  were loaded, their size, and what was referenced but missing. Each file is
+  shown by where it sits in the repository; a file outside the repository is
+  named only. The share dialog lists this before you save. An imported session
+  shows the tab as the sender recorded it, without the actions that only make
+  sense on their machine.
+- **Files created and files modified.** The totals card of OpenCode and Claude
+  Code sessions now shows how many files the agents created (**FC**) and how
+  many existing files they changed (**FM**). Compare shows both too.
+
+### Changed
+
+- Files shared from this version cannot be opened by older versions of the
+  app, which ask you to update. This version still opens files shared from
+  2.5.0.
+
+### Fixed
+
+- OpenCode sessions always showed 0 lines of code. They now show the lines
+  added and removed, from the counts OpenCode records for each edit.
+- The Context Analysis of recent OpenCode sessions missed most of the context
+  files the agent read.
+
 ## [2.5.0] - 2026-11-11
 
 ### Added

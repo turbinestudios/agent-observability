@@ -45,7 +45,7 @@ telemetry.setArchiveDbPath(resolveArchiveDbPath(config));
 // Sessions other people shared and this user imported. Listed (and analyzed
 // for the list's verdict chip) like any other; never part of the user's own
 // figures, which the data host's aggregate queries enforce.
-const shared = new SharedSessionSource(resolveSharedDir());
+const shared = new SharedSessionSource(input.sharedDir ?? resolveSharedDir());
 const sources = new SourceRegistry([
   new ClaudeCodeService(config),
   new CopilotSource(telemetry, config),

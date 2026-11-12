@@ -8,6 +8,8 @@ export interface BackgroundInput {
   /** Once per launch only; tests omit this to avoid touching real temp data. */
   cleanupSnapshots?: boolean;
   ensureArchiveIndexes?: boolean;
+  /** The imported-sessions folder; tests point it at an empty one so a real import on the machine is never indexed. */
+  sharedDir?: string;
   /**
    * Set on passes the live board triggered: sessions that ended after this
    * instant are not re-analyzed yet, because their transcript is still moving.

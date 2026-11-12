@@ -21,6 +21,7 @@ import {
   buildOpencodeInteractions,
   buildOpencodeSessionDetail,
   groupOpencodeSessions,
+  type OpencodeLocOptions,
   type OpencodeSessionInput,
 } from './mapper';
 import { analyzeOpencodeContext } from './contextAnalysis';
@@ -32,6 +33,9 @@ export interface OpencodeSourceConfig {
   isOpencodeEnabled(): boolean;
   getOpencodeDbPath(): string | undefined;
   getExcludedRepositories(): ReadonlySet<string>;
+  /** Extensions counted as code / docs for lines of code; without them the counts are 0. */
+  getCodeFileExtensions?(): string[];
+  getDocFileExtensions?(): string[];
 }
 
 /**
@@ -95,6 +99,16 @@ export class OpencodeSource implements SessionDataSource {
     return this.grouped.sessions.filter((s) => !excluded.has(s.repository));
   }
 
+  private loc(): OpencodeLocOptions | undefined {
+    const codeExts = this.config.getCodeFileExtensions?.();
+    const docExts = this.config.getDocFileExtensions?.();
+    return codeExts === undefined && docExts === undefined ? undefined : { codeExts: codeExts ?? [], docExts: docExts ?? [] };
+  }
+
+  private detail(input: OpencodeSessionInput): SessionDetail {
+    return buildOpencodeSessionDetail(input, this.loc());
+  }
+
   private guard<T>(work: () => T): Result<T> {
     if (!this.isEnabled()) {
       return { ok: false, reason: 'disabled', message: `${this.label} is turned off in Settings.` };
@@ -121,13 +135,13 @@ export class OpencodeSource implements SessionDataSource {
     return this.guard(() => {
       const all = this.sessions()
         .filter((s) => repository === undefined || s.repository === repository)
-        .map((s) => buildOpencodeSessionDetail(s).summary);
+        .map((s) => this.detail(s).summary);
       return limit === undefined ? all : all.slice(0, limit);
     });
   }
 
   getSessionDetail(sessionKey: string): Result<SessionDetail> {
-    return this.guard(() => buildOpencodeSessionDetail(this.find(sessionKey)));
+    return this.guard(() => this.detail(this.find(sessionKey)));
   }
 
   getSessionInteractions(sessionKey: string): Result<Interaction[]> {
@@ -139,7 +153,7 @@ export class OpencodeSource implements SessionDataSource {
   }
 
   getSessionRetrospective(sessionKey: string, detail?: SessionDetail): Result<SessionRetrospective> {
-    return this.guard(() => buildSessionRetrospective(detail ?? buildOpencodeSessionDetail(this.find(sessionKey))));
+    return this.guard(() => buildSessionRetrospective(detail ?? this.detail(this.find(sessionKey))));
   }
 
   getContextAnalysis(sessionKey: string, acceptedMissing: AcceptedMissingConfig): SessionContextAnalysis | undefined {
@@ -158,7 +172,7 @@ export class OpencodeSource implements SessionDataSource {
     return this.guard(() => {
       const byRepo = new Map<string, RepositorySummary & { modelSet: Set<string> }>();
       for (const input of this.sessions()) {
-        const s = buildOpencodeSessionDetail(input).summary;
+        const s = this.detail(input).summary;
         const entry =
           byRepo.get(s.repository) ??
           { repository: s.repository, sessionCount: 0, interactionCount: 0, models: [], lastActivityMs: 0, modelSet: new Set<string>() };
@@ -175,7 +189,7 @@ export class OpencodeSource implements SessionDataSource {
   getOverview(sinceMs?: number): Result<OverviewMetrics> {
     return this.guard(() => {
       const details = this.sessions()
-        .map((s) => buildOpencodeSessionDetail(s))
+        .map((s) => this.detail(s))
         .filter((d) => sinceMs === undefined || d.summary.endedAtMs >= sinceMs);
       return {
         totalInteractions: details.reduce((n, d) => n + d.summary.interactionCount, 0),

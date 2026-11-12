@@ -162,6 +162,8 @@ export interface ToolUseResult {
   newString?: string;
   /** Structured patch (apply_patch-style) when present. */
   structuredPatch?: unknown;
+  /** A Write's result: `create` for a new file, `update` for an existing one. */
+  type?: unknown;
   [key: string]: unknown;
 }
 

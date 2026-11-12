@@ -159,6 +159,17 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
       if (payload === undefined) {
         return;
       }
+      // An imported session's context files are on the sender's machine: there
+      // is nothing here to open, improve, or accept as missing.
+      if (
+        imported &&
+        (payload.type === 'open-context-file' ||
+          payload.type === 'improve-context-files' ||
+          payload.type === 'accept-missing-file' ||
+          payload.type === 'accept-missing-source')
+      ) {
+        return;
+      }
       if (payload.type === 'open-context-file' && typeof payload.path === 'string') {
         void window.desktop.openPath(payload.path);
         return;
@@ -205,7 +216,7 @@ export function SessionDetail({ row, onAskAi }: Props): JSX.Element {
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [row.source, row.sessionId, checkAvailability]);
+  }, [row.source, row.sessionId, checkAvailability, imported]);
 
   if (error !== undefined) {
     return (

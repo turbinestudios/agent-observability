@@ -6,6 +6,7 @@ import { fixtureDetail } from '@agent-observability/core/src/share/sharedSession
 import { SharedSessionSource } from '@agent-observability/core/src/share/sharedSessionSource';
 import { IndexDb } from '../indexer/indexDb';
 import { SharedIndexer } from '../indexer/sharedIndexer';
+import type { SessionContextAnalysis } from '@agent-observability/core/src/context/models';
 import type { SessionRow } from '../../shared/rpc';
 import { exportShare, importShare, previewShare, removeShared, type ShareSessionInput } from './shareFiles';
 import { figureExclusions } from './figures';
@@ -96,6 +97,48 @@ describe('exportShare', () => {
     const text = fs.readFileSync(target, 'utf8');
     expect(text).not.toContain('ghp_');
     expect(text).toContain('[REDACTED:token]');
+  });
+});
+
+describe('exporting the Context Analysis', () => {
+  const repo = path.join(path.parse(process.cwd()).root, 'work', 'repo');
+  const context = (): SessionContextAnalysis => {
+    const total = {
+      agentName: 'Total',
+      kind: 'total' as const,
+      loadedFiles: [{ name: 'AGENTS.md', filePath: path.join(repo, 'AGENTS.md'), category: 'instruction' as const, status: 'applied' as const }],
+      expectedMissing: [],
+      totalContextTokens: 1_000,
+      contextFileTokens: 100,
+      otherContextTokens: 900,
+      oversizedFiles: [],
+    };
+    return { total, agents: [] };
+  };
+
+  it('writes the analysis with repository-relative paths, and the imported copy serves it', () => {
+    const target = path.join(root, 'with-context.aosession.json');
+    const result = exportShare(input({ context, repoRootOf: () => repo }), target);
+    expect(result.ok).toBe(true);
+    const text = fs.readFileSync(target, 'utf8');
+    expect(text).toContain('"repoPath": "AGENTS.md"');
+    expect(text).not.toContain(JSON.stringify(repo).slice(1, -1));
+
+    const imported = importShare(target, sharedDir);
+    expect(imported.ok).toBe(true);
+    const id = imported.ok ? imported.sessionId : '';
+    const served = new SharedSessionSource(sharedDir).getContextAnalysis(id);
+    expect(served?.readOnly).toBe(true);
+    expect(served?.total.loadedFiles[0]).toMatchObject({ name: 'AGENTS.md', repoPath: 'AGENTS.md' });
+  });
+
+  it('still exports the session when the analysis fails', () => {
+    const target = path.join(root, 'no-context.aosession.json');
+    const broken = (): SessionContextAnalysis => {
+      throw new Error('analysis failed');
+    };
+    expect(exportShare(input({ context: broken }), target).ok).toBe(true);
+    expect(fs.readFileSync(target, 'utf8')).not.toContain('contextAnalysis');
   });
 });
 

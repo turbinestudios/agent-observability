@@ -584,6 +584,15 @@ export interface SessionTreeStats {
   linesOfDoc: number;
   linesOfCodeRemoved: number;
   linesOfDocRemoved: number;
+  /**
+   * Distinct files the whole agent tree created / changed, counted from file
+   * edits that succeeded. A file created during the session counts once, as
+   * created, however often it was edited afterwards; the two never overlap.
+   * Unset for sources that record no edit data (the Copilot sources), so the
+   * view can tell "none" from "unknown".
+   */
+  filesCreated?: number;
+  filesModified?: number;
 }
 
 /**

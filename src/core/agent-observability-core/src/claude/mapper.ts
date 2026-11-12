@@ -136,7 +136,16 @@ interface ExtractedTool {
   success: boolean;
   isSubagentSpawn: boolean;
   loc: WriteLineDelta;
+  /** The file an edit tool changed, for the files created / modified counts. */
+  editPath?: string;
+  /** What the tool result said: `true` it created the file, `false` it changed one, `undefined` it did not say. */
+  created?: boolean;
 }
+
+/** Claude Code's file-changing tools. */
+const EDIT_TOOLS: ReadonlySet<string> = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+
+type ToolResultInfo = { isError: boolean; ts: number; created?: boolean };
 
 // ── Public mapping API ─────────────────────────────────────────────────────────
 
@@ -394,19 +403,26 @@ export function extractTranscript(
 }
 
 /** Build `tool_use_id → { isError, ts }` from every `tool_result` block. */
-export function buildToolResultIndex(
-  records: TranscriptRecord[],
-): Map<string, { isError: boolean; ts: number }> {
-  const index = new Map<string, { isError: boolean; ts: number }>();
+export function buildToolResultIndex(records: TranscriptRecord[]): Map<string, ToolResultInfo> {
+  const index = new Map<string, ToolResultInfo>();
   for (const record of records) {
     if (record.type !== 'user' || record.message === undefined) {
       continue;
     }
     const ts = parseTs(record.timestamp);
-    for (const block of contentBlocks(record.message)) {
-      if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
-        index.set(block.tool_use_id, { isError: block.is_error === true, ts });
-      }
+    const blocks = contentBlocks(record.message).filter(
+      (b) => b.type === 'tool_result' && typeof b.tool_use_id === 'string',
+    );
+    // `toolUseResult` belongs to the record, so it describes the result only
+    // when the record carries one. A Write says `create` or `update`.
+    const kind = blocks.length === 1 ? record.toolUseResult?.type : undefined;
+    const created = kind === 'create' ? true : kind === 'update' ? false : undefined;
+    for (const block of blocks) {
+      index.set(block.tool_use_id as string, {
+        isError: block.is_error === true,
+        ts,
+        ...(created !== undefined ? { created } : {}),
+      });
     }
   }
   return index;
@@ -414,7 +430,7 @@ export function buildToolResultIndex(
 
 function extractAssistantTurn(
   record: TranscriptRecord,
-  resultIndex: Map<string, { isError: boolean; ts: number }>,
+  resultIndex: Map<string, ToolResultInfo>,
   prevTs: number,
   codeExts: readonly string[],
   docExts: readonly string[],
@@ -456,6 +472,7 @@ function extractAssistantTurn(
       success: result !== undefined ? !result.isError : true,
       isSubagentSpawn: SUBAGENT_TOOLS.has(name),
       loc: countClaudeWrittenLines(name, (block as ContentBlock).input, codeExts, docExts),
+      ...editOf(name, (block as ContentBlock).input, result?.created),
     });
   }
 
@@ -488,6 +505,38 @@ function extractAssistantTurn(
 /** A zeroed line-delta. */
 function emptyLoc(): WriteLineDelta {
   return { added: { code: 0, doc: 0 }, removed: { code: 0, doc: 0 } };
+}
+
+function editOf(name: string, input: unknown, created: boolean | undefined): Pick<ExtractedTool, 'editPath' | 'created'> {
+  if (!EDIT_TOOLS.has(name) || typeof input !== 'object' || input === null) {
+    return {};
+  }
+  const fields = input as Record<string, unknown>;
+  const p = fields.file_path ?? fields.notebook_path;
+  if (typeof p !== 'string' || p.length === 0) {
+    return {};
+  }
+  return { editPath: p, ...(created !== undefined ? { created } : {}) };
+}
+
+/**
+ * Distinct files the tree created and modified, from edit calls that did not
+ * fail. A Write's result says whether it created the file; when a transcript
+ * lacks that, a Write to a path not yet touched counts as created.
+ */
+function fileCounts(turns: readonly ExtractedTurn[]): { filesCreated: number; filesModified: number } {
+  const tools = turns.flatMap((t) => t.tools).filter((t) => t.success && t.editPath !== undefined);
+  tools.sort((a, b) => a.timestampMs - b.timestampMs);
+  const created = new Set<string>();
+  const touched = new Set<string>();
+  for (const tool of tools) {
+    const p = tool.editPath as string;
+    if (tool.created ?? (tool.name === 'Write' && !touched.has(p))) {
+      created.add(p);
+    }
+    touched.add(p);
+  }
+  return { filesCreated: created.size, filesModified: touched.size - created.size };
 }
 
 // ── Tree rollups ────────────────────────────────────────────────────────────
@@ -533,6 +582,7 @@ function buildTreeStats(main: ExtractedTurn[], subs: SubExtract[]): SessionTreeS
   for (const sub of subs) {
     accumulate(sub.extract.records);
   }
+  Object.assign(stats, fileCounts([...main, ...subs.flatMap((s) => s.extract.records)]));
   // TT is the genuine total: fresh input (TIN) + cache reads (TCI) + output. The
   // three buckets are disjoint, so nothing is double-counted and nothing (incl.
   // cache reads, which the old `input + output` silently dropped) is lost.

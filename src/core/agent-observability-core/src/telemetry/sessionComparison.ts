@@ -43,7 +43,9 @@ export type MetricId =
   | 'loc'
   | 'lod'
   | 'nloc'
-  | 'nlod';
+  | 'nlod'
+  | 'filesCreated'
+  | 'filesModified';
 
 /** How the renderer should format the row's values (and absolute deltas). */
 export type MetricFormat = 'duration' | 'integer' | 'cost';
@@ -111,7 +113,9 @@ interface MetricSpec {
   direction: MetricDirection;
   format: MetricFormat;
   /** Absent for `cost`, whose value depends on the chosen basis. */
-  value?: (input: ComparisonInput) => number;
+  value?: (input: ComparisonInput) => number | undefined;
+  /** Left out of the table when no session has a value (a figure some sources do not record). */
+  optional?: true;
 }
 
 const METRICS: readonly MetricSpec[] = [
@@ -130,6 +134,8 @@ const METRICS: readonly MetricSpec[] = [
   { id: 'lod', direction: 'neutral', format: 'integer', value: (s) => s.detail.treeStats.linesOfDoc },
   { id: 'nloc', direction: 'neutral', format: 'integer', value: (s) => s.detail.treeStats.linesOfCodeRemoved },
   { id: 'nlod', direction: 'neutral', format: 'integer', value: (s) => s.detail.treeStats.linesOfDocRemoved },
+  { id: 'filesCreated', direction: 'neutral', format: 'integer', value: (s) => s.detail.treeStats.filesCreated, optional: true },
+  { id: 'filesModified', direction: 'neutral', format: 'integer', value: (s) => s.detail.treeStats.filesModified, optional: true },
 ];
 
 /** The session's cost on the CHOSEN basis, read from its whole-tree stats. */
@@ -171,13 +177,16 @@ export function computeSessionComparison(
   }));
   const baselineCostExcluded = columns[0]?.costExcluded === true;
 
-  const rows: ComparisonRow[] = METRICS.map((metric) => {
+  const rows: ComparisonRow[] = METRICS.flatMap((metric) => {
     const values = sessions.map((s, index) => {
       if (metric.value !== undefined) {
         return metric.value(s);
       }
       return columns[index].costExcluded ? undefined : costValue(s, costMode);
     });
+    if (metric.optional === true && values.every((v) => v === undefined)) {
+      return [];
+    }
     const baseline = values[0];
 
     const cells: ComparisonCell[] = values.map((value, index) => {
@@ -197,7 +206,7 @@ export function computeSessionComparison(
       return { value, delta };
     });
 
-    return { id: metric.id, direction: metric.direction, format: metric.format, cells };
+    return [{ id: metric.id, direction: metric.direction, format: metric.format, cells }];
   });
 
   const creditUnit = sessions

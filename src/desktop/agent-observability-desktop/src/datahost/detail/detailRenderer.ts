@@ -1,3 +1,4 @@
+import { SHARED_SOURCE_ID } from '@agent-observability/core/src/share/sharedSessionModels';
 import * as crypto from 'node:crypto';
 import {
   renderSessionDetailHtml,
@@ -123,8 +124,9 @@ export class DetailRenderer {
       // Host-authored only — never interpolate session content here.
       detailHeadHtml(nonce, theme),
       retrospectiveView(entry, context),
-      // This host answers the button's message (see SessionDetail.tsx).
-      true,
+      // This host answers the button's message (see SessionDetail.tsx), but
+      // not for an imported session: its files are on the sender's machine.
+      source !== SHARED_SOURCE_ID,
     );
   }
 
@@ -137,7 +139,7 @@ export class DetailRenderer {
       entry.context,
       this.costMode(source, sessionId),
       retrospectiveView(entry, context),
-      true,
+      source !== SHARED_SOURCE_ID,
     );
   }
 
