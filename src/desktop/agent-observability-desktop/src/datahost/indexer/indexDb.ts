@@ -18,8 +18,14 @@ import type {
   ToolRankingRow,
   VerdictDayPoint,
 } from '../../shared/rpc';
-import { COMPLETION_STATUSES, INSIGHT_THEME_LIMIT, MAX_DAILY_COLUMNS, windowStartMs } from '../../shared/rpc';
-import type { CompletionSummary } from '../../shared/rpc';
+import {
+  COMPLETION_STATUSES,
+  EDIT_RECORDING_SOURCES,
+  INSIGHT_THEME_LIMIT,
+  MAX_DAILY_COLUMNS,
+  windowStartMs,
+} from '../../shared/rpc';
+import type { CompletionSummary, EvidenceSummaryResult } from '../../shared/rpc';
 import type { SessionAnalysis } from '../analysis/sessionAnalyzer';
 import { REWORKED_LINES_MIN, isReedited, summarizeRework } from '@agent-observability/core/src/analysis/rework';
 import { approxPercentile, percentileOverflows } from '@agent-observability/core/src/analysis/toolStats';
@@ -1399,6 +1405,205 @@ export class IndexDb {
         p90Overflow: percentileOverflows(buckets, 0.9),
       };
     });
+  }
+
+  /**
+   * Evidence > Summary: what one repository's or one tag's sessions add up to
+   * over a window. Every query below shares one scope, so the tiles, the
+   * per-agent split, the day charts and the code figures count the same
+   * sessions.
+   *
+   * `restrictKeys` carries a tag's `source:sessionId` keys (tags live in a JSON
+   * store the index cannot see). An EMPTY list means "a tag nobody carries"
+   * and yields nothing, never "no filter".
+   *
+   * Code figures come from the background analysis and only from sources that
+   * record edits, so `code` carries both denominators. Cost sums skip NULLs:
+   * an unpriced session adds nothing rather than a fake 0.
+   *
+   * Sessions with no end time are left out (as on every Evidence tab), so
+   * "all repositories" can differ from the Dashboard by those few rows.
+   */
+  evidenceSummary(
+    params: { window: OverviewWindow; repository?: string; restrictKeys?: readonly string[] },
+    hiddenKeys: readonly string[] = [],
+  ): Omit<EvidenceSummaryResult, 'repositories' | 'tags' | 'status'> {
+    const window = params.window;
+    const cutoff = window === 'all' ? 0 : windowStartMs(window);
+    const repository =
+      params.repository !== undefined && params.repository.length > 0 ? params.repository : undefined;
+    const scope = repoScope(repository, cutoff, undefined, hiddenKeys);
+    let where = scope.where;
+    const args = [...scope.args];
+    if (params.restrictKeys !== undefined) {
+      if (params.restrictKeys.length === 0) {
+        where += ' AND 1 = 0';
+      } else {
+        where += ` AND s.source || ':' || s.session_id IN (${params.restrictKeys.map(() => '?').join(', ')})`;
+        args.push(...params.restrictKeys);
+      }
+    }
+
+    const totals = this.db
+      .prepare(
+        `SELECT COUNT(*) AS sessions,
+                COALESCE(SUM(s.interaction_count), 0) AS steps,
+                COALESCE(SUM(s.llm_calls), 0) AS llmCalls,
+                COALESCE(SUM(s.tool_calls), 0) AS toolCalls,
+                COALESCE(SUM(s.input_tokens), 0) AS inputTokens,
+                COALESCE(SUM(s.output_tokens), 0) AS outputTokens,
+                COALESCE(SUM(s.cached_tokens), 0) AS cachedTokens,
+                COALESCE(SUM(s.cost_micros), 0) AS costMicros,
+                COUNT(s.cost_micros) AS costSessions,
+                COALESCE(SUM(s.duration_ms), 0) AS durationMs,
+                COALESCE(AVG(NULLIF(s.duration_ms, 0)), 0) AS avgSessionMs,
+                COUNT(DISTINCT CASE WHEN s.repository <> 'unknown' THEN s.repository END) AS repositories,
+                COUNT(DISTINCT CASE WHEN s.model <> 'unknown' THEN s.model END) AS models,
+                MIN(s.ended_at_ms) AS oldest
+           FROM sessions s ${where}`,
+      )
+      .get(...args) as EvidenceSummaryResult['totals'] & { oldest: number | null };
+    const { oldest, ...totalFigures } = totals;
+
+    const code = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(e.lines_added), 0) AS linesAdded,
+                COALESCE(SUM(e.lines_removed), 0) AS linesRemoved,
+                COUNT(DISTINCT e.file) AS filesEdited
+           FROM session_file_edits e
+           JOIN sessions s ON s.source = e.source AND s.session_id = e.session_id
+           ${where}`,
+      )
+      .get(...args) as { linesAdded: number; linesRemoved: number; filesEdited: number };
+    // Only some sources record their edits; the rest are "not recorded", which
+    // the view must not show as zero lines. Covered = sessions that could carry
+    // code figures; analyzed = those the analysis has read so far.
+    const editSources = `s.source IN (${EDIT_RECORDING_SOURCES.map(() => '?').join(', ')})`;
+    const coverage = this.db
+      .prepare(
+        `SELECT COUNT(*) AS covered, COUNT(a.session_id) AS analyzed
+           FROM sessions s
+           LEFT JOIN session_analysis a ON a.source = s.source AND a.session_id = s.session_id
+           ${where} AND ${editSources}`,
+      )
+      .get(...args, ...EDIT_RECORDING_SOURCES) as { covered: number; analyzed: number };
+
+    const bySource = this.db
+      .prepare(
+        `SELECT s.source AS source,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(s.input_tokens), 0) AS inputTokens,
+                COALESCE(SUM(s.output_tokens), 0) AS outputTokens,
+                COALESCE(SUM(s.cost_micros), 0) AS costMicros,
+                COALESCE(SUM(s.duration_ms), 0) AS durationMs
+           FROM sessions s ${where}
+          GROUP BY s.source
+          ORDER BY sessions DESC, s.source ASC`,
+      )
+      .all(...args) as EvidenceSummaryResult['bySource'];
+
+    // NULL cost here means no session of that model could be priced: kept
+    // absent, so the view says "n/a" rather than $0.00.
+    const byModel = (
+      this.db
+        .prepare(
+          `SELECT s.model AS model, COUNT(*) AS sessions, SUM(s.cost_micros) AS costMicros
+             FROM sessions s ${where}
+            GROUP BY s.model
+            ORDER BY (costMicros IS NULL) ASC, costMicros DESC, sessions DESC, s.model ASC
+            LIMIT ?`,
+        )
+        .all(...args, TOP_MODEL_LIMIT) as { model: string; sessions: number; costMicros: number | null }[]
+    ).map(({ costMicros, ...row }) => (costMicros === null ? row : { ...row, costMicros }));
+
+    // A NULL verdict is "not judged" and must never count as smooth.
+    const verdicts = emptyVerdicts();
+    const verdictRows = this.db
+      .prepare(
+        `SELECT a.verdict AS verdict, COUNT(*) AS n
+           FROM sessions s
+           LEFT JOIN session_analysis a ON a.source = s.source AND a.session_id = s.session_id
+           ${where}
+          GROUP BY a.verdict`,
+      )
+      .all(...args) as { verdict: string | null; n: number }[];
+    for (const v of verdictRows) {
+      const key: RetroVerdict | 'unjudged' =
+        v.verdict !== null && v.verdict !== 'unjudged' && v.verdict in verdicts
+          ? (v.verdict as RetroVerdict)
+          : 'unjudged';
+      verdicts[key] += v.n;
+    }
+
+    const topRepositories = this.db
+      .prepare(
+        `SELECT s.repository AS repository, COUNT(*) AS sessions
+           FROM sessions s ${where} AND s.repository <> 'unknown'
+          GROUP BY s.repository
+          ORDER BY sessions DESC, s.repository ASC
+          LIMIT ?`,
+      )
+      .all(...args, TOP_REPOSITORY_LIMIT) as EvidenceSummaryResult['topRepositories'];
+
+    // Day columns: a chosen window answers for itself; 'all' starts at the
+    // oldest session IN SCOPE, capped like the Dashboard's.
+    let windowDays: number;
+    let dailyCapped = false;
+    if (window !== 'all') {
+      windowDays = window;
+    } else if (oldest === null || oldest <= 0) {
+      windowDays = 1;
+    } else {
+      const start = new Date(oldest);
+      start.setHours(0, 0, 0, 0);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      // Rounded: a DST boundary makes one day 23 or 25 hours long.
+      const span = Math.round((today.getTime() - start.getTime()) / 86_400_000) + 1;
+      dailyCapped = span > MAX_DAILY_COLUMNS;
+      windowDays = Math.max(1, Math.min(span, MAX_DAILY_COLUMNS));
+    }
+    const dailyCutoff = windowStartMs(windowDays);
+    const dayExpr = `date(s.ended_at_ms / 1000, 'unixepoch', 'localtime')`;
+    const sessionDays = this.db
+      .prepare(
+        `SELECT ${dayExpr} AS day, s.source AS source, COUNT(*) AS sessions,
+                COALESCE(SUM(s.cost_micros), 0) AS costMicros
+           FROM sessions s ${where} AND s.ended_at_ms >= ?
+          GROUP BY day, s.source`,
+      )
+      .all(...args, dailyCutoff) as { day: string; source: string; sessions: number; costMicros: number }[];
+    const lineDays = this.db
+      .prepare(
+        `SELECT ${dayExpr} AS day, s.source AS source,
+                COALESCE(SUM(e.lines_added), 0) AS linesAdded,
+                COALESCE(SUM(e.lines_removed), 0) AS linesRemoved
+           FROM session_file_edits e
+           JOIN sessions s ON s.source = e.source AND s.session_id = e.session_id
+           ${where} AND s.ended_at_ms >= ?
+          GROUP BY day, s.source`,
+      )
+      .all(...args, dailyCutoff) as { day: string; source: string; linesAdded: number; linesRemoved: number }[];
+    const lines = new Map(lineDays.map((d) => [`${d.day}|${d.source}`, d]));
+    const daily = sessionDays
+      .map((d) => {
+        const l = lines.get(`${d.day}|${d.source}`);
+        return { ...d, linesAdded: l?.linesAdded ?? 0, linesRemoved: l?.linesRemoved ?? 0 };
+      })
+      .sort((a, b) => (a.day === b.day ? (a.source < b.source ? -1 : 1) : a.day < b.day ? -1 : 1));
+
+    return {
+      totals: totalFigures,
+      code: { ...code, coveredSessions: coverage.covered, analyzedSessions: coverage.analyzed },
+      bySource,
+      byModel,
+      verdicts,
+      topRepositories,
+      daily,
+      windowDays,
+      ...(dailyCapped ? { dailyCapped: true as const } : {}),
+      window,
+    };
   }
 
   /**

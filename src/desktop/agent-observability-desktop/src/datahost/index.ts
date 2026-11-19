@@ -893,6 +893,32 @@ function handle(request: RpcRequest): unknown {
         window,
       };
     }
+    case 'evidence.summary': {
+      const params = request.params[0] ?? {};
+      const window = toOverviewWindow(params.window ?? DEFAULT_OVERVIEW_WINDOW);
+      // Hidden and imported (`shared`) sessions are left out, as on every
+      // other aggregate: an imported session is never the receiver's figures.
+      const hiddenKeys = figures.all();
+      const tag = typeof params.tag === 'string' ? params.tag.trim() : '';
+      const repository = typeof params.repository === 'string' ? params.repository : '';
+      const summary = db.evidenceSummary(
+        {
+          window,
+          ...(repository !== '' ? { repository } : {}),
+          // Tags live in their own local store; the index only sees the keys.
+          ...(tag !== '' ? { restrictKeys: tags.keysFor(tag) } : {}),
+        },
+        hiddenKeys,
+      );
+      return {
+        ...summary,
+        repositories: [...new Set(db.listGroups(hiddenKeys).map((g) => g.repository))]
+          .filter((r) => r !== 'unknown')
+          .sort(),
+        tags: tags.list(hidden.all()),
+        status: analysisStatus(),
+      };
+    }
     case 'evidence.completion': {
       const params = request.params[0] ?? {};
       const window = toOverviewWindow(params.window ?? DEFAULT_OVERVIEW_WINDOW);

@@ -241,6 +241,35 @@
   padding: 24px 28px 40px;
 }
 
+/* Evidence > Summary: what the figures below cover, in words. */
+.summary-scope {
+  margin: 12px 0 14px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.summary-caption {
+  margin: -10px 0 14px;
+}
+
+/* The Sessions tile opens the sessions it counts. */
+.tile-button {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tile-button:hover {
+  border-color: var(--accent, var(--border));
+}
+
+.tile-button:focus-visible {
+  outline: 2px solid var(--accent, currentColor);
+  outline-offset: 2px;
+}
+
 .tools-tab-title {
   display: flex;
   align-items: center;

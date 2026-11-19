@@ -232,7 +232,12 @@ export function HorizontalBars({
   emptyMessage,
   onSelect,
 }: {
-  rows: { label: string; value: number; title?: string }[];
+  /**
+   * `colorVar` on a row overrides the chart's, for bars that each stand for a
+   * series (an agent, a verdict). `display` replaces the printed value, for
+   * bars whose length is a number but whose reading is not (a cost).
+   */
+  rows: { label: string; value: number; title?: string; colorVar?: string; display?: string }[];
   colorVar: string;
   emptyMessage: string;
   /** Open the sessions behind one bar, by its index. */
@@ -253,10 +258,10 @@ export function HorizontalBars({
             <span className="hbar-track">
               <span
                 className="hbar-fill"
-                style={{ width: `${(row.value / max) * 100}%`, background: `var(${colorVar})` }}
+                style={{ width: `${(row.value / max) * 100}%`, background: `var(${row.colorVar ?? colorVar})` }}
               />
             </span>
-            <span className="hbar-value">{row.value.toLocaleString()}</span>
+            <span className="hbar-value">{row.display ?? row.value.toLocaleString()}</span>
           </>
         );
         return (

@@ -9,6 +9,25 @@ why some released versions are absent: they changed nothing you could notice.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.7.0] - 2026-11-19
+
+### Added
+
+- **Summary on the Evidence page.** A new first tab adds up every session in
+  one repository, or every session carrying one of your tags: sessions,
+  session time, tokens and estimated cost. For Claude Code and OpenCode
+  sessions it also counts lines added and removed and files edited. It shows
+  how many sessions each agent ran (Claude Code, Copilot, OpenCode and the
+  rest), how they went, and the cost by model. Charts show sessions, cost and
+  lines changed per day. Click a bar or a day to open the sessions behind it.
+  Pick the time window as on the Dashboard. Imported and hidden sessions are
+  not counted.
+
+### Changed
+
+- The Evidence page now opens on **Summary** until you pick another tab. After
+  that it remembers your choice, as before.
+
 ## [2.6.0] - 2026-11-12
 
 ### Added

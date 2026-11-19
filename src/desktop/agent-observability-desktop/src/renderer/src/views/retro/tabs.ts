@@ -7,7 +7,7 @@
  * `RetroView.tsx`; the completion check and rework proposals each add one.
  */
 
-export type EvidenceTabId = 'retrospectives' | 'completion' | 'tools' | 'rework';
+export type EvidenceTabId = 'summary' | 'retrospectives' | 'completion' | 'tools' | 'rework';
 
 export interface EvidenceTab {
   id: EvidenceTabId;
@@ -17,6 +17,11 @@ export interface EvidenceTab {
 }
 
 export const EVIDENCE_TABS: readonly EvidenceTab[] = [
+  {
+    id: 'summary',
+    label: 'Summary',
+    hint: 'Totals for one repository or tag: tokens, cost, code changed and which agents did the work.',
+  },
   {
     id: 'retrospectives',
     label: 'Retrospectives',
@@ -39,7 +44,7 @@ export const EVIDENCE_TABS: readonly EvidenceTab[] = [
   },
 ];
 
-export const DEFAULT_EVIDENCE_TAB: EvidenceTabId = 'retrospectives';
+export const DEFAULT_EVIDENCE_TAB: EvidenceTabId = 'summary';
 
 const STORAGE_KEY = 'agent-observability.evidenceTab';
 

@@ -11,6 +11,7 @@ import type { SessionFilters } from '../sessions/filters';
 import { ToolsTab } from './ToolsTab';
 import { CompletionTab } from './CompletionTab';
 import { ReworkTab } from './ReworkTab';
+import { SummaryTab } from './SummaryTab';
 import { EVIDENCE_TABS, neighbourTab, persistTab, readStoredTab, type EvidenceTabId } from './tabs';
 import './retro.css';
 
@@ -77,7 +78,9 @@ export function RetroView({ onOpenSession, onImprove, onOpenSessions }: Props): 
         ))}
       </div>
       <div className="evidence-body" role="tabpanel">
-        {tab === 'tools' ? (
+        {tab === 'summary' ? (
+          <SummaryTab onOpenSessions={onOpenSessions} />
+        ) : tab === 'tools' ? (
           <ToolsTab onOpenSessions={onOpenSessions} />
         ) : tab === 'completion' ? (
           <CompletionTab onOpenSessions={onOpenSessions} />

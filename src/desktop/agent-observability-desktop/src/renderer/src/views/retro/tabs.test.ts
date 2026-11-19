@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_EVIDENCE_TAB, EVIDENCE_TABS, neighbourTab, readStoredTab, toEvidenceTab } from './tabs';
 
 describe('evidence tabs', () => {
-  it('opens on Retrospectives, then Completion, then Tools', () => {
-    expect(DEFAULT_EVIDENCE_TAB).toBe('retrospectives');
-    expect(EVIDENCE_TABS.map((tab) => tab.id)).toEqual(['retrospectives', 'completion', 'tools', 'rework']);
+  it('opens on Summary, then Retrospectives, Completion, Tools and Rework', () => {
+    expect(DEFAULT_EVIDENCE_TAB).toBe('summary');
+    expect(EVIDENCE_TABS.map((tab) => tab.id)).toEqual(['summary', 'retrospectives', 'completion', 'tools', 'rework']);
     expect(EVIDENCE_TABS.every((tab) => tab.label.length > 0 && tab.hint.length > 0)).toBe(true);
   });
 

@@ -23,6 +23,7 @@ import { categoryLabel, describeProgress, shortPath } from '../hotspots/hotspots
 import { Spinner } from '../../components/Spinner';
 import { HorizontalBars, Legend, StackedBarChart } from './charts';
 import type { SeriesStyle, StackedColumn } from './charts';
+import { SOURCE_SERIES } from './series';
 import { VERDICT_SERIES, themeTitle, verdictColumns } from './insights';
 import { persistWindow, readStoredWindow, windowDescription, windowRange } from './window';
 import { WindowSelector } from './WindowSelector';
@@ -39,20 +40,6 @@ import './overview.css';
  * first open rather than at startup, so it cannot compete with the session
  * list for the launch path.
  */
-
-/**
- * Fixed hue order, assigned by identity rather than by rank — a source keeps
- * its color when another one out-counts it. Slots come from the validated
- * categorical palette; see overview.css for the values.
- */
-const SOURCE_SERIES: SeriesStyle[] = [
-  { key: 'claude', label: 'Claude Code', colorVar: '--series-1' },
-  { key: 'copilot', label: 'Copilot', colorVar: '--series-2' },
-  { key: 'copilot-cli', label: 'Copilot CLI', colorVar: '--series-cli' },
-  { key: 'copilot-app', label: 'Copilot app', colorVar: '--series-app' },
-  { key: 'copilot-jetbrains', label: 'Copilot (JetBrains)', colorVar: '--series-jetbrains' },
-  { key: 'opencode', label: 'OpenCode', colorVar: '--series-opencode' },
-];
 
 const TOKEN_SERIES: SeriesStyle[] = [
   { key: 'input', label: 'Input', colorVar: '--series-3' },

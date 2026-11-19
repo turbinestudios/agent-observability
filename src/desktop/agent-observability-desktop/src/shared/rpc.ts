@@ -1136,6 +1136,89 @@ export interface ReworkFileRow {
   outsideRepo: boolean;
 }
 
+/**
+ * The sources whose transcripts record file edits, so the analysis can count
+ * lines and files for them. Every other source contributes no code figures,
+ * which is "not recorded", never zero.
+ */
+export const EDIT_RECORDING_SOURCES: readonly string[] = ['claude', 'opencode'];
+
+/** One day of the Summary's charts, per source. Sparse: days without sessions are absent. */
+export interface SummaryDayPoint {
+  /** `YYYY-MM-DD`, local time. */
+  day: string;
+  source: string;
+  sessions: number;
+  /** Estimated micro-USD; unpriced sessions contribute nothing. */
+  costMicros: number;
+  /** From analyzed sessions only. */
+  linesAdded: number;
+  linesRemoved: number;
+}
+
+/** Evidence > Summary: one repository's or one tag's sessions, added up. */
+export interface EvidenceSummaryResult {
+  totals: {
+    sessions: number;
+    steps: number;
+    llmCalls: number;
+    toolCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+    /** Estimated micro-USD over the PRICED sessions only. */
+    costMicros: number;
+    /** Sessions with a known cost: the "covers N of M" denominator. */
+    costSessions: number;
+    /** Summed wall-clock length of every session, in ms. */
+    durationMs: number;
+    /** Mean wall-clock length of a session, in ms (sessions with a length only). */
+    avgSessionMs: number;
+    repositories: number;
+    models: number;
+  };
+  /**
+   * Code changed, from the background analysis. Only sessions from
+   * {@link EDIT_RECORDING_SOURCES} can carry these figures: `coveredSessions`
+   * is how many sessions in scope come from them, and `analyzedSessions` how
+   * many of those the analysis has read, so a partial or absent figure can
+   * say so instead of reading as zero.
+   */
+  code: {
+    linesAdded: number;
+    linesRemoved: number;
+    /** Distinct files edited across the scope. */
+    filesEdited: number;
+    coveredSessions: number;
+    analyzedSessions: number;
+  };
+  /** Per-source totals, ordered by session count. */
+  bySource: {
+    source: string;
+    sessions: number;
+    inputTokens: number;
+    outputTokens: number;
+    costMicros: number;
+    durationMs: number;
+  }[];
+  /** Cost by the session's dominant model. `costMicros` absent: no session of it could be priced. */
+  byModel: { model: string; sessions: number; costMicros?: number }[];
+  /** How the sessions went. `unjudged` is coverage (not yet or not judgeable), never a verdict. */
+  verdicts: Record<RetroVerdict | 'unjudged', number>;
+  /** Busiest repositories in scope, for a tag that spans several. */
+  topRepositories: { repository: string; sessions: number }[];
+  daily: SummaryDayPoint[];
+  windowDays: number;
+  /** Set when `window` is `'all'` and the day charts stop short of the full history. */
+  dailyCapped?: true;
+  window: OverviewWindow;
+  /** Repositories the scope can be narrowed to. */
+  repositories: string[];
+  /** Tags the scope can be narrowed to, with their session counts. */
+  tags: TagCount[];
+  status: AnalysisStatus;
+}
+
 export interface EvidenceReworkResult {
   /** Sessions in the window that edited any file: the rate's denominator. */
   editedSessions: number;
@@ -1687,6 +1770,14 @@ export interface RpcMethods {
   'evidence.completion'(params?: { window?: OverviewWindow; source?: string; repository?: string }): EvidenceCompletionResult;
   /** The Rework ranking: a proxy for thrashing, never a quality score. Paths are display paths. */
   'evidence.rework'(params?: { window?: OverviewWindow; source?: string; repository?: string }): EvidenceReworkResult;
+  /**
+   * Everything one repository or one user tag adds up to over the window:
+   * tokens, cost, run time, code changed, sessions per agent and how they
+   * went. LOCAL-ONLY: tags never leave the machine, and nothing here feeds
+   * the aggregate or team paths. `repository` and `tag` narrow together when
+   * both are given.
+   */
+  'evidence.summary'(params?: { window?: OverviewWindow; repository?: string; tag?: string }): EvidenceSummaryResult;
   /**
    * Run the opt-in Deep retrospective for one session: build a transcript
    * digest, ask the user's own `claude` CLI to judge it, store the verdict in
